@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+# Azure Developer CLI (azd) configuration for Azure FinOps Agent.
+# `azd up` provisions all infrastructure (Bicep under ./infra) and deploys the
+# container image to App Service. PowerShell hooks fill the gaps Bicep can't
+# cover (Entra app registration, ACR image build, redirect-URI patching).
+
+name: azure-finops-agent
+metadata:
+  template: azure-finops-agent@1.0.0
+
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+# The web app is built and pushed by the postdeploy hook (`az acr build`),
+# which avoids needing a local Docker daemon. We declare no `services` block so
+# `azd deploy` is a no-op — provisioning + the postdeploy hook do all the work.
+
+hooks:
+  preprovision:
+    posix:
+      shell: pwsh
+      run: ./infra/scripts/preprovision.ps1
+      interactive: true
+    windows:
+      shell: pwsh
+      run: ./infra/scripts/preprovision.ps1
+      interactive: true
+  postprovision:
+    posix:
+      shell: pwsh
+      run: ./infra/scripts/postprovision.ps1
+      interactive: true
+    windows:
+      shell: pwsh
+      run: ./infra/scripts/postprovision.ps1
+      interactive: true
+  postdeploy:
+    posix:
+      shell: pwsh
+      run: ./infra/scripts/postdeploy.ps1
+      interactive: true
+    windows:
+      shell: pwsh
+      run: ./infra/scripts/postdeploy.ps1
+      interactive: true

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "aoaiLocation": {
+      "value": "${AZURE_OPENAI_LOCATION=swedencentral}"
+    },
+    "appServicePlanSku": {
+      "value": "${APP_SERVICE_PLAN_SKU=B1}"
+    },
+    "aoaiModelName": {
+      "value": "${AZURE_OPENAI_MODEL_NAME=gpt-4o}"
+    },
+    "aoaiModelVersion": {
+      "value": "${AZURE_OPENAI_MODEL_VERSION=2024-11-20}"
+    },
+    "aoaiDeploymentName": {
+      "value": "${AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o}"
+    },
+    "aoaiModelCapacity": {
+      "value": "${AZURE_OPENAI_MODEL_CAPACITY=30}"
+    },
+    "existingAoaiResourceId": {
+      "value": "${EXISTING_AOAI_RESOURCE_ID=}"
+    },
+    "entraAppId": {
+      "value": "${AZURE_ENTRA_APP_ID=}"
+    },
+    "entraClientSecret": {
+      "value": "${AZURE_ENTRA_CLIENT_SECRET=}"
+    },
+    "entraTenantId": {
+      "value": "${AZURE_ENTRA_TENANT_ID=common}"
+    }
+  }
+}

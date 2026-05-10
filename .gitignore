@@ -69,6 +69,9 @@ secrets.json
 ## Squad infrastructure (local only)
 .squad/
 
+## azd local environment state (per-developer; contains secrets like AZURE_ENTRA_CLIENT_SECRET)
+.azure/
+
 .copilot/skills/agent-collaboration/SKILL.md
 .gitignore
 .copilot/skills/squad-conventions/SKILL.md

@@ -36,26 +36,44 @@
 param(
     [string]$AppName = "Azure FinOps Agent",
     [string]$ProductionUrl = "",
-    [int]$SecretExpiryMonths = 12
+    [int]$SecretExpiryMonths = 12,
+    # Extra redirect URIs to register beyond the localhost + ProductionUrl defaults.
+    # Used by the azd preprovision hook to register additional callbacks (e.g. App Service hostname).
+    [string[]]$ExtraRedirectUris = @(),
+    # When set, suppresses all human-readable Write-Host output and prints a single
+    # JSON object {appId, clientSecret, tenantId, redirectUris} to stdout — intended
+    # for consumption by the azd preprovision hook.
+    [switch]$OutputJson
 )
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "`n=== Azure FinOps Agent — Entra ID App Registration Setup ===" -ForegroundColor Cyan
-Write-Host "This script creates a multi-tenant app registration with read-only permissions.`n" -ForegroundColor Gray
+# When -OutputJson is set, route all chatty status output to stderr so stdout is
+# pure JSON the caller can pipe into ConvertFrom-Json.
+function Write-Status {
+    param([string]$Message, [string]$ForegroundColor = 'Gray')
+    if ($OutputJson) {
+        [Console]::Error.WriteLine($Message)
+    } else {
+        Write-Host $Message -ForegroundColor $ForegroundColor
+    }
+}
+
+Write-Status "`n=== Azure FinOps Agent — Entra ID App Registration Setup ===" 'Cyan'
+Write-Status "This script creates a multi-tenant app registration with read-only permissions.`n" 'Gray'
 
 # ── 1. Verify az CLI is logged in ──
-Write-Host "[1/6] Checking Azure CLI login..." -ForegroundColor Yellow
+Write-Status "[1/6] Checking Azure CLI login..." 'Yellow'
 $account = az account show 2>$null | ConvertFrom-Json
 if (-not $account) {
-    Write-Host "  Not logged in. Run 'az login' first." -ForegroundColor Red
+    Write-Status "  Not logged in. Run 'az login' first." 'Red'
     exit 1
 }
-Write-Host "  Tenant: $($account.tenantId)" -ForegroundColor Gray
-Write-Host "  User:   $($account.user.name)" -ForegroundColor Gray
+Write-Status "  Tenant: $($account.tenantId)" 'Gray'
+Write-Status "  User:   $($account.user.name)" 'Gray'
 
 # ── 2. Build redirect URIs ──
-Write-Host "`n[2/6] Configuring redirect URIs..." -ForegroundColor Yellow
+Write-Status "`n[2/6] Configuring redirect URIs..." 'Yellow'
 $redirectUris = @(
     "http://localhost:5000/auth/microsoft/callback"
 )
@@ -69,12 +87,15 @@ if ($ProductionUrl) {
         $redirectUris += "$($uri.Scheme)://www.$($uri.Host)/auth/microsoft/callback"
     }
 }
+foreach ($u in $ExtraRedirectUris) {
+    if ($u -and ($redirectUris -notcontains $u)) { $redirectUris += $u }
+}
 foreach ($u in $redirectUris) {
-    Write-Host "  $u" -ForegroundColor Gray
+    Write-Status "  $u" 'Gray'
 }
 
 # ── 3. Create the app registration ──
-Write-Host "`n[3/6] Creating app registration '$AppName'..." -ForegroundColor Yellow
+Write-Status "`n[3/6] Creating app registration '$AppName'..." 'Yellow'
 
 # Build the redirect URIs JSON for the web platform
 $redirectUrisJson = ($redirectUris | ForEach-Object { "`"$_`"" }) -join ","
@@ -88,7 +109,7 @@ $appJson = az ad app create `
     2>$null
 
 if (-not $appJson) {
-    Write-Host "  Failed to create app registration. Check permissions." -ForegroundColor Red
+    Write-Status "  Failed to create app registration. Check permissions." 'Red'
     exit 1
 }
 
@@ -96,11 +117,11 @@ $app = $appJson | ConvertFrom-Json
 $clientId = $app.appId
 $objectId = $app.id
 
-Write-Host "  App ID (ClientId): $clientId" -ForegroundColor Green
-Write-Host "  Object ID:         $objectId" -ForegroundColor Gray
+Write-Status "  App ID (ClientId): $clientId" 'Green'
+Write-Status "  Object ID:         $objectId" 'Gray'
 
 # ── 4. Add API permissions (all read-only) ──
-Write-Host "`n[4/6] Adding API permissions (read-only)..." -ForegroundColor Yellow
+Write-Status "`n[4/6] Adding API permissions (read-only)..." 'Yellow'
 
 # Known permission GUIDs (Microsoft-published, stable across all tenants)
 # Azure Service Management
@@ -162,17 +183,17 @@ $requiredAccess | Out-File -FilePath $tempFile -Encoding utf8 -NoNewline
 az ad app update --id $objectId --required-resource-accesses "@$tempFile" --output none 2>$null
 Remove-Item $tempFile -Force
 
-Write-Host "  Azure ARM:       user_impersonation (delegated)" -ForegroundColor Gray
-Write-Host "  Microsoft Graph: User.Read, Organization.Read.All, Reports.Read.All," -ForegroundColor Gray
-Write-Host "                   User.Read.All, Group.Read.All (all delegated, read-only)" -ForegroundColor Gray
-Write-Host "  Log Analytics:   Data.Read (delegated, read-only)" -ForegroundColor Gray
-Write-Host "  Azure Storage:   user_impersonation (delegated, for cost exports)" -ForegroundColor Gray
-Write-Host ""
-Write-Host "  NOTE: All Graph and Log Analytics scopes use incremental consent —" -ForegroundColor DarkYellow
-Write-Host "  users only see consent prompts when they opt into each tier." -ForegroundColor DarkYellow
+Write-Status "  Azure ARM:       user_impersonation (delegated)" 'Gray'
+Write-Status "  Microsoft Graph: User.Read, Organization.Read.All, Reports.Read.All," 'Gray'
+Write-Status "                   User.Read.All, Group.Read.All (all delegated, read-only)" 'Gray'
+Write-Status "  Log Analytics:   Data.Read (delegated, read-only)" 'Gray'
+Write-Status "  Azure Storage:   user_impersonation (delegated, for cost exports)" 'Gray'
+Write-Status ""
+Write-Status "  NOTE: All Graph and Log Analytics scopes use incremental consent —" 'DarkYellow'
+Write-Status "  users only see consent prompts when they opt into each tier." 'DarkYellow'
 
 # ── 5. Create client secret ──
-Write-Host "`n[5/6] Creating client secret (valid $SecretExpiryMonths months)..." -ForegroundColor Yellow
+Write-Status "`n[5/6] Creating client secret (valid $SecretExpiryMonths months)..." 'Yellow'
 
 $endDate = (Get-Date).AddMonths($SecretExpiryMonths).ToString("yyyy-MM-ddTHH:mm:ssZ")
 $secretJson = az ad app credential reset `
@@ -183,14 +204,26 @@ $secretJson = az ad app credential reset `
     2>$null
 
 if (-not $secretJson) {
-    Write-Host "  Failed to create client secret." -ForegroundColor Red
+    Write-Status "  Failed to create client secret." 'Red'
     exit 1
 }
 
 $secret = ($secretJson | ConvertFrom-Json).password
-Write-Host "  Secret created (expires: $endDate)" -ForegroundColor Gray
+Write-Status "  Secret created (expires: $endDate)" 'Gray'
 
 # ── 6. Output configuration ──
+if ($OutputJson) {
+    [pscustomobject]@{
+        appId        = $clientId
+        objectId     = $objectId
+        clientSecret = $secret
+        tenantId     = $account.tenantId
+        redirectUris = $redirectUris
+        secretExpiry = $endDate
+    } | ConvertTo-Json -Compress
+    return
+}
+
 Write-Host "`n[6/6] Setup complete!" -ForegroundColor Green
 Write-Host "`n$('=' * 60)" -ForegroundColor Cyan
 Write-Host "  ADD THESE VALUES TO YOUR CONFIGURATION" -ForegroundColor Cyan

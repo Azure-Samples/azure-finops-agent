@@ -28,6 +28,38 @@ Vue 3 SPA → .NET 10 minimal API → GitHub Copilot SDK → Azure read APIs (Co
 
 ## [See the architecture diagram →](https://azure-finops-agent.com/slides#4)
 
+## Deploy to Azure (`azd up`)
+
+One command provisions and deploys everything into your own subscription:
+
+```powershell
+az login                          # sign into the target tenant
+az account set --subscription <id>
+azd auth login                    # sign into azd (same tenant)
+azd up                            # provision + build image + deploy
+```
+
+What `azd up` does:
+
+1. Creates a resource group, Log Analytics + Application Insights, Azure Container Registry (Basic, admin disabled), Azure OpenAI account + model deployment, Linux App Service Plan, and the containerised Web App with system-assigned managed identity.
+2. Grants the Web App's MI `AcrPull` on the registry and `Cognitive Services User` on Azure OpenAI (BYOK).
+3. Creates a multi-tenant Microsoft Entra ID app registration with the 5 incremental-consent permission tiers (ARM, Microsoft Graph, Log Analytics, Azure Storage) — see [setup-entra-app.ps1](src/Dashboard/setup-entra-app.ps1).
+4. Builds the Docker image server-side via `az acr build` (no local Docker daemon required) and restarts the Web App.
+
+Override defaults via `azd env set` before running `azd up`:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `AZURE_LOCATION` | _(prompted)_ | Region for the resource group and most resources |
+| `AZURE_OPENAI_LOCATION` | `swedencentral` | AOAI region (model availability is region-restricted) |
+| `APP_SERVICE_PLAN_SKU` | `B1` | Use `P0V3` for production-grade (~$77/mo vs ~$13/mo) |
+| `AZURE_OPENAI_MODEL_NAME` / `_VERSION` | `gpt-4o` / `2024-11-20` | Must be available in `AZURE_OPENAI_LOCATION` |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | `gpt-4o` | Surfaced as `AzureOpenAI__DeploymentName` to the app |
+| `EXISTING_AOAI_RESOURCE_ID` | _(empty)_ | Full resource ID to reuse an existing AOAI account instead of creating one |
+| `AZURE_ENTRA_APP_ID` / `_CLIENT_SECRET` | _(empty)_ | Reuse an existing Entra app instead of creating one |
+
+Tear down with `azd down --purge` (purge is required because Cognitive Services soft-deletes by default).
+
 ## Running Locally
 
 ### Prerequisites

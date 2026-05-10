@@ -1,0 +1,157 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "10279812525912434775"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string"
+    },
+    "resourceToken": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "object"
+    },
+    "appServicePlanSku": {
+      "type": "string"
+    },
+    "acrLoginServer": {
+      "type": "string"
+    },
+    "containerImageName": {
+      "type": "string"
+    },
+    "appInsightsConnectionString": {
+      "type": "securestring"
+    },
+    "aoaiEndpoint": {
+      "type": "string"
+    },
+    "aoaiDeploymentName": {
+      "type": "string"
+    },
+    "entraAppId": {
+      "type": "string"
+    },
+    "entraClientSecret": {
+      "type": "securestring"
+    },
+    "entraTenantId": {
+      "type": "string"
+    }
+  },
+  "variables": {
+    "planTier": "[if(startsWith(parameters('appServicePlanSku'), 'B'), 'Basic', if(startsWith(parameters('appServicePlanSku'), 'S'), 'Standard', 'PremiumV3'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2024-04-01",
+      "name": "[format('plan-finops-{0}', parameters('resourceToken'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "linux",
+      "sku": {
+        "name": "[parameters('appServicePlanSku')]",
+        "tier": "[variables('planTier')]"
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2024-04-01",
+      "name": "[format('app-finops-{0}', parameters('resourceToken'))]",
+      "location": "[parameters('location')]",
+      "tags": "[union(parameters('tags'), createObject('azd-service-name', 'web'))]",
+      "kind": "app,linux,container",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('plan-finops-{0}', parameters('resourceToken')))]",
+        "httpsOnly": true,
+        "publicNetworkAccess": "Enabled",
+        "siteConfig": {
+          "linuxFxVersion": "[format('DOCKER|{0}/{1}', parameters('acrLoginServer'), parameters('containerImageName'))]",
+          "acrUseManagedIdentityCreds": true,
+          "alwaysOn": "[and(not(equals(parameters('appServicePlanSku'), 'F1')), not(startsWith(parameters('appServicePlanSku'), 'B')))]",
+          "http20Enabled": true,
+          "ftpsState": "Disabled",
+          "minTlsVersion": "1.2",
+          "healthCheckPath": "/api/version",
+          "appSettings": [
+            {
+              "name": "WEBSITES_PORT",
+              "value": "8080"
+            },
+            {
+              "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+              "value": "false"
+            },
+            {
+              "name": "DOCKER_REGISTRY_SERVER_URL",
+              "value": "[format('https://{0}', parameters('acrLoginServer'))]"
+            },
+            {
+              "name": "AzureOpenAI__Endpoint",
+              "value": "[parameters('aoaiEndpoint')]"
+            },
+            {
+              "name": "AzureOpenAI__DeploymentName",
+              "value": "[parameters('aoaiDeploymentName')]"
+            },
+            {
+              "name": "Microsoft__ClientId",
+              "value": "[parameters('entraAppId')]"
+            },
+            {
+              "name": "Microsoft__ClientSecret",
+              "value": "[parameters('entraClientSecret')]"
+            },
+            {
+              "name": "Microsoft__TenantId",
+              "value": "[parameters('entraTenantId')]"
+            },
+            {
+              "name": "ApplicationInsights__ConnectionString",
+              "value": "[parameters('appInsightsConnectionString')]"
+            },
+            {
+              "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+              "value": "[parameters('appInsightsConnectionString')]"
+            },
+            {
+              "name": "ASPNETCORE_ENVIRONMENT",
+              "value": "Production"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', format('plan-finops-{0}', parameters('resourceToken')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "name": {
+      "type": "string",
+      "value": "[format('app-finops-{0}', parameters('resourceToken'))]"
+    },
+    "hostname": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Web/sites', format('app-finops-{0}', parameters('resourceToken'))), '2024-04-01').defaultHostName]"
+    },
+    "principalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Web/sites', format('app-finops-{0}', parameters('resourceToken'))), '2024-04-01', 'full').identity.principalId]"
+    }
+  }
+}
