@@ -19,14 +19,19 @@ env:
   WEBAPP_NAME: finops-agent-container
   RESOURCE_GROUP: rg-finops-agent
 
+# Cancel in-flight prod deploys when a newer commit lands.
+concurrency:
+  group: prod-deploy
+  cancel-in-progress: false # don't cancel a half-deployed prod build
+
 jobs:
   deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
     steps:
+      # Shallow checkout — build number now comes from github.run_number,
+      # so we don't need full git history any more.
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0 # full history for git rev-list --count
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -41,8 +46,8 @@ jobs:
       - name: Set build metadata
         id: meta
         run: |
-          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "build=$(git rev-list --count HEAD)" >> $GITHUB_OUTPUT
+          echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          echo "build=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -52,6 +57,7 @@ jobs:
         with:
           context: src/Dashboard
           push: true
+          provenance: false
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ steps.meta.outputs.sha }}
@@ -59,8 +65,11 @@ jobs:
             BUILD_SHA=${{ steps.meta.outputs.sha }}
             BUILD_NUMBER=${{ steps.meta.outputs.build }}
             BUILD_BRANCH=main
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Registry-mode cache lives in ACR, shared across all workflows.
+          # `buildcache-main` is the warm baseline that feature.yml also
+          # reads from, so feature builds inherit prod's cached layers.
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-main
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-main,mode=max,image-manifest=true,oci-mediatypes=true
 
       - name: Configure App Service settings
         run: |
@@ -69,11 +78,14 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --settings AzureOpenAI__Endpoint="${{ secrets.AZURE_OPENAI_ENDPOINT }}"
 
+      # Production currently runs against :latest, so we bounce the app to
+      # force the new image to be pulled. (Keeping this for prod safety;
+      # the test slot doesn't need it because it pins to test-<sha>.)
       - name: Restart App Service
         run: az webapp restart --name ${{ env.WEBAPP_NAME }} --resource-group ${{ env.RESOURCE_GROUP }}
 
       - name: Verify deployment
         run: |
-          sleep 30
-          curl -sf https://azure-finops-agent.com/api/version | head -c 200
+          curl --retry 10 --retry-delay 5 --retry-connrefused -sf \
+            https://azure-finops-agent.com/api/version | head -c 200
           echo ""

@@ -11,7 +11,7 @@ on:
     paths:
       - "src/Dashboard/**"
       - ".github/workflows/feature.yml"
-    workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -38,9 +38,9 @@ jobs:
     # would fail. Skip — these PRs are reviewed and merged via main.yml.
     if: github.actor != 'dependabot[bot]'
     steps:
+      # Shallow checkout — we no longer need full git history (build number
+      # comes from github.run_number instead of `git rev-list --count HEAD`).
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -56,12 +56,11 @@ jobs:
         id: meta
         run: |
           BRANCH="${GITHUB_REF#refs/heads/}"
-          # Sanitize branch name for a valid Docker tag (no /, no uppercase).
           TAG_BRANCH=$(echo "$BRANCH" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "tag_branch=$TAG_BRANCH" >> $GITHUB_OUTPUT
-          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "build=$(git rev-list --count HEAD)" >> $GITHUB_OUTPUT
+          echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          echo "build=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -71,7 +70,8 @@ jobs:
         with:
           context: src/Dashboard
           push: true
-          # Note: we deliberately do NOT push :latest — that tag belongs to prod.
+          provenance: false
+          # We deliberately do NOT push :latest — that tag belongs to prod.
           tags: |
             ${{ env.IMAGE }}:test-${{ steps.meta.outputs.tag_branch }}
             ${{ env.IMAGE }}:test-${{ steps.meta.outputs.sha }}
@@ -79,9 +79,17 @@ jobs:
             BUILD_SHA=${{ steps.meta.outputs.sha }}
             BUILD_NUMBER=${{ steps.meta.outputs.build }}
             BUILD_BRANCH=${{ steps.meta.outputs.branch }}
-          cache-from: type=gha,scope=test-slot
-          cache-to: type=gha,mode=max,scope=test-slot
+          # Registry-mode cache lives in ACR and is shared across every
+          # branch + every workflow run. Far bigger than the 10GB GHA cache
+          # and survives indefinitely. We read from both the per-feature
+          # buildcache and the prod buildcache (warm baseline).
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:buildcache
+            type=registry,ref=${{ env.IMAGE }}:buildcache-main
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
 
+      # `az webapp config container set` triggers App Service to re-pull and
+      # restart the slot, so an explicit `webapp restart` is redundant.
       - name: Point test slot at new image
         run: |
           az webapp config container set \
@@ -99,17 +107,11 @@ jobs:
             --slot ${{ env.SLOT_NAME }} \
             --settings AzureOpenAI__Endpoint="${{ secrets.AZURE_OPENAI_ENDPOINT }}"
 
-      - name: Restart test slot
-        run: |
-          az webapp restart \
-            --name ${{ env.WEBAPP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --slot ${{ env.SLOT_NAME }}
-
       - name: Verify deployment
         run: |
-          sleep 30
-          curl -sf https://finops-agent-container-test.azurewebsites.net/api/version | head -c 300
+          curl --retry 10 --retry-delay 5 --retry-connrefused -sf \
+            https://finops-agent-container-test.azurewebsites.net/api/version \
+            | head -c 300
           echo ""
 
       - name: Summary
