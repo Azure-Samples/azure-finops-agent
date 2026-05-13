@@ -138,8 +138,8 @@
                     cat.subtitle
                   }}</span>
                 </div>
-                <span class="maturity-card-cta">
-                  {{ maturityScores[cat.key] ? "Re-score" : "Score" }}
+                <span v-if="maturityScores[cat.key]" class="maturity-card-cta">
+                  Re-score
                 </span>
               </div>
               <div class="maturity-card-body">
@@ -165,11 +165,7 @@
                 </span>
               </div>
               <!-- Per-dimension breakdown (only after scoring) -->
-              <div
-                v-if="maturityScores[cat.key]"
-                class="assessment-summary"
-                @click.stop
-              >
+              <div v-if="maturityScores[cat.key]" class="assessment-summary">
                 <div
                   v-for="sc in maturityScores[cat.key]"
                   :key="sc.id"
@@ -1594,8 +1590,8 @@
               <span class="tools-sidebar-title">Agent</span>
               <span class="tools-sidebar-status">
                 <span
-                  v-if="streaming"
-                  class="tools-sidebar-status-dot tools-sidebar-status-dot--live"
+                  class="tools-sidebar-status-dot"
+                  :class="{ 'tools-sidebar-status-dot--live': streaming }"
                 ></span>
                 <span class="tools-sidebar-status-text">{{ agentStatus }}</span>
               </span>
@@ -1695,7 +1691,7 @@
             </div>
             <button
               class="sessions-new-btn"
-              :disabled="streaming || clearing"
+              :disabled="clearing"
               @click="newSession"
               title="Start a new conversation"
             >
@@ -1712,10 +1708,25 @@
               :class="[
                 'session-row',
                 { 'session-row--current': s.id === currentSessionId },
+                { 'session-row--running': runningSessions.has(s.id) },
               ]"
               @click="selectSession(s.id)"
               :title="s.summary"
             >
+              <span
+                class="tools-sidebar-status-dot"
+                :class="{
+                  'tools-sidebar-status-dot--live': runningSessions.has(s.id),
+                }"
+                :aria-label="
+                  runningSessions.has(s.id) ? 'Conversation is running' : 'Idle'
+                "
+                :title="
+                  runningSessions.has(s.id)
+                    ? 'This conversation is still running'
+                    : ''
+                "
+              ></span>
               <div class="session-row-main">
                 <span class="session-row-title">{{
                   s.summary || "Untitled conversation"
@@ -1805,7 +1816,18 @@ const emit = defineEmits(["logout", "login"]);
 
 const messages = ref([]);
 const input = ref("");
-const streaming = ref(false);
+// Sessions that currently have an in-flight stream — drives the small pulsing
+// dot on each row in the Conversations sidebar so the user can tell at a
+// glance which conversation is still working. Sentinel "__pending__" is used
+// while a brand-new session is waiting for the backend to assign its id.
+const runningSessions = reactive(new Set());
+// `streaming` is derived: true iff the currently-viewed session has an
+// in-flight stream. This lets the user navigate to a different session
+// while another keeps running in the background — the input box is only
+// disabled for the session that is actually busy.
+const streaming = computed(() =>
+  runningSessions.has(currentSessionId.value || "__pending__"),
+);
 const streamBuffer = ref("");
 const activeTools = ref([]);
 const streamToolCalls = ref([]);
@@ -2120,15 +2142,11 @@ async function loadSessions() {
 }
 
 async function newSession() {
-  if (clearing.value || streaming.value) return;
-  // Reuses the same teardown as the existing "Reset" button — clears UI,
-  // then the backend assigns a fresh session id which we capture here.
+  if (clearing.value) return;
+  // Note: we do NOT abort an in-flight stream here. If another session is
+  // running in the background, let it keep running — the SSE handlers will
+  // detect that the user has navigated away and stop writing to the UI.
   clearing.value = true;
-  if (abortController) {
-    abortController.abort();
-    abortController = null;
-  }
-  streaming.value = false;
   messages.value = [];
   streamBuffer.value = "";
   streamToolCalls.value = [];
@@ -2162,7 +2180,8 @@ async function newSession() {
 
 async function selectSession(sessionId) {
   if (!sessionId || sessionId === currentSessionId.value) return;
-  if (streaming.value) return;
+  // Allow switching even if another session is streaming in the background;
+  // the in-flight SSE handlers will detect the navigation and skip UI writes.
   try {
     await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/select`, {
       method: "POST",
@@ -2210,6 +2229,55 @@ async function selectSession(sessionId) {
               content: "Resumed conversation. Ask anything to continue.",
             },
           ];
+
+      // Replay any ReportMaturityScore tool calls so the sidebar stars
+      // reflect the conversation's last-known scores. Latest call per level wins.
+      maturityScores.crawl = null;
+      maturityScores.walk = null;
+      maturityScores.run = null;
+      maturityScores.playbook = null;
+      for (const m of restored) {
+        for (const tc of m.toolCalls || []) {
+          if (tc.tool !== "ReportMaturityScore") continue;
+          let level = null;
+          let scoresJson = null;
+          // Prefer the SSE marker baked into the tool result.
+          const marker =
+            typeof tc.result === "string" &&
+            tc.result.startsWith("__MATURITY_SCORE__:")
+              ? tc.result
+              : null;
+          if (marker) {
+            const rest = marker.slice("__MATURITY_SCORE__:".length);
+            const idx = rest.indexOf(":");
+            if (idx > 0) {
+              level = rest.slice(0, idx).toLowerCase();
+              scoresJson = rest.slice(idx + 1);
+            }
+          } else if (tc.args) {
+            // Fallback: parse the tool args (level + scores).
+            try {
+              const a =
+                typeof tc.args === "string" ? JSON.parse(tc.args) : tc.args;
+              level = (a.level || "").toLowerCase();
+              scoresJson = a.scores;
+            } catch {}
+          }
+          if (
+            level &&
+            ["crawl", "walk", "run", "playbook"].includes(level) &&
+            scoresJson
+          ) {
+            try {
+              const arr =
+                typeof scoresJson === "string"
+                  ? JSON.parse(scoresJson)
+                  : scoresJson;
+              if (Array.isArray(arr)) maturityScores[level] = arr;
+            } catch {}
+          }
+        }
+      }
     } else {
       const meta = sessions.value.find((s) => s.id === sessionId);
       messages.value = [
@@ -2235,6 +2303,15 @@ async function deleteSession(sessionId) {
   if (sessionId === currentSessionId.value) {
     currentSessionId.value = null;
     messages.value = [];
+    streamToolCalls.value = [];
+    streamCharts.value = [];
+    streamFollowUp.value = null;
+    scriptReady.value = null;
+    htmlReady.value = null;
+    maturityScores.crawl = null;
+    maturityScores.walk = null;
+    maturityScores.run = null;
+    maturityScores.playbook = null;
   }
   await loadSessions();
 }
@@ -2501,7 +2578,6 @@ watch(
       azureManagementGroups.value = [];
       azureApis.value = [];
       input.value = "";
-      streaming.value = false;
       if (abortController) {
         abortController.abort();
         abortController = null;
@@ -2575,7 +2651,6 @@ async function clearMessages() {
     abortController.abort();
     abortController = null;
   }
-  streaming.value = false;
   messages.value = [];
   streamBuffer.value = "";
   streamToolCalls.value = [];
@@ -4194,14 +4269,25 @@ function copyScript(content) {
 async function send() {
   if (!props.user || clearing.value) return;
   const prompt = input.value.trim();
-  if (!prompt || streaming.value) return;
+  if (!prompt) return;
+  // Per-session gate: only block sending another prompt to the SAME session
+  // while it is already streaming. Other sessions can keep running in the
+  // background.
+  const startSessionId = currentSessionId.value;
+  if (runningSessions.has(startSessionId || "__pending__")) return;
 
   messages.value.push({ role: "user", content: prompt });
   input.value = "";
   nextTick(() => {
     if (inputEl.value) inputEl.value.style.height = "auto";
   });
-  streaming.value = true;
+  // Track this stream's session id locally so we can detect (a) when the
+  // user has navigated to a different session mid-stream, and (b) which
+  // entry to drop from runningSessions when we finish.
+  let streamingId = startSessionId || "__pending__";
+  runningSessions.add(streamingId);
+  const isActiveView = () =>
+    streamingId === (currentSessionId.value || "__pending__");
   streamBuffer.value = "";
   activeTools.value = [];
   streamToolCalls.value = [];
@@ -4247,12 +4333,35 @@ async function send() {
           continue;
         }
 
+        // Routing/sidebar events are handled regardless of which session the
+        // user is currently viewing. Everything else is gated on isActiveView()
+        // below so a backgrounded stream keeps draining bytes (the server
+        // needs us to keep reading) without polluting the foreground view.
+        const routingEvent =
+          data.type === "session" || data.type === "session_title";
+        if (!routingEvent && !isActiveView()) continue;
+
         switch (data.type) {
           case "session":
-            // Backend echoes the active sessionId at the start of each chat
-            // so we can highlight it in the Conversations sidebar and include
-            // it in subsequent requests.
-            if (data.id) currentSessionId.value = data.id;
+            // Backend echoes the active sessionId at the start of each chat.
+            // Swap our local streamingId/runningSessions key from the
+            // "__pending__" sentinel (or stale id) to the real id so the
+            // pulsing dot follows the right row.
+            if (data.id) {
+              if (streamingId !== data.id) {
+                runningSessions.delete(streamingId);
+                streamingId = data.id;
+                runningSessions.add(streamingId);
+              }
+              // Only move the user's view to the new id if they haven't
+              // navigated away to a different session in the meantime.
+              if (
+                currentSessionId.value === null ||
+                currentSessionId.value === startSessionId
+              ) {
+                currentSessionId.value = data.id;
+              }
+            }
             break;
 
           case "session_title": {
@@ -4452,10 +4561,14 @@ async function send() {
       msgObj.script = { ...scriptReady.value };
       scriptReady.value = null;
     }
-    messages.value.push(msgObj);
+    // Only commit the assistant message into the visible message list if
+    // the user is still viewing this stream's session. Otherwise the
+    // server has already persisted it and the user will see it via the
+    // /messages reload when they navigate back.
+    if (isActiveView()) messages.value.push(msgObj);
   } catch (err) {
     if (err.name === "AbortError") {
-      if (streamBuffer.value) {
+      if (streamBuffer.value && isActiveView()) {
         messages.value.push({
           role: "assistant",
           content: streamBuffer.value + "\n\n*(generation stopped)*",
@@ -4463,7 +4576,7 @@ async function send() {
           charts: [...streamCharts.value],
         });
       }
-    } else {
+    } else if (isActiveView()) {
       messages.value.push({
         role: "assistant",
         content: `**Connection error:** ${err.message}`,
@@ -4472,18 +4585,23 @@ async function send() {
   } finally {
     clearInterval(intentAnimTimer);
     intentAnimTimer = null;
-    flushText();
-    streaming.value = false;
-    streamBuffer.value = "";
-    activeTools.value = [];
-    streamToolCalls.value = [];
-    streamCharts.value = [];
-    streamFollowUp.value = null;
-    streamIntent.value = "";
-    scriptReady.value = null;
-    htmlReady.value = null;
-    abortController = null;
-    nextTick(() => inputEl.value?.focus());
+    runningSessions.delete(streamingId);
+    // Only wipe the live-stream UI refs if this stream's session is still
+    // the foreground view. If the user navigated to a different session,
+    // those refs reflect *that* session's state and must not be touched.
+    if (isActiveView()) {
+      flushText();
+      streamBuffer.value = "";
+      activeTools.value = [];
+      streamToolCalls.value = [];
+      streamCharts.value = [];
+      streamFollowUp.value = null;
+      streamIntent.value = "";
+      scriptReady.value = null;
+      htmlReady.value = null;
+      abortController = null;
+      nextTick(() => inputEl.value?.focus());
+    }
     // Refresh the Conversations sidebar so the new/updated summary shows up.
     if (azureConnected.value) loadSessions();
     if (availableModels.value.length <= 1) {
@@ -4918,6 +5036,9 @@ async function send() {
   border-radius: 8px;
   background: #fff;
   cursor: pointer;
+  box-shadow:
+    0 2px 4px rgba(15, 23, 42, 0.06),
+    0 1px 2px rgba(15, 23, 42, 0.04);
   transition:
     border-color 0.2s ease,
     box-shadow 0.25s ease,
@@ -4925,11 +5046,11 @@ async function send() {
   user-select: none;
 }
 .maturity-card:hover:not(.maturity-card--disabled) {
-  border-color: #0078d4;
+  border-color: #c8c6c4;
   box-shadow:
-    0 8px 20px rgba(0, 120, 212, 0.18),
-    0 2px 6px rgba(15, 23, 42, 0.08);
-  transform: translateY(-3px);
+    0 8px 16px rgba(15, 23, 42, 0.12),
+    0 2px 4px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
 }
 .maturity-card:focus-visible {
   outline: 2px solid #c8c6c4;
@@ -4940,7 +5061,7 @@ async function send() {
   cursor: default;
 }
 .maturity-card--scored {
-  background: #fafbfc;
+  background: #fff;
 }
 .maturity-card-header {
   display: flex;
@@ -4967,18 +5088,15 @@ async function send() {
 }
 .maturity-card-cta {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  color: #0078d4;
-  padding: 3px 10px;
-  border: 1px solid #0078d4;
-  border-radius: 12px;
-  background: transparent;
+  color: #8a8886;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
   white-space: nowrap;
 }
 .maturity-card:hover:not(.maturity-card--disabled) .maturity-card-cta {
-  background: #0078d4;
-  color: #fff;
+  color: #1f2328;
 }
 .maturity-card-body {
   display: flex;
@@ -7004,34 +7122,37 @@ async function send() {
   flex: 1 1 50%;
   min-height: 140px;
   border-top: 1px solid #e1dfdd;
-  background: #fafaf9;
+  background: #fff;
 }
 .sessions-header {
-  background: #f3f2f1;
+  background: #fff;
 }
 .sessions-new-btn {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  padding: 3px 9px;
-  border-radius: 4px;
-  border: 1px solid #d2d0ce;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #e1dfdd;
   background: #fff;
-  color: #0078d4;
+  color: #323130;
   cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   transition:
     background 0.15s,
-    border-color 0.15s;
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 .sessions-new-btn:hover:not(:disabled) {
-  background: #eff6fc;
-  border-color: #0078d4;
+  background: #fff;
+  border-color: #d2d0ce;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 .sessions-new-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .sessions-scroll {
-  padding: 4px 6px 8px;
+  padding: 4px 8px 8px;
 }
 .sessions-empty {
   padding: 12px 8px;
@@ -7043,21 +7164,29 @@ async function send() {
 .session-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 4px;
+  gap: 8px;
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
   cursor: pointer;
-  transition: background 0.12s;
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease;
   position: relative;
 }
 .session-row:hover {
-  background: #edebe9;
+  background: rgba(15, 23, 42, 0.04);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 .session-row--current {
-  background: #deecf9;
+  background: #f3f2f1;
 }
 .session-row--current:hover {
-  background: #c7e0f4;
+  background: #f3f2f1;
 }
 .session-row-main {
   flex: 1;
@@ -7067,12 +7196,13 @@ async function send() {
   gap: 1px;
 }
 .session-row-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: #1a1a1a;
+  font-size: 13px;
+  font-weight: 400;
+  color: #323130;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.4;
 }
 .session-row-time {
   font-size: 10.5px;
@@ -7725,7 +7855,7 @@ async function send() {
 }
 .follow-up-btn {
   background: #fff;
-  color: #0078d4;
+  color: #323130;
   border: 1px solid #e1dfdd;
   border-radius: 8px;
   padding: 8px 14px;
@@ -7735,17 +7865,15 @@ async function send() {
   text-align: left;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   transition:
-    border-color 0.2s ease,
-    box-shadow 0.25s ease,
-    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
 }
 .follow-up-btn:hover {
   background: #fff;
-  border-color: #0078d4;
-  box-shadow:
-    0 8px 20px rgba(0, 120, 212, 0.18),
-    0 2px 6px rgba(15, 23, 42, 0.08);
-  transform: translateY(-3px);
+  border-color: #d2d0ce;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
 }
 
 /* ── Mobile ── */
