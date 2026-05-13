@@ -33,6 +33,12 @@ public static class ChatEndpoints
 
             using var bodyDoc = await JsonDocument.ParseAsync(ctx.Request.Body);
             var prompt = bodyDoc.RootElement.GetProperty("prompt").GetString();
+            string? requestedSessionId = null;
+            if (bodyDoc.RootElement.TryGetProperty("sessionId", out var sidProp) && sidProp.ValueKind == JsonValueKind.String)
+            {
+                var sidStr = sidProp.GetString();
+                if (!string.IsNullOrWhiteSpace(sidStr)) requestedSessionId = sidStr;
+            }
 
             if (string.IsNullOrWhiteSpace(prompt))
             {
@@ -44,6 +50,21 @@ public static class ChatEndpoints
             var user = JsonSerializer.Deserialize<JsonElement>(userJson);
             var userId = user.GetProperty("id").GetInt64();
             var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
+
+            // Entra-connected users get persistent per-oid session storage; anonymous
+            // users get an ephemeral working dir that won't appear in any list.
+            string? entraOid = null;
+            var azureUserJson = ctx.Session.GetString("azure_user");
+            if (azureUserJson is not null)
+            {
+                try
+                {
+                    var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("objectId", out var oidProp))
+                        entraOid = oidProp.GetString();
+                }
+                catch { /* ignore malformed session blob */ }
+            }
 
             // Track activity for the janitor's idle eviction.
             UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
@@ -116,7 +137,29 @@ public static class ChatEndpoints
 
             try
             {
-                var session = await copilotFactory.GetOrCreateSessionAsync(userId, userLogin!);
+                CopilotSession session;
+                if (!string.IsNullOrEmpty(requestedSessionId))
+                {
+                    // IDOR guard: a requested sessionId must belong to this
+                    // user's persistent workdir (Entra OID workdir or anon-userId workdir).
+                    // If it doesn't (stale localStorage after a redeploy, or a forged id),
+                    // silently fall through to the user's current/new session so the
+                    // UX doesn't dead-end &#8212; we never resume someone else's session.
+                    if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, requestedSessionId, ctx.RequestAborted))
+                    {
+                        logger.LogInformation("Requested sessionId {Sid} not owned by user {Uid}; falling back to current session", requestedSessionId, userId);
+                        session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
+                    }
+                    else
+                    {
+                        session = await copilotFactory.GetOrResumeAsync(userId, requestedSessionId, userLogin!, entraOid);
+                    }
+                }
+                else
+                {
+                    session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
+                }
+                var activeSessionId = session.SessionId;
 
                 var done = new TaskCompletionSource();
                 var cancelled = false;
@@ -138,7 +181,7 @@ public static class ChatEndpoints
                     try
                     {
                         await HandleSessionEventAsync(evt, ctx, toolTracker, telemetry, copilotFactory.Deployment,
-                            userId, userLogin!, chatActivity, logger, done, () => cancelled = true);
+                            userId, userLogin!, activeSessionId, chatActivity, logger, done, () => cancelled = true);
                     }
                     catch
                     {
@@ -147,19 +190,99 @@ public static class ChatEndpoints
                     }
                 });
 
+                // Capture the assistant's full reply so we can generate a sidebar
+                // title after the turn completes (CLI's title_changed event just
+                // echoes the user prompt, which makes a poor summary). Replies
+                // are streamed as deltas, so we accumulate them here.
+                // StringBuilder is NOT thread-safe — the SDK may dispatch event
+                // callbacks concurrently — so we guard every mutation/read.
+                var assistantBuf = new System.Text.StringBuilder();
+                var assistantBufLock = new object();
+                using var assistantCapture = session.On(async (SessionEvent evt) =>
+                {
+                    if (evt is AssistantMessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Data.DeltaContent))
+                        lock (assistantBufLock) { assistantBuf.Append(ad.Data.DeltaContent); }
+                    else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Data.Content))
+                        lock (assistantBufLock) { assistantBuf.Clear(); assistantBuf.Append(am.Data.Content); }
+                    await Task.CompletedTask;
+                });
+
+                // Emit the active sessionId as the first SSE event so the frontend
+                // can highlight it in the Conversations sidebar and include it in
+                // subsequent requests.
+                await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "session", id = activeSessionId })}\n\n");
+                await ctx.Response.Body.FlushAsync();
+
                 try
                 {
                     await session.SendAsync(new MessageOptions { Prompt = prompt });
                 }
                 catch (Exception sendEx) when (sendEx.Message.Contains("Session not found", StringComparison.OrdinalIgnoreCase))
                 {
-                    logger.LogWarning("Copilot session expired for user {User}, recreating. Error: {Error}", userLogin, sendEx.Message);
+                    logger.LogWarning("Copilot session expired for user {User}, recycling. Error: {Error}", userLogin, sendEx.Message);
                     chatActivity?.SetTag("ai.session_expired", true);
-                    session = await copilotFactory.RecreateSessionAsync(userId, userLogin!);
+                    session = await copilotFactory.RecycleSessionAsync(userId, activeSessionId, userLogin!, entraOid);
                     await session.SendAsync(new MessageOptions { Prompt = prompt });
                 }
 
                 await done.Task;
+
+                // Race-fix: a previous turn's background title call may have
+                // saved a fresh title AFTER its SSE stream closed. Always re-emit
+                // the persisted title on the current open stream so the sidebar
+                // catches up.
+                if (!cancelled
+                    && telemetry.SessionTitles.TryGetValue(activeSessionId, out var persistedTitle)
+                    && !string.IsNullOrWhiteSpace(persistedTitle))
+                {
+                    try
+                    {
+                        var p = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = persistedTitle });
+                        await ctx.Response.WriteAsync($"data: {p}\n\n");
+                        await ctx.Response.Body.FlushAsync();
+                    }
+                    catch { }
+                }
+
+                // After each turn, refresh the sidebar title via Azure OpenAI if
+                // the current persisted title is missing or still equals the raw
+                // user prompt. Cheap (one ~24-token completion) — we await it so
+                // the SSE stream actually delivers the new title for THIS turn.
+                string assistantReply;
+                lock (assistantBufLock) { assistantReply = assistantBuf.ToString(); }
+                logger.LogDebug("Title-gen check: cancelled={Cancelled} replyLen={Len} sessionId={Sid}",
+                    cancelled, assistantReply.Length, activeSessionId);
+                if (!cancelled && !string.IsNullOrWhiteSpace(assistantReply))
+                {
+                    var existing = telemetry.SessionTitles.TryGetValue(activeSessionId, out var t) ? t : null;
+                    var promptClean = AzureFinOps.Dashboard.Endpoints.SessionEndpoints.CleanSummary(prompt);
+                    var needsTitle = string.IsNullOrWhiteSpace(existing)
+                        || existing.Equals(promptClean, StringComparison.OrdinalIgnoreCase)
+                        || existing.StartsWith("Untitled", StringComparison.OrdinalIgnoreCase);
+                    if (needsTitle)
+                    {
+                        // Bound the wait so a slow title call never holds the SSE
+                        // stream open for more than ~10s.
+                        using var titleCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+                        titleCts.CancelAfter(TimeSpan.FromSeconds(10));
+                        try
+                        {
+                            var generated = await copilotFactory.GenerateTitleAsync(prompt, assistantReply, titleCts.Token);
+                            if (!string.IsNullOrWhiteSpace(generated))
+                            {
+                                telemetry.SaveTitle(activeSessionId, generated);
+                                try
+                                {
+                                    var payload = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = generated });
+                                    await ctx.Response.WriteAsync($"data: {payload}\n\n");
+                                    await ctx.Response.Body.FlushAsync();
+                                }
+                                catch { /* client may have disconnected — title is still saved */ }
+                            }
+                        }
+                        catch (OperationCanceledException) { /* timeout or client abort */ }
+                    }
+                }
 
                 chatSw.Stop();
                 telemetry.ChatDuration.Record(chatSw.Elapsed.TotalMilliseconds,
@@ -191,17 +314,27 @@ public static class ChatEndpoints
 
             var user = JsonSerializer.Deserialize<JsonElement>(userJson);
             var userId = user.GetProperty("id").GetInt64();
+            var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
 
-            if (telemetry.UserSessions.TryRemove(userId, out var oldSession))
+            string? entraOid = null;
+            var azureUserJson = ctx.Session.GetString("azure_user");
+            if (azureUserJson is not null)
             {
-                telemetry.ActiveSessions.Add(-1);
-                try { await oldSession.DisposeAsync(); } catch { }
+                try
+                {
+                    var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("objectId", out var oidProp))
+                        entraOid = oidProp.GetString();
+                }
+                catch { }
             }
 
+            // "Reset" semantics: start a brand-new conversation. The previous one
+            // remains on disk and can be resumed via the Conversations sidebar.
+            var fresh = await copilotFactory.CreateNewAsync(userId, userLogin!, entraOid);
             AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ClearForUser(userId);
-
-            logger.LogInformation("Copilot session cleared for user {UserId}", userId);
-            ctx.Response.StatusCode = 204;
+            logger.LogInformation("Started new conversation for user {UserId} sessionId={SessionId}", userId, fresh.SessionId);
+            await ctx.Response.WriteAsJsonAsync(new { sessionId = fresh.SessionId });
         });
     }
 
@@ -213,6 +346,7 @@ public static class ChatEndpoints
         string deployment,
         long userId,
         string userLogin,
+        string activeSessionId,
         Activity? chatActivity,
         ILogger logger,
         TaskCompletionSource done,
@@ -255,13 +389,22 @@ public static class ChatEndpoints
         {
             sseData = await HandleToolDoneAsync(toolDone, ctx, toolTracker, telemetry, userLogin, logger);
         }
+        else if (evt is SessionTitleChangedEvent titleEvt)
+        {
+            var newTitle = AzureFinOps.Dashboard.Endpoints.SessionEndpoints.CleanSummary(titleEvt.Data.Title);
+            telemetry.SaveTitle(activeSessionId, newTitle);
+            sseData = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = newTitle });
+        }
         else if (evt is SessionErrorEvent error)
         {
             sseData = JsonSerializer.Serialize(new { type = "error", message = error.Data.Message });
             logger.LogError("Session error for {User}: {Error}", userLogin, error.Data.Message);
             chatActivity?.SetTag("ai.error", error.Data.Message);
-            if (telemetry.UserSessions.TryRemove(userId, out _))
+            if (telemetry.LiveSessions.TryRemove(activeSessionId, out var dead))
+            {
                 telemetry.ActiveSessions.Add(-1);
+                try { await dead.Session.DisposeAsync(); } catch { }
+            }
         }
 
         if (sseData is not null)

@@ -28,6 +28,7 @@ public static class MicrosoftAuthEndpoints
         EntraClientCredentials credentials,
         IdTokenValidator idTokenValidator,
         AiTelemetry telemetry,
+        PersistentIdentity persistentIdentity,
         ILogger logger)
     {
         // Anonymous-or-Azure-enriched user identity
@@ -60,19 +61,36 @@ public static class MicrosoftAuthEndpoints
         app.MapPost("/auth/logout", async (HttpContext ctx) =>
         {
             var userJson = ctx.Session.GetString("user");
+            string? oid = null;
+            var azureUserJson = ctx.Session.GetString("azure_user");
+            if (azureUserJson is not null)
+            {
+                try
+                {
+                    var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("objectId", out var oidProp)) oid = oidProp.GetString();
+                }
+                catch { }
+            }
             if (userJson is not null)
             {
                 var u = JsonSerializer.Deserialize<JsonElement>(userJson);
                 var uid = u.GetProperty("id").GetInt64();
-                if (telemetry.UserSessions.TryRemove(uid, out var oldSession))
+                var owned = telemetry.LiveSessions.Where(kv => kv.Value.UserId == uid).Select(kv => kv.Key).ToList();
+                foreach (var sid in owned)
                 {
-                    telemetry.ActiveSessions.Add(-1);
-                    try { await oldSession.DisposeAsync(); } catch { }
+                    if (telemetry.LiveSessions.TryRemove(sid, out var live))
+                    {
+                        telemetry.ActiveSessions.Add(-1);
+                        try { await live.Session.DisposeAsync(); } catch { }
+                    }
                 }
+                telemetry.CurrentSessionId.TryRemove(uid, out _);
                 telemetry.UserTokens.TryRemove(uid, out _);
                 telemetry.UserTools.TryRemove(uid, out _);
             }
             ctx.Session.Clear();
+            persistentIdentity.Clear(ctx, oid);
             return Results.Ok(new { ok = true });
         });
 
@@ -336,6 +354,71 @@ public static class MicrosoftAuthEndpoints
                         ["email"] = validated.Email ?? validated.PreferredUsername,
                     };
                     ctx.Session.SetString("azure_user", JsonSerializer.Serialize(azureUser));
+
+                    // Promote the random anonymous userId to a deterministic OID-derived id,
+                    // migrating any in-memory per-user state so the current chat doesn't get
+                    // orphaned mid-conversation.
+                    var oid = validated.ObjectId;
+                    if (!string.IsNullOrEmpty(oid))
+                    {
+                        var newUserId = PersistentIdentity.DeriveUserId(oid);
+                        long? oldUserId = null;
+                        var existingUserJson = ctx.Session.GetString("user");
+                        if (existingUserJson is not null)
+                        {
+                            try
+                            {
+                                var u = JsonSerializer.Deserialize<JsonElement>(existingUserJson);
+                                oldUserId = u.GetProperty("id").GetInt64();
+                            }
+                            catch { }
+                        }
+                        if (oldUserId.HasValue && oldUserId.Value != newUserId)
+                        {
+                            // Re-key per-user dicts. Last-write wins is fine: a single user can't
+                            // be in flight under two ids on the same browser session.
+                            if (telemetry.UserTokens.TryRemove(oldUserId.Value, out var t)) telemetry.UserTokens[newUserId] = t;
+                            if (telemetry.UserTools.TryRemove(oldUserId.Value, out var tools)) telemetry.UserTools[newUserId] = tools;
+                            if (telemetry.CurrentSessionId.TryRemove(oldUserId.Value, out var sid)) telemetry.CurrentSessionId[newUserId] = sid;
+                            // LiveSessions has init-only UserId; not migrated. Any in-flight CLI
+                            // session under the anon id will be cleaned up by the idle-timeout
+                            // sweep (30 min) and the next prompt creates a fresh one under newUserId.
+                        }
+                        ctx.Session.SetString("user", JsonSerializer.Serialize(new
+                        {
+                            id = newUserId,
+                            login = $"user-{newUserId & 0xFFFF:X4}",
+                            name = validated.Name,
+                            avatar = (string?)null,
+                            email = validated.Email ?? validated.PreferredUsername,
+                        }));
+
+                        // Persist identity + the rotating refresh_token to /home so the user
+                        // doesn't have to re-auth after a container restart. On non-base tier
+                        // callbacks Entra still returns a refresh_token (because we always
+                        // request offline_access), so this also keeps the persisted record's
+                        // GraphTier in sync as the user adds add-on consents incrementally.
+                        if (!string.IsNullOrEmpty(refreshToken))
+                        {
+                            persistentIdentity.SaveIdentity(ctx, new IdentityRecord
+                            {
+                                Oid = oid,
+                                TenantId = validated.TenantId ?? "",
+                                UserId = newUserId,
+                                Name = validated.Name,
+                                Email = validated.Email ?? validated.PreferredUsername,
+                                RefreshToken = refreshToken,
+                                GraphTier = ctx.Session.GetString("graph_tier"),
+                            });
+                        }
+                        else
+                        {
+                            // Edge case: re-consent without a fresh refresh_token. Update only
+                            // the GraphTier so post-restart hydration still reflects the new
+                            // add-on without clobbering the existing refresh token.
+                            persistentIdentity.UpdateGraphTier(oid, ctx.Session.GetString("graph_tier"));
+                        }
+                    }
                 }
 
                 logger.LogInformation("Microsoft OAuth login successful, tier={Tier}", authTier);

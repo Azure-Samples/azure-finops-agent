@@ -37,15 +37,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update -qq && \
     apt-get install -y --no-install-recommends \
-      python3 python3-pip \
-      jq sqlite3 && \
+    python3 python3-pip \
+    jq sqlite3 && \
     ln -sf /usr/bin/python3 /usr/bin/python
 
 # Pip packages — cached separately so changing apt vs pip doesn't bust both.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --break-system-packages \
-      requests pandas numpy openpyxl tabulate python-dateutil \
-      "pdfminer.six>=20240706" "pyarrow>=17.0"
+    requests pandas numpy openpyxl tabulate python-dateutil \
+    "pdfminer.six>=20240706" "pyarrow>=17.0"
 
 # OpenTelemetry Collector (contrib build — needed for the azuremonitor exporter).
 # Bridges OTLP from the Copilot CLI subprocess into Azure Application Insights.
@@ -71,6 +71,15 @@ ENV ASPNETCORE_URLS=http://+:8080
 # telemetry to the local collector.
 ENV OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 ENV OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+# Persist Copilot SDK session state on the App Service /home Azure Files mount
+# so chat history survives container restarts, scale ops, and slot swaps.
+# COPILOT_HOME is read by CopilotSessionFactory and passed to the SDK via
+# CopilotClientOptions.CopilotHome (1.0-beta.3+) — the CLI then writes session
+# state under /home/copilot/.copilot/session-state/. /home is the persistent
+# Azure Files mount on App Service Linux. Per-user sessions are isolated under
+# /home/copilot/users/{oid} via SessionConfig.WorkingDirectory (filtered at
+# list time via SessionListFilter.Cwd).
+ENV COPILOT_HOME=/home/copilot
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

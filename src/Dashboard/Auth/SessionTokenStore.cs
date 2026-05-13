@@ -13,17 +13,19 @@ public sealed class SessionTokenStore
 {
     private readonly MicrosoftOAuthOptions _options;
     private readonly EntraClientCredentials _credentials;
+    private readonly PersistentIdentity _identity;
     private readonly ILogger<SessionTokenStore> _logger;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _refreshLocks = new();
 
-    public SessionTokenStore(MicrosoftOAuthOptions options, EntraClientCredentials credentials, ILogger<SessionTokenStore> logger)
+    public SessionTokenStore(MicrosoftOAuthOptions options, EntraClientCredentials credentials, PersistentIdentity identity, ILogger<SessionTokenStore> logger)
     {
         _options = options;
         _credentials = credentials;
+        _identity = identity;
         _logger = logger;
     }
 
-    public async Task<(string Token, DateTimeOffset Expiry)?> ExchangeRefreshTokenForResource(
+    public async Task<(string Token, DateTimeOffset Expiry, string? RotatedRefreshToken)?> ExchangeRefreshTokenForResource(
         HttpClient http, string refreshToken, string scope, string? tenantOverride = null)
     {
         var effectiveTenant = tenantOverride ?? _options.TenantId;
@@ -47,18 +49,27 @@ public sealed class SessionTokenStore
         if (!json.TryGetProperty("access_token", out var tokenProp)) return null;
 
         var expiresIn = json.TryGetProperty("expires_in", out var expProp) ? expProp.GetInt32() : 3600;
-        return (tokenProp.GetString()!, DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60));
+        var rotated = json.TryGetProperty("refresh_token", out var newRt) ? newRt.GetString() : null;
+        return (tokenProp.GetString()!, DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60), rotated);
     }
 
     public async Task<string?> GetSessionTokenAsync(HttpContext ctx, IHttpClientFactory httpFactory,
         string tokenKey, string expiryKey, string refreshScope)
     {
         var token = ctx.Session.GetString(tokenKey);
-        if (token is null) return null;
-
         var expiryStr = ctx.Session.GetString(expiryKey);
-        if (expiryStr is null || !DateTimeOffset.TryParse(expiryStr, out var expiry) || expiry > DateTimeOffset.UtcNow)
+
+        // No cached access token but we have a refresh token (typical right after a
+        // restart-driven session hydration) &#8212; fall through to mint a fresh one.
+        var hasRefresh = !string.IsNullOrEmpty(ctx.Session.GetString("azure_refresh_token"));
+        if (token is null)
+        {
+            if (!hasRefresh) return null;
+        }
+        else if (expiryStr is null || !DateTimeOffset.TryParse(expiryStr, out var expiry) || expiry > DateTimeOffset.UtcNow)
+        {
             return token;
+        }
 
         var lockKey = $"{ctx.Session.Id}|{tokenKey}";
         var sem = _refreshLocks.GetOrAdd(lockKey, _ => new SemaphoreSlim(1, 1));
@@ -94,6 +105,27 @@ public sealed class SessionTokenStore
             }
             ctx.Session.SetString(tokenKey, result.Value.Token);
             ctx.Session.SetString(expiryKey, result.Value.Expiry.ToString("o"));
+            if (!string.IsNullOrEmpty(result.Value.RotatedRefreshToken))
+            {
+                ctx.Session.SetString("azure_refresh_token", result.Value.RotatedRefreshToken);
+                // Mirror the rotated refresh token to /home so survival across container
+                // restarts keeps working after Entra has rotated the original.
+                var azureUserJson = ctx.Session.GetString("azure_user");
+                if (azureUserJson is not null)
+                {
+                    try
+                    {
+                        var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                        if (au.TryGetProperty("objectId", out var oidProp))
+                        {
+                            var oid = oidProp.GetString();
+                            if (!string.IsNullOrEmpty(oid))
+                                _identity.UpdateRefreshToken(oid, result.Value.RotatedRefreshToken);
+                        }
+                    }
+                    catch { }
+                }
+            }
             return result.Value.Token;
         }
         finally

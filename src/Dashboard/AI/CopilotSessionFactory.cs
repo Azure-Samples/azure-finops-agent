@@ -1,4 +1,7 @@
 using System.Collections.Concurrent;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
 using AzureFinOps.Dashboard.AI.Tools;
@@ -153,16 +156,42 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
     private string? _cachedBearerToken;
     private DateTimeOffset _bearerTokenExpiry = DateTimeOffset.MinValue;
 
-    // Tracks the bearer-token expiry that was baked into each user's CopilotSession
-    // at creation time. The Copilot CLI subprocess holds its own copy of the token
-    // string passed via ProviderConfig.BearerToken — there is no way to push a
-    // refreshed token into a running session — so once the original token expires
-    // every subsequent prompt fails with HTTP 401 from Azure OpenAI. We proactively
-    // recreate the session before that happens (see RecycleBuffer).
-    private readonly ConcurrentDictionary<long, DateTimeOffset> _sessionTokenExpiry = new();
+    // BYOK token expiry note: ProviderConfig.BearerToken is a STATIC string baked
+    // into the Copilot CLI subprocess at session creation. There's no callback to
+    // push refreshed tokens. Once the bearer expires (~1h) every prompt fails 401.
+    // We track the expiry per live session in LiveSessionInfo and recycle in-place
+    // by calling ResumeSessionAsync(sameSessionId, ...) — which preserves history.
     private static readonly TimeSpan RecycleBuffer = TimeSpan.FromMinutes(10);
 
+    // Root for SDK session-state. On Azure App Service /home is a persistent
+    // Azure Files mount, so chat history survives restarts.
+    private static readonly string CopilotHome =
+        Environment.GetEnvironmentVariable("COPILOT_HOME")
+        ?? Path.Combine(Path.GetTempPath(), "copilot");
+
     public string Deployment => _deployment;
+
+    /// <summary>
+    /// Resolves the per-user working directory used to scope the SDK's session
+    /// store. Entra-connected users get a stable path under
+    /// <c>$COPILOT_HOME/users/{oid}</c> so their conversations survive restarts
+    /// and isolate from other users; anonymous users get an ephemeral per-process
+    /// dir that won't show up in any session list.
+    /// </summary>
+    public static string GetWorkingDirectory(long userId, string? entraOid)
+    {
+        EnsureRootExists();
+        var subdir = !string.IsNullOrEmpty(entraOid)
+            ? Path.Combine(CopilotHome, "users", entraOid)
+            : Path.Combine(CopilotHome, "anon", userId.ToString());
+        Directory.CreateDirectory(subdir);
+        return subdir;
+    }
+
+    private static void EnsureRootExists()
+    {
+        try { Directory.CreateDirectory(CopilotHome); } catch { }
+    }
 
     private CopilotSessionFactory(
         AiTelemetry telemetry,
@@ -194,7 +223,18 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
         // Azure Monitor format and ships it to Application Insights so we get full
         // tool-call and LLM-roundtrip visibility without any custom span wiring.
         var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
-        var clientOptions = new CopilotClientOptions();
+        var clientOptions = new CopilotClientOptions
+        {
+            // Point the CLI's session-state directory at the persistent /home
+            // Azure Files mount on App Service. Replaces the older HOME env var
+            // hack — same effect, but explicit. Falls back to Path.GetTempPath()
+            // locally when COPILOT_HOME isn't set.
+            CopilotHome = CopilotHome,
+            // Disconnect idle sessions from the in-memory CLI after 30 min to free
+            // resources. Disk state is preserved — ResumeSessionAsync rehydrates
+            // from /home/copilot/.copilot/session-state/{id}/ on the next prompt.
+            SessionIdleTimeoutSeconds = 1800,
+        };
         if (!string.IsNullOrWhiteSpace(otlpEndpoint))
         {
             clientOptions.Telemetry = new TelemetryConfig
@@ -262,46 +302,213 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
         });
     }
 
-    public async Task<CopilotSession> GetOrCreateSessionAsync(long userId, string userLogin)
+    public async Task<CopilotSession> GetCurrentOrCreateAsync(long userId, string userLogin, string? entraOid)
     {
-        if (_telemetry.UserSessions.TryGetValue(userId, out var existing))
+        // Fast path: user already has a current session id mapped.
+        if (_telemetry.CurrentSessionId.TryGetValue(userId, out var currentId))
         {
-            // Proactively recycle if the BYOK bearer token baked into this session is
-            // about to expire — otherwise the next prompt would hit AOAI HTTP 401.
-            if (_sessionTokenExpiry.TryGetValue(userId, out var expiry) &&
-                expiry > DateTimeOffset.UtcNow.Add(RecycleBuffer))
+            try
             {
-                return existing;
+                return await GetOrResumeAsync(userId, currentId, userLogin, entraOid);
             }
-            _logger.LogInformation("Recycling Copilot session for {User} — BYOK token near expiry ({Expiry})", userLogin, expiry);
-            return await RecreateSessionAsync(userId, userLogin);
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Resume failed for {User} session={SessionId}, creating new", userLogin, currentId);
+                _telemetry.CurrentSessionId.TryRemove(userId, out _);
+            }
         }
 
-        var config = await CreateSessionConfigAsync(userId);
+        // Entra-connected users may have past sessions on disk from a prior run.
+        // Pick the most recently modified one as the implicit "current".
+        if (!string.IsNullOrEmpty(entraOid))
+        {
+            try
+            {
+                var workdir = GetWorkingDirectory(userId, entraOid);
+                var listed = await _copilotClient.ListSessionsAsync(
+                    new SessionListFilter { Cwd = workdir }, CancellationToken.None);
+                var mostRecent = listed?
+                    .OrderByDescending(s => s.ModifiedTime)
+                    .FirstOrDefault();
+                if (mostRecent is not null)
+                {
+                    _telemetry.CurrentSessionId[userId] = mostRecent.SessionId;
+                    return await GetOrResumeAsync(userId, mostRecent.SessionId, userLogin, entraOid);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ListSessionsAsync failed for {User}, falling back to fresh session", userLogin);
+            }
+        }
+
+        return await CreateNewAsync(userId, userLogin, entraOid);
+    }
+
+    /// <summary>
+    /// Creates a brand-new Copilot session, registers it as the user's current,
+    /// and returns it. The SDK auto-persists state under the per-user working
+    /// directory so subsequent calls to <see cref="ListUserSessionsAsync"/>
+    /// will find it.
+    /// </summary>
+    public async Task<CopilotSession> CreateNewAsync(long userId, string userLogin, string? entraOid)
+    {
+        var config = await CreateSessionConfigAsync(userId, entraOid);
         var session = await _copilotClient.CreateSessionAsync(config);
-        _telemetry.UserSessions[userId] = session;
-        _sessionTokenExpiry[userId] = _bearerTokenExpiry;
+        _telemetry.LiveSessions[session.SessionId] = new LiveSessionInfo
+        {
+            Session = session,
+            UserId = userId,
+            BearerExpiry = _bearerTokenExpiry,
+        };
+        _telemetry.CurrentSessionId[userId] = session.SessionId;
         _telemetry.ActiveSessions.Add(1);
         _logger.LogInformation("Created new Copilot session for {User} sessionId={SessionId}", userLogin, session.SessionId);
         return session;
     }
 
-    public async Task<CopilotSession> RecreateSessionAsync(long userId, string userLogin)
+    /// <summary>
+    /// Returns the live session if cached and the BYOK token is still fresh;
+    /// otherwise resumes from disk (preserving the SDK-managed conversation
+    /// history) and re-keys the live cache.
+    /// </summary>
+    public async Task<CopilotSession> GetOrResumeAsync(long userId, string sessionId, string userLogin, string? entraOid)
     {
-        if (_telemetry.UserSessions.TryRemove(userId, out _))
-            _telemetry.ActiveSessions.Add(-1);
-        _sessionTokenExpiry.TryRemove(userId, out _);
+        if (_telemetry.LiveSessions.TryGetValue(sessionId, out var live))
+        {
+            if (live.BearerExpiry > DateTimeOffset.UtcNow.Add(RecycleBuffer))
+            {
+                _telemetry.CurrentSessionId[userId] = sessionId;
+                return live.Session;
+            }
+            _logger.LogInformation("Recycling Copilot session for {User} — BYOK token near expiry ({Expiry})", userLogin, live.BearerExpiry);
+            await DisposeLiveAsync(sessionId);
+        }
 
-        var config = await CreateSessionConfigAsync(userId);
-        var session = await _copilotClient.CreateSessionAsync(config);
-        _telemetry.UserSessions[userId] = session;
-        _sessionTokenExpiry[userId] = _bearerTokenExpiry;
+        var resumeConfig = await CreateResumeConfigAsync(userId, entraOid);
+        var resumed = await _copilotClient.ResumeSessionAsync(sessionId, resumeConfig, CancellationToken.None);
+        _telemetry.LiveSessions[sessionId] = new LiveSessionInfo
+        {
+            Session = resumed,
+            UserId = userId,
+            BearerExpiry = _bearerTokenExpiry,
+        };
+        _telemetry.CurrentSessionId[userId] = sessionId;
         _telemetry.ActiveSessions.Add(1);
-        _logger.LogInformation("Recreated Copilot session for {User} sessionId={SessionId}", userLogin, session.SessionId);
-        return session;
+        _logger.LogInformation("Resumed Copilot session for {User} sessionId={SessionId}", userLogin, sessionId);
+        return resumed;
     }
 
-    private async Task<SessionConfig> CreateSessionConfigAsync(long userId)
+    /// <summary>Recycles the same session id after a "Session not found" or expiry error.</summary>
+    public async Task<CopilotSession> RecycleSessionAsync(long userId, string sessionId, string userLogin, string? entraOid)
+    {
+        await DisposeLiveAsync(sessionId);
+        try
+        {
+            return await GetOrResumeAsync(userId, sessionId, userLogin, entraOid);
+        }
+        catch
+        {
+            // Session vanished from disk — fall back to a fresh one.
+            return await CreateNewAsync(userId, userLogin, entraOid);
+        }
+    }
+
+    public async Task<IReadOnlyList<SessionMetadata>> ListUserSessionsAsync(long userId, string? entraOid, CancellationToken ct = default)
+    {
+        // Both Entra and anonymous users have a deterministic workdir scope
+        // (`/users/{oid}` vs `/anon/{userId}`), so we can safely list either.
+        var workdir = GetWorkingDirectory(userId, entraOid);
+        var listed = await _copilotClient.ListSessionsAsync(new SessionListFilter { Cwd = workdir }, ct);
+        return listed?.OrderByDescending(s => s.ModifiedTime).ToList() ?? new List<SessionMetadata>();
+    }
+
+    /// <summary>
+    /// Authoritative ownership check: returns true iff <paramref name="sessionId"/>
+    /// lives under the caller's per-user working directory (Entra OID workdir or
+    /// anon-userId workdir). All cross-session API surfaces (resume, delete,
+    /// select, replay) MUST gate on this to prevent IDOR.
+    /// </summary>
+    public async Task<bool> UserOwnsSessionAsync(long userId, string? entraOid, string sessionId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(sessionId)) return false;
+        var sessions = await ListUserSessionsAsync(userId, entraOid, ct);
+        return sessions.Any(s => s.SessionId == sessionId);
+    }
+
+    public async Task DeleteUserSessionAsync(long userId, string sessionId, CancellationToken ct = default)
+    {
+        await DisposeLiveAsync(sessionId);
+        if (_telemetry.CurrentSessionId.TryGetValue(userId, out var current) && current == sessionId)
+            _telemetry.CurrentSessionId.TryRemove(userId, out _);
+        _telemetry.RemoveTitle(sessionId);
+        try { await _copilotClient.DeleteSessionAsync(sessionId, ct); }
+        catch (Exception ex) { _logger.LogWarning(ex, "DeleteSessionAsync failed for {SessionId}", sessionId); }
+    }
+
+    public void SetCurrentSession(long userId, string sessionId)
+        => _telemetry.CurrentSessionId[userId] = sessionId;
+
+    /// <summary>
+    /// Read-only transcript load: resumes the session just long enough to read
+    /// its persisted events, then disposes. Does NOT touch <see cref="AiTelemetry.CurrentSessionId"/>
+    /// or the <c>ActiveSessions</c> gauge — viewing a past conversation must not
+    /// switch the user's current thread or leak the live-session counter.
+    /// </summary>
+    public async Task<IReadOnlyList<SessionEvent>> LoadTranscriptAsync(string sessionId, long userId, string? entraOid, CancellationToken ct = default)
+    {
+        // If we already have it cached live (active chat in another tab), just
+        // read off that instance — don't churn a second resume.
+        if (_telemetry.LiveSessions.TryGetValue(sessionId, out var live))
+        {
+            return await live.Session.GetMessagesAsync(ct);
+        }
+
+        var resumeConfig = await CreateResumeConfigAsync(userId, entraOid);
+        var ephemeral = await _copilotClient.ResumeSessionAsync(sessionId, resumeConfig, ct);
+        try { return await ephemeral.GetMessagesAsync(ct); }
+        finally { try { await ephemeral.DisposeAsync(); } catch { } }
+    }
+
+    /// <summary>Lists session metadata under the persistent-user roots only — the
+    /// janitor must never touch sessions outside <c>$COPILOT_HOME/users/</c> and
+    /// <c>$COPILOT_HOME/anon/</c> (e.g. another container instance sharing the
+    /// same Azure Files mount, or unrelated SDK state).</summary>
+    public async Task<IReadOnlyList<SessionMetadata>> ListAllManagedSessionsAsync(CancellationToken ct = default)
+    {
+        var listed = await _copilotClient.ListSessionsAsync(new SessionListFilter(), ct);
+        if (listed is null) return Array.Empty<SessionMetadata>();
+        var usersRoot = Path.Combine(CopilotHome, "users");
+        var anonRoot = Path.Combine(CopilotHome, "anon");
+        return listed.Where(s =>
+        {
+            // Linux file paths are case-sensitive; Entra OIDs are lowercase
+            // GUIDs and our roots are constructed from a known constant, so
+            // an Ordinal compare is both correct and slightly faster.
+            var c = s.Context?.Cwd ?? "";
+            return c.StartsWith(usersRoot, StringComparison.Ordinal)
+                || c.StartsWith(anonRoot, StringComparison.Ordinal);
+        }).ToList();
+    }
+
+    public async Task DeleteSessionByIdAsync(string sessionId, CancellationToken ct = default)
+    {
+        await DisposeLiveAsync(sessionId);
+        _telemetry.RemoveTitle(sessionId);
+        try { await _copilotClient.DeleteSessionAsync(sessionId, ct); }
+        catch (Exception ex) { _logger.LogWarning(ex, "DeleteSessionAsync failed for {SessionId}", sessionId); }
+    }
+
+    private async Task DisposeLiveAsync(string sessionId)
+    {
+        if (_telemetry.LiveSessions.TryRemove(sessionId, out var live))
+        {
+            _telemetry.ActiveSessions.Add(-1);
+            try { await live.Session.DisposeAsync(); } catch { }
+        }
+    }
+
+    private async Task<SessionConfig> CreateSessionConfigAsync(long userId, string? entraOid)
     {
         var bearerToken = await GetAzureOpenAIBearerTokenAsync();
         return new SessionConfig
@@ -310,6 +517,32 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
             ReasoningEffort = "xhigh",
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
+            WorkingDirectory = GetWorkingDirectory(userId, entraOid),
+            OnPermissionRequest = (_, _) => Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved }),
+            Provider = new ProviderConfig
+            {
+                Type = "azure",
+                BaseUrl = _endpoint.TrimEnd('/'),
+                BearerToken = bearerToken,
+            },
+            SystemMessage = new SystemMessageConfig
+            {
+                Mode = SystemMessageMode.Append,
+                Content = SystemPrompt,
+            },
+        };
+    }
+
+    private async Task<ResumeSessionConfig> CreateResumeConfigAsync(long userId, string? entraOid)
+    {
+        var bearerToken = await GetAzureOpenAIBearerTokenAsync();
+        return new ResumeSessionConfig
+        {
+            Model = _deployment,
+            ReasoningEffort = "xhigh",
+            Streaming = true,
+            Tools = GetOrCreateUserTools(userId),
+            WorkingDirectory = GetWorkingDirectory(userId, entraOid),
             OnPermissionRequest = (_, _) => Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved }),
             Provider = new ProviderConfig
             {
@@ -353,4 +586,54 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
         try { await _copilotClient.DisposeAsync(); } catch { }
         _bearerTokenLock.Dispose();
     }
+
+    private static readonly HttpClient _titleHttp = new() { Timeout = TimeSpan.FromSeconds(15) };
+
+    /// <summary>
+    /// Generates a short (max ~6-word) human-readable title for the conversation
+    /// using the same Azure OpenAI deployment that powers the chat. The Copilot
+    /// CLI's <c>session.title_changed</c> event in this build just echoes the
+    /// user's first prompt verbatim, so we override it with a real summary.
+    /// Returns null on any failure (caller falls back to existing title).
+    /// </summary>
+    public async Task<string?> GenerateTitleAsync(string userMessage, string assistantReply, CancellationToken ct = default)
+    {
+        try
+        {
+            var token = await GetAzureOpenAIBearerTokenAsync();
+            var url = $"{_endpoint.TrimEnd('/')}/openai/deployments/{_deployment}/chat/completions?api-version=2024-10-21";
+            var body = new
+            {
+                messages = new object[]
+                {
+                    new { role = "system", content = "Summarise the user's question into a 3-6 word title for a chat sidebar. No quotes, no trailing punctuation, no emoji. Title-case." },
+                    new { role = "user", content = $"USER: {Truncate(userMessage, 800)}\n\nASSISTANT: {Truncate(assistantReply, 800)}" },
+                },
+                // GPT-5 / o-series parameter. If the deployment is ever swapped
+                // to a GPT-4 model, change this to `max_tokens` (and ideally add
+                // a model-family check at startup).
+                max_completion_tokens = 24,
+            };
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(body) };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var resp = await _titleHttp.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode) return null;
+            using var stream = await resp.Content.ReadAsStreamAsync(ct);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            var title = doc.RootElement
+                .GetProperty("choices")[0]
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString()?.Trim().Trim('"', '\'', '.', ' ');
+            if (string.IsNullOrWhiteSpace(title)) return null;
+            return title.Length > 80 ? title[..80] : title;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Title generation failed");
+            return null;
+        }
+    }
+
+    private static string Truncate(string s, int max) => string.IsNullOrEmpty(s) || s.Length <= max ? s : s[..max];
 }

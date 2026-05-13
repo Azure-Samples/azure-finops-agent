@@ -1579,86 +1579,160 @@
         </div>
       </div>
 
-      <!-- Right sidebar: Tool calls -->
+      <!-- Right sidebar: Agent (tool calls) + Sessions (Entra-only) -->
       <aside
         class="tools-sidebar"
-        :class="{ 'tools-sidebar--open': allToolCalls.length > 0 || streaming }"
+        :class="{
+          'tools-sidebar--open':
+            allToolCalls.length > 0 || streaming || azureConnected,
+        }"
       >
-        <div class="tools-sidebar-header">
-          <div class="tools-sidebar-header-text">
-            <span class="tools-sidebar-title">Agent</span>
-            <span class="tools-sidebar-status">
-              <span
-                v-if="streaming"
-                class="tools-sidebar-status-dot tools-sidebar-status-dot--live"
-              ></span>
-              <span class="tools-sidebar-status-text">{{ agentStatus }}</span>
-            </span>
+        <!-- ── Top half: Agent ── -->
+        <div class="tools-sidebar-pane tools-sidebar-pane--agent">
+          <div class="tools-sidebar-header">
+            <div class="tools-sidebar-header-text">
+              <span class="tools-sidebar-title">Agent</span>
+              <span class="tools-sidebar-status">
+                <span
+                  v-if="streaming"
+                  class="tools-sidebar-status-dot tools-sidebar-status-dot--live"
+                ></span>
+                <span class="tools-sidebar-status-text">{{ agentStatus }}</span>
+              </span>
+            </div>
+            <span class="st-count">{{ allToolCalls.length }}</span>
           </div>
-          <span class="st-count">{{ allToolCalls.length }}</span>
+          <div class="tools-sidebar-scroll">
+            <div
+              v-for="tc in reversedToolCalls"
+              :key="tc._uid"
+              :class="[
+                'st-row',
+                { 'st-row--running': !tc.done, 'st-row--clickable': tc.done },
+              ]"
+              @click.stop="
+                tc.done && (hoveredTool = hoveredTool === tc ? null : tc)
+              "
+            >
+              <svg
+                v-if="!tc.done"
+                class="st-icon st-icon--spin"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="6"
+                  stroke="#bf8700"
+                  stroke-width="2"
+                  stroke-dasharray="28"
+                  stroke-dashoffset="8"
+                  stroke-linecap="round"
+                />
+              </svg>
+              <svg
+                v-else-if="tc.success"
+                class="st-icon st-icon--ok"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="7"
+                  stroke="#1a7f37"
+                  stroke-width="1.5"
+                />
+                <path
+                  d="M5 8.2 7 10.2 11 6"
+                  stroke="#1a7f37"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <svg
+                v-else
+                class="st-icon st-icon--fail"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="7"
+                  stroke="#cf222e"
+                  stroke-width="1.5"
+                />
+                <path
+                  d="M5.5 5.5 10.5 10.5M10.5 5.5 5.5 10.5"
+                  stroke="#cf222e"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+              <span class="st-name">{{ friendlyToolLabel(tc) }}</span>
+              <span v-if="tc.done" class="st-time">{{
+                formatDuration(tc.durationMs)
+              }}</span>
+            </div>
+          </div>
         </div>
-        <div class="tools-sidebar-scroll">
-          <div
-            v-for="tc in reversedToolCalls"
-            :key="tc._uid"
-            :class="[
-              'st-row',
-              { 'st-row--running': !tc.done, 'st-row--clickable': tc.done },
-            ]"
-            @click.stop="
-              tc.done && (hoveredTool = hoveredTool === tc ? null : tc)
-            "
-          >
-            <svg
-              v-if="!tc.done"
-              class="st-icon st-icon--spin"
-              viewBox="0 0 16 16"
-              fill="none"
+        <!-- ── Bottom half: Conversations (Entra-only) ── -->
+        <div
+          v-if="azureConnected"
+          class="tools-sidebar-pane tools-sidebar-pane--sessions"
+        >
+          <div class="tools-sidebar-header sessions-header">
+            <div class="tools-sidebar-header-text">
+              <span class="tools-sidebar-title">Conversations</span>
+              <span class="tools-sidebar-status">
+                <span class="tools-sidebar-status-text"
+                  >{{ sessions.length }} saved</span
+                >
+              </span>
+            </div>
+            <button
+              class="sessions-new-btn"
+              :disabled="streaming || clearing"
+              @click="newSession"
+              title="Start a new conversation"
             >
-              <circle
-                cx="8"
-                cy="8"
-                r="6"
-                stroke="#bf8700"
-                stroke-width="2"
-                stroke-dasharray="28"
-                stroke-dashoffset="8"
-                stroke-linecap="round"
-              />
-            </svg>
-            <svg
-              v-else-if="tc.success"
-              class="st-icon st-icon--ok"
-              viewBox="0 0 16 16"
-              fill="none"
+              + New
+            </button>
+          </div>
+          <div class="tools-sidebar-scroll sessions-scroll">
+            <div v-if="sessions.length === 0" class="sessions-empty">
+              No saved conversations yet — chat to create one.
+            </div>
+            <div
+              v-for="s in sessions"
+              :key="s.id"
+              :class="[
+                'session-row',
+                { 'session-row--current': s.id === currentSessionId },
+              ]"
+              @click="selectSession(s.id)"
+              :title="s.summary"
             >
-              <circle cx="8" cy="8" r="7" stroke="#1a7f37" stroke-width="1.5" />
-              <path
-                d="M5 8.2 7 10.2 11 6"
-                stroke="#1a7f37"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-            <svg
-              v-else
-              class="st-icon st-icon--fail"
-              viewBox="0 0 16 16"
-              fill="none"
-            >
-              <circle cx="8" cy="8" r="7" stroke="#cf222e" stroke-width="1.5" />
-              <path
-                d="M5.5 5.5 10.5 10.5M10.5 5.5 5.5 10.5"
-                stroke="#cf222e"
-                stroke-width="1.5"
-                stroke-linecap="round"
-              />
-            </svg>
-            <span class="st-name">{{ friendlyToolLabel(tc) }}</span>
-            <span v-if="tc.done" class="st-time">{{
-              formatDuration(tc.durationMs)
-            }}</span>
+              <div class="session-row-main">
+                <span class="session-row-title">{{
+                  s.summary || "Untitled conversation"
+                }}</span>
+                <span class="session-row-time">{{
+                  formatRelativeTime(s.modified)
+                }}</span>
+              </div>
+              <button
+                class="session-row-delete"
+                @click.stop="deleteSession(s.id)"
+                title="Delete this conversation"
+                aria-label="Delete conversation"
+              >
+                ×
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -2020,6 +2094,167 @@ const showTenantSwitcher = ref(false);
 const tenantError = ref(false);
 const clearing = ref(false);
 
+// ── Multi-session state (Entra-only) ─────────────────────────────
+// `sessions` mirrors the server's view of the user's saved Copilot sessions.
+// `currentSessionId` is the one the next /api/chat request will hit. The
+// backend echoes it back as the first SSE event of every chat so we always
+// stay in sync even if the user clicked a row mid-stream.
+const sessions = ref([]);
+const currentSessionId = ref(null);
+
+async function loadSessions() {
+  if (!azureConnected.value) {
+    sessions.value = [];
+    currentSessionId.value = null;
+    return;
+  }
+  try {
+    const res = await fetch("/api/sessions", { credentials: "same-origin" });
+    if (!res.ok) return;
+    const data = await res.json();
+    sessions.value = Array.isArray(data.sessions) ? data.sessions : [];
+    if (data.currentSessionId) currentSessionId.value = data.currentSessionId;
+  } catch {
+    /* network blip — keep prior list */
+  }
+}
+
+async function newSession() {
+  if (clearing.value || streaming.value) return;
+  // Reuses the same teardown as the existing "Reset" button — clears UI,
+  // then the backend assigns a fresh session id which we capture here.
+  clearing.value = true;
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
+  streaming.value = false;
+  messages.value = [];
+  streamBuffer.value = "";
+  streamToolCalls.value = [];
+  streamCharts.value = [];
+  scriptReady.value = null;
+  htmlReady.value = null;
+  attachments.value = [];
+  activeTools.value = [];
+  hoveredTool.value = null;
+  input.value = "";
+  chartInstances.forEach((c) => {
+    try {
+      c.dispose();
+    } catch {}
+  });
+  chartInstances.length = 0;
+  maturityScores.crawl = null;
+  maturityScores.walk = null;
+  maturityScores.run = null;
+  maturityScores.playbook = null;
+  try {
+    const res = await fetch("/api/sessions/new", { method: "POST" });
+    if (res.ok) {
+      const j = await res.json();
+      currentSessionId.value = j.sessionId || null;
+    }
+  } catch {}
+  await loadSessions();
+  clearing.value = false;
+}
+
+async function selectSession(sessionId) {
+  if (!sessionId || sessionId === currentSessionId.value) return;
+  if (streaming.value) return;
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/select`, {
+      method: "POST",
+    });
+  } catch {
+    return;
+  }
+  currentSessionId.value = sessionId;
+  // Fetch the persisted transcript from the SDK and replay it so the user
+  // sees their actual past messages and tool calls — not a placeholder.
+  streamToolCalls.value = [];
+  streamCharts.value = [];
+  scriptReady.value = null;
+  htmlReady.value = null;
+  try {
+    const res = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
+    );
+    if (res.ok) {
+      const j = await res.json();
+      const restored = (j.messages || []).map((m) => ({
+        role: m.role,
+        content: m.content || "",
+        toolCalls: (m.toolCalls || []).map((tc) => ({
+          id: tc.id,
+          tool: tc.name,
+          args: tc.args || "",
+          result: tc.result || null,
+          error: tc.error || null,
+          success: tc.success !== false,
+          intent: tc.intent || "",
+          durationMs: null,
+          done: true,
+          expanded: false,
+        })),
+        charts: m.charts || [],
+        html: m.html || null,
+        script: m.script ? { ...m.script, expanded: false } : null,
+      }));
+      messages.value = restored.length
+        ? restored
+        : [
+            {
+              role: "system",
+              content: "Resumed conversation. Ask anything to continue.",
+            },
+          ];
+    } else {
+      const meta = sessions.value.find((s) => s.id === sessionId);
+      messages.value = [
+        {
+          role: "system",
+          content: `Resumed conversation: ${meta?.summary || "Untitled"}.`,
+        },
+      ];
+    }
+  } catch {
+    messages.value = [{ role: "system", content: "Resumed conversation." }];
+  }
+}
+
+async function deleteSession(sessionId) {
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+  } catch {
+    return;
+  }
+  if (sessionId === currentSessionId.value) {
+    currentSessionId.value = null;
+    messages.value = [];
+  }
+  await loadSessions();
+}
+
+function formatRelativeTime(iso) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (!t) return "";
+  const diff = Date.now() - t;
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.round(hr / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.round(d / 30);
+  return `${mo}mo ago`;
+}
+
 // Add-ons collapsible parent + per-row open state + onboarding glow tour
 // Defaults to collapsed; the first-login tour expands → animates each row → collapses again.
 const addonsOpen = ref(false);
@@ -2188,7 +2423,11 @@ async function revokeAllPermissions() {
 // When Azure connects, force Crawl/Walk/Run/Playbook/Pricing to collapsed.
 // This guarantees a clean initial state every time the user reconnects.
 watch(azureConnected, async (connected, wasConnected) => {
-  if (!connected) return;
+  if (!connected) {
+    sessions.value = [];
+    currentSessionId.value = null;
+    return;
+  }
   collapsedSections.pricing = true;
   collapsedSections.crawl = true;
   collapsedSections.walk = true;
@@ -2202,6 +2441,8 @@ watch(azureConnected, async (connected, wasConnected) => {
   // Auto-clear chat when Azure connects — removes stale "Connect Azure first" messages
   // and resets the Copilot session so the LLM knows the user is now connected
   if (!wasConnected) await clearMessages();
+  // Hydrate the Conversations sidebar with this user's saved sessions.
+  await loadSessions();
 });
 
 // Reset Copilot session when addon tiers are enabled so LLM picks up new tokens
@@ -2271,6 +2512,11 @@ watch(
 
 onMounted(async () => {
   document.addEventListener("click", dismissPopover);
+  // Load saved conversations once we know whether the user is Azure-connected.
+  // (The auth check fires on mount too; loadSessions is a no-op until then.)
+  setTimeout(() => {
+    loadSessions();
+  }, 500);
   // Restore auth loading state after OAuth redirect (page reload clears ref)
   const pendingAuth = sessionStorage.getItem("authLoading");
   if (pendingAuth) {
@@ -2352,8 +2598,15 @@ async function clearMessages() {
   maturityScores.run = null;
   maturityScores.playbook = null;
   try {
-    await fetch("/api/chat/reset", { method: "POST" });
+    const r = await fetch("/api/chat/reset", { method: "POST" });
+    if (r.ok) {
+      try {
+        const j = await r.json();
+        if (j && j.sessionId) currentSessionId.value = j.sessionId;
+      } catch {}
+    }
   } catch {}
+  await loadSessions();
   clearing.value = false;
 }
 
@@ -3962,7 +4215,11 @@ async function send() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model: selectedModel.value }),
+      body: JSON.stringify({
+        prompt,
+        model: selectedModel.value,
+        sessionId: currentSessionId.value || undefined,
+      }),
       signal: abortController.signal,
     });
 
@@ -3991,6 +4248,36 @@ async function send() {
         }
 
         switch (data.type) {
+          case "session":
+            // Backend echoes the active sessionId at the start of each chat
+            // so we can highlight it in the Conversations sidebar and include
+            // it in subsequent requests.
+            if (data.id) currentSessionId.value = data.id;
+            break;
+
+          case "session_title": {
+            const idx = sessions.value.findIndex((s) => s.id === data.id);
+            if (idx >= 0) {
+              const updated = { ...sessions.value[idx], summary: data.title };
+              sessions.value = [
+                ...sessions.value.slice(0, idx),
+                updated,
+                ...sessions.value.slice(idx + 1),
+              ];
+            } else {
+              // New session not yet in sidebar — prepend a stub row.
+              sessions.value = [
+                {
+                  id: data.id,
+                  summary: data.title,
+                  modifiedTime: new Date().toISOString(),
+                },
+                ...sessions.value,
+              ];
+            }
+            break;
+          }
+
           case "delta":
             clearInterval(intentAnimTimer);
             intentAnimTimer = null;
@@ -4197,6 +4484,8 @@ async function send() {
     htmlReady.value = null;
     abortController = null;
     nextTick(() => inputEl.value?.focus());
+    // Refresh the Conversations sidebar so the new/updated summary shows up.
+    if (azureConnected.value) loadSessions();
     if (availableModels.value.length <= 1) {
       try {
         const mr = await fetch("/api/models");
@@ -6636,7 +6925,7 @@ async function send() {
   font-size: 13px;
 }
 .tools-sidebar--open {
-  width: 220px;
+  width: 250px;
 }
 .tools-sidebar-header {
   display: flex;
@@ -6700,6 +6989,118 @@ async function send() {
   overflow-y: auto;
   padding: 4px 8px;
   scrollbar-width: thin;
+}
+/* ── Right sidebar split: Agent (top) + Conversations (bottom) ── */
+.tools-sidebar-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.tools-sidebar-pane--agent {
+  flex: 1 1 50%;
+  min-height: 120px;
+}
+.tools-sidebar-pane--sessions {
+  flex: 1 1 50%;
+  min-height: 140px;
+  border-top: 1px solid #e1dfdd;
+  background: #fafaf9;
+}
+.sessions-header {
+  background: #f3f2f1;
+}
+.sessions-new-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 4px;
+  border: 1px solid #d2d0ce;
+  background: #fff;
+  color: #0078d4;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.sessions-new-btn:hover:not(:disabled) {
+  background: #eff6fc;
+  border-color: #0078d4;
+}
+.sessions-new-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sessions-scroll {
+  padding: 4px 6px 8px;
+}
+.sessions-empty {
+  padding: 12px 8px;
+  font-size: 11.5px;
+  color: #8a8886;
+  font-style: italic;
+  text-align: center;
+}
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s;
+  position: relative;
+}
+.session-row:hover {
+  background: #edebe9;
+}
+.session-row--current {
+  background: #deecf9;
+}
+.session-row--current:hover {
+  background: #c7e0f4;
+}
+.session-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.session-row-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #1a1a1a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-row-time {
+  font-size: 10.5px;
+  color: #8a8886;
+}
+.session-row-delete {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+  color: #a19f9d;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    background 0.12s,
+    color 0.12s;
+}
+.session-row:hover .session-row-delete {
+  opacity: 1;
+}
+.session-row-delete:hover {
+  background: #fde7e9;
+  color: #a4262c;
 }
 .st-count {
   font-size: 11px;

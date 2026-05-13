@@ -8,10 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [Unreleased]
 
 ### Fixed
+
 - `RouteHandlerAnalyzer` AD0001 NullReferenceException at startup — removed vestigial `(Delegate)` cast in `ChatEndpoints.cs`.
 - `DefaultAzureCredential` 2-5s per-message hang on `VisualStudioCredential.RunProcessesAsync` — excluded VS / VS Code / Interactive / AzurePowerShell credential providers in `CopilotSessionFactory`.
 
 ### Changed
+
 - Added ambiguous-affirmative intent-binding rule to the Copilot SystemPrompt — "yes/go ahead/proceed" now resolves against the most recent in-chat offer instead of the loudest queued sidebar action.
 
 ### Added
@@ -29,7 +31,7 @@ Initial public release.
 ### Added
 
 - Azure FinOps Agent reference architecture targeting Azure App Service (Linux container).
-- GitHub Copilot SDK 0.3.0 backend with shared `CopilotClient` and per-user `CopilotSession`.
+- GitHub Copilot SDK 1.0.0-beta.3 backend with shared `CopilotClient` and per-user `CopilotSession`. Multi-session per user with on-disk persistence at `{CopilotHome}/.copilot/session-state/` (mapped to App Service `/home` Azure Files mount). Idle sessions auto-disconnect after 30 min via `SessionIdleTimeoutSeconds`; resume rehydrates on next prompt with a fresh BYOK bearer token.
 - Azure OpenAI BYOK using **system-assigned managed identity** (`DefaultAzureCredential`) — no client secret needed for AOAI.
 - Microsoft Entra ID multi-tenant OAuth with **incremental consent**:
   - Base tier: Azure ARM (`user_impersonation`)

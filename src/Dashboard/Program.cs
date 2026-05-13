@@ -73,12 +73,15 @@ if (!string.IsNullOrEmpty(appInsightsCs))
 }
 
 var telemetry = new AiTelemetry();
+telemetry.LoadTitles();
 builder.Services.AddSingleton(telemetry);
 builder.Services.AddSingleton(oauthOptions);
 builder.Services.AddSingleton<EntraClientCredentials>();
 builder.Services.AddSingleton<IdTokenValidator>();
 builder.Services.AddSingleton<SessionTokenStore>();
-builder.Services.AddHostedService<UserStateJanitor>();
+builder.Services.AddSingleton<PersistentIdentity>();
+// Janitor is started manually after CopilotSessionFactory is constructed
+// (see below) because it now depends on the factory for the 30-day TTL sweep.
 
 var app = builder.Build();
 var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
@@ -87,6 +90,16 @@ logger.LogInformation("Application starting. AppInsights configured: {Configured
 
 await using var copilotFactory = await CopilotSessionFactory.CreateAsync(
     telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, loggerFactory);
+
+// Start the janitor now that the factory exists; tie its lifecycle to the host.
+var janitor = new UserStateJanitor(telemetry, copilotFactory, loggerFactory.CreateLogger<UserStateJanitor>());
+await janitor.StartAsync(CancellationToken.None);
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    // Bound shutdown so a hung dispose can't block the App Service drain.
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    try { janitor.StopAsync(cts.Token).GetAwaiter().GetResult(); } catch { }
+});
 
 // ── Middleware pipeline ────────────────────────────────────────
 var forwardedHeadersOptions = new ForwardedHeadersOptions
@@ -214,22 +227,52 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-// Auto-assign anonymous session user on first request (no login required for chat)
+// Auto-assign anonymous session user on first request (no login required for chat).
+// If the user previously authenticated with Entra, the encrypted finops_id cookie
+// lets us silently rehydrate identity + refresh token across container restarts.
+var persistentIdentity = app.Services.GetRequiredService<PersistentIdentity>();
 app.Use(async (ctx, next) =>
 {
     if (ctx.Session.GetString("user") is null)
     {
-        // Crypto-random user ID — used as the key for per-user session/token state.
-        var sessionUserId = (long)(RandomNumberGenerator.GetInt32(1_000_000, int.MaxValue)) << 24
-                             | (long)RandomNumberGenerator.GetInt32(0, 1 << 24);
-        ctx.Session.SetString("user", JsonSerializer.Serialize(new
+        var record = persistentIdentity.Load(ctx);
+        if (record is not null && !string.IsNullOrEmpty(record.Oid))
         {
-            id = sessionUserId,
-            login = $"user-{sessionUserId % 10000:D4}",
-            name = (string?)null,
-            avatar = (string?)null,
-            email = (string?)null
-        }));
+            // Returning Entra user: rebuild the session blobs deterministically.
+            ctx.Session.SetString("user", JsonSerializer.Serialize(new
+            {
+                id = record.UserId,
+                login = $"user-{record.UserId & 0xFFFF:X4}",
+                name = record.Name,
+                avatar = (string?)null,
+                email = record.Email,
+            }));
+            ctx.Session.SetString("azure_user", JsonSerializer.Serialize(new Dictionary<string, string?>
+            {
+                ["tenantId"] = record.TenantId,
+                ["objectId"] = record.Oid,
+                ["name"] = record.Name,
+                ["email"] = record.Email,
+            }));
+            if (!string.IsNullOrEmpty(record.RefreshToken))
+                ctx.Session.SetString("azure_refresh_token", record.RefreshToken);
+            if (!string.IsNullOrEmpty(record.GraphTier))
+                ctx.Session.SetString("graph_tier", record.GraphTier);
+        }
+        else
+        {
+            // Brand-new visitor: crypto-random anonymous id keyed only in this session.
+            var sessionUserId = (long)(RandomNumberGenerator.GetInt32(1_000_000, int.MaxValue)) << 24
+                                 | (long)RandomNumberGenerator.GetInt32(0, 1 << 24);
+            ctx.Session.SetString("user", JsonSerializer.Serialize(new
+            {
+                id = sessionUserId,
+                login = $"user-{sessionUserId % 10000:D4}",
+                name = (string?)null,
+                avatar = (string?)null,
+                email = (string?)null
+            }));
+        }
     }
     await next();
 });
@@ -239,9 +282,10 @@ var tokenStore = app.Services.GetRequiredService<SessionTokenStore>();
 var entraCredentials = app.Services.GetRequiredService<EntraClientCredentials>();
 var idTokenValidator = app.Services.GetRequiredService<IdTokenValidator>();
 
-app.MapMicrosoftAuthEndpoints(oauthOptions, entraCredentials, idTokenValidator, telemetry, logger);
+app.MapMicrosoftAuthEndpoints(oauthOptions, entraCredentials, idTokenValidator, telemetry, persistentIdentity, logger);
 app.MapAzureSessionEndpoints(tokenStore, telemetry, logger);
 app.MapChatEndpoints(copilotFactory, tokenStore, telemetry, logger);
+app.MapSessionEndpoints(copilotFactory, telemetry, logger);
 app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
 app.MapUploadEndpoints();
