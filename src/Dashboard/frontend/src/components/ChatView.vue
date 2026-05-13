@@ -44,7 +44,6 @@
           <span>Open source</span>
         </a>
       </div>
-      <span class="portal-title portal-title--center">Azure FinOps Agent</span>
       <!-- Build/branch badge in the top-right corner. Highlights non-main
            (preview slot) deployments so it's obvious which build you're on. -->
       <div
@@ -4368,19 +4367,6 @@ async function send() {
   font-size: 14px;
   font-weight: 600;
   color: #fff;
-}
-.portal-title--center {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  white-space: nowrap;
-}
-@media (max-width: 720px) {
-  .portal-title--center {
-    display: none;
-  }
 }
 .portal-readonly-badge {
   font-size: 10px;
