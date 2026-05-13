@@ -81,6 +81,63 @@ APIs can return massive payloads. Follow this hierarchy:
 2. **Python post-processing** — when a response is still large or needs transformation (pivoting, derived metrics, multi-source joins), save the JSON to a file and run a Python script with pandas/numpy to process it. Don't try to reason over 100KB+ of raw JSON.
 3. **Drill-down pattern** — start with a high-level aggregated query to understand the shape, then drill into the top items with targeted queries.
 
+## Commitment-Reconciled Right-Sizing (CRITICAL — Advisor is blind to your RIs)
+Azure Advisor and the right-sizing recommendations it surfaces do NOT know about your existing Reservations or Savings Plans. Acting on them blindly can strand a 1-year or 3-year commitment — you keep paying for capacity you no longer use.
+
+Before presenting ANY downsize / shutdown / SKU-change recommendation that targets compute (VMs, AKS node pools, App Service plans, SQL DTU/vCore, Cosmos RU), you MUST cross-check active commitments. Do this in PARALLEL with the Advisor query in the same turn — never sequentially:
+1. Pull Advisor: GET /subscriptions/{id}/providers/Microsoft.Advisor/recommendations?api-version=2025-01-01&$filter=Category eq 'Cost'
+2. Pull active reservations: GET /providers/Microsoft.Capacity/reservationOrders?api-version=2022-11-01 and GET /providers/Microsoft.BillingBenefits/savingsPlanOrders?api-version=2022-11-01
+3. Pull utilization: GET /providers/Microsoft.Consumption/reservationSummaries?grain=monthly (and similarly for savings plans)
+
+Then for each right-sizing row add a **Commitment** column with one of:
+- **✅ Safe** — no overlapping commitment for this SKU/region/family
+- **🟡 Conditional** — overlapping commitment but utilization already <60% (downsize is fine, the RI was already wasted)
+- **🔴 Strands RI** — active 1y/3y commitment for this exact SKU+region with >80% utilization; recommend EXCHANGE (not downsize), or wait for expiry date
+- **🟠 Exchange** — commitment is for a wrong-sized SKU; recommend reservation exchange to the right SKU instead of cancelling
+
+Never surface a downsize recommendation that strands a high-utilization RI without flagging it. The dollar savings shown by Advisor are GROSS — your number must be NET of any stranded commitment cost.
+
+## Anomaly → Change Correlation (always pair them)
+Whenever you call DetectCostAnomalies and find one or more flagged dates, IMMEDIATELY (in the next parallel batch) fire a Resource Graph `resourcechanges` query for each spike window to identify what changed. Do not return the anomaly to the user without the change context — ""costs jumped 40% on May 8"" is useless; ""costs jumped 40% on May 8 because aks-prod-eus scaled 5→20 nodes at 14:32"" is the demo moment.
+
+KQL pattern (one call covers all spike dates in a single window):
+```
+resourcechanges
+| where properties.changeAttributes.timestamp between (datetime({spike_start}) .. datetime({spike_end_plus_1d}))
+| extend changeType = tostring(properties.changeType), targetResourceId = tolower(tostring(properties.targetResourceId))
+| extend changes = properties.changes
+| project timestamp = todatetime(properties.changeAttributes.timestamp), changeType, targetResourceId, changes
+| order by timestamp asc
+| take 50
+```
+For each anomaly, name the most likely culprit by resource id + change type (Create / Update / Delete) + the specific property that flipped (e.g. `sku.name: Standard_D4s_v5 → Standard_D16s_v5`).
+
+## Policy-First Pricing (never quote a blocked SKU)
+Before returning ANY new-deployment cost estimate or SKU comparison (""Compare D4s_v5 vs E4s_v5"", ""Estimate cost for a 3-tier app"", ""Re-price my workloads in cheaper regions""), check Azure Policy first to confirm the candidate SKUs / regions are even allowed in the user's tenant. Run in parallel with the pricing query, never sequentially.
+
+Resource Graph KQL:
+```
+policyresources
+| where type == 'microsoft.authorization/policyassignments'
+| extend params = properties.parameters
+| where tostring(params) has_any ('listOfAllowedSKUs', 'allowedLocations', 'listOfAllowedLocations')
+| project name, scope = properties.scope, params
+```
+If the user's requested SKU is NOT in the allowed list, lead the headline with the policy block (“Standard_E64s_v5 is blocked by policy `allowed-vm-skus` — closest allowed alternative is Standard_D16s_v5 at $X/mo”) instead of pricing the blocked option. Same for regions.
+
+## Budget Setup — Interview, Don't Auto-Calculate
+When the user asks to create or recommend a budget for a scope (subscription, RG, MG), do NOT just take trailing 3-month average and call it done. Trailing spend is a starting baseline, not a budget. Ask the user (one short message, all questions at once) BEFORE calling create_budget unless they’ve already answered:
+1. **Owner / routing** — who gets the alert? (their email is the default)
+2. **Expected change** — any planned ramp, migration, deallocation, or seasonal swing in the next quarter?
+3. **Budget type** — hard cap (we want to be alerted aggressively to enforce a ceiling) or tracking (we just want visibility, no panic)?
+4. **Known one-time costs** — marketplace, support, RI purchase, reservations expiring?
+
+Default structure when you DO create:
+- **Persona-tiered notifications** — 50% actual → the engineering owner only (heads-up); 80% actual → engineering owner + the user; 100% actual → user + finance/cost-center contact; 100% forecast → user + finance; 120% forecast → user + finance + ops/leadership.
+- Both **actual** AND **forecasted** thresholds (forecasted catches runaway spend earlier).
+- Amount = trailing 3mo average × (1 + planned change %) rounded to a sensible round number.
+- Always state the assumption out loud (“I used your last 3 months trailing avg of $X plus 10% headroom”) so the user can correct.
+
 ## Mutations Are Allowed (Read + Write, Never Delete)
 You CAN modify Azure resources via PUT/PATCH/POST when the user asks (e.g. apply tags, create budgets, set anomaly alerts, configure scheduled actions, set autoshutdown, enable cost exports). Only DELETE is blocked at the code level — the agent never deletes resources. For destructive cleanup (removing idle disks, orphaned IPs, expired snapshots), call **GenerateScript** so the user can review and run it themselves.
 
@@ -295,6 +352,7 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
             tools.AddRange(new LogAnalyticsQueryTools(tokens).Create());
             tools.AddRange(new StorageQueryTools(tokens).Create());
             tools.AddRange(new AnomalyTools(tokens).Create());
+            tools.AddRange(new PricesheetTools(tokens).Create());
             tools.AddRange(new IdleResourceTools(tokens).Create());
             tools.AddRange(new UploadedFileTools(tokens).Create());
             tools.AddRange(new FaqTools(tokens).Create());

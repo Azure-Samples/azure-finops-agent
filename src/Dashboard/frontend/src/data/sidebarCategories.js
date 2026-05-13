@@ -592,6 +592,62 @@ const maturityCategories = [
       },
     ],
   },
+  // ── ENTERPRISE — EA / MCA negotiated rates + commitment-aware analysis ──
+  {
+    key: "enterprise",
+    label: "Enterprise",
+    subtitle: "EA / MCA & Commitments",
+    icon: "E",
+    colorClass: "cat-enterprise",
+    requiresAzure: true,
+    prompts: [
+      {
+        label: "List my billing accounts",
+        prompt:
+          "List my billing accounts and (for MCA) billing profiles. Show the agreement type (EA / MCA / MOSP), account name, and ID. I'll use these to download the negotiated pricesheet.",
+      },
+      {
+        label: "Download EA pricesheet",
+        prompt:
+          "Start a negotiated pricesheet download for my EA billing account using StartPricesheetDownload, then poll with GetPricesheetStatus until ready (back off ~10s between polls). When done, give me the SAS download link and tell me how it differs from public retail rates for my top 5 SKUs.",
+      },
+      {
+        label: "Download MCA pricesheet",
+        prompt:
+          "List my MCA billing profiles, ask which one, then start a negotiated pricesheet download with StartPricesheetDownload and poll with GetPricesheetStatus until ready. Return the SAS link.",
+      },
+      {
+        label: "Re-price top VMs at negotiated rates",
+        prompt:
+          "List my top 10 most expensive VMs by monthly cost. Then download my negotiated pricesheet (StartPricesheetDownload + GetPricesheetStatus). Compare each VM's billed rate to its negotiated rate AND to retail. Show a table — flag any case where the negotiated rate inverts the public-retail recommendation (e.g. retail says move regions, but negotiated says stay).",
+      },
+      {
+        label: "Right-size VMs (commitment-aware)",
+        prompt:
+          "Get Azure Advisor right-sizing recommendations for my VMs. In parallel pull active reservations, savings plans, and their utilization. For each recommendation, add a Commitment column: ✅ Safe / 🟡 Conditional / 🔴 Strands RI / 🟠 Exchange — and show NET monthly savings (gross savings minus stranded commitment cost). Sort by net savings descending.",
+      },
+      {
+        label: "RI exchange opportunities (negotiated)",
+        prompt:
+          "Find reservations that are underutilized (<60%) or that no longer match my workload mix. For each, recommend a specific exchange target SKU+region using my negotiated pricesheet rates (not retail). Show a table with current RI, utilization %, recommended exchange target, and projected monthly savings at negotiated rates.",
+      },
+      {
+        label: "Investigate spike with change correlation",
+        prompt:
+          "Run DetectCostAnomalies for my most expensive subscription over the last 35 days. For every flagged spike date, immediately fire a Resource Graph resourcechanges query for that day to identify which resources changed (Create / Update / Delete) and which property flipped (e.g. sku.name, capacity, tier). Name the most likely culprit per spike.",
+      },
+      {
+        label: "Policy-blocked SKU audit",
+        prompt:
+          "Query Azure Policy via Resource Graph (policyresources, listOfAllowedSKUs / allowedLocations parameters) to list every SKU and region restriction in effect across my subscriptions. Then check my current resources — which would be DENIED if redeployed today? Show a table grouped by policy with affected resource count and monthly cost.",
+      },
+      {
+        label: "Negotiated vs retail savings overview",
+        prompt:
+          "Download my negotiated pricesheet. Pick my top 20 SKUs by spend this month and compute (a) % discount vs retail per SKU, (b) total monthly $ saved vs retail at current usage, (c) any SKUs where negotiated > retail (rare — flag as rate-card anomaly). Show a horizontal bar chart of $ saved per SKU.",
+      },
+    ],
+  },
   // ── Public pricing — also rendered as its own dedicated sidebar card,
   // so it is intentionally NOT included in maturityCategories anymore.
 ];
