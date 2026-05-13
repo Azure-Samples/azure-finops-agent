@@ -1,0 +1,122 @@
+name: Deploy feature branch to test slot
+
+# Any push to a branch other than `main` builds a fresh image and deploys it
+# to the `test` deployment slot of the finops-agent-container web app at
+# https://finops-agent-container-test.azurewebsites.net so we can preview
+# feature branches before merging.
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - "src/Dashboard/**"
+      - ".github/workflows/feature.yml"
+    workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_NAME: crfinopsagent
+  ACR_LOGIN: crfinopsagent.azurecr.io
+  IMAGE: crfinopsagent.azurecr.io/finops-agent
+  WEBAPP_NAME: finops-agent-container
+  SLOT_NAME: test
+  RESOURCE_GROUP: rg-finops-agent
+
+# Cancel any in-flight deploy for the same branch — only the latest commit matters.
+concurrency:
+  group: test-slot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build & Deploy to test slot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Set build metadata
+        id: meta
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          # Sanitize branch name for a valid Docker tag (no /, no uppercase).
+          TAG_BRANCH=$(echo "$BRANCH" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "tag_branch=$TAG_BRANCH" >> $GITHUB_OUTPUT
+          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "build=$(git rev-list --count HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build & push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: src/Dashboard
+          push: true
+          # Note: we deliberately do NOT push :latest — that tag belongs to prod.
+          tags: |
+            ${{ env.IMAGE }}:test-${{ steps.meta.outputs.tag_branch }}
+            ${{ env.IMAGE }}:test-${{ steps.meta.outputs.sha }}
+          build-args: |
+            BUILD_SHA=${{ steps.meta.outputs.sha }}
+            BUILD_NUMBER=${{ steps.meta.outputs.build }}
+            BUILD_BRANCH=${{ steps.meta.outputs.branch }}
+          cache-from: type=gha,scope=test-slot
+          cache-to: type=gha,mode=max,scope=test-slot
+
+      - name: Point test slot at new image
+        run: |
+          az webapp config container set \
+            --name ${{ env.WEBAPP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --slot ${{ env.SLOT_NAME }} \
+            --container-image-name ${{ env.IMAGE }}:test-${{ steps.meta.outputs.sha }} \
+            --container-registry-url https://${{ env.ACR_LOGIN }}
+
+      - name: Configure App Service settings (test slot)
+        run: |
+          az webapp config appsettings set \
+            --name ${{ env.WEBAPP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --slot ${{ env.SLOT_NAME }} \
+            --settings AzureOpenAI__Endpoint="${{ secrets.AZURE_OPENAI_ENDPOINT }}"
+
+      - name: Restart test slot
+        run: |
+          az webapp restart \
+            --name ${{ env.WEBAPP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --slot ${{ env.SLOT_NAME }}
+
+      - name: Verify deployment
+        run: |
+          sleep 30
+          curl -sf https://finops-agent-container-test.azurewebsites.net/api/version | head -c 300
+          echo ""
+
+      - name: Summary
+        run: |
+          {
+            echo "### Test slot deployed :rocket:"
+            echo ""
+            echo "- **Branch:** \`${{ steps.meta.outputs.branch }}\`"
+            echo "- **Build:** \`${{ steps.meta.outputs.build }}\`"
+            echo "- **SHA:** \`${{ steps.meta.outputs.sha }}\`"
+            echo "- **Image:** \`${{ env.IMAGE }}:test-${{ steps.meta.outputs.sha }}\`"
+            echo "- **URL:** https://finops-agent-container-test.azurewebsites.net"
+          } >> $GITHUB_STEP_SUMMARY

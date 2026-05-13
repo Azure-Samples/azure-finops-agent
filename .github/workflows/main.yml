@@ -1,11 +1,11 @@
-name: Deploy to Azure
+name: Deploy main to production
 
 on:
   push:
     branches: [main]
     paths:
       - "src/Dashboard/**"
-      - ".github/workflows/deploy.yml"
+      - ".github/workflows/main.yml"
   workflow_dispatch:
 
 permissions:
