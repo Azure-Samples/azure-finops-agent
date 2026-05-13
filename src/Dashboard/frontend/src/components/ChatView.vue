@@ -23,11 +23,6 @@
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <span class="portal-title">Azure FinOps Agent</span>
-      </div>
-      <div class="portal-trustline" aria-hidden="false">
-        <span class="portal-trustline-item">Built by Microsoft</span>
-        <span class="portal-trustline-sep" aria-hidden="true">·</span>
         <a
           class="portal-trustline-link"
           href="https://github.com/Azure-Samples/azure-finops-agent"
@@ -49,6 +44,7 @@
           <span>Open source</span>
         </a>
       </div>
+      <span class="portal-title portal-title--center">Azure FinOps Agent</span>
       <!-- Build/branch badge in the top-right corner. Highlights non-main
            (preview slot) deployments so it's obvious which build you're on. -->
       <div
@@ -4303,11 +4299,6 @@ async function send() {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 60vw;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  pointer-events: auto;
 }
 .portal-trustline-dot {
   width: 6px;
@@ -4377,6 +4368,19 @@ async function send() {
   font-size: 14px;
   font-weight: 600;
   color: #fff;
+}
+.portal-title--center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .portal-title--center {
+    display: none;
+  }
 }
 .portal-readonly-badge {
   font-size: 10px;
