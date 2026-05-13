@@ -4288,6 +4288,7 @@ async function send() {
   padding: 0 12px;
   flex-shrink: 0;
   z-index: 100;
+  position: relative;
 }
 .portal-trustline {
   display: inline-flex;
@@ -4302,6 +4303,11 @@ async function send() {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 60vw;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
 }
 .portal-trustline-dot {
   width: 6px;
