@@ -2135,7 +2135,12 @@ async function loadSessions() {
     if (!res.ok) return;
     const data = await res.json();
     sessions.value = Array.isArray(data.sessions) ? data.sessions : [];
-    if (data.currentSessionId) currentSessionId.value = data.currentSessionId;
+    // Only adopt the server's notion of "current" when the client has none.
+    // Otherwise a periodic refresh would yank the user out of the session
+    // they explicitly selected.
+    if (data.currentSessionId && currentSessionId.value == null) {
+      currentSessionId.value = data.currentSessionId;
+    }
   } catch {
     /* network blip — keep prior list */
   }
@@ -2192,8 +2197,20 @@ async function selectSession(sessionId) {
   currentSessionId.value = sessionId;
   // Fetch the persisted transcript from the SDK and replay it so the user
   // sees their actual past messages and tool calls — not a placeholder.
+  // Wipe ALL stream-scoped UI refs so nothing from the previous session view
+  // (animating intent, hovered tool popover, partial buffer, follow-up CTA)
+  // leaks into the new view.
   streamToolCalls.value = [];
   streamCharts.value = [];
+  streamFollowUp.value = null;
+  streamBuffer.value = "";
+  streamIntent.value = "";
+  if (intentAnimTimer) {
+    clearInterval(intentAnimTimer);
+    intentAnimTimer = null;
+  }
+  activeTools.value = [];
+  hoveredTool.value = null;
   scriptReady.value = null;
   htmlReady.value = null;
   try {
@@ -2221,6 +2238,16 @@ async function selectSession(sessionId) {
         html: m.html || null,
         script: m.script ? { ...m.script, expanded: false } : null,
       }));
+      console.log(
+        "[loadMessages] /messages returned",
+        restored.length,
+        "messages. roles=",
+        restored.map((m) => m.role).join(","),
+        "assistant lengths=",
+        restored
+          .filter((m) => m.role === "assistant")
+          .map((m) => m.content.length),
+      );
       messages.value = restored.length
         ? restored
         : [
@@ -2655,11 +2682,20 @@ async function clearMessages() {
   streamBuffer.value = "";
   streamToolCalls.value = [];
   streamCharts.value = [];
+  streamFollowUp.value = null;
+  streamIntent.value = "";
+  if (intentAnimTimer) {
+    clearInterval(intentAnimTimer);
+    intentAnimTimer = null;
+  }
   scriptReady.value = null;
   htmlReady.value = null;
   attachments.value = [];
   activeTools.value = [];
   hoveredTool.value = null;
+  // Drop any tracked background streams — on logout/reset they belong to
+  // a different identity and would otherwise leave stale "live" dots.
+  runningSessions.clear();
   input.value = "";
   chartInstances.forEach((c) => {
     try {
@@ -2775,7 +2811,20 @@ const AZURE_API_LABELS = [
 
 function _arm_label(path) {
   if (!path) return null;
-  for (const [re, label] of AZURE_API_LABELS) if (re.test(path)) return label;
+  for (const [re, label] of AZURE_API_LABELS) {
+    if (!re.test(path)) continue;
+    // Several distinct REST operations can share the same friendly label
+    // (e.g. /query, /dimensions, /alerts all map to "Cost Management").
+    // Append the last action/segment so parallel calls don't look like duplicates.
+    const tail = (path.split("?")[0].match(/\/([A-Za-z0-9_-]+)\/?$/) || [])[1];
+    if (tail && !new RegExp(tail, "i").test(label)) {
+      const t = tail.toLowerCase();
+      // Skip noisy id-like tails (guids, version segments).
+      if (!/^[0-9a-f]{8,}$/i.test(tail) && !/^\d{4}-\d{2}-\d{2}/.test(tail))
+        return `${label} · ${t}`;
+    }
+    return label;
+  }
   return "ARM";
 }
 
@@ -3950,19 +3999,38 @@ onBeforeUnmount(() => {
 });
 
 // ── Aggregated tool calls for sidebar ──
+// Dedupe by tool-call id. The same tool call can appear in both the
+// persisted message history (loaded via /messages on session resume) AND
+// in the live stream's toolCalls list when the user navigates away from
+// a running session and back. Stream entries reflect the freshest state
+// (running spinner, latest result), so they win.
 const allToolCalls = computed(() => {
-  const result = [];
-  for (const msg of messages.value) {
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) {
-        result.push({ ...tc, _uid: `msg-${tc.id}`, done: true });
-      }
+  const byId = new Map();
+  const order = [];
+  const add = (tc, uidPrefix) => {
+    const id = tc.id;
+    if (id == null) {
+      // Anonymous tool call — keep as-is, no dedupe possible.
+      const entry = { ...tc, _uid: `${uidPrefix}-anon-${order.length}` };
+      order.push(entry);
+      return;
     }
+    if (byId.has(id)) {
+      // Stream wins over history — overwrite in place, keep ordering stable.
+      const idx = byId.get(id);
+      order[idx] = { ...tc, _uid: `${uidPrefix}-${id}` };
+    } else {
+      const entry = { ...tc, _uid: `${uidPrefix}-${id}` };
+      byId.set(id, order.length);
+      order.push(entry);
+    }
+  };
+  for (const msg of messages.value) {
+    if (!msg.toolCalls) continue;
+    for (const tc of msg.toolCalls) add(tc, "msg");
   }
-  for (const tc of streamToolCalls.value) {
-    result.push({ ...tc, _uid: `stream-${tc.id}` });
-  }
-  return result;
+  for (const tc of streamToolCalls.value) add(tc, "stream");
+  return order;
 });
 
 // -- Connected sources --
@@ -4294,7 +4362,13 @@ async function send() {
   scrollToBottom();
 
   abortController = new AbortController();
+  // Per-stream local arrays. KEEP THESE LOCAL — do not promote to a shared
+  // ref. Concurrent streams in different sessions each need their own
+  // record; a global ref would be clobbered by whichever send() ran most
+  // recently. The visible `streamToolCalls`/`streamCharts` refs are just a
+  // mirror for the currently-foregrounded session.
   const toolCalls = [];
+  const charts = [];
   let hasDeltas = false;
 
   try {
@@ -4405,6 +4479,12 @@ async function send() {
             // — not the final answer. Wipe it; the real answer streams after the
             // last tool completes.
             if (hasDeltas) {
+              console.log(
+                "[tool_start wipe] streamBuffer length before wipe=",
+                streamBuffer.value.length,
+                "first 60=",
+                streamBuffer.value.slice(0, 60),
+              );
               if (textAnimFrame) {
                 cancelAnimationFrame(textAnimFrame);
                 textAnimFrame = null;
@@ -4414,18 +4494,38 @@ async function send() {
               hasDeltas = false;
             }
             activeTools.value = [...activeTools.value, data.tool];
-            toolCalls.push({
-              id: data.id,
-              tool: data.tool,
-              args: data.args || null,
-              result: null,
-              error: null,
-              success: null,
-              durationMs: null,
-              done: false,
-              expanded: false,
-            });
-            streamToolCalls.value = [...toolCalls];
+            {
+              const existingIdx = toolCalls.findIndex((t) => t.id === data.id);
+              if (existingIdx >= 0) {
+                console.warn(
+                  "[tool_start] duplicate id, skipping push",
+                  data.id,
+                  data.tool,
+                  data.args,
+                );
+              } else {
+                console.log(
+                  "[tool_start]",
+                  data.id,
+                  data.tool,
+                  typeof data.args === "string"
+                    ? data.args.slice(0, 120)
+                    : JSON.stringify(data.args || {}).slice(0, 120),
+                );
+                toolCalls.push({
+                  id: data.id,
+                  tool: data.tool,
+                  args: data.args || null,
+                  result: null,
+                  error: null,
+                  success: null,
+                  durationMs: null,
+                  done: false,
+                  expanded: false,
+                });
+              }
+            }
+            if (isActiveView()) streamToolCalls.value = [...toolCalls];
             if (data.tool === "report_intent" && data.args) {
               try {
                 const parsed =
@@ -4465,7 +4565,7 @@ async function send() {
                 tc.error = data.error || null;
               }
             }
-            streamToolCalls.value = [...toolCalls];
+            if (isActiveView()) streamToolCalls.value = [...toolCalls];
             if (
               data.tool === "SuggestFollowUp" &&
               data.success &&
@@ -4479,7 +4579,8 @@ async function send() {
             break;
 
           case "chart":
-            streamCharts.value = [...streamCharts.value, data.options];
+            charts.push(data.options);
+            if (isActiveView()) streamCharts.value = [...charts];
             scrollToBottom();
             break;
 
@@ -4550,7 +4651,7 @@ async function send() {
       role: "assistant",
       content: clean,
       toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
-      charts: [...streamCharts.value],
+      charts: [...charts],
       followUp: streamFollowUp.value ? { ...streamFollowUp.value } : null,
     };
     if (htmlReady.value) {
@@ -4565,7 +4666,17 @@ async function send() {
     // the user is still viewing this stream's session. Otherwise the
     // server has already persisted it and the user will see it via the
     // /messages reload when they navigate back.
-    if (isActiveView()) messages.value.push(msgObj);
+    if (isActiveView()) {
+      console.log(
+        "[push assistant] live-stream commit. content length=",
+        clean.length,
+        "first 80=",
+        clean.slice(0, 80),
+        "messages.length now=",
+        messages.value.length + 1,
+      );
+      messages.value.push(msgObj);
+    }
   } catch (err) {
     if (err.name === "AbortError") {
       if (streamBuffer.value && isActiveView()) {
@@ -4573,7 +4684,7 @@ async function send() {
           role: "assistant",
           content: streamBuffer.value + "\n\n*(generation stopped)*",
           toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
-          charts: [...streamCharts.value],
+          charts: [...charts],
         });
       }
     } else if (isActiveView()) {

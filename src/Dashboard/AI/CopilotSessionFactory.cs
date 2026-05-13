@@ -432,6 +432,13 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
     public async Task<bool> UserOwnsSessionAsync(long userId, string? entraOid, string sessionId, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(sessionId)) return false;
+        // Fast path: a freshly-created or currently-live session is recorded in
+        // LiveSessions with its owning UserId. The on-disk index used by
+        // ListSessionsAsync can lag behind CreateSessionAsync by a few ms, which
+        // would otherwise reject a session the user just created and collapse
+        // all their parallel chats onto the "current session" fallback.
+        if (_telemetry.LiveSessions.TryGetValue(sessionId, out var live) && live.UserId == userId)
+            return true;
         var sessions = await ListUserSessionsAsync(userId, entraOid, ct);
         return sessions.Any(s => s.SessionId == sessionId);
     }
