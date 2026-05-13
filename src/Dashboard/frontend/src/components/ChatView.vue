@@ -2248,6 +2248,19 @@ async function selectSession(sessionId) {
           .filter((m) => m.role === "assistant")
           .map((m) => m.content.length),
       );
+      // If this session is still streaming in the background, drop any
+      // trailing assistant message — it is the in-progress turn that the
+      // SDK has already persisted. The live SSE stream will commit the
+      // final version on completion. Otherwise the streaming indicator
+      // (which renders its own AI avatar) would appear directly below the
+      // partial assistant row, producing two stacked AI avatars.
+      if (
+        runningSessions.has(sessionId) &&
+        restored.length &&
+        restored[restored.length - 1].role === "assistant"
+      ) {
+        restored.pop();
+      }
       messages.value = restored.length
         ? restored
         : [
