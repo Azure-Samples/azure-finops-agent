@@ -16,19 +16,12 @@ This project has adopted the [Microsoft Open Source Code of Conduct](https://ope
 
 ## Branch Naming Convention
 
-New branches must use one of the following prefixes (enforced by a GitHub
-ruleset on branch creation — existing branches are unaffected):
+New branches must use one of two prefixes (kept simple on purpose):
 
 | Prefix | Use |
 |---|---|
-| `feature/<short-desc>` | new functionality |
-| `fix/<short-desc>` | bug fix |
-| `bugfix/<short-desc>` | bug fix (alias) |
-| `hotfix/<short-desc>` | urgent production fix |
-| `chore/<short-desc>` | tooling, dependencies, refactor |
-| `docs/<short-desc>` | docs-only change |
-| `users/<alias>/<short-desc>` | personal experiments |
-| `dependabot/**` | reserved for Dependabot |
+| `feature/<short-desc>` | new functionality, refactor, docs, chore |
+| `bug/<short-desc>` | bug fix or hotfix |
 
 Pushing to any non-`main` branch deploys it to the test slot at
 <https://finops-agent-container-test.azurewebsites.net> via `feature.yml`.
