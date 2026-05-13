@@ -1830,8 +1830,20 @@ const streaming = computed(() =>
 );
 const streamBuffer = ref("");
 const activeTools = ref([]);
-const streamToolCalls = ref([]);
-const streamCharts = ref([]);
+// Per-session live-stream tool calls / charts. Keyed by sessionId (or the
+// "__pending__" sentinel before the server echoes the real id). This keeps
+// each in-flight stream's UI state isolated so switching between concurrently
+// streaming sessions never blanks out the right-rail tool list. The visible
+// streamToolCalls / streamCharts are computeds derived from these maps for
+// whichever session the user is currently viewing.
+const perSessionToolCalls = reactive(new Map());
+const perSessionCharts = reactive(new Map());
+const streamToolCalls = computed(
+  () => perSessionToolCalls.get(currentSessionId.value || "__pending__") || [],
+);
+const streamCharts = computed(
+  () => perSessionCharts.get(currentSessionId.value || "__pending__") || [],
+);
 const streamFollowUp = ref(null);
 const streamIntent = ref("");
 const htmlReady = ref(null);
@@ -2154,8 +2166,9 @@ async function newSession() {
   clearing.value = true;
   messages.value = [];
   streamBuffer.value = "";
-  streamToolCalls.value = [];
-  streamCharts.value = [];
+  // User-initiated wipe — drop every session's live buckets.
+  perSessionToolCalls.clear();
+  perSessionCharts.clear();
   scriptReady.value = null;
   htmlReady.value = null;
   attachments.value = [];
@@ -2197,11 +2210,11 @@ async function selectSession(sessionId) {
   currentSessionId.value = sessionId;
   // Fetch the persisted transcript from the SDK and replay it so the user
   // sees their actual past messages and tool calls — not a placeholder.
-  // Wipe ALL stream-scoped UI refs so nothing from the previous session view
-  // (animating intent, hovered tool popover, partial buffer, follow-up CTA)
-  // leaks into the new view.
-  streamToolCalls.value = [];
-  streamCharts.value = [];
+  // Wipe transient view-scoped UI refs (intent ticker, partial text buffer,
+  // follow-up CTA) so nothing from the previous view leaks. Do NOT touch
+  // perSessionToolCalls / perSessionCharts — those are keyed by sessionId
+  // and a still-streaming background session needs its bucket intact so the
+  // tool list is whole when the user switches back.
   streamFollowUp.value = null;
   streamBuffer.value = "";
   streamIntent.value = "";
@@ -2343,8 +2356,6 @@ async function deleteSession(sessionId) {
   if (sessionId === currentSessionId.value) {
     currentSessionId.value = null;
     messages.value = [];
-    streamToolCalls.value = [];
-    streamCharts.value = [];
     streamFollowUp.value = null;
     scriptReady.value = null;
     htmlReady.value = null;
@@ -2353,6 +2364,10 @@ async function deleteSession(sessionId) {
     maturityScores.run = null;
     maturityScores.playbook = null;
   }
+  // Drop the live-stream buckets for the deleted session regardless of view —
+  // a backgrounded stream may still be writing to it; abandon those writes.
+  perSessionToolCalls.delete(sessionId);
+  perSessionCharts.delete(sessionId);
   await loadSessions();
 }
 
@@ -2693,8 +2708,8 @@ async function clearMessages() {
   }
   messages.value = [];
   streamBuffer.value = "";
-  streamToolCalls.value = [];
-  streamCharts.value = [];
+  perSessionToolCalls.clear();
+  perSessionCharts.clear();
   streamFollowUp.value = null;
   streamIntent.value = "";
   if (intentAnimTimer) {
@@ -4371,17 +4386,21 @@ async function send() {
     streamingId === (currentSessionId.value || "__pending__");
   streamBuffer.value = "";
   activeTools.value = [];
-  streamToolCalls.value = [];
   scrollToBottom();
 
   abortController = new AbortController();
-  // Per-stream local arrays. KEEP THESE LOCAL — do not promote to a shared
-  // ref. Concurrent streams in different sessions each need their own
-  // record; a global ref would be clobbered by whichever send() ran most
-  // recently. The visible `streamToolCalls`/`streamCharts` refs are just a
-  // mirror for the currently-foregrounded session.
-  const toolCalls = [];
-  const charts = [];
+  // Per-stream buckets live in perSessionToolCalls / perSessionCharts keyed
+  // by streamingId. Writing through the map (instead of a closure-local
+  // array) means the right-rail UI — driven by the streamToolCalls /
+  // streamCharts computeds — picks up new tool events even for backgrounded
+  // sessions, and the data survives the user switching away and back.
+  const ensureBuckets = (sid) => {
+    if (!perSessionToolCalls.has(sid)) perSessionToolCalls.set(sid, []);
+    if (!perSessionCharts.has(sid)) perSessionCharts.set(sid, []);
+  };
+  ensureBuckets(streamingId);
+  let toolCalls = perSessionToolCalls.get(streamingId);
+  let charts = perSessionCharts.get(streamingId);
   let hasDeltas = false;
 
   try {
@@ -4426,7 +4445,19 @@ async function send() {
         // needs us to keep reading) without polluting the foreground view.
         const routingEvent =
           data.type === "session" || data.type === "session_title";
-        if (!routingEvent && !isActiveView()) continue;
+        // Tool / chart / completion-marker events go into the per-session
+        // map so a backgrounded stream still accumulates state and the user
+        // sees a complete tool list when they switch back. Only delta/text
+        // and intent ticker events are gated on the active view (their UI
+        // lives in shared single-value refs that can only show one stream).
+        const sessionScopedEvent =
+          data.type === "tool_start" ||
+          data.type === "tool_done" ||
+          data.type === "chart" ||
+          data.type === "html_ready" ||
+          data.type === "script_ready" ||
+          data.type === "maturity_score";
+        if (!routingEvent && !sessionScopedEvent && !isActiveView()) continue;
 
         switch (data.type) {
           case "session":
@@ -4437,8 +4468,24 @@ async function send() {
             if (data.id) {
               if (streamingId !== data.id) {
                 runningSessions.delete(streamingId);
+                // Migrate any tool/chart events that arrived under the
+                // "__pending__" sentinel into the real session bucket so
+                // the right-rail UI stays continuous across the id swap.
+                const pendingTools = perSessionToolCalls.get(streamingId);
+                const pendingCharts = perSessionCharts.get(streamingId);
+                if (pendingTools && pendingTools.length) {
+                  perSessionToolCalls.set(data.id, pendingTools);
+                }
+                if (pendingCharts && pendingCharts.length) {
+                  perSessionCharts.set(data.id, pendingCharts);
+                }
+                perSessionToolCalls.delete(streamingId);
+                perSessionCharts.delete(streamingId);
                 streamingId = data.id;
                 runningSessions.add(streamingId);
+                ensureBuckets(streamingId);
+                toolCalls = perSessionToolCalls.get(streamingId);
+                charts = perSessionCharts.get(streamingId);
               }
               // Only move the user's view to the new id if they haven't
               // navigated away to a different session in the meantime.
@@ -4538,7 +4585,11 @@ async function send() {
                 });
               }
             }
-            if (isActiveView()) streamToolCalls.value = [...toolCalls];
+            // Reseat the map entry so the reactive Map notifies — the
+            // streamToolCalls computed re-derives off this map, so all
+            // viewers of this session (now or later) see the update.
+            perSessionToolCalls.set(streamingId, [...toolCalls]);
+            toolCalls = perSessionToolCalls.get(streamingId);
             if (data.tool === "report_intent" && data.args) {
               try {
                 const parsed =
@@ -4578,7 +4629,8 @@ async function send() {
                 tc.error = data.error || null;
               }
             }
-            if (isActiveView()) streamToolCalls.value = [...toolCalls];
+            perSessionToolCalls.set(streamingId, [...toolCalls]);
+            toolCalls = perSessionToolCalls.get(streamingId);
             if (
               data.tool === "SuggestFollowUp" &&
               data.success &&
@@ -4593,8 +4645,9 @@ async function send() {
 
           case "chart":
             charts.push(data.options);
-            if (isActiveView()) streamCharts.value = [...charts];
-            scrollToBottom();
+            perSessionCharts.set(streamingId, [...charts]);
+            charts = perSessionCharts.get(streamingId);
+            if (isActiveView()) scrollToBottom();
             break;
 
           case "html_ready":
@@ -4713,12 +4766,17 @@ async function send() {
     // Only wipe the live-stream UI refs if this stream's session is still
     // the foreground view. If the user navigated to a different session,
     // those refs reflect *that* session's state and must not be touched.
+    // Stream is done — the persisted assistant message snapshot owns
+    // toolCalls/charts now, so drop the live bucket for this session
+    // unconditionally. Doing this regardless of isActiveView() keeps the
+    // per-session map from accumulating stale entries when the user is
+    // viewing a different tab at completion.
+    perSessionToolCalls.delete(streamingId);
+    perSessionCharts.delete(streamingId);
     if (isActiveView()) {
       flushText();
       streamBuffer.value = "";
       activeTools.value = [];
-      streamToolCalls.value = [];
-      streamCharts.value = [];
       streamFollowUp.value = null;
       streamIntent.value = "";
       scriptReady.value = null;
