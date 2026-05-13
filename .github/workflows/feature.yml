@@ -34,6 +34,9 @@ jobs:
   deploy:
     name: Build & Deploy to test slot
     runs-on: ubuntu-latest
+    # Dependabot-triggered runs don't get access to repo secrets, so azure/login
+    # would fail. Skip — these PRs are reviewed and merged via main.yml.
+    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v6
         with:
