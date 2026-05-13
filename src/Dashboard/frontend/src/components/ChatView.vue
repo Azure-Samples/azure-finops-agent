@@ -28,8 +28,6 @@
       <div class="portal-trustline" aria-hidden="false">
         <span class="portal-trustline-item">Built by Microsoft</span>
         <span class="portal-trustline-sep" aria-hidden="true">·</span>
-        <span class="portal-trustline-item">Build {{ buildNumber }}</span>
-        <span class="portal-trustline-sep" aria-hidden="true">·</span>
         <a
           class="portal-trustline-link"
           href="https://github.com/Azure-Samples/azure-finops-agent"
@@ -50,6 +48,28 @@
           </svg>
           <span>Open source</span>
         </a>
+      </div>
+      <!-- Build/branch badge in the top-right corner. Highlights non-main
+           (preview slot) deployments so it's obvious which build you're on. -->
+      <div
+        v-if="buildBranch && buildBranch !== 'main'"
+        class="portal-build-badge portal-build-badge--preview"
+        :title="`Branch ${buildBranch} · Build ${buildNumber} · ${buildSha}`"
+      >
+        <span class="portal-build-badge-branch">{{ buildBranch }}</span>
+        <span class="portal-build-badge-sep">·</span>
+        <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
+      </div>
+      <div
+        v-else-if="buildNumber && buildNumber !== '0'"
+        class="portal-build-badge"
+        :title="`Branch ${buildBranch || 'main'} · Build ${buildNumber} · ${buildSha}`"
+      >
+        <span class="portal-build-badge-branch">{{
+          buildBranch || "main"
+        }}</span>
+        <span class="portal-build-badge-sep">·</span>
+        <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
       </div>
       <!-- Hidden for Dragon's Den pitch — email + disconnect are already shown in the sidebar.
            Re-enable by removing v-if="false". -->
@@ -1976,6 +1996,7 @@ function toggleSection(key) {
 }
 const buildSha = ref("");
 const buildNumber = ref("0");
+const buildBranch = ref("");
 const sidebarOpen = ref(
   typeof window !== "undefined" ? window.innerWidth > 768 : true,
 );
@@ -2289,6 +2310,7 @@ onMounted(async () => {
       const v = await r.json();
       buildSha.value = v.sha || "";
       buildNumber.value = v.build || "0";
+      buildBranch.value = v.branch || "";
     }
   } catch {}
   // Fetch available models and Azure status in parallel
@@ -4366,6 +4388,34 @@ async function send() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.portal-build-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  white-space: nowrap;
+}
+.portal-build-badge--preview {
+  background: #ffb900;
+  color: #1f1f1f;
+}
+.portal-build-badge-sep {
+  opacity: 0.6;
+}
+.portal-build-badge-branch {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-transform: lowercase;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .portal-header-email {
   font-size: 14px;

@@ -46,8 +46,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # Build metadata baked into the image
 ARG BUILD_SHA=dev
 ARG BUILD_NUMBER=0
+ARG BUILD_BRANCH=main
 ENV BUILD_SHA=${BUILD_SHA}
 ENV BUILD_NUMBER=${BUILD_NUMBER}
+ENV BUILD_BRANCH=${BUILD_BRANCH}
 
 # App Service expects port 8080 by default for containers
 ENV ASPNETCORE_URLS=http://+:8080

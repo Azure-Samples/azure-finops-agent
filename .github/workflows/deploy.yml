@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src/Dashboard/**'
-      - '.github/workflows/deploy.yml'
+      - "src/Dashboard/**"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0  # full history for git rev-list --count
+          fetch-depth: 0 # full history for git rev-list --count
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -58,6 +58,7 @@ jobs:
           build-args: |
             BUILD_SHA=${{ steps.meta.outputs.sha }}
             BUILD_NUMBER=${{ steps.meta.outputs.build }}
+            BUILD_BRANCH=main
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
