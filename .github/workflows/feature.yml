@@ -60,7 +60,10 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "tag_branch=$TAG_BRANCH" >> $GITHUB_OUTPUT
           echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-          echo "build=${{ github.run_number }}" >> $GITHUB_OUTPUT
+          # Offset so we keep numbering continuous after switching from
+          # `git rev-list --count HEAD` (which had reached 252) to run_number
+          # (which restarted at 1 when the workflow file was renamed).
+          echo "build=$(( ${{ github.run_number }} + 247 ))" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

@@ -20,8 +20,12 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
     dotnet restore -r linux-x64
 COPY . .
 COPY --from=frontend /app/wwwroot ./wwwroot/
+# Note: we deliberately do NOT pass --no-restore here. BuildKit cache mounts
+# only exist for the duration of a single RUN, so the restore step above
+# can't share its /root/.nuget/packages with this step. Re-mounting the
+# cache makes the second restore essentially free (everything cache-hits).
 RUN --mount=type=cache,target=/root/.nuget/packages \
-    dotnet publish -c Release -r linux-x64 --self-contained false --no-restore -o /app/publish
+    dotnet publish -c Release -r linux-x64 --self-contained false -o /app/publish
 
 # ── Stage 3: Final runtime image ──
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
