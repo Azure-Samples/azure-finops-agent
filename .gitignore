@@ -91,3 +91,7 @@ docs/local/
 .github/agents/competition.agent.md
 .github/agents/triage.agent.md
 
+
+# Playwright browser profile (local testing)
+.pw-profile/
+upload-social-preview.mjs
