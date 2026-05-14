@@ -34,14 +34,14 @@ Returns JSON with:
 - anomalies[]: dates where cost > threshold, with magnitude and grouping breakdown
 - summary: human-readable explanation
 
-After calling, drill into anomalous dates with QueryAzure (Cost Management /query grouped by ResourceGroup or ServiceName for the specific date range) to find the root cause.");
+After calling, drill into anomalous dates with QueryAzure (Cost Management /query grouped by ResourceGroupName or ServiceName for the specific date range) to find the root cause.");
     }
 
     private async Task<string> DetectCostAnomalies(
         [Description("Subscription ID to analyze")] string subscriptionId,
         [Description("Days of history to fetch (baseline + detection window). Default 35.")] int days = 35,
         [Description("Z-score threshold for flagging an anomaly. Default 2.0 (= ~95% confidence). Use 1.5 for more sensitive, 3.0 for stricter.")] double zThreshold = 2.0,
-        [Description("Optional grouping for breakdown of anomalous days: 'ServiceName', 'ResourceGroup', 'MeterCategory'. Default 'ServiceName'.")] string groupBy = "ServiceName")
+        [Description("Optional grouping for breakdown of anomalous days: 'ServiceName', 'ResourceGroupName', 'MeterCategory'. Default 'ServiceName'.")] string groupBy = "ServiceName")
     {
         var token = _tokens.AzureToken;
         if (string.IsNullOrEmpty(token))

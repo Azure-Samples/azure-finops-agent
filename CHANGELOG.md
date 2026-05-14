@@ -11,6 +11,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 - `RouteHandlerAnalyzer` AD0001 NullReferenceException at startup — removed vestigial `(Delegate)` cast in `ChatEndpoints.cs`.
 - `DefaultAzureCredential` 2-5s per-message hang on `VisualStudioCredential.RunProcessesAsync` — excluded VS / VS Code / Interactive / AzurePowerShell credential providers in `CopilotSessionFactory`.
+- `Microsoft.Migrate` resource type corrected from `migrateProjects` to `assessmentProjects` in QueryAzure description and `.github/copilot-instructions.md` (was returning 404 InvalidResourceType against ARM).
+- `Microsoft.Quota` quotas endpoint now documents `MissingRegistrationForResourceProvider` failure mode + fallback to `Microsoft.Compute/locations/{region}/usages` when the RP is not registered.
 
 ### Changed
 
@@ -18,7 +20,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
-- (placeholder)
+- Code-level scope-prefix preflight in `QueryAzure` — rejects bare `/providers/Microsoft.CostManagement/...` (and `/Consumption/budgets`, `/PolicyInsights/policyStates`) calls with HTTP 400 + a corrective grammar message instead of a confusing 404 from ARM. Backed by 5/27 4xx production failures observed over the last 5 days in App Insights.
+- `=== CRITICAL: SCOPE-PREFIXED ENDPOINTS ===` section hoisted to the top of the `QueryAzure` tool description so the LLM sees the {scope} grammar before any per-provider examples.
+- Microsoft Graph: promoted `/v1.0/reports/getMicrosoft365CopilotUsageUserDetail`, `getMicrosoft365CopilotUserCountSummary`, and `/v1.0/deviceManagement/managedDevices` as the primary paths (now GA). The `/beta/` paths remain documented as fallbacks.
 
 ### Removed
 

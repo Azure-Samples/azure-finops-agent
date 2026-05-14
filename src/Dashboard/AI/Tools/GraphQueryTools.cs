@@ -39,15 +39,15 @@ GET /v1.0/reports/getOffice365ServicesUserCounts(period='D30') — user counts b
 GET /v1.0/reports/getEmailActivityCounts(period='D30') — email send/receive/read counts per day.
 GET /v1.0/reports/getEmailAppUsageUserDetail(period='D30') — which email clients users use (Outlook desktop/mobile/web, other).
 
-=== M365 COPILOT USAGE (v1.0 + beta) — identify unused Copilot licenses ===
+=== M365 COPILOT USAGE (v1.0 preferred, beta as fallback) — identify unused Copilot licenses ===
 GET /v1.0/reports/getM365AppUserDetail(period='D30') — per-user M365 app usage (Word, Excel, PowerPoint, Outlook, Teams, OneNote) across platforms (Windows, Mac, Web, Mobile); find users with M365 Apps license but zero app usage.
-GET /beta/reports/getMicrosoft365CopilotUsageUserDetail(period='D30') — per-user Copilot usage (prompts, active days, last activity); find users with assigned Copilot license ($30/user/month) but no usage = immediate savings.
-GET /beta/reports/getMicrosoft365CopilotUserCountSummary(period='D30') — aggregate Copilot adoption: enabled users, active users, adoption rate.
+GET /v1.0/reports/getMicrosoft365CopilotUsageUserDetail(period='D30') — per-user Copilot usage (prompts, active days, last activity); find users with assigned Copilot license but no usage = immediate savings. Now in v1.0 — use this. The /beta/ path still works as a fallback if v1.0 returns 400.
+GET /v1.0/reports/getMicrosoft365CopilotUserCountSummary(period='D30') — aggregate Copilot adoption: enabled users, active users, adoption rate. Now in v1.0 — prefer over /beta/.
 
-=== DEVICE MANAGEMENT (beta) — Intune ===
-GET /beta/deviceManagement/managedDevices?$select=deviceName,operatingSystem,complianceState,lastSyncDateTime,userPrincipalName&$top=50 — Intune managed devices; find devices not syncing (lastSyncDateTime old) for license reconciliation.
-GET /beta/deviceManagement/deviceCompliancePolicySettingStateSummaries — compliance posture summary across all policies.
-GET /beta/deviceManagement/detectedApps?$top=50 — apps detected on managed devices (shadow IT discovery).
+=== DEVICE MANAGEMENT (v1.0 preferred, beta for newer surface) — Intune ===
+GET /v1.0/deviceManagement/managedDevices?$select=deviceName,operatingSystem,complianceState,lastSyncDateTime,userPrincipalName&$top=50 — Intune managed devices (now GA in v1.0); find devices not syncing (lastSyncDateTime old) for license reconciliation. Use v1.0 unless the user explicitly needs a preview-only field — then fall back to /beta/.
+GET /beta/deviceManagement/deviceCompliancePolicySettingStateSummaries — compliance posture summary across all policies (still beta-only).
+GET /beta/deviceManagement/detectedApps?$top=50 — apps detected on managed devices (shadow IT discovery; still beta-only).
 
 === DIRECTORY (v1.0) — org structure for cost allocation ===
 GET /v1.0/organization — tenant info (displayName, verifiedDomains, assignedPlans, createdDateTime).

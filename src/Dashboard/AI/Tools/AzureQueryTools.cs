@@ -29,7 +29,7 @@ public class AzureQueryTools
 Base: https://management.azure.com — provide path starting with /.
 Allowed methods: GET, POST, PUT, PATCH. DELETE is blocked at the code level — the agent never deletes resources. Beyond that, the user's Entra RBAC role governs what they can actually do (assign Reader / Cost Management Reader for read-only).
 Use POST freely for cost/query/report endpoints (/query, /forecast, /resources, /generateCostDetailsReport, /calculatePrice, /carbonEmissionReports, /getEntities, /pricesheets/download, etc.) — these are the canonical Cost Management and Resource Graph surfaces.
-DATA SCOPING: For Cost Management POST .../query, ALWAYS use grouping (ServiceName, ResourceGroup, MeterCategory) and date granularity (Daily/Monthly). Never request raw ungrouped cost data. For Resource Graph POST .../resources, use KQL 'project' and 'top 20' — never select all columns. For list APIs (VMs, storage, etc.), results are already scoped by subscription.
+DATA SCOPING: For Cost Management POST .../query, ALWAYS use grouping (ServiceName, ResourceGroupName, MeterCategory — NOT 'ResourceGroup', NOT 'UsageDate') and date granularity (Daily/Monthly). For per-day breakdowns set granularity=""Daily"" — DO NOT add UsageDate to the grouping array (UsageDate is the response column name, not a valid grouping dimension; 400 BadRequest if used). Never request raw ungrouped cost data. For Resource Graph POST .../resources, use KQL 'project' and 'top 20' — never select all columns. For list APIs (VMs, storage, etc.), results are already scoped by subscription.
 
 === API VERSIONS REFERENCE (use these exact api-version values) ===
 Microsoft.CostManagement: 2025-03-01 (query, forecast, exports, views, alerts, scheduledActions, dimensions, benefitUtilizationSummaries, benefitRecommendations, costAllocationRules, generateCostDetailsReport, generateDetailedCostReport, generateReservationDetailsReport, generateBenefitUtilizationSummariesReport, priceSheet, settings)
@@ -72,8 +72,20 @@ Microsoft.Management: 2023-04-01 (managementGroups, descendants, getEntities)
 Microsoft.Resources: 2022-12-01 (subscriptions); 2023-07-01 (tagNames, resourceGroups, resources)
 Microsoft.Quota: 2025-09-01 (quotas, usages, quotaRequests — scope: /subscriptions/{subId}/providers/Microsoft.Compute/locations/{region}/providers/Microsoft.Quota/quotas)
 Microsoft.Carbon: 2025-04-01 (carbonEmissionReports)
-Microsoft.Migrate: 2024-01-15 (migrateProjects, assessments, assessedMachines)
+Microsoft.Migrate: 2024-01-15 (assessmentProjects, assessments, assessedMachines — NOTE: resource type is `assessmentProjects`, NOT `migrateProjects`)
 Microsoft.Support: 2024-04-01 (supportTickets, services)
+
+=== {scope} GRAMMAR (REQUIRED for ALL Microsoft.CostManagement, Microsoft.Consumption, and Microsoft.CostManagement/budgets paths) ===
+{scope} MUST be exactly ONE of these prefixes — never empty, never bare /providers/...:
+  /subscriptions/{subId}
+  /subscriptions/{subId}/resourceGroups/{rgName}
+  /providers/Microsoft.Management/managementGroups/{mgId}
+  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}
+  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}/billingProfiles/{profileId}
+  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}/invoiceSections/{invoiceSectionId}
+✓ POST /subscriptions/abc-123/providers/Microsoft.CostManagement/query?api-version=2025-03-01
+✗ POST /providers/Microsoft.CostManagement/query  (missing scope → HTTP 400 BadRequest from agent preflight, was previously 404 InvalidResourceType from ARM)
+THROTTLING: Cost Management /query and /forecast are aggressively throttled per-tenant — the agent silently retries 429s up to 5× with exponential backoff. Do NOT call CostManagement endpoints in parallel with each other from the same turn (parallel CM calls trigger 429 cascades). Resource Graph and Advisor are higher-throughput; safe to parallelize.
 
 === COST MANAGEMENT (Microsoft.CostManagement, api-version=2025-03-01) ===
 POST /{scope}/providers/Microsoft.CostManagement/query — cost analysis with grouping/filtering. POST /{scope}/providers/Microsoft.CostManagement/forecast — forecast. POST /{scope}/providers/Microsoft.CostManagement/generateCostDetailsReport — line-item cost data (replaces Consumption usageDetails). POST /{scope}/providers/Microsoft.CostManagement/generateDetailedCostReport — detailed cost report (async; separate from generateCostDetailsReport). POST /{scope}/providers/Microsoft.CostManagement/generateReservationDetailsReport — reservation utilization line-item. POST /{scope}/providers/Microsoft.CostManagement/generateBenefitUtilizationSummariesReport — triggers async benefit utilization summaries report. GET /{scope}/providers/Microsoft.CostManagement/alerts — cost anomaly alerts. GET /{scope}/providers/Microsoft.CostManagement/dimensions — available dimensions for queries. GET /{scope}/providers/Microsoft.CostManagement/benefitUtilizationSummaries — reservation/savings plan utilization. GET /{scope}/providers/Microsoft.CostManagement/benefitRecommendations — purchase recommendations. GET /{scope}/providers/Microsoft.CostManagement/costAllocationRules — split shared costs across scopes. GET /{scope}/providers/Microsoft.CostManagement/exports — scheduled cost data exports to storage. GET /{scope}/providers/Microsoft.CostManagement/scheduledActions — scheduled cost alert emails/reports. GET /{scope}/providers/Microsoft.CostManagement/views — pre-saved cost analysis views. GET /{scope}/providers/Microsoft.CostManagement/settings — cost management settings per scope. POST .../pricesheets/download — download price sheets by billing account/profile/invoice.
@@ -114,6 +126,7 @@ GET /subscriptions/{id}/providers/Microsoft.Compute/virtualMachines?api-version=
 
 === QUOTA (Microsoft.Quota, api-version=2025-09-01) ===
 GET /subscriptions/{subId}/providers/Microsoft.Compute/locations/{region}/providers/Microsoft.Quota/quotas?api-version=2025-09-01 — list ALL compute quotas for a region (standard family quotas + lowPriorityCores). GET .../quotas/{resourceName}?api-version=2025-09-01 — get single quota by name. GET .../providers/Microsoft.Quota/quotaRequests?api-version=2025-09-01 — list quota change requests.
+NOTE: Microsoft.Quota requires RP registration on the subscription — if the call returns 400 MissingRegistrationForResourceProvider, the user (or an Owner) must register it first via PUT /subscriptions/{subId}/providers/Microsoft.Quota/register?api-version=2022-09-01. Until then fall back to GET /subscriptions/{id}/providers/Microsoft.Compute/locations/{region}/usages?api-version=2025-11-01 which always works for compute quotas.
 IMPORTANT — SPOT QUOTA NAMING: Spot/low-priority VM quota is a SINGLE regional bucket called 'lowPriorityCores' (NOT per VM family). This covers ALL spot VMs including H100, A100, etc. Standard quotas are per-family (e.g., 'standardNDSH100v5Family', 'StandardNCadsH100v5Family'). To check H100 spot capacity: query lowPriorityCores limit. To check H100 standard capacity: query standardNDSH100v5Family and StandardNCadsH100v5Family.
 ALSO: Legacy Compute usage API (GET .../locations/{region}/usages?api-version=2025-11-01) returns BOTH standard and spot usage with family names like 'lowPriorityCores' and per-family entries. Use BOTH APIs for a complete picture.
 
@@ -194,7 +207,7 @@ GET /providers/Microsoft.Management/managementGroups?api-version=2023-04-01 — 
 GET /subscriptions/{id}/tagNames?api-version=2023-07-01 — all tag names used in subscription with value counts. GET /subscriptions/{id}/resources?api-version=2023-07-01 — list all resources with type, location, tags, sku. Use for: resource inventory, untagged resource discovery (resources missing CostCenter/Environment/Owner tags), tag coverage analysis for chargeback.
 
 === MIGRATE (Microsoft.Migrate, api-version=2024-01-15) ===
-GET /subscriptions/{id}/resourceGroups/{rg}/providers/Microsoft.Migrate/migrateProjects?api-version=2024-01-15 — migration projects with discovery and assessment status. GET .../migrateProjects/{project}/assessments?api-version=2024-01-15 — migration assessments with target Azure sizing recommendations, estimated monthly cost, readiness status (Ready/ConditionallyReady/NotReady). GET .../assessments/{name}/assessedMachines?api-version=2024-01-15 — individual assessed machines with recommended VM size, disk type, estimated cost — use for pre-migration cost projection.
+GET /subscriptions/{id}/providers/Microsoft.Migrate/assessmentProjects?api-version=2024-01-15 — list all Azure Migrate assessment projects in the subscription (the canonical resource type — `migrateProjects` is NOT a valid type and returns 404 InvalidResourceType). GET /subscriptions/{id}/resourceGroups/{rg}/providers/Microsoft.Migrate/assessmentProjects/{project}/assessments?api-version=2024-01-15 — migration assessments with target Azure sizing recommendations, estimated monthly cost, readiness status (Ready/ConditionallyReady/NotReady). GET .../assessments/{name}/assessedMachines?api-version=2024-01-15 — individual assessed machines with recommended VM size, disk type, estimated cost — use for pre-migration cost projection. Discovery sources live under a separate provider: GET /subscriptions/{id}/providers/Microsoft.OffAzure/MasterSites?api-version=2023-06-06.
 
 === SUPPORT (Microsoft.Support, api-version=2024-04-01) ===
 GET /subscriptions/{id}/providers/Microsoft.Support/supportTickets?api-version=2024-04-01 — all support tickets with severity (Minimal/Moderate/Critical/Highestcriticalimpact), status (Open/Closed), title, createdDate, serviceId. GET /providers/Microsoft.Support/services?api-version=2024-04-01 — available Azure services for support ticket categorization.
@@ -234,6 +247,19 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
             return $"HTTP 400 BadRequest\nInvalid path: '{path}'. Path must start with /.";
         }
 
+        // Scope-prefix preflight: catches the #1 production failure pattern observed in App Insights —
+        // the LLM emitting bare /providers/Microsoft.CostManagement|Consumption|... paths without the
+        // required {scope} prefix (subscriptions / resourceGroups / managementGroups / billingAccounts).
+        // ARM responds 404 InvalidResourceType in that case; we return a precise 400 with the grammar
+        // so the LLM corrects on the next turn instead of burning a round-trip.
+        var scopeError = ValidateScopePrefix(path);
+        if (scopeError is not null)
+        {
+            activity?.SetTag("azure.result", "missing_scope");
+            activity?.SetStatus(ActivityStatusCode.Error, "Missing scope prefix");
+            return scopeError;
+        }
+
         var (httpMethod, methodError) = HttpHelper.ResolveMethod(method, activity, "azure");
         if (methodError is not null) return methodError;
 
@@ -244,6 +270,51 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
             method: httpMethod,
             jsonBody: hasBody && httpMethod != HttpMethod.Get ? body : null,
             includeTimestamp: true);
+    }
+
+    /// <summary>
+    /// Returns null if the path is acceptable, otherwise a ready-to-return HTTP 400 message explaining
+    /// the missing {scope} prefix. Scope-required providers (Cost Management, Consumption budgets,
+    /// PolicyInsights states, etc.) MUST be prefixed with one of the five canonical scope shapes.
+    /// Bare /providers/Microsoft.CostManagement/query was 5/27 of all 4xx failures in the last 5 days.
+    /// </summary>
+    private static string? ValidateScopePrefix(string path)
+    {
+        // Strip query string for the check
+        var qIdx = path.IndexOf('?');
+        var clean = qIdx >= 0 ? path[..qIdx] : path;
+
+        // Only enforce on the providers that actually require {scope}. Cost Management is the big one.
+        // Consumption/budgets and PolicyInsights/policyStates also require it. ResourceGraph, Capacity,
+        // BillingBenefits, Billing, Advisor, etc. live at root and are unaffected.
+        string[] scopeRequired =
+        [
+            "/providers/Microsoft.CostManagement/",
+            "/providers/Microsoft.Consumption/budgets",
+            "/providers/Microsoft.PolicyInsights/policyStates",
+        ];
+
+        foreach (var marker in scopeRequired)
+        {
+            if (!clean.Contains(marker, StringComparison.OrdinalIgnoreCase)) continue;
+            // Acceptable: the marker is preceded by a valid scope segment.
+            if (clean.StartsWith("/subscriptions/", StringComparison.OrdinalIgnoreCase)
+                || clean.StartsWith("/providers/Microsoft.Management/managementGroups/", StringComparison.OrdinalIgnoreCase)
+                || clean.StartsWith("/providers/Microsoft.Billing/billingAccounts/", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+            return "HTTP 400 BadRequest\n" +
+                   $"Path is missing the required {{scope}} prefix before '{marker.TrimEnd('/')}'.\n" +
+                   "Prepend exactly ONE of:\n" +
+                   "  /subscriptions/{subId}\n" +
+                   "  /subscriptions/{subId}/resourceGroups/{rgName}\n" +
+                   "  /providers/Microsoft.Management/managementGroups/{mgId}\n" +
+                   "  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}\n" +
+                   "  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}/billingProfiles/{profileId}\n" +
+                   "Example: POST /subscriptions/abc-123/providers/Microsoft.CostManagement/query?api-version=2025-03-01";
+        }
+        return null;
     }
 
     private async Task<string> BulkAzureRequest(
