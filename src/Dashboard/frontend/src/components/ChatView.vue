@@ -66,7 +66,7 @@
         <span class="portal-build-badge-sep">·</span>
         <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
       </div>
-      <!-- Hidden for Dragon's Den pitch — email + disconnect are already shown in the sidebar.
+      <!-- Hidden — email + disconnect are already shown in the sidebar.
            Re-enable by removing v-if="false". -->
       <div
         v-if="false && azureConnected && azureUserEmail"
@@ -571,7 +571,7 @@
               </div>
             </div>
             <!-- Incremental consent: one row per scope, all delegated, separate Entra ID consent each -->
-            <!-- HIDDEN for Dragon's Den pitch — single-button Connect Azure only.
+            <!-- HIDDEN — single-button Connect Azure only.
                  Re-enable by removing v-if="false" to bring back License Optimization,
                  Cost Allocation, Log Analytics, Cost Exports add-on tiers. -->
             <div v-if="false" class="addons-section">
@@ -904,7 +904,7 @@
                 </div>
               </div>
 
-              <!-- HIDDEN for Dragon's Den pitch — keep UI to email + X disconnect only.
+              <!-- HIDDEN — keep UI to email + X disconnect only.
                    Re-enable by removing v-if="false" to bring back the revoke-all button. -->
               <button
                 v-if="false"
@@ -1795,17 +1795,17 @@ import hljs from "highlight.js/lib/core";
 import hljsJson from "highlight.js/lib/languages/json";
 import "highlight.js/styles/github-dark.css";
 import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  reactive,
-  ref,
-  watch,
+    computed,
+    nextTick,
+    onBeforeUnmount,
+    onMounted,
+    reactive,
+    ref,
+    watch,
 } from "vue";
 import {
-  maturityCategories,
-  pricingCategory,
+    maturityCategories,
+    pricingCategory,
 } from "../data/sidebarCategories.js";
 hljs.registerLanguage("json", hljsJson);
 
