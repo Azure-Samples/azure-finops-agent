@@ -579,7 +579,7 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
         return new SessionConfig
         {
             Model = _deployment,
-            ReasoningEffort = "xhigh",
+            ReasoningEffort = IsReasoningModel(_deployment) ? "xhigh" : null,
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),
@@ -604,7 +604,7 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
         return new ResumeSessionConfig
         {
             Model = _deployment,
-            ReasoningEffort = "xhigh",
+            ReasoningEffort = IsReasoningModel(_deployment) ? "xhigh" : null,
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),
@@ -667,18 +667,15 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
         {
             var token = await GetAzureOpenAIBearerTokenAsync();
             var url = $"{_endpoint.TrimEnd('/')}/openai/deployments/{_deployment}/chat/completions?api-version=2024-10-21";
-            var body = new
+            var messages = new object[]
             {
-                messages = new object[]
-                {
-                    new { role = "system", content = "Summarise the user's question into a 3-6 word title for a chat sidebar. No quotes, no trailing punctuation, no emoji. Title-case." },
-                    new { role = "user", content = $"USER: {Truncate(userMessage, 800)}\n\nASSISTANT: {Truncate(assistantReply, 800)}" },
-                },
-                // GPT-5 / o-series parameter. If the deployment is ever swapped
-                // to a GPT-4 model, change this to `max_tokens` (and ideally add
-                // a model-family check at startup).
-                max_completion_tokens = 24,
+                new { role = "system", content = "Summarise the user's question into a 3-6 word title for a chat sidebar. No quotes, no trailing punctuation, no emoji. Title-case." },
+                new { role = "user", content = $"USER: {Truncate(userMessage, 800)}\n\nASSISTANT: {Truncate(assistantReply, 800)}" },
             };
+            // GPT-5 / o-series use `max_completion_tokens`; grok and GPT-4 use `max_tokens`.
+            object body = IsReasoningModel(_deployment)
+                ? new { messages, max_completion_tokens = 24 }
+                : new { messages, max_tokens = 24 };
             using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(body) };
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using var resp = await _titleHttp.SendAsync(req, ct);
@@ -701,4 +698,18 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
     }
 
     private static string Truncate(string s, int max) => string.IsNullOrEmpty(s) || s.Length <= max ? s : s[..max];
+
+    /// <summary>
+    /// Returns true if the deployment is a reasoning model that accepts the
+    /// <c>reasoning_effort</c> parameter and the <c>max_completion_tokens</c> field.
+    /// GPT-5.x and o-series qualify; grok-4.3 / grok-4 / GPT-4.x do not.
+    /// (grok-4-20-reasoning is the xAI reasoning variant — add it here if deployed.)
+    /// </summary>
+    private static bool IsReasoningModel(string deployment)
+    {
+        if (string.IsNullOrEmpty(deployment)) return false;
+        var d = deployment.ToLowerInvariant();
+        if (d.StartsWith("grok")) return d.Contains("reasoning");
+        return d.StartsWith("gpt-5") || d.StartsWith("o1") || d.StartsWith("o3") || d.StartsWith("o4") || d.StartsWith("codex");
+    }
 }
