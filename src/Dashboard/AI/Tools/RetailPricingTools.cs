@@ -70,10 +70,26 @@ Common queries:
         activity?.SetTag("pricing.sku", armSkuName ?? "any");
         activity?.SetTag("pricing.top", top);
 
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
-        var res = await Http.SendAsync(req);
-        var body = await res.Content.ReadAsStringAsync();
+        // Lightweight retry on 429 / transient — prices.azure.com is public but rate-limits
+        // when an agent fans out 5+ pricing lookups in one turn (Persistence ladder pattern).
+        HttpResponseMessage res = null!;
+        string body = "";
+        const int MaxAttempts = 4;
+        for (var attempt = 0; attempt < MaxAttempts; attempt++)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
+            res = await Http.SendAsync(req);
+            body = await res.Content.ReadAsStringAsync();
+
+            if ((int)res.StatusCode != 429 && (int)res.StatusCode < 500) break;
+            if (attempt == MaxAttempts - 1) break;
+
+            var retryAfter = res.Headers.RetryAfter?.Delta?.TotalSeconds
+                          ?? Math.Min(Math.Pow(2, attempt + 1) + Random.Shared.NextDouble(), 30);
+            activity?.SetTag($"pricing.retry_{attempt}", $"{(int)res.StatusCode}, waiting {retryAfter:F0}s");
+            await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, retryAfter)));
+        }
 
         activity?.SetTag("pricing.status_code", (int)res.StatusCode);
         activity?.SetTag("pricing.response_length", body.Length);

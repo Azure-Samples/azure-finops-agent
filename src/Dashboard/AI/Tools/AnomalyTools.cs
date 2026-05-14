@@ -21,20 +21,13 @@ public class AnomalyTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(DetectCostAnomalies, "DetectCostAnomalies",
-            @"Detects cost anomalies (spikes/drops) in a subscription's recent daily spend using statistical baselining (z-score over rolling window).
+            @"Detects cost spikes/drops in a subscription's recent daily spend via z-score over a rolling window.
 
-Use when the user asks about:
-- 'Why did costs spike?'
-- 'Are there any cost anomalies?'
-- 'Did anything unusual happen in our spending last week?'
-- 'Investigate cost increase'
+Use when user asks 'why did costs spike?', 'are there anomalies?', 'investigate cost increase', etc.
 
-Returns JSON with:
-- baseline_mean, baseline_stddev, threshold (mean + 2*stddev)
-- anomalies[]: dates where cost > threshold, with magnitude and grouping breakdown
-- summary: human-readable explanation
+Returns JSON: baseline_mean, baseline_stddev, threshold (mean + 2*stddev), anomalies[] (date, magnitude, grouping breakdown), summary.
 
-After calling, drill into anomalous dates with QueryAzure (Cost Management /query grouped by ResourceGroupName or ServiceName for the specific date range) to find the root cause.");
+After calling, drill into each anomalous date with QueryAzure (Cost Mgmt /query grouped by ResourceGroupName or ServiceName for that date range) to find root cause.");
     }
 
     private async Task<string> DetectCostAnomalies(

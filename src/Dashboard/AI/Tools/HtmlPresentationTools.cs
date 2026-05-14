@@ -25,20 +25,20 @@ public static class HtmlPresentationTools
     public static IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateHtmlPresentation, "GenerateHtmlPresentation",
-            @"Generates a self-contained HTML deck (one .html file). Use whenever the user asks for a 'presentation', 'deck', 'slides', or 'exec summary' — there's no other format. Built-in nav: ←/→ navigate, ↑ fullscreen, ↓/Esc exit, number keys jump, touch swipe, dot nav, progress bar.
+            @"Generates a self-contained HTML deck (one .html file). Use for any 'presentation', 'deck', 'slides', or 'exec summary' — there's no other format. Built-in nav: ←/→ navigate, ↑ fullscreen, ↓/Esc exit, number keys jump, touch swipe, dot nav, progress bar.
 
 LAYOUTS: title | kpi | chart | content | two_column | maturity | alerts | table | closing.
-Use 'alerts' (good/warn/bad rows) for findings. Use 'table' for top-N rankings (status column auto-colors OK/Watch/Alert; numeric col auto-renders inline bar). 'maturity' supports single-state mode: omit `before` (or set =after) and it collapses to one column.
+Use 'alerts' for findings (good/warn/bad). Use 'table' for top-N rankings (Status col auto-colors OK/Watch/Alert; numeric col auto-renders inline bar). 'maturity' single-state mode: omit `before` (or set =after).
 
 DESIGN RULES:
-- Report CURRENT state, not a narrative. State metric + 3-word verdict (good/watch/bad). No multi-quarter story arcs unless user asks for trends.
+- Report CURRENT state, not a narrative. Metric + 3-word verdict (good/watch/bad). No multi-quarter arcs unless asked.
 - Max 5 bullets/slide, ≤10 words each, no paragraphs. Always include units ($12.4K/mo, 47 VMs).
 - Slide title = the CONCLUSION, not the topic. Bad: 'VM Costs'. Good: 'VMs drive 38% of spend — too concentrated'.
-- One chart OR one table per slide, never both. Chart values are numbers, not strings. Use chart only when ≥3 data points.
-- Chart types: pie/doughnut (composition ≤6), horizontal_bar (top-N rankings — preferred), bar (small comparison), line (time series 7+), waterfall (ONLY if user asks for before→after impact stacking).
-- No 'Thank You' or 'Questions?' slides. No padding — if 4 slides is the report, ship 4.
+- One chart OR one table per slide, never both. Chart values are numbers. Use chart only when ≥3 data points.
+- Chart types: pie/doughnut (composition ≤6), horizontal_bar (top-N rankings, preferred), bar (small comparison), line (time series 7+), waterfall (only for explicit before→after impact stacking).
+- No 'Thank You' / 'Questions?' slides. No padding — if 4 slides is the report, ship 4.
 
-DEFAULT CURRENT-STATE PATTERN (for any 'show me where we stand'): title → kpi (4 cards, accent green/amber/red as verdicts) → alerts (3-6 findings) → chart (horizontal_bar top 5-10) → table (5-10 rows: Name, Owner, $, Status) → maturity (single-state) → closing (3-5 verbs-first next steps + optional CTA). Switch to before/after mode (waterfall + before≠after) ONLY when user explicitly asks for a remediation recap.
+DEFAULT CURRENT-STATE PATTERN ('show me where we stand'): title → kpi (4 cards, accent green/amber/red) → alerts (3-6 findings) → chart (horizontal_bar top 5-10) → table (5-10 rows: Name, Owner, $, Status) → maturity (single-state) → closing (3-5 verbs-first next steps + optional CTA). Switch to before/after mode (waterfall + before≠after) ONLY when user explicitly asks for a remediation recap.
 ");
     }
 

@@ -2909,6 +2909,12 @@ function _graph_label(path) {
 
 function friendlyToolLabel(tc) {
   if (!tc) return "";
+  // Throttled HTTP calls: the tool itself succeeded (returned a string), but the
+  // body starts with "HTTP 429 …". Show a friendly status instead of the tool name
+  // so the user understands it was rate-limited, not a hard failure.
+  if (tc.done && typeof tc.result === "string" && tc.result.startsWith("HTTP 429")) {
+    return "Cooling down…";
+  }
   const tool = tc.tool;
   let args = tc.args;
   if (args && typeof args === "string") {

@@ -14,14 +14,14 @@ public static class ChartTools
         _logger = logger;
         yield return AIFunctionFactory.Create(
             (
-                [Description(@"Chart type — choose based on purpose:
-• bar — compare discrete categories (e.g. cost by service, VM sizes). Best for side-by-side comparison.
-• horizontal_bar — same as bar but with bars running left→right (categories on the y-axis). Best when you have many categories or long category names. xAxisName should describe the value (e.g. ""USD""), yAxisName the category (e.g. ""Service"").
-• line — show trends over time (e.g. daily spend, monthly growth). Best for continuous data.
-• pie — show composition/proportions (e.g. cost breakdown by service). Best for parts-of-a-whole. Solid pie with click-to-select slice highlighting and a Total subtitle.
-• scatter — show correlation between two variables (e.g. CPU vs cost). Best for distribution analysis.
-• funnel — show drop-off stages (e.g. pipeline conversion). Best for sequential stage data.
-• race — animated line chart with end labels showing final values (e.g. cost trends by service over months, regional spend over time). Best for comparing how multiple series evolve and race against each other.")] string type,
+                [Description(@"Chart type:
+• bar — compare discrete categories side-by-side.
+• horizontal_bar — same as bar, categories on y-axis (use for many/long category names; xAxisName=value, yAxisName=category).
+• line — trends over time / continuous data.
+• pie — composition / parts-of-a-whole (≤6 slices). Click-to-select highlighting + Total subtitle.
+• scatter — correlation between two variables.
+• funnel — sequential drop-off stages.
+• race — animated line with end labels (multi-series racing over time).")] string type,
                 [Description("Chart title")] string title,
                 [Description("Series name for the legend")] string seriesName,
                 [Description(@"Data as JSON array string.
@@ -40,14 +40,11 @@ Multi-series (grouped bar/line) — one extra key per series:
                 return JsonSerializer.Serialize(new { type, title, seriesName, data, xAxisName, yAxisName });
             },
             "RenderChart",
-            "Renders an interactive ECharts chart. Use for straightforward single-series or multi-series data visualization.");
+            "Renders an interactive ECharts chart for single or multi-series data.");
 
         yield return AIFunctionFactory.Create(
             (
-                [Description(@"Full ECharts option object as JSON string.
-For world maps: use series type 'map' with map:'world'.
-Use Natural Earth country names (e.g. 'United States of America' not 'USA', 'Czechia' not 'Czech Republic').
-The frontend auto-registers world map GeoJSON.")] string options
+                [Description(@"Full ECharts option object as JSON string. World maps: series type 'map' with map:'world'. Use Natural Earth country names ('United States of America' not 'USA', 'Czechia' not 'Czech Republic'). Frontend auto-registers world map GeoJSON.")] string options
             ) =>
             {
                 _logger?.LogInformation("RenderAdvancedChart called: optionsLen={OptionsLen}", options?.Length ?? 0);
@@ -55,20 +52,20 @@ The frontend auto-registers world map GeoJSON.")] string options
                 return JsonSerializer.Serialize(new { raw = true, options });
             },
             "RenderAdvancedChart",
-            @"Renders any ECharts visualization using raw options JSON. Use for world maps, heatmaps, treemaps, radar, gauge, or charts needing full ECharts config.
+            @"Renders any ECharts visualization from raw options JSON. Use for world maps, heatmaps, treemaps, radar, gauge, or anything needing full ECharts config.
 
-CRITICAL: The options JSON is parsed with JSON.parse(). Do NOT include JavaScript functions — they cannot be serialized in JSON and will be ignored. Use only static values.
+CRITICAL: options is parsed with JSON.parse() — NO JavaScript functions (formatter, etc.); they're silently dropped. Use only static values.
 
-WORLD MAP — effectScatter on geo (Azure region pricing):
+WORLD MAP — effectScatter on geo (e.g. Azure region pricing):
 - Series: type:'effectScatter', coordinateSystem:'geo'.
-- Data format per point: {name:'East US ($0.192/hr)', value:[lon, lat, price], symbolSize:20, itemStyle:{color:'#27ae60'}, label:{show:true, formatter:'{b}', position:'right', fontSize:9}}.
-- Include the price in the name field so tooltips show it without a formatter function.
-- Set symbolSize as a NUMBER per data point (12=cheap / 18=mid / 26=expensive). Color per point via itemStyle.color: GREEN #27ae60 (cheap third), ORANGE #f39c12 (mid third), RED #e74c3c (top third).
+- Data point: {name:'East US ($0.192/hr)', value:[lon, lat, price], symbolSize:20, itemStyle:{color:'#27ae60'}, label:{show:true, formatter:'{b}', position:'right', fontSize:9}}.
+- Embed price in `name` so tooltips show it without a formatter function.
+- symbolSize per point: 12=cheap / 18=mid / 26=expensive. Color via itemStyle.color: GREEN #27ae60 (cheap third), ORANGE #f39c12 (mid third), RED #e74c3c (top third).
 - geo: {map:'world', roam:true, itemStyle:{areaColor:'#e0e0e0', borderColor:'#ccc'}, emphasis:{itemStyle:{areaColor:'#ddd'}}}.
 - visualMap: {min,max, left:'left', bottom:30, text:['Expensive','Cheap'], calculable:true, inRange:{color:['#27ae60','#f39c12','#e74c3c']}}.
-- series rippleEffect: {brushType:'stroke', scale:3}. tooltip: {trigger:'item'} — no formatter functions.
-- Azure region [lon, lat] coordinates are loaded by the frontend from src/Dashboard/AI/Tools/Resources/world-map-coordinates.json — reference any Azure region by its ARM name (eastus, westeurope, swedencentral, etc.) and look it up there. Modern LLMs also know approximate lon/lat for major cities — eastus≈[-79,37], westeurope≈[5,52], swedencentral≈[18,59], japaneast≈[140,36], australiaeast≈[151,-34] — these are accurate enough for a world map.
-- For non-pricing maps (just region locations), use uniform blue #0078D4 dots with symbolSize:10 on the series level and no visualMap.");
+- rippleEffect:{brushType:'stroke', scale:3}, tooltip:{trigger:'item'} — NO formatter.
+- Azure region [lon, lat] coordinates: src/Dashboard/AI/Tools/Resources/world-map-coordinates.json (auto-loaded). Approximate fallbacks: eastus≈[-79,37], westeurope≈[5,52], swedencentral≈[18,59], japaneast≈[140,36], australiaeast≈[151,-34].
+- Non-pricing maps: uniform blue #0078D4 dots, symbolSize:10, no visualMap.");
 
     }
 }

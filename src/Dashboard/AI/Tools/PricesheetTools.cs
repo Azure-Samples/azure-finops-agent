@@ -24,36 +24,29 @@ public class PricesheetTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(StartPricesheetDownload, "StartPricesheetDownload",
-            @"Kicks off an async download of the user's NEGOTIATED Azure pricesheet (EA or MCA contract rates — NOT retail). Use this whenever right-sizing, RI/SP, or cross-region recommendations need real prices instead of public retail.
+            @"Async download of the user's NEGOTIATED pricesheet (EA/MCA contract rates, NOT retail). Real contract rates can be 30–60% off retail — retail prices can invert right-sizing/region recommendations.
 
-WHEN TO USE:
-- Before recommending region migration (negotiated rates may invert the recommendation)
-- Before recommending RI/SP purchases (real PAYG-vs-RI delta needs negotiated PAYG)
-- When user mentions EA, MCA, enterprise agreement, billing account, billing profile
+USE BEFORE: region migration recs, RI/SP recommendations, anytime user mentions EA/MCA/billing account/profile.
 
-SCOPE FORMATS (provide ONE):
-- EA billing account:    /providers/Microsoft.Billing/billingAccounts/{billingAccountId}
-- MCA billing profile:   /providers/Microsoft.Billing/billingAccounts/{billingAccountId}/billingProfiles/{billingProfileId}
+SCOPE FORMATS (one):
+- EA:  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}
+- MCA: /providers/Microsoft.Billing/billingAccounts/{id}/billingProfiles/{profileId}
 
-If you don't know the IDs, first call QueryAzure to list them:
-- EA: GET /providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01
+If you don't know the IDs, list them via QueryAzure first:
+- EA:  GET /providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01
 - MCA: GET /providers/Microsoft.Billing/billingAccounts/{id}/billingProfiles?api-version=2024-04-01
 
-Returns JSON with operationStatusUrl. Pass that URL to GetPricesheetStatus to poll. Typical wait 1–15 minutes for large EA accounts; a few seconds for small MCA profiles.");
+Returns JSON with operationStatusUrl — pass to GetPricesheetStatus to poll. Typically 1–15 min for large EA, seconds for small MCA.");
 
         yield return AIFunctionFactory.Create(GetPricesheetStatus, "GetPricesheetStatus",
             @"Polls the pricesheet download started by StartPricesheetDownload. Pass the operationStatusUrl returned by that tool.
 
 Returns one of:
-- {""status"":""pending""}  — keep polling (back off ~10s between calls)
-- {""status"":""ready"",""downloadUrl"":""<SAS>"",""validTill"":""...""} — SAS valid ~1h
+- {""status"":""pending""}                  — keep polling, back off ~10s between calls
+- {""status"":""ready"",""downloadUrl"":""<SAS>"",""validTill"":""...""}  — SAS valid ~1h
 - {""status"":""failed"",""error"":""...""}
 
-When status=ready, the downloadUrl is a SAS URL to a CSV (typically multi-MB). Either:
-1. Tell the user the link is ready and let them click to download, OR
-2. If small enough, use the built-in fetch tool to grab the first chunk and parse the rates inline.
-
-Do NOT poll faster than every 10 seconds — the operation is genuinely slow.");
+When ready: tell user the link is ready, OR if small enough use FetchPublicWebPage to grab the first chunk and parse rates inline. Do NOT poll faster than every 10s.");
     }
 
     private async Task<string> StartPricesheetDownload(
