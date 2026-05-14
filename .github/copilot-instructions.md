@@ -264,6 +264,21 @@ Prompt shortcuts are available in `.github/prompts/`:
 - `debug-local.prompt.md` for non-container local debugging
 - `debug-local-docker.prompt.md` for Docker-based local debugging
 
+## Testing Protocol (Local UI Tests)
+
+When the user asks for "testing", "test the change", "verify it works", or any equivalent — and the test would benefit from driving the live UI — you MUST follow this exact protocol:
+
+1. **Check that the VS Code integrated Playwright browser tools are loadable.** Run two `tool_search` calls:
+   - `"playwright browser navigate screenshot read page type"` (yields `navigate_page`, `screenshot_page`, `read_page`, `type_in_page`, `hover_element`, `run_playwright_code`)
+   - `"open browser page url click element handle dialog"` (yields `open_browser_page`, `click_element`, `handle_dialog`, `drag_element`)
+   If either search returns nothing, STOP and tell the user the test must run inside VS Code Insiders. Do not fall back to a system browser, do not ask the user to test manually.
+2. **Check whether a local backend is already running** at `http://localhost:5000` via `(Invoke-WebRequest -Uri http://localhost:5000/api/version -UseBasicParsing).StatusCode`. If 200, reuse it; if not, follow `.github/prompts/debug-local.prompt.md` to bring it up.
+3. **Confirm a browser page is shared** with you (look for the `Browser Pages` attachment in the conversation context). If none, call `open_browser_page url=http://localhost:5000` and capture the `pageId`.
+4. **Run the test against the live page** — `read_page` for state, `click_element` / `type_in_page` for actions, `screenshot_page` after each meaningful step. Verify the change actually took effect in the rendered DOM, not just in the source.
+5. **Only after the live test passes** (or fails with a captured screenshot + reproduction steps) should you report the result. Never declare a UI change "tested" based on `npm run build` succeeding alone — the build only proves it compiles.
+
+Skip this protocol only when the change has no UI surface (pure backend refactor, doc edits, infra-only changes).
+
 ## Deploying to Azure
 
 > **Do not deploy from the developer's machine without explicit instruction.** Deployment is the repo owner's decision. The agent must never run `az acr build`, `az webapp restart`, `azd up`, or any equivalent command on its own initiative. If the user asks to deploy, point them at the manual checklist in `.github/prompts/deploy.prompt.md` and let them invoke it. Code changes ship via the user's own deploy step (or CI/CD), never via an agent push.
