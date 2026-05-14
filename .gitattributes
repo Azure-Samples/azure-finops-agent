@@ -1,3 +1,45 @@
+# Default: normalize line endings to LF on commit
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.psd1  text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+# Source
+*.cs       text diff=csharp
+*.csproj   text
+*.sln      text eol=crlf
+*.json     text
+*.jsonc    text
+*.yml      text
+*.yaml     text
+*.md       text
+*.html     text
+*.css      text
+*.js       text
+*.ts       text
+*.vue      text
+
+# Binary
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.svg      text
+*.pdf      binary
+*.mp4      binary
+*.zip      binary
+*.parquet  binary
+*.xlsx     binary
+
+# Lockfiles — generated, hide from PR diffs
+package-lock.json   linguist-generated=true
+*.lock              linguist-generated=true
+
 # Squad: union merge for append-only team state files
 .squad/decisions.md merge=union
 .squad/agents/*/history.md merge=union
