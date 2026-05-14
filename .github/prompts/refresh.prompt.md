@@ -1,3 +1,1 @@
 Refresh all md files with latest knowledge and remove what is not true anymore. This is a maintenance task to ensure that all markdown files in the repository are up-to-date and accurate. Please review each file, update any outdated information, and remove any content that is no longer relevant or true.
-
-always keep any details about the competition as I am participating in it

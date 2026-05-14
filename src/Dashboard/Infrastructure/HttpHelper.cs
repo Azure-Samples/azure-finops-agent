@@ -13,8 +13,20 @@ public static class HttpHelper
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(60) };
     public static readonly ActivitySource Telemetry = new("AzureFinOps.AI");
 
+    // Max retry attempts on HTTP 429. After this many failed attempts the throttled
+    // response is returned to the caller so the LLM (or user) sees the throttle status.
+    private const int MaxThrottleRetries = 5;
+
+    // Cap on a single wait between retries (seconds). Honors Retry-After up to this ceiling
+    // so a misbehaving service can't pin us indefinitely. Cost Management commonly returns
+    // 30–60s; bigger waits are clamped to keep tool latency bounded.
+    private const int MaxRetryWaitSeconds = 60;
+
     /// <summary>
-    /// Sends an HTTP request with automatic retry on 429 (up to 3 attempts).
+    /// Sends an HTTP request with silent retry on 429 (up to 5 attempts). On each 429 we honor,
+    /// in priority order: Cost Management's <c>x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after</c>,
+    /// then the standard <c>Retry-After</c> header (delta or HTTP-date), then exponential backoff
+    /// with jitter. After 5 failed attempts the 429 response is returned to the caller.
     /// Returns formatted "HTTP {status}\n{body}" string for the LLM.
     /// </summary>
     public static async Task<string> SendWithRetryAsync(
@@ -31,7 +43,7 @@ public static class HttpHelper
         method ??= HttpMethod.Get;
 
         HttpResponseMessage res = null!;
-        for (var attempt = 0; attempt < 3; attempt++)
+        for (var attempt = 0; attempt < MaxThrottleRetries; attempt++)
         {
             using var req = new HttpRequestMessage(method, url);
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -47,12 +59,11 @@ public static class HttpHelper
             res = await Http.SendAsync(req);
 
             if ((int)res.StatusCode != 429) break;
+            if (attempt == MaxThrottleRetries - 1) break; // last attempt — return the 429 to caller
 
-            var retryAfter = res.Headers.RetryAfter?.Delta?.TotalSeconds
-                          ?? res.Headers.RetryAfter?.Date?.Subtract(DateTimeOffset.UtcNow).TotalSeconds
-                          ?? (attempt + 1) * 5;
-            activity?.SetTag($"{telemetryPrefix}.retry_{attempt}", $"429, waiting {retryAfter:F0}s");
-            await Task.Delay(TimeSpan.FromSeconds(Math.Min(Math.Max(retryAfter, 1), 30)));
+            var waitSeconds = ResolveRetryAfterSeconds(res, attempt);
+            activity?.SetTag($"{telemetryPrefix}.retry_{attempt}", $"429, waiting {waitSeconds:F0}s");
+            await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
         }
 
         var responseBody = await res.Content.ReadAsStringAsync();
@@ -107,6 +118,36 @@ public static class HttpHelper
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Resolves how long to wait before the next retry on a 429 response. Priority:
+    /// (1) Cost Management's QPU-specific header, (2) standard Retry-After (delta or HTTP-date),
+    /// (3) exponential backoff with jitter (2s, 4s, 8s, 16s...). Result is clamped to
+    /// [1, MaxRetryWaitSeconds].
+    /// </summary>
+    private static double ResolveRetryAfterSeconds(HttpResponseMessage res, int attempt)
+    {
+        // Cost Management exposes a service-specific retry header — prefer it when present.
+        if (res.Headers.TryGetValues("x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after", out var qpuValues)
+            && double.TryParse(qpuValues.FirstOrDefault(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var qpuSeconds)
+            && qpuSeconds > 0)
+        {
+            return Math.Min(Math.Max(qpuSeconds, 1), MaxRetryWaitSeconds);
+        }
+
+        // Standard Retry-After (seconds) or HTTP-date.
+        var standard = res.Headers.RetryAfter?.Delta?.TotalSeconds
+                    ?? res.Headers.RetryAfter?.Date?.Subtract(DateTimeOffset.UtcNow).TotalSeconds;
+        if (standard is > 0)
+        {
+            return Math.Min(Math.Max(standard.Value, 1), MaxRetryWaitSeconds);
+        }
+
+        // Fallback: exponential backoff with small jitter to avoid lockstep retries.
+        var backoff = Math.Pow(2, attempt + 1); // 2, 4, 8, 16, 32
+        var jitter = Random.Shared.NextDouble(); // 0..1s
+        return Math.Min(backoff + jitter, MaxRetryWaitSeconds);
     }
 
     /// <summary>
