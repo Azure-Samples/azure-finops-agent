@@ -101,6 +101,23 @@ app.Lifetime.ApplicationStopping.Register(() =>
     try { janitor.StopAsync(cts.Token).GetAwaiter().GetResult(); } catch { }
 });
 
+// Background tenant-token refresher. Keeps Azure ARM / Graph / Log Analytics /
+// Storage tokens fresh on the per-user UserTokens bag so background turns
+// (browser closed) and long-running scoring jobs don't hit silent 401s after
+// the ~60-min access-token expiry. Uses the persisted MSAL refresh token.
+var tokenRefresher = new TenantTokenRefresher(
+    telemetry,
+    app.Services.GetRequiredService<SessionTokenStore>(),
+    app.Services.GetRequiredService<PersistentIdentity>(),
+    app.Services.GetRequiredService<IHttpClientFactory>(),
+    loggerFactory.CreateLogger<TenantTokenRefresher>());
+await tokenRefresher.StartAsync(CancellationToken.None);
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    try { tokenRefresher.StopAsync(cts.Token).GetAwaiter().GetResult(); } catch { }
+});
+
 // ── Middleware pipeline ────────────────────────────────────────
 var forwardedHeadersOptions = new ForwardedHeadersOptions
 {

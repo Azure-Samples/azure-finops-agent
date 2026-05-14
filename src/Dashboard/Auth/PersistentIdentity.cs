@@ -49,6 +49,12 @@ public sealed class PersistentIdentity
     private static SemaphoreSlim LockFor(string oid) =>
         _fileLocks.GetOrAdd(oid, _ => new SemaphoreSlim(1, 1));
 
+    // userId → oid lookup so background services (e.g. TenantTokenRefresher)
+    // can find an identity record by the userId surfaced in telemetry without
+    // an HttpContext. Populated on every Save / Load / Update so once a user has
+    // touched the system in this process, lookup is O(1).
+    private static readonly ConcurrentDictionary<long, string> _userIdToOid = new();
+
     public PersistentIdentity(IDataProtectionProvider provider, ILogger<PersistentIdentity> logger)
     {
         _protector = provider.CreateProtector("FinOps.Identity.v1");
@@ -79,6 +85,7 @@ public sealed class PersistentIdentity
             var path = Path.Combine(dir, "identity.json");
             var encrypted = _protector.Protect(JsonSerializer.Serialize(record));
             AtomicWrite(path, encrypted);
+            _userIdToOid[record.UserId] = record.Oid;
         }
         catch (Exception ex)
         {
@@ -129,7 +136,9 @@ public sealed class PersistentIdentity
         {
             var encrypted = File.ReadAllText(path);
             var json = _protector.Unprotect(encrypted);
-            return JsonSerializer.Deserialize<IdentityRecord>(json);
+            var rec = JsonSerializer.Deserialize<IdentityRecord>(json);
+            if (rec is not null) _userIdToOid[rec.UserId] = rec.Oid;
+            return rec;
         }
         catch (Exception ex)
         {
@@ -147,6 +156,48 @@ public sealed class PersistentIdentity
         {
             try { File.Delete(Path.Combine(GetUserDir(oid), "identity.json")); }
             catch { }
+        }
+    }
+
+    /// <summary>Loads an identity by its derived userId, used by background
+    /// services that have no HttpContext (e.g. <c>TenantTokenRefresher</c>).
+    /// First-call after a process restart falls back to a cheap directory scan
+    /// to populate the cache; subsequent calls are O(1).</summary>
+    public IdentityRecord? LoadByUserId(long userId)
+    {
+        if (_userIdToOid.TryGetValue(userId, out var cachedOid))
+            return LoadByOid(cachedOid);
+
+        // Cold path after restart: walk users/ until we find a match. Cheap —
+        // O(active users) and only on cache misses.
+        var root = Path.Combine(CopilotHome, "users");
+        if (!Directory.Exists(root)) return null;
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            var oid = Path.GetFileName(dir);
+            var rec = LoadByOid(oid);
+            if (rec is not null && rec.UserId == userId) return rec;
+        }
+        return null;
+    }
+
+    /// <summary>Loads an identity by Entra OID directly (no cookie / context
+    /// required). Returns null if the file is missing or undecryptable.</summary>
+    public IdentityRecord? LoadByOid(string oid)
+    {
+        var path = Path.Combine(GetUserDir(oid), "identity.json");
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var encrypted = File.ReadAllText(path);
+            var json = _protector.Unprotect(encrypted);
+            var rec = JsonSerializer.Deserialize<IdentityRecord>(json);
+            if (rec is not null) _userIdToOid[rec.UserId] = rec.Oid;
+            return rec;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -179,6 +230,7 @@ public sealed class PersistentIdentity
             mutate(existing);
             existing.UpdatedUtc = DateTimeOffset.UtcNow;
             AtomicWrite(path, _protector.Protect(JsonSerializer.Serialize(existing)));
+            _userIdToOid[existing.UserId] = existing.Oid;
         }
         catch (Exception ex)
         {

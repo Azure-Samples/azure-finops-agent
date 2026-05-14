@@ -90,6 +90,14 @@ public static class ChatEndpoints
                 tokens.GraphToken = await tokenStore.GetGraphTokenAsync(ctx, httpFactory);
                 tokens.LogAnalyticsToken = await tokenStore.GetLogAnalyticsTokenAsync(ctx, httpFactory);
                 tokens.StorageToken = await tokenStore.GetStorageTokenAsync(ctx, httpFactory);
+
+                // Mirror expiry from session into the volatile bag so the
+                // TenantTokenRefresher background service can refresh proactively
+                // when no HTTP request is around (browser closed, background turn).
+                tokens.AzureTokenExpiry = ParseExpiry(ctx.Session.GetString("azure_token_expiry"));
+                tokens.GraphTokenExpiry = ParseExpiry(ctx.Session.GetString("graph_token_expiry"));
+                tokens.LogAnalyticsTokenExpiry = ParseExpiry(ctx.Session.GetString("loganalytics_token_expiry"));
+                tokens.StorageTokenExpiry = ParseExpiry(ctx.Session.GetString("storage_token_expiry"));
             }
             finally
             {
@@ -165,12 +173,19 @@ public static class ChatEndpoints
                 var cancelled = false;
                 var toolTracker = new ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)>();
 
-                ctx.RequestAborted.Register(async () =>
+                // Browser disconnect releases this SSE handler but does NOT
+                // abort the running turn. The Copilot CLI keeps generating
+                // and persists the assistant message + tool results to the
+                // on-disk session state ($COPILOT_HOME/.copilot/session-state).
+                // The user can reload the conversation later and see the full
+                // result via LoadTranscriptAsync. Without this detach, closing
+                // the tab during a long "score my estate" run would silently
+                // kill the work mid-flight.
+                ctx.RequestAborted.Register(() =>
                 {
                     if (!cancelled)
                     {
                         cancelled = true;
-                        try { await session.AbortAsync(); } catch { }
                         done.TrySetResult();
                     }
                 });
@@ -584,4 +599,7 @@ public static class ChatEndpoints
         await ctx.Response.WriteAsync($"data: {sseData}\n\n");
         await ctx.Response.Body.FlushAsync();
     }
+
+    private static DateTimeOffset? ParseExpiry(string? raw)
+        => DateTimeOffset.TryParse(raw, out var v) ? v : (DateTimeOffset?)null;
 }

@@ -3243,7 +3243,12 @@ function buildEChartsOption(raw) {
     return null;
   }
 
-  const chartType = (parsed.type || "bar").toLowerCase();
+  let chartType = (parsed.type || "bar").toLowerCase();
+  // Translate `horizontal_bar` to a regular bar with swapped axes — ECharts
+  // has no native `horizontal_bar` series type, so without this we'd render
+  // an empty chart (axes only, no bars). The LLM frequently emits this value.
+  const isHorizontal = chartType === "horizontal_bar";
+  if (isHorizontal) chartType = "bar";
   const title = parsed.title || "";
   const seriesName = parsed.seriesName || "";
   const xAxisName = parsed.xAxisName || "";
@@ -3466,7 +3471,42 @@ function buildEChartsOption(raw) {
     };
   }
 
-  const values = dataArr.map((d) => (Array.isArray(d) ? d[1] : d.value));
+  // Extract numeric values robustly. Accept any of:
+  //   [name, value]                          (array form)
+  //   {name, value}                           (canonical object form)
+  //   {name, <seriesName>}                    (LLM-named value key, e.g. {name:'A', USD:100})
+  // Without the third fallback, single-series bar charts whose value key
+  // matches the seriesName render with empty bars.
+  const values = dataArr.map((d) => {
+    if (Array.isArray(d)) return d[1];
+    if (d && "value" in d) return d.value;
+    if (d && typeof d === "object") {
+      const k = Object.keys(d).find((k) => k !== "name");
+      return k ? d[k] : undefined;
+    }
+    return undefined;
+  });
+
+  // Horizontal bar: keep categories on the value-perpendicular axis, swap
+  // which axis is `category` vs `value`. xAxisName/yAxisName already reflect
+  // the user's intent (xAxis=USD, yAxis=Service for horizontal_bar).
+  const categoryAxis = {
+    type: "category",
+    data: categories,
+    name: isHorizontal ? yAxisName : xAxisName,
+    nameLocation: "center",
+    nameGap: isHorizontal ? 60 : 30,
+    axisLabel: isHorizontal
+      ? { fontSize: 11, color: "#1f2328", fontWeight: 500 }
+      : xAxisLabel,
+  };
+  const valueAxis = {
+    type: "value",
+    name: isHorizontal ? xAxisName : yAxisName,
+    nameLocation: "center",
+    nameGap: isHorizontal ? 30 : 45,
+    axisLabel: yAxisLabel,
+  };
 
   return {
     title: {
@@ -3476,22 +3516,9 @@ function buildEChartsOption(raw) {
     },
     tooltip: { trigger: "axis" },
     color: colors,
-    grid: { left: 60, right: 20, bottom: 40, top: 50 },
-    xAxis: {
-      type: "category",
-      data: categories,
-      name: xAxisName,
-      nameLocation: "center",
-      nameGap: 30,
-      axisLabel: xAxisLabel,
-    },
-    yAxis: {
-      type: "value",
-      name: yAxisName,
-      nameLocation: "center",
-      nameGap: 45,
-      axisLabel: yAxisLabel,
-    },
+    grid: { left: isHorizontal ? 120 : 60, right: 20, bottom: 40, top: 50 },
+    xAxis: isHorizontal ? valueAxis : categoryAxis,
+    yAxis: isHorizontal ? categoryAxis : valueAxis,
     series: [
       {
         name: seriesName,

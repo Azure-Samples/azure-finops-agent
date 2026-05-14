@@ -16,6 +16,7 @@ public static class ChartTools
             (
                 [Description(@"Chart type — choose based on purpose:
 • bar — compare discrete categories (e.g. cost by service, VM sizes). Best for side-by-side comparison.
+• horizontal_bar — same as bar but with bars running left→right (categories on the y-axis). Best when you have many categories or long category names. xAxisName should describe the value (e.g. ""USD""), yAxisName the category (e.g. ""Service"").
 • line — show trends over time (e.g. daily spend, monthly growth). Best for continuous data.
 • pie — show composition/proportions (e.g. cost breakdown by service). Best for parts-of-a-whole. Solid pie with click-to-select slice highlighting and a Total subtitle.
 • scatter — show correlation between two variables (e.g. CPU vs cost). Best for distribution analysis.
@@ -24,8 +25,11 @@ public static class ChartTools
                 [Description("Chart title")] string title,
                 [Description("Series name for the legend")] string seriesName,
                 [Description(@"Data as JSON array string.
-Single series: [[""Apple"",100],[""Banana"",200]] or [{""name"":""A"",""value"":100}].
-Multi-series (grouped bar/line): [{""name"":""D2s_v5"",""East US"":70,""West Europe"":84},{""name"":""D4s_v5"",""East US"":140,""West Europe"":168}]")] string data,
+Single series — ALWAYS use the key 'value' for the numeric (do NOT name it after the series, e.g. don't use 'USD'):
+  [[""Apple"",100],[""Banana"",200]]
+  [{""name"":""A"",""value"":100},{""name"":""B"",""value"":200}]
+Multi-series (grouped bar/line) — one extra key per series:
+  [{""name"":""D2s_v5"",""East US"":70,""West Europe"":84},{""name"":""D4s_v5"",""East US"":140,""West Europe"":168}]")] string data,
                 [Description("X-axis label (optional)")] string? xAxisName,
                 [Description("Y-axis label (optional)")] string? yAxisName
             ) =>
