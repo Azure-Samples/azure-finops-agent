@@ -21,26 +21,21 @@ public class LogAnalyticsQueryTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(QueryLogAnalytics, "QueryLogAnalytics", @"Runs a KQL query against a Log Analytics workspace or Application Insights component.
-DATA SCOPING: ALWAYS use summarize, top, take, or where to limit results. Use bin(TimeGenerated, 1d) for time aggregation — never raw per-minute rows. Project only needed columns — never select *. Start with an aggregated overview, then drill down.
-LOG ANALYTICS: Specify workspaceId (GUID) — find it via QueryAzure GET /subscriptions/{id}/providers/Microsoft.OperationalInsights/workspaces?api-version=2025-07-01 (customerId field is the workspace GUID).
-APP INSIGHTS: Specify appId (GUID) and set target='appinsights' — find it via Azure portal or QueryAzure.
+DATA SCOPING: ALWAYS use summarize/top/take/where to limit. Use bin(TimeGenerated, 1d) for time aggregation — never raw per-minute. Project only needed columns. Start aggregated, then drill down.
+LOG ANALYTICS: workspaceId is the workspace GUID — find via QueryAzure GET .../Microsoft.OperationalInsights/workspaces (customerId field).
+APP INSIGHTS: appId is the App Insights component GUID; set target='appinsights'.
 
-=== FINOPS TABLES & KQL PATTERNS ===
-Perf — VM CPU/memory/disk metrics. Example: Perf | where ObjectName == 'Processor' and CounterName == '% Processor Time' | summarize AvgCPU=avg(CounterValue) by Computer, bin(TimeGenerated, 1d) | where AvgCPU < 5 — find idle VMs (CPU < 5% = candidate for right-sizing/shutdown).
-InsightsMetrics — VM Insights and container insights metrics (CPU, memory, disk, network). Example: InsightsMetrics | where Namespace == 'Processor' and Name == 'UtilizationPercentage' | summarize avg(Val) by Computer, bin(TimeGenerated, 1h).
-Heartbeat — VM heartbeat signals; gaps indicate offline/deallocated VMs. Example: Heartbeat | summarize LastHeartbeat=max(TimeGenerated) by Computer | where LastHeartbeat < ago(7d) — VMs not seen in 7 days (potentially orphaned but still billed).
-ContainerInventory — AKS container inventory with image, state, pod. KubePodInventory — AKS pod details with CPU/memory requests vs limits. Example: KubePodInventory | summarize avg(PodRequests_cpu), avg(PodLimits_cpu) by Namespace, ControllerName — find over-provisioned pods.
-ContainerLog — container stdout/stderr log volume; often the #1 ingestion cost driver. Example: ContainerLog | summarize TotalBytes=sum(_BilledSize) by ContainerID | top 10 by TotalBytes desc.
-AzureMetrics — PaaS resource metrics (DTU usage for SQL, RU/s for Cosmos DB, request units). Example: AzureMetrics | where ResourceProvider == 'MICROSOFT.SQL' | summarize avg(Average) by MetricName, Resource, bin(TimeGenerated, 1d).
-AzureDiagnostics — diagnostic logs from App Gateway, SQL, Firewall, Key Vault. Example: AzureDiagnostics | where ResourceType == 'APPLICATIONGATEWAYS' | summarize count() by OperationName, bin(TimeGenerated, 1h).
-AzureActivity — who created/deleted/modified resources (OperationName, Caller, ResourceGroup). Example: AzureActivity | where OperationNameValue endswith 'write' or OperationNameValue endswith 'delete' | summarize count() by Caller, OperationNameValue | top 20 by count_.
-AppRequests — Application Insights HTTP requests (url, duration, resultCode, success). AppDependencies — outbound dependency calls (SQL, HTTP, Redis, etc.) with duration.
-Usage — Log Analytics ingestion volume per data type. Example: Usage | summarize DataGB=sum(Quantity)/1024 by DataType | top 10 by DataGB desc — find which tables cost the most for ingestion.
-_BilledSize — per-record ingestion size column available on all tables; use sum(_BilledSize) for cost attribution.
-Update — Windows Update compliance data; UpdateSummary — patch compliance summary.
-SecurityEvent — Windows security events (logon, privilege use); SecurityAlert — Defender alerts.
-Syslog — Linux syslog messages (Facility, SeverityLevel, SyslogMessage).
-W3CIISLog — IIS web server access logs (request URL, status, bytes, client IP).");
+FinOps-relevant tables (you know KQL syntax):
+- Perf / InsightsMetrics — VM CPU, memory, disk, network. Idle-VM detection: AvgCPU < 5% over 7d.
+- Heartbeat — gaps indicate offline/deallocated VMs (LastHeartbeat < ago(7d) = potentially orphaned but billed).
+- KubePodInventory / ContainerInventory — AKS pod requests vs limits for over-provisioning. ContainerLog — often #1 ingestion cost driver; group by ContainerID and sum(_BilledSize).
+- AzureMetrics — PaaS metrics (SQL DTU, Cosmos RU/s).
+- AzureDiagnostics — diagnostic logs (App Gateway, SQL, Firewall, Key Vault).
+- AzureActivity — who created/deleted/modified resources (OperationName, Caller); cost attribution audit trail.
+- AppRequests / AppDependencies — App Insights request and dependency telemetry.
+- Usage — Log Analytics ingestion volume per DataType. sum(Quantity)/1024 = GB/day. Identifies top ingestion cost drivers.
+- _BilledSize — per-record ingestion size column on all tables; use for cost attribution.
+- SecurityEvent / SecurityAlert / Syslog / W3CIISLog / Update — security/OS/web/patch tables.");
     }
 
     private async Task<string> QueryLogAnalytics(

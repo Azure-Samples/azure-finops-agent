@@ -330,7 +330,6 @@ Triggered by the TOP-PRIORITY ROUTING RULE above. This answer is shown to execut
         sharedTools.AddRange(FollowUpTools.Create());
         sharedTools.AddRange(ScoreTools.Create());
         sharedTools.AddRange(ScriptTools.Create());
-        sharedTools.AddRange(ScheduleTools.Create());
         sharedTools.AddRange(RetailPricingTools.Create());
 
         var logger = loggerFactory.CreateLogger("AzureFinOps.AI");

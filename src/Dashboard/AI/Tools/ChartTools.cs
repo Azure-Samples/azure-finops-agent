@@ -61,16 +61,14 @@ CRITICAL: The options JSON is parsed with JSON.parse(). Do NOT include JavaScrip
 
 WORLD MAP — effectScatter on geo (Azure region pricing):
 - Series: type:'effectScatter', coordinateSystem:'geo'.
-- Data format per point: {name:'East US ($0.192/hr)', value:[-79.0, 37.3, 0.192], symbolSize:20, itemStyle:{color:'#27ae60'}, label:{show:true, formatter:'{b}', position:'right', fontSize:9}}.
-- IMPORTANT: Set symbolSize as a NUMBER on EACH data point (not on the series, not as a function). Scale it by price: cheap regions symbolSize:12, mid-range symbolSize:18, expensive symbolSize:26.
-- Color each dot individually via itemStyle.color: GREEN (#27ae60) = cheap (bottom third of price range), ORANGE (#f39c12) = mid-range (middle third), RED (#e74c3c) = expensive (top third).
-- Include the price in the name field like 'East US ($0.192/hr)' so tooltips show the price without needing a formatter function.
-- geo config: {map:'world', roam:true, itemStyle:{areaColor:'#e0e0e0', borderColor:'#ccc'}, emphasis:{itemStyle:{areaColor:'#ddd'}}}.
-- visualMap: {min:<lowest_price>, max:<highest_price>, left:'left', bottom:30, text:['Expensive','Cheap'], calculable:true, inRange:{color:['#27ae60','#f39c12','#e74c3c']}}.
-- rippleEffect: {brushType:'stroke', scale:3} on the series for animated pulsing dots.
-- tooltip: {trigger:'item'} — do NOT use a formatter function. The name field already contains the price.
-- Azure region coordinates [lon, lat]: eastus=[-79.0,37.3], eastus2=[-78.4,36.7], westus=[-122.0,37.4], westus2=[-119.8,47.2], westus3=[-112.1,33.4], centralus=[-93.6,41.6], northcentralus=[-87.6,41.9], southcentralus=[-98.5,29.4], westeurope=[4.9,52.4], northeurope=[-6.3,53.3], uksouth=[-0.1,51.5], ukwest=[-3.2,51.5], francecentral=[2.3,46.6], francesouth=[3.0,43.6], germanywestcentral=[8.7,50.1], germanynorth=[9.7,53.6], norwayeast=[10.7,59.9], norwaywest=[5.3,60.4], swedencentral=[18.1,59.3], swedensouth=[13.0,55.6], switzerlandnorth=[8.5,47.4], switzerlandwest=[6.1,46.2], polandcentral=[21.0,52.2], italynorth=[9.2,45.5], spaincentral=[-3.7,40.4], austriaeast=[16.4,48.2], denmarkeast=[12.6,55.7], belgiumcentral=[4.4,50.8], southeastasia=[103.8,1.3], eastasia=[114.2,22.3], japaneast=[139.7,35.7], japanwest=[135.5,34.7], koreacentral=[127.0,37.6], koreasouth=[129.1,35.2], australiaeast=[151.2,-33.9], australiasoutheast=[144.9,-37.8], australiacentral=[149.1,-35.3], centralindia=[73.9,18.5], southindia=[80.2,12.9], westindia=[72.9,19.1], canadacentral=[-79.4,43.7], canadaeast=[-71.2,46.8], brazilsouth=[-46.6,-23.5], brazilsoutheast=[-43.2,-22.9], southafricanorth=[28.2,-25.7], southafricawest=[18.4,-33.9], uaenorth=[55.3,25.3], uaecentral=[54.4,24.5], qatarcentral=[51.4,25.3], israelcentral=[34.8,31.3], mexicocentral=[-99.1,19.4], chilecentral=[-70.7,-33.5], newzealandnorth=[174.8,-36.8], taiwannorth=[121.5,25.0], indonesiacentral=[106.8,-6.2], malaysiawest=[101.7,3.1].
-- For non-pricing maps (just showing region locations), use uniform blue (#0078D4) dots with symbolSize:10 on the series level and no visualMap.");
+- Data format per point: {name:'East US ($0.192/hr)', value:[lon, lat, price], symbolSize:20, itemStyle:{color:'#27ae60'}, label:{show:true, formatter:'{b}', position:'right', fontSize:9}}.
+- Include the price in the name field so tooltips show it without a formatter function.
+- Set symbolSize as a NUMBER per data point (12=cheap / 18=mid / 26=expensive). Color per point via itemStyle.color: GREEN #27ae60 (cheap third), ORANGE #f39c12 (mid third), RED #e74c3c (top third).
+- geo: {map:'world', roam:true, itemStyle:{areaColor:'#e0e0e0', borderColor:'#ccc'}, emphasis:{itemStyle:{areaColor:'#ddd'}}}.
+- visualMap: {min,max, left:'left', bottom:30, text:['Expensive','Cheap'], calculable:true, inRange:{color:['#27ae60','#f39c12','#e74c3c']}}.
+- series rippleEffect: {brushType:'stroke', scale:3}. tooltip: {trigger:'item'} — no formatter functions.
+- Azure region [lon, lat] coordinates are loaded by the frontend from src/Dashboard/AI/Tools/Resources/world-map-coordinates.json — reference any Azure region by its ARM name (eastus, westeurope, swedencentral, etc.) and look it up there. Modern LLMs also know approximate lon/lat for major cities — eastus≈[-79,37], westeurope≈[5,52], swedencentral≈[18,59], japaneast≈[140,36], australiaeast≈[151,-34] — these are accurate enough for a world map.
+- For non-pricing maps (just region locations), use uniform blue #0078D4 dots with symbolSize:10 on the series level and no visualMap.");
 
     }
 }

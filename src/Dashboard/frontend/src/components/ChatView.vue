@@ -156,29 +156,55 @@
                       : "☆☆☆☆☆"
                   }}</span
                 >
-                <span class="maturity-card-score">
-                  {{
-                    maturityScores[cat.key]
-                      ? maturityNumeric(cat.key) + " / 5"
-                      : "not scored"
-                  }}
-                </span>
+                <svg
+                  v-if="maturityScores[cat.key]"
+                  class="collapse-chevron maturity-card-chevron"
+                  :class="{
+                    'collapse-chevron--collapsed':
+                      collapsedSections['cm_' + cat.key],
+                  }"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="
+                    collapsedSections['cm_' + cat.key] ? 'Expand' : 'Collapse'
+                  "
+                  @click.stop="toggleSection('cm_' + cat.key)"
+                  @keydown.enter.stop="toggleSection('cm_' + cat.key)"
+                >
+                  <path
+                    d="M4 6l4 4 4-4"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
               </div>
               <!-- Per-dimension breakdown (only after scoring) -->
-              <div v-if="maturityScores[cat.key]" class="assessment-summary">
-                <div
-                  v-for="sc in maturityScores[cat.key]"
-                  :key="sc.id"
-                  class="assessment-row"
-                >
-                  <div class="assessment-label">{{ sc.label }}</div>
+              <div
+                v-if="maturityScores[cat.key]"
+                class="collapse-body"
+                :class="{
+                  'collapse-body--collapsed': collapsedSections['cm_' + cat.key],
+                }"
+              >
+                <div class="assessment-summary">
                   <div
-                    class="assessment-stars"
-                    :style="{ color: starColor(sc.score) }"
+                    v-for="sc in maturityScores[cat.key]"
+                    :key="sc.id"
+                    class="assessment-row"
                   >
-                    {{ starsText(sc.score) }}
+                    <div class="assessment-label">{{ sc.label }}</div>
+                    <div
+                      class="assessment-stars"
+                      :style="{ color: starColor(sc.score) }"
+                    >
+                      {{ starsText(sc.score) }}
+                    </div>
+                    <div class="assessment-detail-text">{{ sc.detail }}</div>
                   </div>
-                  <div class="assessment-detail-text">{{ sc.detail }}</div>
                 </div>
               </div>
             </div>
@@ -2093,6 +2119,11 @@ const collapsedSections = reactive({
   pb_walk: true,
   pb_run: true,
   pb_playbook: true,
+  // Maturity cards default to expanded after scoring
+  cm_crawl: false,
+  cm_walk: false,
+  cm_run: false,
+  cm_playbook: false,
 });
 function toggleSection(key) {
   collapsedSections[key] = !collapsedSections[key];
@@ -5261,9 +5292,9 @@ async function send() {
     0 2px 4px rgba(15, 23, 42, 0.08);
   transform: translateY(-2px);
 }
+.maturity-card:focus,
 .maturity-card:focus-visible {
-  outline: 2px solid #c8c6c4;
-  outline-offset: 2px;
+  outline: none;
 }
 .maturity-card--disabled {
   opacity: 0.55;
@@ -5319,13 +5350,25 @@ async function send() {
   letter-spacing: 3px;
   line-height: 1;
 }
-.maturity-card-score {
-  font-size: 13px;
-  font-weight: 600;
-  color: #656d76;
+.maturity-card-chevron {
+  width: 16px;
+  height: 16px;
+  color: #8a8886;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  transition:
+    transform 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
 }
-.maturity-card--scored .maturity-card-score {
+.maturity-card-chevron:hover {
+  background: rgba(15, 23, 42, 0.06);
   color: #1f2328;
+}
+.maturity-card-chevron:focus,
+.maturity-card-chevron:focus-visible {
+  outline: none;
 }
 
 .sidebar-subgroup {
