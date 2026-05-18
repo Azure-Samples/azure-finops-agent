@@ -87,8 +87,14 @@ Common queries:
 
             var retryAfter = res.Headers.RetryAfter?.Delta?.TotalSeconds
                           ?? Math.Min(Math.Pow(2, attempt + 1) + Random.Shared.NextDouble(), 30);
-            activity?.SetTag($"pricing.retry_{attempt}", $"{(int)res.StatusCode}, waiting {retryAfter:F0}s");
-            await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, retryAfter)));
+            var waitSeconds = Math.Max(1, retryAfter);
+            activity?.SetTag($"pricing.retry_{attempt}", $"{(int)res.StatusCode}, waiting {waitSeconds:F0}s");
+            // Surface the cool-down to the chat UI on the same SSE channel HttpHelper uses.
+            if (HttpHelper.RetryReporter.Value is { } report)
+            {
+                try { await report(attempt + 1, waitSeconds); } catch { /* best-effort */ }
+            }
+            await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
         }
 
         activity?.SetTag("pricing.status_code", (int)res.StatusCode);

@@ -2909,6 +2909,11 @@ function _graph_label(path) {
 
 function friendlyToolLabel(tc) {
   if (!tc) return "";
+  // Live 429 backoff — set by cooling_down SSE event mid-flight.
+  if (tc.cooling && !tc.done) {
+    const w = Math.round(tc.cooling.wait || 0);
+    return `Cooling down… ${w}s`;
+  }
   // Throttled HTTP calls: the tool itself succeeded (returned a string), but the
   // body starts with "HTTP 429 …". Show a friendly status instead of the tool name
   // so the user understands it was rate-limited, not a hard failure.
@@ -4517,6 +4522,7 @@ async function send() {
         const sessionScopedEvent =
           data.type === "tool_start" ||
           data.type === "tool_done" ||
+          data.type === "cooling_down" ||
           data.type === "chart" ||
           data.type === "html_ready" ||
           data.type === "script_ready" ||
@@ -4691,6 +4697,7 @@ async function send() {
                 tc.durationMs = data.durationMs;
                 tc.result = data.result || null;
                 tc.error = data.error || null;
+                tc.cooling = null;
               }
             }
             perSessionToolCalls.set(streamingId, [...toolCalls]);
@@ -4713,6 +4720,21 @@ async function send() {
             charts = perSessionCharts.get(streamingId);
             if (isActiveView()) scrollToBottom();
             break;
+
+          case "cooling_down": {
+            // 429 backoff in flight — tag the most recent in-progress tool so
+            // the sidebar swaps its label to "Cooling down… {wait}s".
+            const inFlight = [...toolCalls].reverse().find((t) => !t.done);
+            if (inFlight) {
+              inFlight.cooling = {
+                attempt: data.attempt,
+                wait: data.waitSeconds,
+              };
+              perSessionToolCalls.set(streamingId, [...toolCalls]);
+              toolCalls = perSessionToolCalls.get(streamingId);
+            }
+            break;
+          }
 
           case "html_ready":
             htmlReady.value = {

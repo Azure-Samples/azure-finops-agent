@@ -1,17 +1,36 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Net.Http.Headers;
 using System.Text;
 
 namespace AzureFinOps.Dashboard.Infrastructure;
 
 /// <summary>
-/// Shared HTTP helper for all API tools — handles retry on 429, response formatting, and telemetry.
+/// Shared HTTP helper for all API tools — handles retry on 429/5xx, response formatting, and telemetry.
 /// Eliminates duplicated retry loops, response formatting, and HttpClient instances across tools.
 /// </summary>
 public static class HttpHelper
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(60) };
+    // SocketsHttpHandler with PooledConnectionLifetime so a process running for weeks on App
+    // Service eventually picks up DNS changes (the classic long-lived static HttpClient footgun).
+    private static readonly HttpClient Http = new(new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+    })
+    { Timeout = TimeSpan.FromSeconds(60) };
+
     public static readonly ActivitySource Telemetry = new("AzureFinOps.AI");
+
+    private static readonly Meter Meter = new("AzureFinOps.AI");
+    private static readonly Counter<long> ThrottleRetries =
+        Meter.CreateCounter<long>("finops.throttle.retries", description: "HTTP retries triggered by 429 or transient 5xx");
+
+    /// <summary>
+    /// Per-request hook for reporting 429 retries to the SSE stream. Set by ChatEndpoints
+    /// before <c>session.SendAsync</c>; flows through AsyncLocal into every tool invocation
+    /// on the same async context. Null in background workers / tests — calls become no-ops.
+    /// </summary>
+    public static readonly AsyncLocal<Func<int, double, Task>?> RetryReporter = new();
 
     // Max retry attempts on HTTP 429. After this many failed attempts the throttled
     // response is returned to the caller so the LLM (or user) sees the throttle status.
@@ -58,11 +77,24 @@ public static class HttpHelper
 
             res = await Http.SendAsync(req);
 
-            if ((int)res.StatusCode != 429) break;
-            if (attempt == MaxThrottleRetries - 1) break; // last attempt — return the 429 to caller
+            // Retry on 429 (throttle) and transient 5xx (502/503/504 — typical ARM regional
+            // failover or backend hiccups). Other non-success codes return to the caller.
+            var status = (int)res.StatusCode;
+            var isThrottle = status == 429;
+            var isTransientServer = status == 502 || status == 503 || status == 504;
+            if (!isThrottle && !isTransientServer) break;
+            if (attempt == MaxThrottleRetries - 1) break; // last attempt — return as-is to caller
 
             var waitSeconds = ResolveRetryAfterSeconds(res, attempt);
-            activity?.SetTag($"{telemetryPrefix}.retry_{attempt}", $"429, waiting {waitSeconds:F0}s");
+            var reason = isThrottle ? "429" : status.ToString();
+            activity?.SetTag($"{telemetryPrefix}.retry_{attempt}", $"{reason}, waiting {waitSeconds:F0}s");
+            ThrottleRetries.Add(1,
+                new KeyValuePair<string, object?>("status", reason),
+                new KeyValuePair<string, object?>("tool", telemetryPrefix));
+            if (RetryReporter.Value is { } report)
+            {
+                try { await report(attempt + 1, waitSeconds); } catch { /* UI hook is best-effort */ }
+            }
             await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
         }
 

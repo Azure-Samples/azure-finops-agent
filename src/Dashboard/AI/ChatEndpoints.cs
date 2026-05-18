@@ -228,6 +228,20 @@ public static class ChatEndpoints
                 await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "session", id = activeSessionId })}\n\n");
                 await ctx.Response.Body.FlushAsync();
 
+                // Wire the retry hook so HttpHelper can push "Cooling down" pings
+                // to this SSE stream during 429 backoff. Serialize writes against
+                // the SDK event handler with a per-request lock so retry pings
+                // can't interleave bytes with delta/tool_done frames.
+                var sseLock = new SemaphoreSlim(1, 1);
+                async Task SafeEmit(string sseData)
+                {
+                    await sseLock.WaitAsync();
+                    try { await EmitAsync(ctx, sseData); }
+                    finally { sseLock.Release(); }
+                }
+                Infrastructure.HttpHelper.RetryReporter.Value = (attempt, waitSec) =>
+                    SafeEmit(JsonSerializer.Serialize(new { type = "cooling_down", attempt, waitSeconds = waitSec }));
+
                 try
                 {
                     await session.SendAsync(new MessageOptions { Prompt = prompt });
