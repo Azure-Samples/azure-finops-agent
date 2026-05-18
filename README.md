@@ -31,7 +31,21 @@ No Azure tenant? Two ways to demo:
 
 Vue 3 SPA → .NET 10 minimal API → GitHub Copilot SDK → Azure read APIs (Cost Management, Resource Graph, Microsoft Graph, Log Analytics) using your delegated Entra tokens. Hosted on Azure App Service or Container Apps. OpenTelemetry to your Application Insights.
 
-## [See the architecture diagram →](docs/architecture-and-security.md#mermaid-architecture-diagram)
+## Architecture
+
+```mermaid
+flowchart LR
+    U[User] --> FE[Vue 3 SPA]
+    FE --> API[.NET 10 API]
+    API --> SDK[Copilot SDK]
+    SDK --> AOAI[Azure OpenAI]
+    SDK --> TOOLS[Azure Tools]
+    TOOLS --> ARM[ARM / Cost Mgmt]
+    TOOLS --> GRAPH[Microsoft Graph]
+    TOOLS --> LA[Log Analytics]
+    U -. OAuth .-> ENTRA[Entra ID]
+    ENTRA --> API
+```
 
 ## Running Locally
 
