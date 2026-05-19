@@ -1639,6 +1639,7 @@
               <svg
                 v-if="!tc.done"
                 class="st-icon st-icon--spin"
+                :class="{ 'st-icon--cooling': tc.cooling }"
                 viewBox="0 0 16 16"
                 fill="none"
               >
@@ -1695,23 +1696,31 @@
                 />
               </svg>
               <span class="st-name">{{ friendlyToolLabel(tc) }}</span>
+              <span
+                v-if="tc.cooling && !tc.done"
+                class="st-cooling"
+                :title="`Rate-limited — backing off ${Math.round(tc.cooling.wait || 0)}s before retry ${tc.cooling.attempt || ''}`"
+              >
+                · cooling {{ Math.round(tc.cooling.wait || 0) }}s
+              </span>
               <span v-if="tc.done" class="st-time">{{
                 formatDuration(tc.durationMs)
               }}</span>
             </div>
           </div>
         </div>
-        <!-- ── Bottom half: Conversations (Entra-only) ── -->
+        <!-- ── Bottom half: Conversations (browser-local, IndexedDB) ── -->
         <div
-          v-if="azureConnected"
           class="tools-sidebar-pane tools-sidebar-pane--sessions"
         >
           <div class="tools-sidebar-header sessions-header">
             <div class="tools-sidebar-header-text">
               <span class="tools-sidebar-title">Conversations</span>
               <span class="tools-sidebar-status">
-                <span class="tools-sidebar-status-text"
-                  >{{ sessions.length }} saved</span
+                <span
+                  class="tools-sidebar-status-text"
+                  title="Stored only in this browser — switching device or clearing site data removes them."
+                  >{{ sessions.length }} on this device</span
                 >
               </span>
             </div>
@@ -1726,7 +1735,8 @@
           </div>
           <div class="tools-sidebar-scroll sessions-scroll">
             <div v-if="sessions.length === 0" class="sessions-empty">
-              No saved conversations yet — chat to create one.
+              No conversations yet — chat to create one. They're saved in this
+              browser only.
             </div>
             <div
               v-for="s in sessions"
@@ -1833,6 +1843,7 @@ import {
     maturityCategories,
     pricingCategory,
 } from "../data/sidebarCategories.js";
+import * as sessionStore from "../lib/sessionStore.js";
 hljs.registerLanguage("json", hljsJson);
 
 const props = defineProps({
@@ -2159,45 +2170,36 @@ const showTenantSwitcher = ref(false);
 const tenantError = ref(false);
 const clearing = ref(false);
 
-// ── Multi-session state (Entra-only) ─────────────────────────────
-// `sessions` mirrors the server's view of the user's saved Copilot sessions.
-// `currentSessionId` is the one the next /api/chat request will hit. The
-// backend echoes it back as the first SSE event of every chat so we always
-// stay in sync even if the user clicked a row mid-stream.
+// ── Multi-session state (browser-only, IndexedDB) ─────────────────
+// Conversations live entirely in the user's browser via sessionStore.js.
+// The backend is stateless: each turn we POST the prompt plus a slim
+// history snapshot. Switching browser/device wipes history.
 const sessions = ref([]);
 const currentSessionId = ref(null);
 
+function toSidebarRow(row) {
+  return {
+    id: row.id,
+    summary: row.title || "Untitled conversation",
+    modifiedTime: row.updatedUtc ? new Date(row.updatedUtc).toISOString() : null,
+    startTime: row.createdUtc ? new Date(row.createdUtc).toISOString() : null,
+  };
+}
+
 async function loadSessions() {
-  if (!azureConnected.value) {
-    sessions.value = [];
-    currentSessionId.value = null;
-    return;
-  }
   try {
-    const res = await fetch("/api/sessions", { credentials: "same-origin" });
-    if (!res.ok) return;
-    const data = await res.json();
-    sessions.value = Array.isArray(data.sessions) ? data.sessions : [];
-    // Only adopt the server's notion of "current" when the client has none.
-    // Otherwise a periodic refresh would yank the user out of the session
-    // they explicitly selected.
-    if (data.currentSessionId && currentSessionId.value == null) {
-      currentSessionId.value = data.currentSessionId;
-    }
+    const rows = await sessionStore.listSessions();
+    sessions.value = rows.map(toSidebarRow);
   } catch {
-    /* network blip — keep prior list */
+    sessions.value = [];
   }
 }
 
 async function newSession() {
   if (clearing.value) return;
-  // Note: we do NOT abort an in-flight stream here. If another session is
-  // running in the background, let it keep running — the SSE handlers will
-  // detect that the user has navigated away and stop writing to the UI.
   clearing.value = true;
   messages.value = [];
   streamBuffer.value = "";
-  // User-initiated wipe — drop every session's live buckets.
   perSessionToolCalls.clear();
   perSessionCharts.clear();
   scriptReady.value = null;
@@ -2216,36 +2218,16 @@ async function newSession() {
   maturityScores.walk = null;
   maturityScores.run = null;
   maturityScores.playbook = null;
-  try {
-    const res = await fetch("/api/sessions/new", { method: "POST" });
-    if (res.ok) {
-      const j = await res.json();
-      currentSessionId.value = j.sessionId || null;
-    }
-  } catch {}
+  // Don't persist a session until the user actually sends something —
+  // sidebar stays clean. send() will lazily create one on first prompt.
+  currentSessionId.value = null;
   await loadSessions();
   clearing.value = false;
 }
 
 async function selectSession(sessionId) {
   if (!sessionId || sessionId === currentSessionId.value) return;
-  // Allow switching even if another session is streaming in the background;
-  // the in-flight SSE handlers will detect the navigation and skip UI writes.
-  try {
-    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/select`, {
-      method: "POST",
-    });
-  } catch {
-    return;
-  }
   currentSessionId.value = sessionId;
-  // Fetch the persisted transcript from the SDK and replay it so the user
-  // sees their actual past messages and tool calls — not a placeholder.
-  // Wipe transient view-scoped UI refs (intent ticker, partial text buffer,
-  // follow-up CTA) so nothing from the previous view leaks. Do NOT touch
-  // perSessionToolCalls / perSessionCharts — those are keyed by sessionId
-  // and a still-streaming background session needs its bucket intact so the
-  // tool list is whole when the user switches back.
   streamFollowUp.value = null;
   streamBuffer.value = "";
   streamIntent.value = "";
@@ -2258,118 +2240,76 @@ async function selectSession(sessionId) {
   scriptReady.value = null;
   htmlReady.value = null;
   try {
-    const res = await fetch(
-      `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
-    );
-    if (res.ok) {
-      const j = await res.json();
-      const restored = (j.messages || []).map((m) => ({
-        role: m.role,
-        content: m.content || "",
-        toolCalls: (m.toolCalls || []).map((tc) => ({
-          id: tc.id,
-          tool: tc.name,
-          args: tc.args || "",
-          result: tc.result || null,
-          error: tc.error || null,
-          success: tc.success !== false,
-          intent: tc.intent || "",
-          durationMs: null,
-          done: true,
-          expanded: false,
-        })),
-        charts: m.charts || [],
-        html: m.html || null,
-        script: m.script ? { ...m.script, expanded: false } : null,
-      }));
-      console.log(
-        "[loadMessages] /messages returned",
-        restored.length,
-        "messages. roles=",
-        restored.map((m) => m.role).join(","),
-        "assistant lengths=",
-        restored
-          .filter((m) => m.role === "assistant")
-          .map((m) => m.content.length),
-      );
-      // If this session is still streaming in the background, drop any
-      // trailing assistant message — it is the in-progress turn that the
-      // SDK has already persisted. The live SSE stream will commit the
-      // final version on completion. Otherwise the streaming indicator
-      // (which renders its own AI avatar) would appear directly below the
-      // partial assistant row, producing two stacked AI avatars.
-      if (
-        runningSessions.has(sessionId) &&
-        restored.length &&
-        restored[restored.length - 1].role === "assistant"
-      ) {
-        restored.pop();
-      }
-      messages.value = restored.length
-        ? restored
-        : [
-            {
-              role: "system",
-              content: "Resumed conversation. Ask anything to continue.",
-            },
-          ];
+    const stored = await sessionStore.getMessages(sessionId);
+    const restored = stored.map((m) => ({
+      role: m.role,
+      content: m.content || "",
+      toolCalls: (m.toolCalls || []).map((tc) => ({
+        ...tc,
+        expanded: false,
+      })),
+      charts: m.charts || [],
+      html: m.html || null,
+      script: m.script ? { ...m.script, expanded: false } : null,
+    }));
+    if (
+      runningSessions.has(sessionId) &&
+      restored.length &&
+      restored[restored.length - 1].role === "assistant"
+    ) {
+      restored.pop();
+    }
+    messages.value = restored.length
+      ? restored
+      : [
+          {
+            role: "system",
+            content: "Resumed conversation. Ask anything to continue.",
+          },
+        ];
 
-      // Replay any ReportMaturityScore tool calls so the sidebar stars
-      // reflect the conversation's last-known scores. Latest call per level wins.
-      maturityScores.crawl = null;
-      maturityScores.walk = null;
-      maturityScores.run = null;
-      maturityScores.playbook = null;
-      for (const m of restored) {
-        for (const tc of m.toolCalls || []) {
-          if (tc.tool !== "ReportMaturityScore") continue;
-          let level = null;
-          let scoresJson = null;
-          // Prefer the SSE marker baked into the tool result.
-          const marker =
-            typeof tc.result === "string" &&
-            tc.result.startsWith("__MATURITY_SCORE__:")
-              ? tc.result
-              : null;
-          if (marker) {
-            const rest = marker.slice("__MATURITY_SCORE__:".length);
-            const idx = rest.indexOf(":");
-            if (idx > 0) {
-              level = rest.slice(0, idx).toLowerCase();
-              scoresJson = rest.slice(idx + 1);
-            }
-          } else if (tc.args) {
-            // Fallback: parse the tool args (level + scores).
-            try {
-              const a =
-                typeof tc.args === "string" ? JSON.parse(tc.args) : tc.args;
-              level = (a.level || "").toLowerCase();
-              scoresJson = a.scores;
-            } catch {}
+    // Replay any ReportMaturityScore tool calls so the sidebar stars
+    // reflect the conversation's last-known scores. Latest call per level wins.
+    maturityScores.crawl = null;
+    maturityScores.walk = null;
+    maturityScores.run = null;
+    maturityScores.playbook = null;
+    for (const m of restored) {
+      for (const tc of m.toolCalls || []) {
+        if (tc.tool !== "ReportMaturityScore") continue;
+        let level = null;
+        let scoresJson = null;
+        const marker =
+          typeof tc.result === "string" &&
+          tc.result.startsWith("__MATURITY_SCORE__:")
+            ? tc.result
+            : null;
+        if (marker) {
+          const rest = marker.slice("__MATURITY_SCORE__:".length);
+          const idx = rest.indexOf(":");
+          if (idx > 0) {
+            level = rest.slice(0, idx).toLowerCase();
+            scoresJson = rest.slice(idx + 1);
           }
-          if (
-            level &&
-            ["crawl", "walk", "run", "playbook"].includes(level) &&
-            scoresJson
-          ) {
-            try {
-              const arr =
-                typeof scoresJson === "string"
-                  ? JSON.parse(scoresJson)
-                  : scoresJson;
-              if (Array.isArray(arr)) maturityScores[level] = arr;
-            } catch {}
-          }
+        } else if (tc.args) {
+          try {
+            const a = typeof tc.args === "string" ? JSON.parse(tc.args) : tc.args;
+            level = (a.level || "").toLowerCase();
+            scoresJson = a.scores;
+          } catch {}
+        }
+        if (
+          level &&
+          ["crawl", "walk", "run", "playbook"].includes(level) &&
+          scoresJson
+        ) {
+          try {
+            const arr =
+              typeof scoresJson === "string" ? JSON.parse(scoresJson) : scoresJson;
+            if (Array.isArray(arr)) maturityScores[level] = arr;
+          } catch {}
         }
       }
-    } else {
-      const meta = sessions.value.find((s) => s.id === sessionId);
-      messages.value = [
-        {
-          role: "system",
-          content: `Resumed conversation: ${meta?.summary || "Untitled"}.`,
-        },
-      ];
     }
   } catch {
     messages.value = [{ role: "system", content: "Resumed conversation." }];
@@ -2378,9 +2318,7 @@ async function selectSession(sessionId) {
 
 async function deleteSession(sessionId) {
   try {
-    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-      method: "DELETE",
-    });
+    await sessionStore.deleteSession(sessionId);
   } catch {
     return;
   }
@@ -2395,8 +2333,6 @@ async function deleteSession(sessionId) {
     maturityScores.run = null;
     maturityScores.playbook = null;
   }
-  // Drop the live-stream buckets for the deleted session regardless of view —
-  // a backgrounded stream may still be writing to it; abandon those writes.
   perSessionToolCalls.delete(sessionId);
   perSessionCharts.delete(sessionId);
   await loadSessions();
@@ -2587,8 +2523,8 @@ async function revokeAllPermissions() {
 // This guarantees a clean initial state every time the user reconnects.
 watch(azureConnected, async (connected, wasConnected) => {
   if (!connected) {
-    sessions.value = [];
-    currentSessionId.value = null;
+    // Chat history is browser-local and unaffected by auth changes — leave
+    // the sidebar list intact.
     return;
   }
   collapsedSections.pricing = true;
@@ -2767,15 +2703,8 @@ async function clearMessages() {
   maturityScores.walk = null;
   maturityScores.run = null;
   maturityScores.playbook = null;
-  try {
-    const r = await fetch("/api/chat/reset", { method: "POST" });
-    if (r.ok) {
-      try {
-        const j = await r.json();
-        if (j && j.sessionId) currentSessionId.value = j.sessionId;
-      } catch {}
-    }
-  } catch {}
+  // No server-side state to reset — chat is stateless.
+  currentSessionId.value = null;
   await loadSessions();
   clearing.value = false;
 }
@@ -2909,11 +2838,6 @@ function _graph_label(path) {
 
 function friendlyToolLabel(tc) {
   if (!tc) return "";
-  // Live 429 backoff — set by cooling_down SSE event mid-flight.
-  if (tc.cooling && !tc.done) {
-    const w = Math.round(tc.cooling.wait || 0);
-    return `Cooling down… ${w}s`;
-  }
   // Throttled HTTP calls: the tool itself succeeded (returned a string), but the
   // body starts with "HTTP 429 …". Show a friendly status instead of the tool name
   // so the user understands it was rate-limited, not a hard failure.
@@ -4435,34 +4359,46 @@ async function send() {
   if (!props.user || clearing.value) return;
   const prompt = input.value.trim();
   if (!prompt) return;
-  // Per-session gate: only block sending another prompt to the SAME session
-  // while it is already streaming. Other sessions can keep running in the
-  // background.
+
+  // Lazily create a session in IndexedDB on first prompt so sidebar rows
+  // only show conversations that actually contain messages.
+  if (!currentSessionId.value) {
+    const newId = sessionStore.newSessionId();
+    await sessionStore.createSession(newId, "New conversation");
+    currentSessionId.value = newId;
+    await loadSessions();
+  }
   const startSessionId = currentSessionId.value;
-  if (runningSessions.has(startSessionId || "__pending__")) return;
+  if (runningSessions.has(startSessionId)) return;
+
+  // Build replay history BEFORE we push the new user turn locally — the
+  // server doesn't need the prompt twice.
+  let history = [];
+  try {
+    history = await sessionStore.getHistoryForReplay(startSessionId);
+  } catch {}
 
   messages.value.push({ role: "user", content: prompt });
+  // Await the persist so a quota-full / IDB error surfaces synchronously
+  // and the user turn can't be lost behind the assistant reply.
+  try {
+    await sessionStore.appendMessage(startSessionId, { role: "user", content: prompt });
+  } catch (e) {
+    console.warn("[sessionStore] failed to persist user turn", e);
+  }
+
   input.value = "";
   nextTick(() => {
     if (inputEl.value) inputEl.value.style.height = "auto";
   });
-  // Track this stream's session id locally so we can detect (a) when the
-  // user has navigated to a different session mid-stream, and (b) which
-  // entry to drop from runningSessions when we finish.
-  let streamingId = startSessionId || "__pending__";
+  const streamingId = startSessionId;
   runningSessions.add(streamingId);
-  const isActiveView = () =>
-    streamingId === (currentSessionId.value || "__pending__");
+  const isActiveView = () => streamingId === currentSessionId.value;
   streamBuffer.value = "";
   activeTools.value = [];
   scrollToBottom();
 
   abortController = new AbortController();
-  // Per-stream buckets live in perSessionToolCalls / perSessionCharts keyed
-  // by streamingId. Writing through the map (instead of a closure-local
-  // array) means the right-rail UI — driven by the streamToolCalls /
-  // streamCharts computeds — picks up new tool events even for backgrounded
-  // sessions, and the data survives the user switching away and back.
   const ensureBuckets = (sid) => {
     if (!perSessionToolCalls.has(sid)) perSessionToolCalls.set(sid, []);
     if (!perSessionCharts.has(sid)) perSessionCharts.set(sid, []);
@@ -4478,11 +4414,24 @@ async function send() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt,
+        history,
         model: selectedModel.value,
-        sessionId: currentSessionId.value || undefined,
       }),
       signal: abortController.signal,
     });
+
+    // fetch() resolves successfully on 5xx — the body is usually an HTML
+    // error page (ASP.NET dev exception page) which would silently drain
+    // through the SSE parser and commit a blank assistant turn. Surface
+    // it as a real error so the catch block renders a useful message.
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const body = await res.text();
+        detail = body.length > 200 ? body.slice(0, 200) + "…" : body;
+      } catch {}
+      throw new Error(`HTTP ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ""}`);
+    }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -4508,17 +4457,7 @@ async function send() {
           continue;
         }
 
-        // Routing/sidebar events are handled regardless of which session the
-        // user is currently viewing. Everything else is gated on isActiveView()
-        // below so a backgrounded stream keeps draining bytes (the server
-        // needs us to keep reading) without polluting the foreground view.
-        const routingEvent =
-          data.type === "session" || data.type === "session_title";
-        // Tool / chart / completion-marker events go into the per-session
-        // map so a backgrounded stream still accumulates state and the user
-        // sees a complete tool list when they switch back. Only delta/text
-        // and intent ticker events are gated on the active view (their UI
-        // lives in shared single-value refs that can only show one stream).
+        const routingEvent = data.type === "session_title";
         const sessionScopedEvent =
           data.type === "tool_start" ||
           data.type === "tool_done" ||
@@ -4530,63 +4469,30 @@ async function send() {
         if (!routingEvent && !sessionScopedEvent && !isActiveView()) continue;
 
         switch (data.type) {
-          case "session":
-            // Backend echoes the active sessionId at the start of each chat.
-            // Swap our local streamingId/runningSessions key from the
-            // "__pending__" sentinel (or stale id) to the real id so the
-            // pulsing dot follows the right row.
-            if (data.id) {
-              if (streamingId !== data.id) {
-                runningSessions.delete(streamingId);
-                // Migrate any tool/chart events that arrived under the
-                // "__pending__" sentinel into the real session bucket so
-                // the right-rail UI stays continuous across the id swap.
-                const pendingTools = perSessionToolCalls.get(streamingId);
-                const pendingCharts = perSessionCharts.get(streamingId);
-                if (pendingTools && pendingTools.length) {
-                  perSessionToolCalls.set(data.id, pendingTools);
-                }
-                if (pendingCharts && pendingCharts.length) {
-                  perSessionCharts.set(data.id, pendingCharts);
-                }
-                perSessionToolCalls.delete(streamingId);
-                perSessionCharts.delete(streamingId);
-                streamingId = data.id;
-                runningSessions.add(streamingId);
-                ensureBuckets(streamingId);
-                toolCalls = perSessionToolCalls.get(streamingId);
-                charts = perSessionCharts.get(streamingId);
-              }
-              // Only move the user's view to the new id if they haven't
-              // navigated away to a different session in the meantime.
-              if (
-                currentSessionId.value === null ||
-                currentSessionId.value === startSessionId
-              ) {
-                currentSessionId.value = data.id;
-              }
-            }
-            break;
-
           case "session_title": {
-            const idx = sessions.value.findIndex((s) => s.id === data.id);
-            if (idx >= 0) {
-              const updated = { ...sessions.value[idx], summary: data.title };
-              sessions.value = [
-                ...sessions.value.slice(0, idx),
-                updated,
-                ...sessions.value.slice(idx + 1),
-              ];
-            } else {
-              // New session not yet in sidebar — prepend a stub row.
-              sessions.value = [
-                {
-                  id: data.id,
-                  summary: data.title,
-                  modifiedTime: new Date().toISOString(),
-                },
-                ...sessions.value,
-              ];
+            // Server generated a title after the first turn — persist it.
+            const title = data.title;
+            if (title) {
+              sessionStore.renameSession(streamingId, title).then(() => {
+                const idx = sessions.value.findIndex((s) => s.id === streamingId);
+                if (idx >= 0) {
+                  const updated = { ...sessions.value[idx], summary: title };
+                  sessions.value = [
+                    ...sessions.value.slice(0, idx),
+                    updated,
+                    ...sessions.value.slice(idx + 1),
+                  ];
+                } else {
+                  sessions.value = [
+                    {
+                      id: streamingId,
+                      summary: title,
+                      modifiedTime: new Date().toISOString(),
+                    },
+                    ...sessions.value,
+                  ];
+                }
+              });
             }
             break;
           }
@@ -4815,26 +4721,35 @@ async function send() {
       scriptReady.value = null;
     }
     // Only commit the assistant message into the visible message list if
-    // the user is still viewing this stream's session. Otherwise the
-    // server has already persisted it and the user will see it via the
-    // /messages reload when they navigate back.
+    // the user is still viewing this stream's session. Otherwise it's
+    // still persisted to IndexedDB below — selectSession() will rehydrate.
     if (isActiveView()) {
-      console.log(
-        "[push assistant] live-stream commit. content length=",
-        clean.length,
-        "first 80=",
-        clean.slice(0, 80),
-        "messages.length now=",
-        messages.value.length + 1,
-      );
       messages.value.push(msgObj);
     }
+    // Persist assistant turn to IndexedDB regardless of foreground state.
+    try {
+      await sessionStore.appendMessage(streamingId, {
+        role: "assistant",
+        content: msgObj.content,
+        toolCalls: msgObj.toolCalls,
+        charts: msgObj.charts,
+        html: msgObj.html || null,
+        script: msgObj.script || null,
+      });
+    } catch {}
   } catch (err) {
+    // Persist whatever we have so reload doesn't leave the prior user turn
+    // dangling (which would make the next replay send two consecutive USER
+    // messages to the LLM).
+    const partialContent =
+      err.name === "AbortError"
+        ? (streamBuffer.value || "") + "\n\n*(generation stopped)*"
+        : `**Connection error:** ${err.message}`;
     if (err.name === "AbortError") {
       if (streamBuffer.value && isActiveView()) {
         messages.value.push({
           role: "assistant",
-          content: streamBuffer.value + "\n\n*(generation stopped)*",
+          content: partialContent,
           toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
           charts: [...charts],
         });
@@ -4842,8 +4757,18 @@ async function send() {
     } else if (isActiveView()) {
       messages.value.push({
         role: "assistant",
-        content: `**Connection error:** ${err.message}`,
+        content: partialContent,
       });
+    }
+    try {
+      await sessionStore.appendMessage(streamingId, {
+        role: "assistant",
+        content: partialContent,
+        toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
+        charts: [...charts],
+      });
+    } catch (persistErr) {
+      console.warn("[sessionStore] failed to persist failed-turn assistant", persistErr);
     }
   } finally {
     clearInterval(intentAnimTimer);
@@ -4871,7 +4796,7 @@ async function send() {
       nextTick(() => inputEl.value?.focus());
     }
     // Refresh the Conversations sidebar so the new/updated summary shows up.
-    if (azureConnected.value) loadSessions();
+    loadSessions();
     if (availableModels.value.length <= 1) {
       try {
         const mr = await fetch("/api/models");
@@ -7585,6 +7510,47 @@ async function send() {
   flex-shrink: 0;
   color: #605e5c;
   font-size: 11px;
+}
+
+/* ── Cooling indicator (live 429 backoff) ──
+   Pure visual cue so the user knows "this tool is rate-limited, retrying" and
+   the UI isn't stuck. Same font as the row label, no pill. The status icon
+   itself flashes red and settles back to amber — the icon does the alarm
+   work; the text is just a quiet timer. */
+.st-icon--cooling circle {
+  animation: st-icon-cool-flash 1500ms ease-out forwards;
+}
+@keyframes st-icon-cool-flash {
+  0% {
+    stroke: #cf222e;
+    stroke-width: 2.5;
+  }
+  60% {
+    stroke: #d97706;
+    stroke-width: 2.2;
+  }
+  100% {
+    stroke: #bf8700;
+    stroke-width: 2;
+  }
+}
+.st-cooling {
+  flex-shrink: 0;
+  color: #b54708;
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+  opacity: 0.85;
+  animation: st-cooling-text-pulse 1800ms ease-in-out infinite;
+}
+@keyframes st-cooling-text-pulse {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 /* ── Tool popover ── */

@@ -31,6 +31,7 @@ if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
 var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.4";
+var azureOpenAITenantId = builder.Configuration["AzureOpenAI:TenantId"];
 var appInsightsCs = builder.Configuration["ApplicationInsights:ConnectionString"];
 
 // ── Services ───────────────────────────────────────────────────
@@ -73,15 +74,13 @@ if (!string.IsNullOrEmpty(appInsightsCs))
 }
 
 var telemetry = new AiTelemetry();
-telemetry.LoadTitles();
 builder.Services.AddSingleton(telemetry);
 builder.Services.AddSingleton(oauthOptions);
 builder.Services.AddSingleton<EntraClientCredentials>();
 builder.Services.AddSingleton<IdTokenValidator>();
 builder.Services.AddSingleton<SessionTokenStore>();
 builder.Services.AddSingleton<PersistentIdentity>();
-// Janitor is started manually after CopilotSessionFactory is constructed
-// (see below) because it now depends on the factory for the 30-day TTL sweep.
+// Janitor is started manually after the host is built (see below).
 
 var app = builder.Build();
 var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
@@ -89,10 +88,10 @@ var logger = loggerFactory.CreateLogger("AzureFinOps.AI");
 logger.LogInformation("Application starting. AppInsights configured: {Configured}", !string.IsNullOrEmpty(appInsightsCs));
 
 await using var copilotFactory = await CopilotSessionFactory.CreateAsync(
-    telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, loggerFactory);
+    telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, loggerFactory, azureOpenAITenantId);
 
 // Start the janitor now that the factory exists; tie its lifecycle to the host.
-var janitor = new UserStateJanitor(telemetry, copilotFactory, loggerFactory.CreateLogger<UserStateJanitor>());
+var janitor = new UserStateJanitor(telemetry, loggerFactory.CreateLogger<UserStateJanitor>());
 await janitor.StartAsync(CancellationToken.None);
 app.Lifetime.ApplicationStopping.Register(() =>
 {
@@ -302,7 +301,6 @@ var idTokenValidator = app.Services.GetRequiredService<IdTokenValidator>();
 app.MapMicrosoftAuthEndpoints(oauthOptions, entraCredentials, idTokenValidator, telemetry, persistentIdentity, logger);
 app.MapAzureSessionEndpoints(tokenStore, telemetry, logger);
 app.MapChatEndpoints(copilotFactory, tokenStore, telemetry, logger);
-app.MapSessionEndpoints(copilotFactory, telemetry, logger);
 app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
 app.MapUploadEndpoints();

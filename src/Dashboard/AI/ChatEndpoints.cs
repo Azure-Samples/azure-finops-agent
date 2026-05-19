@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Auth;
@@ -9,9 +10,11 @@ using GitHub.Copilot.SDK;
 namespace AzureFinOps.Dashboard.AI;
 
 /// <summary>
-/// SSE chat endpoint and session reset. Owns the streaming handler, structured
-/// marker parsing (chart / html / script / maturity), and the per-request
-/// telemetry span.
+/// Stateless SSE chat endpoint. Each request creates a fresh one-shot Copilot
+/// session, replays the browser-provided history as a composed prompt, streams
+/// the assistant response, then disposes. No server-side conversation state.
+///
+/// Request body: <c>{ "prompt": "...", "history": [{ "role": "user"|"assistant", "content": "..." }] }</c>
 /// </summary>
 public static class ChatEndpoints
 {
@@ -32,14 +35,7 @@ public static class ChatEndpoints
             }
 
             using var bodyDoc = await JsonDocument.ParseAsync(ctx.Request.Body);
-            var prompt = bodyDoc.RootElement.GetProperty("prompt").GetString();
-            string? requestedSessionId = null;
-            if (bodyDoc.RootElement.TryGetProperty("sessionId", out var sidProp) && sidProp.ValueKind == JsonValueKind.String)
-            {
-                var sidStr = sidProp.GetString();
-                if (!string.IsNullOrWhiteSpace(sidStr)) requestedSessionId = sidStr;
-            }
-
+            var prompt = bodyDoc.RootElement.TryGetProperty("prompt", out var pp) ? pp.GetString() : null;
             if (string.IsNullOrWhiteSpace(prompt))
             {
                 ctx.Response.StatusCode = 400;
@@ -47,26 +43,28 @@ public static class ChatEndpoints
                 return;
             }
 
+            // Browser-provided conversation history (oldest first). Each item is
+            // { role: "user"|"assistant", content: string }. Tool calls / charts /
+            // scripts are NOT replayed — the assistant text already summarises
+            // what happened in previous turns from the user's perspective.
+            var history = new List<(string Role, string Content)>();
+            if (bodyDoc.RootElement.TryGetProperty("history", out var histProp) && histProp.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in histProp.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object) continue;
+                    var role = item.TryGetProperty("role", out var rp) ? rp.GetString() : null;
+                    var content = item.TryGetProperty("content", out var cp) ? cp.GetString() : null;
+                    if (role is null || string.IsNullOrEmpty(content)) continue;
+                    if (role != "user" && role != "assistant") continue;
+                    history.Add((role, content));
+                }
+            }
+
             var user = JsonSerializer.Deserialize<JsonElement>(userJson);
             var userId = user.GetProperty("id").GetInt64();
             var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
 
-            // Entra-connected users get persistent per-oid session storage; anonymous
-            // users get an ephemeral working dir that won't appear in any list.
-            string? entraOid = null;
-            var azureUserJson = ctx.Session.GetString("azure_user");
-            if (azureUserJson is not null)
-            {
-                try
-                {
-                    var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
-                    if (au.TryGetProperty("objectId", out var oidProp))
-                        entraOid = oidProp.GetString();
-                }
-                catch { /* ignore malformed session blob */ }
-            }
-
-            // Track activity for the janitor's idle eviction.
             UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
 
             var chatSw = Stopwatch.StartNew();
@@ -78,35 +76,86 @@ public static class ChatEndpoints
             chatActivity?.SetTag("ai.user", userLogin);
             chatActivity?.SetTag("ai.model", copilotFactory.Deployment);
             chatActivity?.SetTag("ai.prompt_length", prompt!.Length);
+            chatActivity?.SetTag("ai.history_turns", history.Count);
             chatActivity?.SetTag("ai.prompt", prompt.Length > 500 ? prompt[..500] + "..." : prompt);
-            logger.LogInformation("Chat request from {User} model={Model} promptLen={PromptLen}",
-                userLogin, copilotFactory.Deployment, prompt.Length);
+            logger.LogInformation("Chat request from {User} model={Model} promptLen={PromptLen} historyTurns={Hist}",
+                userLogin, copilotFactory.Deployment, prompt.Length, history.Count);
 
             var tokens = telemetry.UserTokens.GetOrAdd(userId, uid => new UserTokens { UserId = uid });
+            // Kick off session creation IN PARALLEL with token refresh — both
+            // are independent (tools close over `tokens` by reference, so they
+            // see refreshed tokens regardless of when the session is built).
+            // Awaited together below so the slowest leg sets the floor.
+            var sessionCreateTask = copilotFactory.CreateOneShotAsync(userId);
+
             await tokens.RefreshLock.WaitAsync(ctx.RequestAborted);
             try
             {
-                tokens.AzureToken = await tokenStore.GetAzureTokenAsync(ctx, httpFactory);
-                tokens.GraphToken = await tokenStore.GetGraphTokenAsync(ctx, httpFactory);
-                tokens.LogAnalyticsToken = await tokenStore.GetLogAnalyticsTokenAsync(ctx, httpFactory);
-                tokens.StorageToken = await tokenStore.GetStorageTokenAsync(ctx, httpFactory);
+                // Skip token refreshes for tiers the user never consented to —
+                // otherwise every turn burns 1–60s on Entra round-trips that are
+                // guaranteed to fail with 400 invalid_grant. ARM (base) is always
+                // tried; the rest are opt-in via `graph_tier` in session.
+                var graphTier = ctx.Session.GetString("graph_tier") ?? "";
+                var tierSet = new HashSet<string>(
+                    graphTier.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                    StringComparer.OrdinalIgnoreCase);
+                var wantGraph = tierSet.Contains("licenses") || tierSet.Contains("chargeback");
+                var wantLogAnalytics = tierSet.Contains("loganalytics");
+                var wantStorage = tierSet.Contains("storage");
 
-                // Mirror expiry from session into the volatile bag so the
-                // TenantTokenRefresher background service can refresh proactively
-                // when no HTTP request is around (browser closed, background turn).
+                // Refresh in parallel so a single slow-Entra leg doesn't serialise the rest.
+                var azureTask = tokenStore.GetAzureTokenAsync(ctx, httpFactory);
+                var graphTask = wantGraph
+                    ? tokenStore.GetGraphTokenAsync(ctx, httpFactory)
+                    : Task.FromResult<string?>(null);
+                var laTask = wantLogAnalytics
+                    ? tokenStore.GetLogAnalyticsTokenAsync(ctx, httpFactory)
+                    : Task.FromResult<string?>(null);
+                var storageTask = wantStorage
+                    ? tokenStore.GetStorageTokenAsync(ctx, httpFactory)
+                    : Task.FromResult<string?>(null);
+                await Task.WhenAll(azureTask, graphTask, laTask, storageTask);
+                tokens.AzureToken = azureTask.Result;
+                tokens.GraphToken = graphTask.Result;
+                tokens.LogAnalyticsToken = laTask.Result;
+                tokens.StorageToken = storageTask.Result;
+
                 tokens.AzureTokenExpiry = ParseExpiry(ctx.Session.GetString("azure_token_expiry"));
                 tokens.GraphTokenExpiry = ParseExpiry(ctx.Session.GetString("graph_token_expiry"));
                 tokens.LogAnalyticsTokenExpiry = ParseExpiry(ctx.Session.GetString("loganalytics_token_expiry"));
                 tokens.StorageTokenExpiry = ParseExpiry(ctx.Session.GetString("storage_token_expiry"));
             }
+            catch (Exception tokenEx)
+            {
+                // Token refresh failure (e.g. login.microsoftonline.com unreachable,
+                // refresh token rejected). Surface as a structured SSE error rather
+                // than a 500 — the browser renders it inline in the chat instead of
+                // dropping a blank assistant bubble.
+                logger.LogError(tokenEx, "Token refresh failed for {User}", userLogin);
+                ctx.Response.Headers.ContentType = "text/event-stream";
+                ctx.Response.Headers.CacheControl = "no-cache";
+                var msg = $"Token refresh failed: {tokenEx.Message}";
+                var errPayload = JsonSerializer.Serialize(new { type = "error", message = msg });
+                await ctx.Response.WriteAsync($"data: {errPayload}\n\n");
+                await ctx.Response.WriteAsync("data: [DONE]\n\n");
+                await ctx.Response.Body.FlushAsync();
+                // Release the parallel session we started so it doesn't leak.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var leaked = await sessionCreateTask;
+                        await leaked.DisposeAsync();
+                        telemetry.ActiveSessions.Add(-1);
+                    }
+                    catch { }
+                });
+                return;
+            }
             finally
             {
                 tokens.RefreshLock.Release();
             }
-
-            logger.LogInformation("Chat tokens: azure={HasAzure} graph={HasGraph} la={HasLA} storage={HasStorage}",
-                tokens.AzureToken is not null, tokens.GraphToken is not null,
-                tokens.LogAnalyticsToken is not null, tokens.StorageToken is not null);
 
             var connectedApis = new List<string>();
             if (tokens.AzureToken is not null) connectedApis.Add("Azure ARM (QueryAzure)");
@@ -115,72 +164,55 @@ public static class ChatEndpoints
             if (tokens.StorageToken is not null) connectedApis.Add("Azure Storage (ListCostExportBlobs, ReadCostExportBlob)");
             var connectionContext = connectedApis.Count > 0
                 ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}. Proceed with tool calls directly.]"
-                : "[CONTEXT: User is NOT connected to Azure. You can still answer any question that does NOT require their tenant-specific data — including public Azure information (regions, datacenters, services, pricing via RetailPrices, service health, general FinOps guidance), rendering charts/maps with public data, and explaining concepts. Use your built-in knowledge and public tools (RenderChart, RenderAdvancedChart, RetailPricing, GetAzureServiceHealth, web fetch) freely. Only ask the user to click 'Connect Azure' when the question genuinely requires their subscription/tenant data (their costs, their resources, their usage). Do NOT refuse public questions.]";
+                : "[CONTEXT: User is NOT connected to Azure. You can still answer any question that does NOT require their tenant-specific data — including public Azure information (regions, datacenters, services, pricing via RetailPrices, service health, general FinOps guidance), rendering charts/maps with public data, and explaining concepts. Use your built-in knowledge and public tools freely. Only ask the user to click 'Connect Azure' when the question genuinely requires their subscription/tenant data.]";
 
-            // Surface any files the user has dropped into this session so the LLM
-            // immediately knows the fileIds it can pass to QueryUploadedFile.
-            var uploads = AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ListForUser(userId);
+            var uploads = UploadedFileTools.ListForUser(userId);
             string uploadsContext = "";
             if (uploads.Count > 0)
             {
-                var sb = new System.Text.StringBuilder();
-                sb.Append("[UPLOADED FILES IN THIS SESSION — the user dropped these in. Their question is almost certainly about them. Use QueryUploadedFile(fileId, mode, paramsJson) to drill in. The schema is already shown below — you usually do NOT need a separate 'preview' call. Jump straight to head / slice / filter / aggregate / text_range / json_path. Responses are capped at ~200 rows / ~8000 chars; issue more calls if needed.");
+                var sb = new StringBuilder();
+                sb.Append("[UPLOADED FILES IN THIS SESSION — the user dropped these in. Use QueryUploadedFile(fileId, mode, paramsJson) to drill in.");
                 foreach (var u in uploads)
                 {
                     sb.Append($"\n  - fileId={u.FileId} name='{u.FileName}' kind={u.Kind} size={u.SizeBytes}B");
                     if (!string.IsNullOrEmpty(u.SchemaSummary))
                         sb.Append($"\n      schema: {u.SchemaSummary}");
                 }
-                sb.Append("]\n[ANSWER SHAPE FOR FILE ANALYSIS: (1) ONE-sentence headline naming the #1 waste with $ amount + concrete owner/RG/resource. (2) ONE visual — RenderChart (horizontal_bar of top-5 by $) when ≥3 data points, else a tight ≤5-row markdown table with an Owner column. NEVER both. NEVER long bullet lists of generic advice. (3) Optional 1-line takeaway. Then call SuggestFollowUp.]\n[FOLLOW-UP DIRECTIVE: After answering, you MUST call SuggestFollowUp. When the answer involved file analysis, prefer 2-3 distinct actions via the optional label2/prompt2 + label3/prompt3 parameters. Each action must propose a concrete next ACTION on these files (e.g. 'Rank top 5 prioritized actions across all files', 'Generate a cleanup script for the disks identified', 'Build a CFO deck from these uploads', 'Tag the untagged resources via PATCH'). Never propose a follow-up that just re-asks for analysis the user already saw.]");
+                sb.Append("]");
                 uploadsContext = sb.ToString();
             }
-            prompt = string.IsNullOrEmpty(uploadsContext)
-                ? $"{connectionContext}\n{prompt}"
-                : $"{connectionContext}\n{uploadsContext}\n{prompt}";
+
+            // Compose: [CONTEXT] + [UPLOADS] + <conversation_history> + new prompt.
+            var composed = new StringBuilder();
+            composed.Append(connectionContext);
+            if (uploadsContext.Length > 0) composed.Append('\n').Append(uploadsContext);
+            if (history.Count > 0)
+            {
+                composed.Append("\n<conversation_history>\n");
+                foreach (var (role, content) in history)
+                {
+                    composed.Append(role.ToUpperInvariant()).Append(": ").Append(content).Append("\n\n");
+                }
+                composed.Append("</conversation_history>\n");
+            }
+            composed.Append('\n').Append(prompt);
+            var composedPrompt = composed.ToString();
 
             ctx.Response.Headers.ContentType = "text/event-stream";
             ctx.Response.Headers.CacheControl = "no-cache";
             ctx.Response.Headers.Connection = "keep-alive";
             ctx.Response.Headers["X-Accel-Buffering"] = "no";
 
+            CopilotSession? session = null;
             try
             {
-                CopilotSession session;
-                if (!string.IsNullOrEmpty(requestedSessionId))
-                {
-                    // IDOR guard: a requested sessionId must belong to this
-                    // user's persistent workdir (Entra OID workdir or anon-userId workdir).
-                    // If it doesn't (stale localStorage after a redeploy, or a forged id),
-                    // silently fall through to the user's current/new session so the
-                    // UX doesn't dead-end &#8212; we never resume someone else's session.
-                    if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, requestedSessionId, ctx.RequestAborted))
-                    {
-                        logger.LogInformation("Requested sessionId {Sid} not owned by user {Uid}; falling back to current session", requestedSessionId, userId);
-                        session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
-                    }
-                    else
-                    {
-                        session = await copilotFactory.GetOrResumeAsync(userId, requestedSessionId, userLogin!, entraOid);
-                    }
-                }
-                else
-                {
-                    session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
-                }
-                var activeSessionId = session.SessionId;
-
+                // Session creation was kicked off in parallel with token refresh
+                // (see sessionCreateTask above) — await whichever finishes last.
+                session = await sessionCreateTask;
                 var done = new TaskCompletionSource();
                 var cancelled = false;
                 var toolTracker = new ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)>();
 
-                // Browser disconnect releases this SSE handler but does NOT
-                // abort the running turn. The Copilot CLI keeps generating
-                // and persists the assistant message + tool results to the
-                // on-disk session state ($COPILOT_HOME/.copilot/session-state).
-                // The user can reload the conversation later and see the full
-                // result via LoadTranscriptAsync. Without this detach, closing
-                // the tab during a long "score my estate" run would silently
-                // kill the work mid-flight.
                 ctx.RequestAborted.Register(() =>
                 {
                     if (!cancelled)
@@ -195,8 +227,8 @@ public static class ChatEndpoints
                     if (cancelled) return;
                     try
                     {
-                        await HandleSessionEventAsync(evt, ctx, toolTracker, telemetry, copilotFactory.Deployment,
-                            userId, userLogin!, activeSessionId, chatActivity, logger, done, () => cancelled = true);
+                        await HandleSessionEventAsync(evt, ctx, toolTracker, telemetry,
+                            userLogin!, chatActivity, logger, done);
                     }
                     catch
                     {
@@ -205,13 +237,7 @@ public static class ChatEndpoints
                     }
                 });
 
-                // Capture the assistant's full reply so we can generate a sidebar
-                // title after the turn completes (CLI's title_changed event just
-                // echoes the user prompt, which makes a poor summary). Replies
-                // are streamed as deltas, so we accumulate them here.
-                // StringBuilder is NOT thread-safe — the SDK may dispatch event
-                // callbacks concurrently — so we guard every mutation/read.
-                var assistantBuf = new System.Text.StringBuilder();
+                var assistantBuf = new StringBuilder();
                 var assistantBufLock = new object();
                 using var assistantCapture = session.On(async (SessionEvent evt) =>
                 {
@@ -222,16 +248,6 @@ public static class ChatEndpoints
                     await Task.CompletedTask;
                 });
 
-                // Emit the active sessionId as the first SSE event so the frontend
-                // can highlight it in the Conversations sidebar and include it in
-                // subsequent requests.
-                await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "session", id = activeSessionId })}\n\n");
-                await ctx.Response.Body.FlushAsync();
-
-                // Wire the retry hook so HttpHelper can push "Cooling down" pings
-                // to this SSE stream during 429 backoff. Serialize writes against
-                // the SDK event handler with a per-request lock so retry pings
-                // can't interleave bytes with delta/tool_done frames.
                 var sseLock = new SemaphoreSlim(1, 1);
                 async Task SafeEmit(string sseData)
                 {
@@ -242,75 +258,43 @@ public static class ChatEndpoints
                 Infrastructure.HttpHelper.RetryReporter.Value = (attempt, waitSec) =>
                     SafeEmit(JsonSerializer.Serialize(new { type = "cooling_down", attempt, waitSeconds = waitSec }));
 
-                try
+                // Dev-only: opt into a one-shot synthetic 429 on the next HTTP
+                // call so the cool-down UI badge can be exercised end-to-end.
+                // Off unless FINOPS_FORCE_THROTTLE_DEMO=1 is set in the environment.
+                if (string.Equals(
+                        Environment.GetEnvironmentVariable("FINOPS_FORCE_THROTTLE_DEMO"),
+                        "1",
+                        StringComparison.Ordinal))
                 {
-                    await session.SendAsync(new MessageOptions { Prompt = prompt });
-                }
-                catch (Exception sendEx) when (sendEx.Message.Contains("Session not found", StringComparison.OrdinalIgnoreCase))
-                {
-                    logger.LogWarning("Copilot session expired for user {User}, recycling. Error: {Error}", userLogin, sendEx.Message);
-                    chatActivity?.SetTag("ai.session_expired", true);
-                    session = await copilotFactory.RecycleSessionAsync(userId, activeSessionId, userLogin!, entraOid);
-                    await session.SendAsync(new MessageOptions { Prompt = prompt });
+                    Infrastructure.HttpHelper.ForceThrottleNext.Value = true;
                 }
 
+                await session.SendAsync(new MessageOptions { Prompt = composedPrompt });
                 await done.Task;
 
-                // Race-fix: a previous turn's background title call may have
-                // saved a fresh title AFTER its SSE stream closed. Always re-emit
-                // the persisted title on the current open stream so the sidebar
-                // catches up.
-                if (!cancelled
-                    && telemetry.SessionTitles.TryGetValue(activeSessionId, out var persistedTitle)
-                    && !string.IsNullOrWhiteSpace(persistedTitle))
-                {
-                    try
-                    {
-                        var p = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = persistedTitle });
-                        await ctx.Response.WriteAsync($"data: {p}\n\n");
-                        await ctx.Response.Body.FlushAsync();
-                    }
-                    catch { }
-                }
-
-                // After each turn, refresh the sidebar title via Azure OpenAI if
-                // the current persisted title is missing or still equals the raw
-                // user prompt. Cheap (one ~24-token completion) — we await it so
-                // the SSE stream actually delivers the new title for THIS turn.
+                // Generate a short title for the conversation on the FIRST turn
+                // (history is empty). Browser persists it in IndexedDB.
                 string assistantReply;
                 lock (assistantBufLock) { assistantReply = assistantBuf.ToString(); }
-                logger.LogDebug("Title-gen check: cancelled={Cancelled} replyLen={Len} sessionId={Sid}",
-                    cancelled, assistantReply.Length, activeSessionId);
-                if (!cancelled && !string.IsNullOrWhiteSpace(assistantReply))
+                if (!cancelled && history.Count == 0 && !string.IsNullOrWhiteSpace(assistantReply))
                 {
-                    var existing = telemetry.SessionTitles.TryGetValue(activeSessionId, out var t) ? t : null;
-                    var promptClean = AzureFinOps.Dashboard.Endpoints.SessionEndpoints.CleanSummary(prompt);
-                    var needsTitle = string.IsNullOrWhiteSpace(existing)
-                        || existing.Equals(promptClean, StringComparison.OrdinalIgnoreCase)
-                        || existing.StartsWith("Untitled", StringComparison.OrdinalIgnoreCase);
-                    if (needsTitle)
+                    using var titleCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+                    titleCts.CancelAfter(TimeSpan.FromSeconds(10));
+                    try
                     {
-                        // Bound the wait so a slow title call never holds the SSE
-                        // stream open for more than ~10s.
-                        using var titleCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
-                        titleCts.CancelAfter(TimeSpan.FromSeconds(10));
-                        try
+                        var generated = await copilotFactory.GenerateTitleAsync(prompt, assistantReply, titleCts.Token);
+                        if (!string.IsNullOrWhiteSpace(generated))
                         {
-                            var generated = await copilotFactory.GenerateTitleAsync(prompt, assistantReply, titleCts.Token);
-                            if (!string.IsNullOrWhiteSpace(generated))
+                            try
                             {
-                                telemetry.SaveTitle(activeSessionId, generated);
-                                try
-                                {
-                                    var payload = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = generated });
-                                    await ctx.Response.WriteAsync($"data: {payload}\n\n");
-                                    await ctx.Response.Body.FlushAsync();
-                                }
-                                catch { /* client may have disconnected — title is still saved */ }
+                                var payload = JsonSerializer.Serialize(new { type = "session_title", title = generated });
+                                await ctx.Response.WriteAsync($"data: {payload}\n\n");
+                                await ctx.Response.Body.FlushAsync();
                             }
+                            catch { }
                         }
-                        catch (OperationCanceledException) { /* timeout or client abort */ }
                     }
+                    catch (OperationCanceledException) { }
                 }
 
                 chatSw.Stop();
@@ -334,36 +318,14 @@ public static class ChatEndpoints
                 await ctx.Response.WriteAsync("data: [DONE]\n\n");
                 await ctx.Response.Body.FlushAsync();
             }
-        });
-
-        app.MapPost("/api/chat/reset", async (HttpContext ctx) =>
-        {
-            var userJson = ctx.Session.GetString("user");
-            if (userJson is null) { ctx.Response.StatusCode = 401; return; }
-
-            var user = JsonSerializer.Deserialize<JsonElement>(userJson);
-            var userId = user.GetProperty("id").GetInt64();
-            var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
-
-            string? entraOid = null;
-            var azureUserJson = ctx.Session.GetString("azure_user");
-            if (azureUserJson is not null)
+            finally
             {
-                try
+                if (session is not null)
                 {
-                    var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
-                    if (au.TryGetProperty("objectId", out var oidProp))
-                        entraOid = oidProp.GetString();
+                    try { await session.DisposeAsync(); } catch { }
+                    telemetry.ActiveSessions.Add(-1);
                 }
-                catch { }
             }
-
-            // "Reset" semantics: start a brand-new conversation. The previous one
-            // remains on disk and can be resumed via the Conversations sidebar.
-            var fresh = await copilotFactory.CreateNewAsync(userId, userLogin!, entraOid);
-            AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ClearForUser(userId);
-            logger.LogInformation("Started new conversation for user {UserId} sessionId={SessionId}", userId, fresh.SessionId);
-            await ctx.Response.WriteAsJsonAsync(new { sessionId = fresh.SessionId });
         });
     }
 
@@ -372,14 +334,10 @@ public static class ChatEndpoints
         HttpContext ctx,
         ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)> toolTracker,
         AiTelemetry telemetry,
-        string deployment,
-        long userId,
         string userLogin,
-        string activeSessionId,
         Activity? chatActivity,
         ILogger logger,
-        TaskCompletionSource done,
-        Action markCancelled)
+        TaskCompletionSource done)
     {
         string? sseData = null;
 
@@ -418,22 +376,11 @@ public static class ChatEndpoints
         {
             sseData = await HandleToolDoneAsync(toolDone, ctx, toolTracker, telemetry, userLogin, logger);
         }
-        else if (evt is SessionTitleChangedEvent titleEvt)
-        {
-            var newTitle = AzureFinOps.Dashboard.Endpoints.SessionEndpoints.CleanSummary(titleEvt.Data.Title);
-            telemetry.SaveTitle(activeSessionId, newTitle);
-            sseData = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = newTitle });
-        }
         else if (evt is SessionErrorEvent error)
         {
             sseData = JsonSerializer.Serialize(new { type = "error", message = error.Data.Message });
             logger.LogError("Session error for {User}: {Error}", userLogin, error.Data.Message);
             chatActivity?.SetTag("ai.error", error.Data.Message);
-            if (telemetry.LiveSessions.TryRemove(activeSessionId, out var dead))
-            {
-                telemetry.ActiveSessions.Add(-1);
-                try { await dead.Session.DisposeAsync(); } catch { }
-            }
         }
 
         if (sseData is not null)
@@ -488,8 +435,6 @@ public static class ChatEndpoints
             toolName, toolId, toolDone.Data.Success, durationMs, resultText?.Length ?? 0);
 
         // Marker-based side channels (chart / html / script / maturity).
-        // If a marker is detected we emit the tool_done event followed by the
-        // structured event, then return null so the caller skips re-emit.
         if ((toolName == "RenderChart" || toolName == "RenderAdvancedChart") && toolDone.Data.Success && resultText is not null)
         {
             try
@@ -498,7 +443,7 @@ public static class ChatEndpoints
                 await EmitAsync(ctx, JsonSerializer.Serialize(new { type = "chart", options = resultText }));
                 return null;
             }
-            catch (Exception ex) when (IsClientDisconnect(ex)) { /* SSE client gone — nothing to do */ }
+            catch (Exception ex) when (IsClientDisconnect(ex)) { }
             catch (Exception ex) { logger.LogWarning(ex, "Failed to emit chart marker for tool {Tool}", toolName); }
         }
         else if (toolDone.Data.Success && resultText is not null && resultText.Contains("__CHART__:"))
@@ -517,7 +462,7 @@ public static class ChatEndpoints
                     }
                 }
             }
-            catch (Exception ex) when (IsClientDisconnect(ex)) { /* SSE client gone */ }
+            catch (Exception ex) when (IsClientDisconnect(ex)) { }
             catch (Exception ex) { logger.LogWarning(ex, "Failed to emit __CHART__ marker"); }
         }
 
@@ -542,7 +487,7 @@ public static class ChatEndpoints
                     }
                 }
             }
-            catch (Exception ex) when (IsClientDisconnect(ex)) { /* SSE client gone */ }
+            catch (Exception ex) when (IsClientDisconnect(ex)) { }
             catch (Exception ex) { logger.LogWarning(ex, "Failed to emit __HTML_READY__ marker"); }
         }
 
@@ -571,7 +516,7 @@ public static class ChatEndpoints
                     }
                 }
             }
-            catch (Exception ex) when (IsClientDisconnect(ex)) { /* SSE client gone */ }
+            catch (Exception ex) when (IsClientDisconnect(ex)) { }
             catch (Exception ex) { logger.LogWarning(ex, "Failed to emit __SCRIPT_READY__ marker"); }
         }
 
@@ -595,14 +540,13 @@ public static class ChatEndpoints
                     }
                 }
             }
-            catch (Exception ex) when (IsClientDisconnect(ex)) { /* SSE client gone */ }
+            catch (Exception ex) when (IsClientDisconnect(ex)) { }
             catch (Exception ex) { logger.LogWarning(ex, "Failed to emit __MATURITY_SCORE__ marker"); }
         }
 
         return sseData;
     }
 
-    /// <summary>True when the exception indicates the SSE client closed the connection.</summary>
     private static bool IsClientDisconnect(Exception ex) =>
         ex is OperationCanceledException
         || ex is System.IO.IOException

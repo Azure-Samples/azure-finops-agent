@@ -32,6 +32,16 @@ public static class HttpHelper
     /// </summary>
     public static readonly AsyncLocal<Func<int, double, Task>?> RetryReporter = new();
 
+    /// <summary>
+    /// Dev-only one-shot: when set to true at the start of a chat turn (gated on
+    /// the env var <c>FINOPS_FORCE_THROTTLE_DEMO</c>), the very next call to
+    /// <see cref="SendWithRetryAsync"/> simulates a single 429 + 4s wait + retry
+    /// so the cool-down UI badge can be exercised end-to-end without depending
+    /// on a real ARM throttle. Flag flips itself back to false after firing
+    /// (one-shot). Never enabled in production.
+    /// </summary>
+    public static readonly AsyncLocal<bool> ForceThrottleNext = new();
+
     // Max retry attempts on HTTP 429. After this many failed attempts the throttled
     // response is returned to the caller so the LLM (or user) sees the throttle status.
     private const int MaxThrottleRetries = 5;
@@ -60,6 +70,24 @@ public static class HttpHelper
         int? maxResponseChars = null)
     {
         method ??= HttpMethod.Get;
+
+        // Dev-only one-shot synthetic throttle: fire a single fake cooling_down
+        // event + brief wait before the real request, then clear the flag. Lets
+        // us verify the SSE → UI badge wiring end-to-end without depending on
+        // ARM actually rate-limiting us. See ForceThrottleNext.
+        if (ForceThrottleNext.Value)
+        {
+            ForceThrottleNext.Value = false;
+            const double demoWait = 4.0;
+            ThrottleRetries.Add(1,
+                new KeyValuePair<string, object?>("status", "429-demo"),
+                new KeyValuePair<string, object?>("tool", telemetryPrefix));
+            if (RetryReporter.Value is { } demoReport)
+            {
+                try { await demoReport(1, demoWait); } catch { }
+            }
+            await Task.Delay(TimeSpan.FromSeconds(demoWait));
+        }
 
         HttpResponseMessage res = null!;
         for (var attempt = 0; attempt < MaxThrottleRetries; attempt++)

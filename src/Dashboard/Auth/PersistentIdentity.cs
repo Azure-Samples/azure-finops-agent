@@ -8,7 +8,7 @@ namespace AzureFinOps.Dashboard.Auth;
 
 /// <summary>
 /// Persistent per-user identity + OAuth refresh-token store backed by an
-/// encrypted JSON file under <c>$COPILOT_HOME/users/{oid}/identity.json</c>.
+/// encrypted JSON file under <c>{IdentityRoot}/users/{oid}/identity.json</c>.
 ///
 /// Why this exists: the ASP.NET <see cref="ISession"/> store is in-memory
 /// (<c>AddDistributedMemoryCache</c>) so OAuth tokens vanish on every container
@@ -35,9 +35,13 @@ public sealed class PersistentIdentity
     private const string IdentityCookieName = "finops_id";
     private static readonly TimeSpan CookieLifetime = TimeSpan.FromDays(30);
 
-    private static readonly string CopilotHome =
-        Environment.GetEnvironmentVariable("COPILOT_HOME")
-        ?? Path.Combine(Path.GetTempPath(), "copilot");
+    // Identity records live on the persistent /home Azure Files mount on App
+    // Service Linux (same place as the DataProtection key ring). Falls back to
+    // a temp dir locally.
+    private static readonly string IdentityRoot =
+        Path.Combine(
+            OperatingSystem.IsLinux() && Directory.Exists("/home") ? "/home" : Path.GetTempPath(),
+            "finops-identity");
 
     private readonly IDataProtector _protector;
     private readonly ILogger<PersistentIdentity> _logger;
@@ -170,7 +174,7 @@ public sealed class PersistentIdentity
 
         // Cold path after restart: walk users/ until we find a match. Cheap —
         // O(active users) and only on cache misses.
-        var root = Path.Combine(CopilotHome, "users");
+        var root = Path.Combine(IdentityRoot, "users");
         if (!Directory.Exists(root)) return null;
         foreach (var dir in Directory.EnumerateDirectories(root))
         {
@@ -249,7 +253,7 @@ public sealed class PersistentIdentity
         File.Move(tmp, path, overwrite: true);
     }
 
-    private static string GetUserDir(string oid) => Path.Combine(CopilotHome, "users", oid);
+    private static string GetUserDir(string oid) => Path.Combine(IdentityRoot, "users", oid);
 }
 
 /// <summary>Encrypted-on-disk identity record. Contains only the long-lived

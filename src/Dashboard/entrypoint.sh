@@ -16,14 +16,4 @@ else
   echo "[entrypoint] APPLICATIONINSIGHTS_CONNECTION_STRING not set — skipping collector"
 fi
 
-# Ensure the Copilot SDK session-state root exists on the persistent /home mount.
-# COPILOT_HOME is passed to the SDK via CopilotClientOptions.CopilotHome, which
-# makes the CLI write under {COPILOT_HOME}/.copilot/session-state/. Failure here
-# (e.g. /home is read-only) should fail loudly — silently swallowing the error
-# masks a misconfigured mount and surfaces as a confusing runtime error later.
-mkdir -p \
-  "${COPILOT_HOME:-/home/copilot}/users" \
-  "${COPILOT_HOME:-/home/copilot}/anon" \
-  "${COPILOT_HOME:-/home/copilot}/.copilot/session-state"
-
 exec dotnet Dashboard.dll

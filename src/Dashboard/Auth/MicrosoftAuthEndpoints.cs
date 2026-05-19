@@ -76,16 +76,6 @@ public static class MicrosoftAuthEndpoints
             {
                 var u = JsonSerializer.Deserialize<JsonElement>(userJson);
                 var uid = u.GetProperty("id").GetInt64();
-                var owned = telemetry.LiveSessions.Where(kv => kv.Value.UserId == uid).Select(kv => kv.Key).ToList();
-                foreach (var sid in owned)
-                {
-                    if (telemetry.LiveSessions.TryRemove(sid, out var live))
-                    {
-                        telemetry.ActiveSessions.Add(-1);
-                        try { await live.Session.DisposeAsync(); } catch { }
-                    }
-                }
-                telemetry.CurrentSessionId.TryRemove(uid, out _);
                 telemetry.UserTokens.TryRemove(uid, out _);
                 telemetry.UserTools.TryRemove(uid, out _);
             }
@@ -379,10 +369,6 @@ public static class MicrosoftAuthEndpoints
                             // be in flight under two ids on the same browser session.
                             if (telemetry.UserTokens.TryRemove(oldUserId.Value, out var t)) telemetry.UserTokens[newUserId] = t;
                             if (telemetry.UserTools.TryRemove(oldUserId.Value, out var tools)) telemetry.UserTools[newUserId] = tools;
-                            if (telemetry.CurrentSessionId.TryRemove(oldUserId.Value, out var sid)) telemetry.CurrentSessionId[newUserId] = sid;
-                            // LiveSessions has init-only UserId; not migrated. Any in-flight CLI
-                            // session under the anon id will be cleaned up by the idle-timeout
-                            // sweep (30 min) and the next prompt creates a fresh one under newUserId.
                         }
                         ctx.Session.SetString("user", JsonSerializer.Serialize(new
                         {

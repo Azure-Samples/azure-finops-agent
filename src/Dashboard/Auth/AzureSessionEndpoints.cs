@@ -180,30 +180,9 @@ public static class AzureSessionEndpoints
         }
         if (fullClear)
         {
-            DisposeUserLiveSessions(telemetry, uid);
-            telemetry.CurrentSessionId.TryRemove(uid, out _);
             telemetry.UserTools.TryRemove(uid, out _);
         }
         logger.LogInformation("Azure {Action} for user {UserId}", fullClear ? "revoked" : "disconnected", uid);
-    }
-
-    private static void DisposeUserLiveSessions(AiTelemetry telemetry, long userId)
-    {
-        var owned = telemetry.LiveSessions.Where(kv => kv.Value.UserId == userId).Select(kv => kv.Key).ToList();
-        foreach (var sid in owned)
-        {
-            if (telemetry.LiveSessions.TryRemove(sid, out var live))
-            {
-                telemetry.ActiveSessions.Add(-1);
-                // Fire-and-forget but observe the task so a failed dispose is
-                // logged via the unobserved-exception channel rather than
-                // silently leaking the CLI subprocess.
-                _ = Task.Run(async () =>
-                {
-                    try { await live.Session.DisposeAsync(); } catch { }
-                });
-            }
-        }
     }
 
     private static void ClearSessionTokenKeys(HttpContext ctx, bool includeForceConsent)

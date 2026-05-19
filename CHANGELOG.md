@@ -7,6 +7,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **Chat sessions moved entirely to the browser.** The server no longer persists conversation history, titles, or "current session" state. The Copilot SDK runs in one-shot mode: each `/api/chat` request creates a fresh `CopilotSession`, replays the browser-provided history as a composed prompt, streams the answer, and disposes. Conversations live in IndexedDB via `idb` (see `src/Dashboard/frontend/src/lib/sessionStore.js`) and are scoped to the user's browser only — switching device or clearing site data removes them.
+- `/api/chat` request body now accepts `{ prompt, history: [{ role, content }] }`. The previous `sessionId` field is gone.
+
+### Removed
+
+- `Endpoints/SessionEndpoints.cs` and all `/api/sessions/*` routes (`GET`, `POST /new`, `POST /{id}/select`, `DELETE /{id}`, `GET /{id}/messages`).
+- `/api/chat/reset` endpoint.
+- `AiTelemetry.LiveSessions`, `CurrentSessionId`, `SessionTitles`, `LoadTitles`, `SaveTitle`, and the on-disk `session-titles.json`.
+- `LiveSessionInfo` class.
+- `CopilotSessionFactory` resume / recycle / IDOR-guard surface: `GetOrCreateSessionAsync`, `GetOrResumeAsync`, `RecycleSessionAsync`, `CreateNewAsync`, `ListUserSessionsAsync`, `UserOwnsSessionAsync`, `LoadTranscriptAsync`, `DeleteUserSessionAsync`, `DeleteSessionByIdAsync`, `ListAllManagedSessionsAsync`, `GetWorkingDirectory`, `SetCurrentSession`, BYOK bearer-expiry recycling. Replaced by a single `CreateOneShotAsync` per-turn factory method.
+- `UserStateJanitor`'s 30-day TTL sweep and dependency on `CopilotSessionFactory`. Janitor now only evicts idle in-memory `UserTokens` / tool closures.
+- `ENV COPILOT_HOME=/home/copilot` in the Dockerfile and the corresponding `mkdir -p` in `entrypoint.sh`. The CLI uses its default ephemeral state directory; the App Service `/home` mount is still used for `dataprotection-keys` (auth cookies) but no longer for chat.
+
+### Added
+
+- `src/Dashboard/frontend/src/lib/sessionStore.js` — IndexedDB-backed conversation store (sessions + messages stores, `bySession` index), with `createSession`, `appendMessage`, `getMessages`, `getHistoryForReplay`, `deleteSession`, `renameSession`, plus `exportAll` / `importAll` helpers for JSON backup/restore.
+
+### Security
+
+- Chat content is no longer stored on the server. Cross-user IDOR on conversation history is architecturally impossible (the server has no history to leak). GDPR "right to be forgotten" for chat is a one-click browser action.
+
 ## [0.2.0] - 2026-05-14
 
 Persistent sessions, hardened auth, richer chat UX.

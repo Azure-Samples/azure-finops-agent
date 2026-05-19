@@ -41,7 +41,20 @@ public sealed class SessionTokenStore
         await _credentials.AddCredentialFieldsAsync(form);
         req.Content = new FormUrlEncodedContent(form);
 
-        var res = await http.SendAsync(req);
+        // Bound the call so a hung/very-slow Entra response (we saw 62s on a
+        // local dev box) can't pin a chat turn open. 15s is generous for a
+        // healthy Entra round-trip (~200-500ms) but cuts off the long tail.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        HttpResponseMessage res;
+        try
+        {
+            res = await http.SendAsync(req, cts.Token);
+        }
+        catch (TaskCanceledException) when (cts.IsCancellationRequested)
+        {
+            _logger.LogWarning("Token refresh for scope '{Scope}' timed out after 15s", scope);
+            return null;
+        }
         if (!res.IsSuccessStatusCode) return null;
 
         var body = await res.Content.ReadAsStringAsync();
@@ -60,11 +73,15 @@ public sealed class SessionTokenStore
         var expiryStr = ctx.Session.GetString(expiryKey);
 
         // No cached access token but we have a refresh token (typical right after a
-        // restart-driven session hydration) &#8212; fall through to mint a fresh one.
+        // restart-driven session hydration) — fall through to mint a fresh one.
         var hasRefresh = !string.IsNullOrEmpty(ctx.Session.GetString("azure_refresh_token"));
         if (token is null)
         {
             if (!hasRefresh) return null;
+            // Short-circuit if we already learned the refresh-token is rejected
+            // for this scope. Without this, every chat turn re-hits Entra for a
+            // token we know we can't get (1–60s wasted, every turn).
+            if (ctx.Session.GetString($"{tokenKey}_failed") == "1") return null;
         }
         else if (expiryStr is null || !DateTimeOffset.TryParse(expiryStr, out var expiry) || expiry > DateTimeOffset.UtcNow)
         {
@@ -101,8 +118,14 @@ public sealed class SessionTokenStore
                 _logger.LogWarning("Token {Key} refresh failed; user must re-authenticate", tokenKey);
                 ctx.Session.Remove(tokenKey);
                 ctx.Session.Remove(expiryKey);
+                // Sticky failure flag so we don't keep hammering Entra for a
+                // scope we already know is rejected. Cleared on logout / fresh
+                // login; user can re-grant the add-on tier to retry.
+                ctx.Session.SetString($"{tokenKey}_failed", "1");
                 return null;
             }
+            // Clear any prior failure marker on success.
+            ctx.Session.Remove($"{tokenKey}_failed");
             ctx.Session.SetString(tokenKey, result.Value.Token);
             ctx.Session.SetString(expiryKey, result.Value.Expiry.ToString("o"));
             if (!string.IsNullOrEmpty(result.Value.RotatedRefreshToken))
