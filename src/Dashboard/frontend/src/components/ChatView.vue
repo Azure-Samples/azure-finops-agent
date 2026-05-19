@@ -1725,9 +1725,8 @@
             </template>
           </div>
         </div>
-        <!-- ── Bottom half: Conversations (Entra-only) ── -->
+        <!-- ── Bottom half: Conversations (works for anonymous + signed-in) ── -->
         <div
-          v-if="azureConnected"
           class="tools-sidebar-pane tools-sidebar-pane--sessions"
         >
           <div class="tools-sidebar-header sessions-header">
@@ -5046,7 +5045,7 @@ async function send() {
       nextTick(() => inputEl.value?.focus());
     }
     // Refresh the Conversations sidebar so the new/updated summary shows up.
-    if (azureConnected.value) loadSessions();
+    loadSessions();
     if (availableModels.value.length <= 1) {
       try {
         const mr = await fetch("/api/models");
