@@ -1,0 +1,1 @@
+go trhough all th enot comitted code does it make sense? analyze evey single line

@@ -182,7 +182,7 @@ public sealed class TenantTokenRefresher : BackgroundService
             if (!string.IsNullOrEmpty(result.Value.RotatedRefreshToken)
                 && result.Value.RotatedRefreshToken != record.RefreshToken)
             {
-                _identity.UpdateRefreshToken(record.Oid, result.Value.RotatedRefreshToken);
+                await _identity.UpdateRefreshTokenAsync(record.Oid, result.Value.RotatedRefreshToken);
                 record.RefreshToken = result.Value.RotatedRefreshToken;
             }
 

@@ -96,26 +96,35 @@ After calling, drill into each anomalous date with QueryAzure (Cost Mgmt /query 
         var threshold = mean + zThreshold * stddev;
         var lowThreshold = Math.Max(0, mean - zThreshold * stddev);
 
-        var anomalies = new List<object>();
+        // Build the list of anomalous days first (cheap, in-memory), then
+        // fan out the per-day cost-breakdown drilldowns in parallel. Each
+        // drilldown is an independent Cost Management query; serialising
+        // them was needlessly multiplying wall time by N anomalies.
+        var anomalyCandidates = new List<(DateTime Date, double Cost, double Z)>();
         foreach (var p in detection)
         {
             if (stddev < 0.01) continue; // flat baseline, can't detect
             var z = (p.Cost - mean) / stddev;
-            if (Math.Abs(z) >= zThreshold)
-            {
-                // Drill down for this specific day
-                var breakdown = await GetBreakdownForDay(token, subscriptionId, p.Date, groupBy, activity);
-                anomalies.Add(new
-                {
-                    date = p.Date.ToString("yyyy-MM-dd"),
-                    cost = Math.Round(p.Cost, 2),
-                    z_score = Math.Round(z, 2),
-                    deviation_pct = mean > 0.01 ? Math.Round((p.Cost - mean) / mean * 100, 1) : 0,
-                    direction = z > 0 ? "spike" : "drop",
-                    top_contributors = breakdown
-                });
-            }
+            if (Math.Abs(z) >= zThreshold) anomalyCandidates.Add((p.Date, p.Cost, z));
         }
+        var drilldownTasks = anomalyCandidates.Select(async c =>
+        {
+            // Pass null activity — Activity is not safe for concurrent SetTag
+            // writers, and these drilldowns run in parallel. Each call still
+            // gets its own ActivitySource span inside HttpHelper.
+            try { return (c, Breakdown: (object)await GetBreakdownForDay(token, subscriptionId, c.Date, groupBy, activity: null)); }
+            catch (Exception ex) { return (c, Breakdown: (object)new { error = ex.Message }); }
+        }).ToArray();
+        var drilldowns = await Task.WhenAll(drilldownTasks);
+        var anomalies = drilldowns.Select(d => (object)new
+        {
+            date = d.c.Date.ToString("yyyy-MM-dd"),
+            cost = Math.Round(d.c.Cost, 2),
+            z_score = Math.Round(d.c.Z, 2),
+            deviation_pct = mean > 0.01 ? Math.Round((d.c.Cost - mean) / mean * 100, 1) : 0,
+            direction = d.c.Z > 0 ? "spike" : "drop",
+            top_contributors = d.Breakdown
+        }).ToList();
 
         var result = new
         {

@@ -586,10 +586,13 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     private async Task<SessionConfig> CreateSessionConfigAsync(long userId, string? entraOid)
     {
         var bearerToken = await GetAzureOpenAIBearerTokenAsync();
+        var effort = IsReasoningModel(_deployment) ? "xhigh" : null;
+        _logger.LogInformation("SessionConfig(create) model={Model} reasoningEffort={Effort} isReasoning={IsReasoning}",
+            _deployment, effort ?? "<null>", IsReasoningModel(_deployment));
         return new SessionConfig
         {
             Model = _deployment,
-            ReasoningEffort = IsReasoningModel(_deployment) ? "xhigh" : null,
+            ReasoningEffort = effort,
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),
@@ -611,10 +614,13 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     private async Task<ResumeSessionConfig> CreateResumeConfigAsync(long userId, string? entraOid)
     {
         var bearerToken = await GetAzureOpenAIBearerTokenAsync();
+        var effort = IsReasoningModel(_deployment) ? "xhigh" : null;
+        _logger.LogInformation("SessionConfig(resume) model={Model} reasoningEffort={Effort} isReasoning={IsReasoning} — NOTE: CLI may retain original-session effort",
+            _deployment, effort ?? "<null>", IsReasoningModel(_deployment));
         return new ResumeSessionConfig
         {
             Model = _deployment,
-            ReasoningEffort = IsReasoningModel(_deployment) ? "xhigh" : null,
+            ReasoningEffort = effort,
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),

@@ -82,14 +82,62 @@ public static class ChatEndpoints
             logger.LogInformation("Chat request from {User} model={Model} promptLen={PromptLen}",
                 userLogin, copilotFactory.Deployment, prompt.Length);
 
+            // === TIMING HOOKS ===
+            // Per-phase stopwatch buffer flushed as SSE `timing` events once
+            // the response headers are open. We can't emit before
+            // ctx.Response.Headers are written (SSE preamble below), so we
+            // buffer here and replay after the headers go out.
+            var timingBuf = new List<(string Phase, double Ms, object? Extra)>();
+            void RecordPhase(string phase, double ms, object? extra = null)
+            {
+                timingBuf.Add((phase, ms, extra));
+                logger.LogInformation("timing phase={Phase} ms={Ms:F0} user={User}", phase, ms, userLogin);
+            }
+
             var tokens = telemetry.UserTokens.GetOrAdd(userId, uid => new UserTokens { UserId = uid });
+            // Fast path: anonymous user (no Entra OID) has nothing to refresh.
+            // Skipping the lock + 4 fetches saves ~5-30ms per Pricing/Estimates
+            // click and avoids touching the DNS-poisoned token endpoint at all.
+            if (entraOid is null)
+            {
+                RecordPhase("token.skipped_anonymous", 0);
+            }
+            else
+            {
+            var tokenLockSw = Stopwatch.StartNew();
             await tokens.RefreshLock.WaitAsync(ctx.RequestAborted);
+            tokenLockSw.Stop();
+            RecordPhase("token.lock_wait", tokenLockSw.Elapsed.TotalMilliseconds);
             try
             {
-                tokens.AzureToken = await tokenStore.GetAzureTokenAsync(ctx, httpFactory);
-                tokens.GraphToken = await tokenStore.GetGraphTokenAsync(ctx, httpFactory);
-                tokens.LogAnalyticsToken = await tokenStore.GetLogAnalyticsTokenAsync(ctx, httpFactory);
-                tokens.StorageToken = await tokenStore.GetStorageTokenAsync(ctx, httpFactory);
+                // Fan out all four token fetches in parallel — they hit different
+                // Entra scopes and are independent. Each task wraps a try/catch so
+                // a single scope failure (e.g. user never consented to Storage)
+                // doesn't drag down the others. Saves ~1.2 s on warm turns.
+                async Task<(string Name, string? Value, double Ms, string? Error)> Fetch(string name, Func<Task<string?>> fn)
+                {
+                    var sw = Stopwatch.StartNew();
+                    try { var v = await fn(); sw.Stop(); return (name, v, sw.Elapsed.TotalMilliseconds, null); }
+                    catch (Exception ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
+                }
+                var fetchSw = Stopwatch.StartNew();
+                var results = await Task.WhenAll(
+                    Fetch("azure", () => tokenStore.GetAzureTokenAsync(ctx, httpFactory)),
+                    Fetch("graph", () => tokenStore.GetGraphTokenAsync(ctx, httpFactory)),
+                    Fetch("loganalytics", () => tokenStore.GetLogAnalyticsTokenAsync(ctx, httpFactory)),
+                    Fetch("storage", () => tokenStore.GetStorageTokenAsync(ctx, httpFactory)));
+                fetchSw.Stop();
+                foreach (var r in results)
+                {
+                    RecordPhase($"token.{r.Name}", r.Ms, new { hit = r.Value is not null, error = r.Error });
+                    if (r.Error is not null)
+                        logger.LogWarning("Token fetch failed scope={Scope} ms={Ms:F0} err={Err}", r.Name, r.Ms, r.Error);
+                }
+                RecordPhase("token.parallel_total", fetchSw.Elapsed.TotalMilliseconds);
+                tokens.AzureToken = results[0].Value;
+                tokens.GraphToken = results[1].Value;
+                tokens.LogAnalyticsToken = results[2].Value;
+                tokens.StorageToken = results[3].Value;
 
                 // Mirror expiry from session into the volatile bag so the
                 // TenantTokenRefresher background service can refresh proactively
@@ -103,6 +151,7 @@ public static class ChatEndpoints
             {
                 tokens.RefreshLock.Release();
             }
+            } // end if (entraOid is not null)
 
             logger.LogInformation("Chat tokens: azure={HasAzure} graph={HasGraph} la={HasLA} storage={HasStorage}",
                 tokens.AzureToken is not null, tokens.GraphToken is not null,
@@ -143,9 +192,15 @@ public static class ChatEndpoints
             ctx.Response.Headers.Connection = "keep-alive";
             ctx.Response.Headers["X-Accel-Buffering"] = "no";
 
+            // Declared outside the try so the finally block can deterministically
+            // remove this exact turn's reporter (sweeping by userId prefix would
+            // clobber a concurrent turn in another tab).
+            string? turnKey = null;
             try
             {
                 CopilotSession session;
+                var sessionSw = Stopwatch.StartNew();
+                string sessionAcquireMode;
                 if (!string.IsNullOrEmpty(requestedSessionId))
                 {
                     // IDOR guard: a requested sessionId must belong to this
@@ -157,21 +212,27 @@ public static class ChatEndpoints
                     {
                         logger.LogInformation("Requested sessionId {Sid} not owned by user {Uid}; falling back to current session", requestedSessionId, userId);
                         session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
+                        sessionAcquireMode = "fallback_current";
                     }
                     else
                     {
                         session = await copilotFactory.GetOrResumeAsync(userId, requestedSessionId, userLogin!, entraOid);
+                        sessionAcquireMode = "resume";
                     }
                 }
                 else
                 {
                     session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
+                    sessionAcquireMode = "current_or_new";
                 }
+                sessionSw.Stop();
+                RecordPhase($"session.{sessionAcquireMode}", sessionSw.Elapsed.TotalMilliseconds);
                 var activeSessionId = session.SessionId;
 
                 var done = new TaskCompletionSource();
                 var cancelled = false;
                 var toolTracker = new ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)>();
+                var firstEventLogged = 0;
 
                 // Browser disconnect releases this SSE handler but does NOT
                 // abort the running turn. The Copilot CLI keeps generating
@@ -190,9 +251,36 @@ public static class ChatEndpoints
                     }
                 });
 
+                // SSE write lock + emit helper — declared up here so the
+                // session.On callback below can use SafeEmit for the
+                // sdk.first_event timing ping.
+                var sseLock = new SemaphoreSlim(1, 1);
+                async Task SafeEmit(string sseData)
+                {
+                    await sseLock.WaitAsync();
+                    try { await EmitAsync(ctx, sseData); }
+                    finally { sseLock.Release(); }
+                }
+                // sdkSw measures time from subscription registration to the
+                // first SDK event arrival (time-to-first-byte from model).
+                // Started immediately before the subscription so a fast first
+                // event can't be observed before the stopwatch is running
+                // (which would log a misleading ms=0).
+                var sdkSw = Stopwatch.StartNew();
+
                 using var subscription = session.On(async (SessionEvent evt) =>
                 {
                     if (cancelled) return;
+                    if (System.Threading.Interlocked.Exchange(ref firstEventLogged, 1) == 0)
+                    {
+                        try
+                        {
+                            var firstMs = sdkSw.Elapsed.TotalMilliseconds;
+                            logger.LogInformation("timing phase=sdk.first_event ms={Ms:F0} user={User}", firstMs, userLogin);
+                            await SafeEmit(JsonSerializer.Serialize(new { type = "timing", phase = "sdk.first_event", ms = Math.Round(firstMs, 1), extra = new { evt = evt.GetType().Name } }));
+                        }
+                        catch { }
+                    }
                     try
                     {
                         await HandleSessionEventAsync(evt, ctx, toolTracker, telemetry, copilotFactory.Deployment,
@@ -228,19 +316,39 @@ public static class ChatEndpoints
                 await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "session", id = activeSessionId })}\n\n");
                 await ctx.Response.Body.FlushAsync();
 
-                // Wire the retry hook so HttpHelper can push "Cooling down" pings
-                // to this SSE stream during 429 backoff. Serialize writes against
-                // the SDK event handler with a per-request lock so retry pings
-                // can't interleave bytes with delta/tool_done frames.
-                var sseLock = new SemaphoreSlim(1, 1);
-                async Task SafeEmit(string sseData)
+                // Flush buffered timing phases (token refresh + session acquire)
+                // now that the SSE stream is open. The frontend collects these
+                // alongside its own perf marks to build the timing table.
+                foreach (var t in timingBuf)
                 {
-                    await sseLock.WaitAsync();
-                    try { await EmitAsync(ctx, sseData); }
-                    finally { sseLock.Release(); }
+                    var p = t.Extra is null
+                        ? JsonSerializer.Serialize(new { type = "timing", phase = t.Phase, ms = Math.Round(t.Ms, 1) })
+                        : JsonSerializer.Serialize(new { type = "timing", phase = t.Phase, ms = Math.Round(t.Ms, 1), extra = t.Extra });
+                    await ctx.Response.WriteAsync($"data: {p}\n\n");
                 }
-                Infrastructure.HttpHelper.RetryReporter.Value = (attempt, waitSec) =>
-                    SafeEmit(JsonSerializer.Serialize(new { type = "cooling_down", attempt, waitSeconds = waitSec }));
+                await ctx.Response.Body.FlushAsync();
+
+                // Wire the retry hook so HttpHelper can push "Cooling down" pings
+                // to this SSE stream during 429 backoff. The sseLock / SafeEmit
+                // were declared above so the subscription callback can share them.
+                // Register the SSE retry hook keyed by *turn id* (userId:sessionId)
+                // — NOT just userId — so concurrent turns from the same user
+                // (two tabs, sidebar score racing chat) don't clobber each
+                // other's reporter. Propagated to all child activities (incl.
+                // across the Copilot CLI JSON-RPC tool-callback boundary) via
+                // Activity Baggage. Earlier we tried AsyncLocal and Activity.RootId
+                // — both failed to flow through that boundary; baggage does.
+                turnKey = $"{userId}:{activeSessionId}";
+                chatActivity?.SetBaggage("finops.turn.id", turnKey);
+                Infrastructure.HttpHelper.RetryReporters[turnKey] = (attempt, waitSec, url, tool, status) =>
+                {
+                    logger.LogInformation("EMIT cooling_down sse turn={Turn} attempt={Attempt} status={Status} tool={Tool} waitSec={Wait:F1}",
+                        turnKey, attempt, status, tool, waitSec);
+                    return SafeEmit(JsonSerializer.Serialize(new { type = "cooling_down", attempt, waitSeconds = waitSec, url, tool, status }));
+                };
+                // Belt-and-braces cleanup on request abort.
+                var turnKeyForAbort = turnKey;
+                ctx.RequestAborted.Register(() => Infrastructure.HttpHelper.RetryReporters.TryRemove(turnKeyForAbort, out _));
 
                 try
                 {
@@ -290,26 +398,48 @@ public static class ChatEndpoints
                         || existing.StartsWith("Untitled", StringComparison.OrdinalIgnoreCase);
                     if (needsTitle)
                     {
-                        // Bound the wait so a slow title call never holds the SSE
-                        // stream open for more than ~10s.
-                        using var titleCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
-                        titleCts.CancelAfter(TimeSpan.FromSeconds(10));
-                        try
+                        // Fire-and-forget: a fresh title is nice-to-have, not
+                        // worth blocking the SSE close for. The next turn (or a
+                        // sidebar refresh) will pick up the saved title via the
+                        // session_title re-emit path above. Capture references
+                        // so the background task is independent of the request.
+                        var bgPrompt = prompt;
+                        var bgReply = assistantReply;
+                        var bgSessionId = activeSessionId;
+                        // Race the title call against the SSE close so a fast title
+                        // (~150ms p50) still gets pushed to the live stream. If it
+                        // misses the window, the next turn's re-emit path picks it up.
+                        var titleTask = Task.Run(async () =>
                         {
-                            var generated = await copilotFactory.GenerateTitleAsync(prompt, assistantReply, titleCts.Token);
+                            try
+                            {
+                                using var bgCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                                var generated = await copilotFactory.GenerateTitleAsync(bgPrompt, bgReply, bgCts.Token);
+                                if (!string.IsNullOrWhiteSpace(generated))
+                                    telemetry.SaveTitle(bgSessionId, generated);
+                                return generated;
+                            }
+                            catch (Exception bgEx)
+                            {
+                                logger.LogWarning(bgEx, "Background title generation failed for session {Sid}", bgSessionId);
+                                return null;
+                            }
+                        });
+                        var winner = await Task.WhenAny(titleTask, Task.Delay(1500));
+                        if (winner == titleTask && !ctx.RequestAborted.IsCancellationRequested)
+                        {
+                            var generated = await titleTask;
                             if (!string.IsNullOrWhiteSpace(generated))
                             {
-                                telemetry.SaveTitle(activeSessionId, generated);
                                 try
                                 {
-                                    var payload = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = generated });
-                                    await ctx.Response.WriteAsync($"data: {payload}\n\n");
+                                    var p = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = generated });
+                                    await ctx.Response.WriteAsync($"data: {p}\n\n");
                                     await ctx.Response.Body.FlushAsync();
                                 }
                                 catch { /* client may have disconnected — title is still saved */ }
                             }
                         }
-                        catch (OperationCanceledException) { /* timeout or client abort */ }
                     }
                 }
 
@@ -318,6 +448,13 @@ public static class ChatEndpoints
                     new KeyValuePair<string, object?>("model", copilotFactory.Deployment),
                     new KeyValuePair<string, object?>("user", userLogin));
                 chatActivity?.SetTag("ai.duration_ms", chatSw.Elapsed.TotalMilliseconds);
+                try
+                {
+                    var donePayload = JsonSerializer.Serialize(new { type = "timing", phase = "chat.total", ms = Math.Round(chatSw.Elapsed.TotalMilliseconds, 1) });
+                    await ctx.Response.WriteAsync($"data: {donePayload}\n\n");
+                    await ctx.Response.Body.FlushAsync();
+                }
+                catch { }
             }
             catch (Exception ex)
             {
@@ -333,6 +470,14 @@ public static class ChatEndpoints
                 await ctx.Response.WriteAsync($"data: {errorData}\n\n");
                 await ctx.Response.WriteAsync("data: [DONE]\n\n");
                 await ctx.Response.Body.FlushAsync();
+            }
+            finally
+            {
+                // Release this turn's reporter only — never sweep by userId
+                // prefix, since a concurrent turn from the same user (two tabs,
+                // sidebar score racing chat) holds its own key in the dict.
+                if (turnKey is not null)
+                    Infrastructure.HttpHelper.RetryReporters.TryRemove(turnKey, out _);
             }
         });
 

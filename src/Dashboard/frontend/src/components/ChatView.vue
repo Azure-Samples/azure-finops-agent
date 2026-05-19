@@ -1625,17 +1625,40 @@
             <span class="st-count">{{ allToolCalls.length }}</span>
           </div>
           <div class="tools-sidebar-scroll">
-            <div
-              v-for="tc in reversedToolCalls"
-              :key="tc._uid"
-              :class="[
-                'st-row',
-                { 'st-row--running': !tc.done, 'st-row--clickable': tc.done },
-              ]"
-              @click.stop="
-                tc.done && (hoveredTool = hoveredTool === tc ? null : tc)
-              "
-            >
+            <template v-for="tc in reversedToolCalls" :key="tc._uid">
+              <!-- Ghost cooling-down row: animated, expand-to-detail, ephemeral -->
+              <div
+                v-if="tc._isCooler"
+                :class="['st-row', 'st-row--cooler', { 'st-row--cooler-open': tc.expanded }]"
+                @click.stop="tc.expanded = !tc.expanded"
+                :title="`Cooling down ${tc.tool} (HTTP ${tc.status}) attempt ${tc.attempt}, waiting ${Math.round(tc.wait)}s`"
+              >
+                <svg class="st-icon st-icon--cooler" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6 4">
+                    <animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="1.4s" repeatCount="indefinite"/>
+                  </circle>
+                </svg>
+                <span class="st-name">Cooling down… {{ Math.round(tc.wait) }}s (attempt {{ tc.attempt }})</span>
+                <span class="st-time">HTTP {{ tc.status }}</span>
+                <div v-if="tc.expanded" class="st-cooler-detail" @click.stop>
+                  <div class="st-cooler-row"><strong>Tool:</strong> {{ tc.tool }}</div>
+                  <div class="st-cooler-row"><strong>Status:</strong> HTTP {{ tc.status }}</div>
+                  <div class="st-cooler-row"><strong>Attempt:</strong> {{ tc.attempt }} of 5</div>
+                  <div class="st-cooler-row"><strong>Wait:</strong> {{ Math.round(tc.wait) }}s</div>
+                  <div class="st-cooler-row st-cooler-url"><strong>URL:</strong> <code>{{ tc.url }}</code></div>
+                </div>
+              </div>
+              <!-- Normal tool row -->
+              <div
+                v-else
+                :class="[
+                  'st-row',
+                  { 'st-row--running': !tc.done, 'st-row--clickable': tc.done },
+                ]"
+                @click.stop="
+                  tc.done && (hoveredTool = hoveredTool === tc ? null : tc)
+                "
+              >
               <svg
                 v-if="!tc.done"
                 class="st-icon st-icon--spin"
@@ -1699,6 +1722,7 @@
                 formatDuration(tc.durationMs)
               }}</span>
             </div>
+            </template>
           </div>
         </div>
         <!-- ── Bottom half: Conversations (Entra-only) ── -->
@@ -1864,11 +1888,18 @@ const activeTools = ref([]);
 // whichever session the user is currently viewing.
 const perSessionToolCalls = reactive(new Map());
 const perSessionCharts = reactive(new Map());
+// Per-session ephemeral "cooling down" ghost rows. NOT persisted into
+// messages/IndexedDB — they vanish at stream end. Each entry:
+// { _uid, _isCooler:true, tool, url, attempt, wait, status, ts, expanded, _timer }
+const perSessionCoolers = reactive(new Map());
 const streamToolCalls = computed(
   () => perSessionToolCalls.get(currentSessionId.value || "__pending__") || [],
 );
 const streamCharts = computed(
   () => perSessionCharts.get(currentSessionId.value || "__pending__") || [],
+);
+const streamCoolers = computed(
+  () => perSessionCoolers.get(currentSessionId.value || "__pending__") || [],
 );
 const streamFollowUp = ref(null);
 const streamIntent = ref("");
@@ -2674,6 +2705,39 @@ watch(
 
 onMounted(async () => {
   document.addEventListener("click", dismissPopover);
+  // Dev helper: window.__simulateCool(waitSec?) injects a synthetic ghost
+  // "cooling down" row in the current session's tool sidebar so you can
+  // verify the throttle UI without forcing a real 429. Removes itself
+  // after the wait elapses, just like a real cooler. Dev-build only —
+  // gated on Vite's import.meta.env.DEV so production bundles don't ship it.
+  if (import.meta.env.DEV) {
+    window.__simulateCool = (wait = 15, status = 429) => {
+      const sid = currentSessionId.value || "__pending__";
+      const list = perSessionCoolers.get(sid) || [];
+      const cooler = {
+        _uid: `c-sim-${Date.now()}`,
+        _key: `sim|${Date.now()}`,
+        _isCooler: true,
+        tool: "azure",
+        url: "https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CostManagement/query?api-version=2025-03-01",
+        attempt: 1,
+        wait,
+        status,
+        ts: Date.now(),
+        expanded: false,
+        done: false,
+      };
+      cooler._timer = setTimeout(() => {
+        const arr = perSessionCoolers.get(sid) || [];
+        perSessionCoolers.set(sid, arr.filter((x) => x._uid !== cooler._uid));
+      }, wait * 1000 + 500);
+      list.push(cooler);
+      perSessionCoolers.set(sid, [...list]);
+      // eslint-disable-next-line no-console
+      console.log("[simulateCool] injected ghost row for", wait, "s in session", sid);
+      return cooler._uid;
+    };
+  }
   // Load saved conversations once we know whether the user is Azure-connected.
   // (The auth check fires on mount too; loadSessions is a no-op until then.)
   setTimeout(() => {
@@ -4127,6 +4191,14 @@ const allToolCalls = computed(() => {
     for (const tc of msg.toolCalls) add(tc, "msg");
   }
   for (const tc of streamToolCalls.value) add(tc, "stream");
+  // Append any live cooling-down ghosts at the end so they pin to the top of
+  // the reversed sidebar view. They are ephemeral and never get committed.
+  // IMPORTANT: pass the original reference (no spread) so toggling
+  // tc.expanded in the template mutates the reactive source.
+  for (const c of streamCoolers.value) {
+    c._uid = c._uid || `cool-${Math.random()}`;
+    order.push(c);
+  }
   return order;
 });
 
@@ -4472,6 +4544,20 @@ async function send() {
   let charts = perSessionCharts.get(streamingId);
   let hasDeltas = false;
 
+  // === TIMING HOOKS ===
+  // Captures every meaningful moment of the turn so we can build a flat
+  // timing table afterwards. Records: client send, each SSE event arrival
+  // (with type/tool), backend phase timings (token.*, session.*, sdk.*,
+  // chat.total), tool durations from tool_done.durationMs, and 429 retries
+  // from cooling_down. Dumped to console.table + window.__lastTimings
+  // when the stream ends.
+  const t0 = performance.now();
+  const timings = [];
+  const recordTiming = (entry) => {
+    timings.push({ t_ms: Math.round(performance.now() - t0), ...entry });
+  };
+  recordTiming({ kind: "client", phase: "send.start", prompt: prompt.slice(0, 60) });
+
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
@@ -4508,12 +4594,33 @@ async function send() {
           continue;
         }
 
+        // Capture every SSE event's arrival timestamp for the timing table.
+        // Backend-emitted `timing` events are stored verbatim (they carry their
+        // own ms measurement); all other events get a client-arrival t_ms.
+        if (data.type === "timing") {
+          recordTiming({ kind: "server", phase: data.phase, server_ms: data.ms, extra: data.extra });
+        } else if (data.type === "tool_done") {
+          recordTiming({ kind: "event", phase: "tool_done", tool: data.tool, durationMs: data.durationMs, success: data.success });
+        } else if (data.type === "tool_start") {
+          recordTiming({ kind: "event", phase: "tool_start", tool: data.tool });
+        } else if (data.type === "cooling_down") {
+          // eslint-disable-next-line no-console
+          console.log("[SSE cooling_down arrived]", data);
+          recordTiming({ kind: "event", phase: "cooling_down", attempt: data.attempt, waitSec: data.waitSeconds });
+        } else if (data.type === "delta") {
+          if (!timings.some((x) => x.phase === "first_delta")) {
+            recordTiming({ kind: "event", phase: "first_delta" });
+          }
+        } else if (data.type !== "message") {
+          recordTiming({ kind: "event", phase: data.type });
+        }
+
         // Routing/sidebar events are handled regardless of which session the
         // user is currently viewing. Everything else is gated on isActiveView()
         // below so a backgrounded stream keeps draining bytes (the server
         // needs us to keep reading) without polluting the foreground view.
         const routingEvent =
-          data.type === "session" || data.type === "session_title";
+          data.type === "session" || data.type === "session_title" || data.type === "timing";
         // Tool / chart / completion-marker events go into the per-session
         // map so a backgrounded stream still accumulates state and the user
         // sees a complete tool list when they switch back. Only delta/text
@@ -4722,8 +4829,53 @@ async function send() {
             break;
 
           case "cooling_down": {
-            // 429 backoff in flight — tag the most recent in-progress tool so
-            // the sidebar swaps its label to "Cooling down… {wait}s".
+            // 429/5xx backoff in flight. Insert/refresh a separate ephemeral
+            // ghost row in perSessionCoolers — NOT a label swap on the real
+            // tool. The ghost has its own animated background and an
+            // expand-to-detail panel showing the throttled URL. It auto-
+            // removes after the wait elapses (or sooner if tool_done arrives).
+            const list = perSessionCoolers.get(streamingId) || [];
+            const key = `${data.tool || "http"}|${data.url || ""}`;
+            const existing = list.find((c) => c._key === key);
+            if (existing) {
+              existing.attempt = data.attempt;
+              existing.wait = data.waitSeconds;
+              existing.status = data.status;
+              existing.ts = Date.now();
+              if (existing._timer) clearTimeout(existing._timer);
+              existing._timer = setTimeout(() => {
+                const arr = perSessionCoolers.get(streamingId) || [];
+                perSessionCoolers.set(
+                  streamingId,
+                  arr.filter((x) => x._uid !== existing._uid),
+                );
+              }, (data.waitSeconds || 5) * 1000 + 500);
+              perSessionCoolers.set(streamingId, [...list]);
+            } else {
+              const cooler = {
+                _uid: `c-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                _key: key,
+                _isCooler: true,
+                tool: data.tool || "http",
+                url: data.url || "",
+                attempt: data.attempt,
+                wait: data.waitSeconds,
+                status: data.status,
+                ts: Date.now(),
+                expanded: false,
+                done: false,
+              };
+              cooler._timer = setTimeout(() => {
+                const arr = perSessionCoolers.get(streamingId) || [];
+                perSessionCoolers.set(
+                  streamingId,
+                  arr.filter((x) => x._uid !== cooler._uid),
+                );
+              }, (data.waitSeconds || 5) * 1000 + 500);
+              list.push(cooler);
+              perSessionCoolers.set(streamingId, [...list]);
+            }
+            // Legacy label swap on the in-flight tool — kept for accessibility.
             const inFlight = [...toolCalls].reverse().find((t) => !t.done);
             if (inFlight) {
               inFlight.cooling = {
@@ -4785,6 +4937,10 @@ async function send() {
 
           case "error":
             streamBuffer.value += `\n**Error:** ${data.message}`;
+            break;
+
+          case "timing":
+            // Already captured above; no UI action needed.
             break;
         }
       }
@@ -4849,6 +5005,21 @@ async function send() {
     clearInterval(intentAnimTimer);
     intentAnimTimer = null;
     runningSessions.delete(streamingId);
+
+    // === TIMING DUMP ===
+    // Stash on window for easy copy-paste; print a flat table to the
+    // devtools console so we can eyeball where the time went.
+    recordTiming({ kind: "client", phase: "send.end" });
+    try {
+      window.__lastTimings = timings;
+      window.__lastTimingsPrompt = prompt;
+      // eslint-disable-next-line no-console
+      console.groupCollapsed(`[timing] ${prompt.slice(0, 60)} — ${timings.length} events, total ${timings[timings.length - 1]?.t_ms ?? 0}ms`);
+      // eslint-disable-next-line no-console
+      console.table(timings);
+      // eslint-disable-next-line no-console
+      console.groupEnd();
+    } catch {}
     // Only wipe the live-stream UI refs if this stream's session is still
     // the foreground view. If the user navigated to a different session,
     // those refs reflect *that* session's state and must not be touched.
@@ -4859,6 +5030,10 @@ async function send() {
     // viewing a different tab at completion.
     perSessionToolCalls.delete(streamingId);
     perSessionCharts.delete(streamingId);
+    // Discard any lingering cooling-down ghosts — they're stream-scoped only.
+    const lingering = perSessionCoolers.get(streamingId) || [];
+    for (const c of lingering) { if (c._timer) clearTimeout(c._timer); }
+    perSessionCoolers.delete(streamingId);
     if (isActiveView()) {
       flushText();
       streamBuffer.value = "";
@@ -7585,6 +7760,72 @@ async function send() {
   flex-shrink: 0;
   color: #605e5c;
   font-size: 11px;
+}
+
+/* ── Cooling-down ghost row (ephemeral, 429/5xx) ── */
+/* Same row chrome as .st-row (size, padding, font weight 400, height);
+   only the background + text colour differ so the user can spot retries.
+   Gradient mirrors the Azure top bar (#005a9e → #0078d4 → #0098e0) and
+   sweeps horizontally — never goes to white so dark blues stay readable. */
+.st-row--cooler {
+  cursor: pointer;
+  position: relative;
+  flex-wrap: wrap;
+  background: linear-gradient(
+    90deg,
+    #005a9e 0%,
+    #0078d4 25%,
+    #0098e0 50%,
+    #0078d4 75%,
+    #005a9e 100%
+  );
+  background-size: 200% 100%;
+  animation: cool-sweep 2.4s linear infinite;
+}
+.st-row--cooler:hover {
+  filter: brightness(1.05);
+}
+.st-row--cooler .st-name,
+.st-row--cooler .st-time {
+  color: #fff;
+}
+.st-icon--cooler {
+  width: 14px;
+  height: 14px;
+  color: #fff;
+}
+.st-cooler-detail {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: default;
+}
+.st-cooler-row {
+  margin-bottom: 2px;
+}
+.st-cooler-row strong {
+  color: #fff;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.st-cooler-url code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  word-break: break-all;
+  display: inline-block;
+  max-width: 100%;
+}
+@keyframes cool-sweep {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
 }
 
 /* ── Tool popover ── */
