@@ -232,14 +232,6 @@ app.Use(async (ctx, next) =>
 
 // CSRF defense — for state-changing requests, require Origin/Referer to match this host.
 // Combined with SameSite=Lax cookies this defeats the standard CSRF surface.
-var allowedOriginHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-{
-    "azure-finops-agent.com",
-    "www.azure-finops-agent.com",
-    "finops-agent-container.azurewebsites.net",
-    "localhost:5000",
-    "localhost:5173",
-};
 app.Use(async (ctx, next) =>
 {
     var method = ctx.Request.Method;
@@ -253,7 +245,8 @@ app.Use(async (ctx, next) =>
         if (Uri.TryCreate(origin, UriKind.Absolute, out var oUri)) sourceHost = oUri.Authority;
         else if (Uri.TryCreate(referer, UriKind.Absolute, out var rUri)) sourceHost = rUri.Authority;
 
-        if (string.IsNullOrEmpty(sourceHost) || !allowedOriginHosts.Contains(sourceHost))
+        var ownHost = ctx.Request.Host.Value ?? "";
+        if (string.IsNullOrEmpty(sourceHost) || !string.Equals(sourceHost, ownHost, StringComparison.OrdinalIgnoreCase))
         {
             ctx.Response.StatusCode = 403;
             await ctx.Response.WriteAsync("Forbidden: cross-origin write blocked");
