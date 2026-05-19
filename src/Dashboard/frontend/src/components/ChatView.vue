@@ -4196,7 +4196,7 @@ const allToolCalls = computed(() => {
   // IMPORTANT: pass the original reference (no spread) so toggling
   // tc.expanded in the template mutates the reactive source.
   for (const c of streamCoolers.value) {
-    c._uid = c._uid || `cool-${Math.random()}`;
+    c._uid = c._uid || `cool-${crypto.randomUUID()}`;
     order.push(c);
   }
   return order;
@@ -4853,7 +4853,7 @@ async function send() {
               perSessionCoolers.set(streamingId, [...list]);
             } else {
               const cooler = {
-                _uid: `c-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                _uid: `c-${Date.now()}-${crypto.randomUUID().slice(0, 4)}`,
                 _key: key,
                 _isCooler: true,
                 tool: data.tool || "http",
