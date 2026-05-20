@@ -32,13 +32,23 @@ if ($signedInUser) {
 }
 
 # ── 2. Entra app registration ──
-$envValues = azd env get-values | ConvertFrom-StringData
-$existingAppId = $envValues['AZURE_ENTRA_APP_ID']
-$existingSecret = $envValues['AZURE_ENTRA_CLIENT_SECRET']
+function Get-AzdEnvValue {
+    param([string]$Key)
+    $val = azd env get-value $Key 2>$null
+    if ($LASTEXITCODE -ne 0) { return '' }
+    if ($null -eq $val) { return '' }
+    return ([string]$val).Trim().Trim('"')
+}
 
-if ($existingAppId -and $existingAppId.Trim('"').Length -gt 0) {
-    $appId = $existingAppId.Trim('"')
-    $secret = if ($existingSecret) { $existingSecret.Trim('"') } else { '' }
+$existingAppId  = Get-AzdEnvValue 'AZURE_ENTRA_APP_ID'
+$existingSecret = Get-AzdEnvValue 'AZURE_ENTRA_CLIENT_SECRET'
+$envName        = Get-AzdEnvValue 'AZURE_ENV_NAME'
+if ([string]::IsNullOrWhiteSpace($envName)) { $envName = $env:AZURE_ENV_NAME }
+if ([string]::IsNullOrWhiteSpace($envName)) { $envName = 'finops-agent' }
+
+if (-not [string]::IsNullOrWhiteSpace($existingAppId)) {
+    $appId = $existingAppId
+    $secret = $existingSecret
 
     # Validate the secret is also provided — Bicep would otherwise pass an empty
     # string into Microsoft__ClientSecret and OAuth would silently fall back to
@@ -64,7 +74,6 @@ if ($existingAppId -and $existingAppId.Trim('"').Length -gt 0) {
     Write-Host "  Creating Entra ID app registration (multi-tenant, 5 consent tiers)..." -ForegroundColor Yellow
 
     $entraScript = Join-Path $repoRoot 'src/Dashboard/setup-entra-app.ps1'
-    $envName = $envValues['AZURE_ENV_NAME'].Trim('"')
     $appName = "Azure FinOps Agent ($envName)"
 
     # Production redirect URI is unknown until Bicep runs. Register localhost now;
