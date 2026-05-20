@@ -12,9 +12,9 @@ public static class MetaEndpoints
         string appInsightsConnectionString,
         string azureOpenAIDeployment)
     {
-        var (sha, build) = ResolveBuildInfo();
+        var (sha, build, branch) = ResolveBuildInfo();
 
-        app.MapGet("/api/version", () => Results.Ok(new { sha, build, started = DateTime.UtcNow.ToString("o") }));
+        app.MapGet("/api/version", () => Results.Ok(new { sha, build, branch, started = DateTime.UtcNow.ToString("o") }));
 
         app.MapGet("/api/config", () => Results.Ok(new { appInsightsConnectionString = appInsightsConnectionString ?? "" }));
 
@@ -30,7 +30,7 @@ public static class MetaEndpoints
         });
     }
 
-    private static (string Sha, string Build) ResolveBuildInfo()
+    private static (string Sha, string Build, string Branch) ResolveBuildInfo()
     {
         var sha = Environment.GetEnvironmentVariable("BUILD_SHA");
         if (string.IsNullOrEmpty(sha))
@@ -46,6 +46,13 @@ public static class MetaEndpoints
             catch { build = "0"; }
         }
 
-        return (sha!, build!);
+        var branch = Environment.GetEnvironmentVariable("BUILD_BRANCH");
+        if (string.IsNullOrEmpty(branch))
+        {
+            try { branch = Process.Start(new ProcessStartInfo("git", "rev-parse --abbrev-ref HEAD") { RedirectStandardOutput = true, UseShellExecute = false })!.StandardOutput.ReadToEnd().Trim(); }
+            catch { branch = "main"; }
+        }
+
+        return (sha!, build!, branch!);
     }
 }

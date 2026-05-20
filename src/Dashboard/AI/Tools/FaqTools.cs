@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AzureFinOps.Dashboard.Auth;
 using Microsoft.Extensions.AI;
 
 namespace AzureFinOps.Dashboard.AI.Tools;
@@ -9,9 +10,14 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// <summary>
 /// Publishes useful public Q&As as SEO-indexable FAQ pages.
 /// The LLM calls PublishFAQ after answering a public FinOps question.
+/// Requires Azure authentication — anonymous users are blocked at the tool layer.
 /// </summary>
-public static class FaqTools
+public class FaqTools
 {
+    private readonly UserTokens _tokens;
+
+    public FaqTools(UserTokens tokens) => _tokens = tokens;
+
     private static readonly string FaqDir = Path.Combine(Path.GetTempPath(), "finops-agent-faq");
     private static readonly string FaqFile = Path.Combine(FaqDir, "dynamic-faqs.json");
     private static readonly ConcurrentDictionary<string, FaqEntry> DynamicFaqs = new(StringComparer.OrdinalIgnoreCase);
@@ -29,17 +35,21 @@ public static class FaqTools
         Load();
     }
 
-    public static IEnumerable<AIFunction> Create()
+    public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(PublishFAQ);
     }
 
     [Description("Publish a useful public FinOps Q&A as an SEO page. Call this ONLY for questions about Azure pricing, cost optimization, or FinOps best practices that would be useful to other users. Do NOT publish tenant-specific or private data.")]
-    private static string PublishFAQ(
+    private string PublishFAQ(
         [Description("The question (e.g. 'How much does a D4s_v5 VM cost per month?')")] string question,
         [Description("A concise, factual answer (1-3 sentences with specific numbers)")] string answer,
         [Description("SEO page title (e.g. 'Azure D4s_v5 VM Pricing by Region')")] string title)
     {
+        // Hard auth gate — anon users (all-null tokens) must not write to the public FAQ surface.
+        if (_tokens.AzureToken is null)
+            return "PublishFAQ requires authentication. Please use the **Connect Azure** button to sign in before publishing FAQ entries to the public site.";
+
         if (string.IsNullOrWhiteSpace(question) || string.IsNullOrWhiteSpace(answer) || string.IsNullOrWhiteSpace(title))
             return "Error: question, answer, and title are all required.";
 

@@ -7,11 +7,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-### Added
-
-- (placeholder)
+### Fixed
+- `RouteHandlerAnalyzer` AD0001 NullReferenceException at startup — removed vestigial `(Delegate)` cast in `ChatEndpoints.cs`.
+- `DefaultAzureCredential` 2-5s per-message hang on `VisualStudioCredential.RunProcessesAsync` — excluded VS / VS Code / Interactive / AzurePowerShell credential providers in `CopilotSessionFactory`.
 
 ### Changed
+- Added ambiguous-affirmative intent-binding rule to the Copilot SystemPrompt — "yes/go ahead/proceed" now resolves against the most recent in-chat offer instead of the loudest queued sidebar action.
+
+### Added
 
 - (placeholder)
 

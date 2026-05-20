@@ -760,6 +760,81 @@
         transform: scale(0.96);
       }
 
+      /* ========== Slide 3 (centered, no images): same pain-card style as slide 2 ========== */
+      .s3.s3-centered {
+        align-items: center;
+        padding-top: 5vh;
+      }
+      .s3.s3-centered .content {
+        max-width: 1280px;
+        margin: 0 auto;
+      }
+      .s3-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 1.6rem;
+        margin-top: 1.4rem;
+        max-width: 980px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .s3-grid .pain-card {
+        display: flex;
+        align-items: flex-start;
+        gap: 1.25rem;
+        text-align: left;
+        padding: 0.65rem 0;
+        margin: 0;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        transition: none;
+      }
+      .s3-grid .pain-card:hover {
+        border: none;
+        box-shadow: none;
+        transform: none;
+      }
+      .s3-grid .pain-card .ico {
+        margin: 0;
+        flex: 0 0 auto;
+        width: 64px;
+        height: 64px;
+        border-radius: 14px;
+      }
+      .s3-grid .pain-card .ico svg {
+        width: 34px;
+        height: 34px;
+      }
+      .s3-grid .pain-card .card-text {
+        min-width: 0;
+      }
+      .s3-grid .pain-card h3 {
+        font-size: clamp(1.35rem, 1.6vw, 1.7rem);
+        margin: 0 0 0.4rem;
+        line-height: 1.25;
+      }
+      .s3-grid .pain-card p {
+        font-size: clamp(1.05rem, 1.15vw, 1.25rem);
+        margin: 0;
+        line-height: 1.5;
+        color: var(--ink-soft);
+      }
+      .s3.s3-centered .punchline {
+        margin-top: 1.4rem;
+        line-height: 1.7;
+      }
+      .s3.s3-centered .punchline br {
+        content: "";
+        display: block;
+        margin-bottom: 0.5rem;
+      }
+      @media (max-width: 720px) {
+        .s3-grid {
+          gap: 1rem;
+        }
+      }
+
       /* ========== Slide 3 (legacy): Solution image at bottom ========== */
       .s3 .content {
         display: flex;
@@ -1204,8 +1279,8 @@
         gap: 2rem;
       }
       .sec-panel {
-        padding: 2rem 1.8rem;
-        border-radius: 16px;
+        padding: 2.6rem 2.4rem;
+        border-radius: 18px;
       }
       .sec-panel.ok {
         background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
@@ -1216,9 +1291,9 @@
         border: 1px solid #fed7d7;
       }
       .sec-panel h3 {
-        font-size: 1.6rem;
+        font-size: 2rem;
         font-weight: 800;
-        margin-bottom: 1.2rem;
+        margin-bottom: 1.4rem;
         letter-spacing: -0.01em;
       }
       .sec-panel.ok h3 {
@@ -1231,10 +1306,12 @@
         list-style: none;
       }
       .sec-panel li {
-        padding: 0.85rem 0;
-        font-size: 1.1rem;
+        padding: 1.6rem 0;
+        font-size: 1.7rem;
+        font-weight: 600;
+        line-height: 1.35;
         display: flex;
-        gap: 0.7rem;
+        gap: 1rem;
         align-items: flex-start;
         border-top: 1px solid rgba(0, 0, 0, 0.06);
       }
@@ -1243,9 +1320,10 @@
       }
       .sec-panel li .mark {
         flex-shrink: 0;
-        width: 22px;
+        width: 32px;
         font-weight: 800;
-        font-size: 1.2rem;
+        font-size: 2rem;
+        line-height: 1;
       }
       .sec-panel.ok li .mark {
         color: var(--azure-blue);
@@ -1301,52 +1379,45 @@
       .s6b-grid {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 1.1rem;
+        gap: 1.4rem;
       }
       .s6b-card {
         display: flex;
-        align-items: flex-start;
-        gap: 1rem;
-        padding: 1.1rem 1.25rem;
+        flex-direction: column;
+        gap: 0.9rem;
+        padding: 1.6rem 1.5rem;
         border: 1px solid var(--line);
-        border-radius: 14px;
+        border-radius: 16px;
         background: #fff;
         text-align: left;
       }
-      .s6b-card .ico {
-        width: 44px;
-        height: 44px;
-        border-radius: 10px;
-        background: var(--bg-blue);
+      .s6b-card .crit {
+        font-size: 0.85rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
         color: var(--azure-blue);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex: 0 0 auto;
-      }
-      .s6b-card .ico svg {
-        width: 22px;
-        height: 22px;
       }
       .s6b-card h3 {
-        font-size: clamp(1rem, 1.1vw, 1.2rem);
-        font-weight: 700;
-        margin: 0 0 0.2rem;
+        font-size: clamp(1.25rem, 1.4vw, 1.55rem);
+        font-weight: 800;
+        margin: 0;
         color: var(--ink);
+        line-height: 1.2;
       }
       .s6b-card p {
-        font-size: clamp(0.85rem, 0.95vw, 1rem);
+        font-size: clamp(1rem, 1.05vw, 1.15rem);
         color: var(--ink-soft);
-        line-height: 1.45;
+        line-height: 1.5;
         margin: 0;
       }
       .s6b-punch {
-        margin-top: 1.6rem;
-        font-size: clamp(1.4rem, 2.2vw, 2rem);
+        margin-top: 2rem;
+        font-size: clamp(1.6rem, 2.4vw, 2.2rem);
         font-weight: 800;
         letter-spacing: -0.015em;
         color: var(--azure-blue-darker);
-        padding: 1.1rem 1.6rem;
+        padding: 1.4rem 1.8rem;
         background: var(--bg-blue);
         border-left: 5px solid var(--azure-blue);
         border-radius: 10px;
@@ -1748,6 +1819,16 @@
       body:has(.s7.active) .counter {
         color: rgba(255, 255, 255, 0.85);
       }
+      /* Fullscreen video slide: hide all overlay chrome */
+      body:has(.s-video.active) .corner-links,
+      body:has(.s-video.active) .progress,
+      body:has(.s-video.active) .counter,
+      body:has(.s-video.active) .nav,
+      body:has(.s-video.active) .nav-arrow,
+      body:has(.s-video.active) .dots,
+      body:has(.s-video.active) .hint {
+        display: none !important;
+      }
       .brand-mark {
         position: fixed;
         top: 1.4rem;
@@ -1846,16 +1927,14 @@
             alt="FinOps team grilled by leadership about cloud spending"
           />
           <blockquote>
-            "Why have we paid for 1,000+ Visual Studio Enterprise licenses for
-            truck drivers?"
+            "800 developer licenses for truck drivers?"
             <cite
-              >Global enterprise customer, 2025<br />$250/user/month · millions
-              wasted per year</cite
+              >Global enterprise customer, 2025<br />$250/user/month · $2.4M
+              wasted for a year</cite
             >
           </blockquote>
           <blockquote>
-            Novo Nordisk "needs to exercise greater discipline and prudence on
-            spending" — and will review the company's cost base.
+            Novo Nordisk "needs to exercise greater discipline on spending."
             <cite
               >Mike Doustdar, CEO, Novo Nordisk (<a
                 href="https://news.bloomberglaw.com/pharma-and-life-sciences/novo-nordisks-new-ceo-starts-hiring-freeze-in-cost-cutting-push"
@@ -1877,9 +1956,9 @@
               class="tagline anim d4"
               style="font-size: 1.85em; font-weight: 700; line-height: 1.25"
             >
-              <span>Visibility</span>
-              <span> · Agentic Remediation</span>
-              <span> · Clarity in minutes</span>
+              <span>Understand</span>
+              <span> · Forecast</span>
+              <span> · Optimize</span>
             </p>
           </div>
           <div
@@ -1987,49 +2066,6 @@
                   </p>
                 </div>
               </div>
-              <div class="pain-card" data-step data-img="4">
-                <div class="ico">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path
-                      d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"
-                    />
-                  </svg>
-                </div>
-                <div class="card-text">
-                  <h3>Portal hopping</h3>
-                  <p>Five tabs deep, same data, different views.</p>
-                </div>
-              </div>
-              <div class="pain-card" data-step data-img="3">
-                <div class="ico">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path
-                      d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72A2 2 0 0 1 22 16.92z"
-                    />
-                  </svg>
-                </div>
-                <div class="card-text">
-                  <h3>Chasing departments</h3>
-                  <p>
-                    Painful in large organizations where silos are hard to
-                    avoid.
-                  </p>
-                </div>
-              </div>
               <div class="pain-card" data-step data-img="5">
                 <div class="ico">
                   <svg
@@ -2075,64 +2111,132 @@
       <section class="slide s3 s3-centered">
         <div class="content">
           <h2 class="section-title anim d1">
-            Solution. FinOps <em>Agent</em>.
+            Solution. Azure FinOps <em>Agent</em>.
           </h2>
           <p class="section-lead anim d2">
-            One portal for the CFO and the FinOps team.
-            Every spend question becomes an Azure query.
+            Every spend question becomes an agentic operation.
           </p>
-          <div class="s3c-list">
-            <div class="s3c-row anim d3">
-              <span class="s3c-num">01</span>
-              <div class="s3c-text">
-                <h3>One portal. CFO and FinOps, same chat.</h3>
-                <p>Plain&#8209;English questions. No tabs, no KQL, no dashboards to build.</p>
+          <div class="s3-grid">
+            <div class="pain-card anim d3" data-step>
+              <div class="ico">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                </svg>
+              </div>
+              <div class="card-text">
+                <h3>Built for everyone &mdash; CFO to engineer.</h3>
+                <p>
+                  Plain&#8209;language questions about waste and spend
+                  translated into dozens of live Azure API calls.<br />
+                  Not a chatbot summarising PDFs or stale data.
+                </p>
               </div>
             </div>
-            <div class="s3c-row anim d4">
-              <span class="s3c-num">02</span>
-              <div class="s3c-text">
-                <h3>Questions become Azure queries &mdash; live.</h3>
-                <p>Translates intent into Cost Management, ARM, Graph and Log Analytics calls. Reads <em>your</em> tenant, not a stale report.</p>
+            <div class="pain-card anim d4" data-step>
+              <div class="ico">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <rect x="2" y="3" width="20" height="14" rx="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
+              </div>
+              <div class="card-text">
+                <h3>One&#8209;click CFO readout.</h3>
+                <p>
+                  Fresh numbers and forecast &mdash; ready to present in
+                  seconds.
+                </p>
               </div>
             </div>
-            <div class="s3c-row anim d5">
-              <span class="s3c-num">03</span>
-              <div class="s3c-text">
-                <h3>Reads. Reasons. Acts.</h3>
-                <p>Surfaces waste, applies tags, sets budgets and alerts &mdash; across subscriptions, while you talk to it.</p>
+            <div class="pain-card anim d5" data-step>
+              <div class="ico">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="12" cy="12" r="3" />
+                  <path
+                    d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"
+                  />
+                </svg>
+              </div>
+              <div class="card-text">
+                <h3>Agentic remediation.</h3>
+                <p>
+                  An agent that takes action. Applies tags, sets budgets &amp;
+                  alerts. Crawl &rarr; Walk &rarr; Run.
+                </p>
               </div>
             </div>
-            <div class="s3c-row anim d6">
-              <span class="s3c-num">04</span>
-              <div class="s3c-text">
-                <h3>Scores your FinOps maturity, 0&ndash;5.</h3>
-                <p>Crawl &rarr; Walk &rarr; Run, FinOps Framework aligned. Concrete next steps, not opinions.</p>
+            <div class="pain-card anim d6" data-step>
+              <div class="ico">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+              </div>
+              <div class="card-text">
+                <h3>Trust &amp; open source.</h3>
+                <p>
+                  Open source and free. Runs in the customer&rsquo;s tenant,
+                  with fully transparent tool calls &mdash; and
+                  <strong>never deletes</strong>, enforced in code.
+                </p>
               </div>
             </div>
-            <div class="s3c-row anim d7">
-              <span class="s3c-num">05</span>
-              <div class="s3c-text">
-                <h3>One&#8209;click executive deck.</h3>
-                <p>From chat to a CFO&#8209;ready HTML deck &mdash; charts, findings, actions &mdash; in seconds.</p>
-              </div>
-            </div>
-            <div class="s3c-row anim d8">
-              <span class="s3c-num">06</span>
-              <div class="s3c-text">
-                <h3>Trust by architecture.</h3>
-                <p>Runs in the customer&rsquo;s tenant. Customer&rsquo;s tokens. Every tool call visible. <strong>Never deletes</strong> &mdash; enforced in code.</p>
-              </div>
-            </div>
-          </div>
-          <div class="s3c-closer anim d9">
-            Microsoft&rsquo;s first <em>agentic</em> FinOps experience. Free. Open source. Ready Monday.
           </div>
         </div>
       </section>
 
-      <!-- ========== Slide 3.5: Bigger than FinOps ========== -->
-      <section class="slide s3half" style="background: #0a1733; color: #fff">
+      <!-- ========== Slide 4: Demo video (fullscreen, no chrome) ========== -->
+      <section
+        class="slide s-video"
+        style="background: #000; padding: 0; margin: 0; overflow: hidden"
+      >
+        <video
+          id="demoVideo"
+          src="/video1.mp4"
+          playsinline
+          preload="auto"
+          style="
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+            display: block;
+            pointer-events: none;
+          "
+        ></video>
+      </section>
+
+      <!-- ========== ARCHIVED (kept hidden for future use) ========== -->
+      <section class="slide-archived s3half-archived" style="display: none">
         <div class="content" style="text-align: center">
           <h2 class="section-title anim d1" style="color: #fff">
             Bigger than <em>FinOps</em>.
@@ -2239,8 +2343,8 @@
         </div>
       </section>
 
-      <!-- ========== Slide 4: Architecture ========== -->
-      <section class="slide s4">
+      <!-- ========== Slide 4: Architecture (HIDDEN — kept for future use; restore by changing class back to "slide s4") ========== -->
+      <section class="slide-archived s4" style="display: none">
         <div class="content">
           <div class="s4-header">
             <h2 class="section-title anim d1">How it <em>works</em>.</h2>
@@ -3345,8 +3449,8 @@
         </div>
       </section>
 
-      <!-- ========== Slide 5: FinOps Maturity ========== -->
-      <section class="slide s5">
+      <!-- ========== Slide 5: FinOps Maturity (HIDDEN) ========== -->
+      <section class="slide-archived s5" style="display: none">
         <div class="content">
           <h2 class="section-title anim d1">Start where <em>you are</em>.</h2>
           <p class="section-lead anim d2">
@@ -3387,8 +3491,8 @@
         </div>
       </section>
 
-      <!-- ========== Slide 5a: Demo video placeholder ========== -->
-      <section class="slide s5a">
+      <!-- ========== Slide 5a: Demo video placeholder (HIDDEN) ========== -->
+      <section class="slide-archived s5a" style="display: none">
         <div class="content">
           <h2 class="section-title anim d1">See it <em>live</em>.</h2>
           <p class="section-lead anim d2">
@@ -3446,8 +3550,8 @@
         </div>
       </section>
 
-      <!-- ========== Slide 5b: Proof ========== -->
-      <section class="slide s5b">
+      <!-- ========== Slide 5b: Proof (HIDDEN) ========== -->
+      <section class="slide-archived s5b" style="display: none">
         <div class="content">
           <h2 class="section-title anim d1">
             Tagging score: <em>0 → 5</em>. In minutes.
@@ -3495,58 +3599,34 @@
 
       <!-- ========== Slide 6: Security ========== -->
       <section class="slide s6">
-        <div class="content">
+        <div class="content" style="text-align: center">
           <h2 class="section-title anim d1">Trust by <em>design</em>.</h2>
           <p class="section-lead anim d2">
             Read &amp; write on your behalf. <strong>Never delete.</strong>
           </p>
-          <div class="sec-grid">
-            <div class="sec-panel ok anim d3">
-              <h3>Can</h3>
-              <ul>
-                <li>
-                  <span class="mark">✓</span
-                  ><span>Read all your cost &amp; ops data</span>
-                </li>
-                <li>
-                  <span class="mark">✓</span
-                  ><span>Write tags, budgets, alerts</span>
-                </li>
-                <li>
-                  <span class="mark">✓</span
-                  ><span>Generate scripts, or run them with your approval</span>
-                </li>
-                <li>
-                  <span class="mark">✓</span
-                  ><span>Build dashboards, charts, presentations</span>
-                </li>
-              </ul>
-            </div>
-            <div class="sec-panel no anim d4">
-              <h3>Cannot</h3>
-              <ul>
-                <li>
-                  <span class="mark">✗</span
-                  ><span>Delete any Azure resource. Ever.</span>
-                </li>
-                <li>
-                  <span class="mark">✗</span><span>Exceed your RBAC role</span>
-                </li>
-                <li>
-                  <span class="mark">✗</span
-                  ><span>Persist your data, always live, never stored</span>
-                </li>
-                <li>
-                  <span class="mark">✗</span
-                  ><span>Bypass Conditional Access</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-          <div class="sec-foot anim d5">
-            <strong>Your tenant. Your tokens. Your control.</strong>
-            Multi-tenant Entra ID with incremental, opt-in consent per data
-            source.
+          <div
+            class="sec-panel no anim d3"
+            style="
+              max-width: 900px;
+              margin: 2.5rem auto 0;
+              text-align: left;
+              padding: 3rem 3rem;
+            "
+          >
+            <ul>
+              <li>
+                <span class="mark">✗</span
+                ><span>Delete any Azure resource. Ever.</span>
+              </li>
+              <li>
+                <span class="mark">✗</span
+                ><span>Move your data outside your tenant</span>
+              </li>
+              <li>
+                <span class="mark">✗</span
+                ><span>Lock you in — no license, no hidden code</span>
+              </li>
+            </ul>
           </div>
         </div>
       </section>
@@ -3555,172 +3635,69 @@
       <section class="slide s6b">
         <div class="content">
           <h2 class="section-title anim d1">Why this <em>wins</em>.</h2>
-          <p class="section-lead anim d2">Real, working, ready.</p>
+          <p class="section-lead anim d2">Scored on the official rubric.</p>
           <div class="s6b-grid">
             <div class="s6b-card" data-step>
-              <div class="ico">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polyline points="16 18 22 12 16 6" />
-                  <polyline points="8 6 2 12 8 18" />
-                </svg>
-              </div>
-              <div>
-                <h3>Problem &amp; Value: part of every renewal</h3>
-                <p>
-                  CFOs are reviewing every cost line. Sellers walk in with this.
-                  Door-opener for the renewal conversation.
-                </p>
-              </div>
+              <div class="crit">Problem &amp; Value</div>
+              <h3>Opener for renewals &amp; AI Transformation</h3>
+              <p>
+                The reference customers point to when starting their AI
+                Transformation conversation.
+              </p>
             </div>
             <div class="s6b-card" data-step>
-              <div class="ico">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <circle cx="12" cy="12" r="3" />
-                  <path
-                    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
-                  />
-                </svg>
-              </div>
-              <div>
-                <h3>Impact: millions in recovered waste</h3>
-                <p>
-                  License sprawl, ghost reservations, decommissioned research
-                  projects, missing budget alerts — surfaced in minutes.
-                </p>
-              </div>
+              <div class="crit">Impact &amp; Outcomes</div>
+              <h3>
+                VBD Ready. Recover waste. Predictability. Sustainable business.
+              </h3>
+              <p>
+                Millions surfaced in minutes — before the CFO asks the hard
+                questions.
+              </p>
             </div>
             <div class="s6b-card" data-step>
-              <div class="ico">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              </div>
-              <div>
-                <h3>Responsible AI: transparent advisor</h3>
-                <p>
-                  Open source. Every prompt, tool call, and answer visible.
-                  Customer audits the agent, not the other way around.
-                </p>
-              </div>
+              <div class="crit">Innovation &amp; Creativity</div>
+              <h3>First agentic FinOps on Azure</h3>
+              <p>
+                Reasoning + orchestration across Cost, ARM, Graph, Log
+                Analytics.
+              </p>
             </div>
             <div class="s6b-card" data-step>
-              <div class="ico">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M9 12l2 2 4-4" />
-                </svg>
-              </div>
-              <div>
-                <h3>Feasibility: free, MIT, deploy in minutes</h3>
-                <p>
-                  Zero procurement friction. Every EMEA seller can hand it to a
-                  customer on Monday.
-                </p>
-              </div>
+              <div class="crit">User Experience</div>
+              <h3>Built on years of CSA FinOps know-how</h3>
+              <p>
+                Crawl-Walk-Run prompt templates, live charts, and exec decks.
+                Drag, drop, done.
+              </p>
             </div>
             <div class="s6b-card" data-step>
-              <div class="ico">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="17 8 12 3 7 8" />
-                  <line x1="12" y1="3" x2="12" y2="15" />
-                </svg>
-              </div>
-              <div>
-                <h3>UX: drag &amp; drop, no training</h3>
-                <p>
-                  CFO drops a CSV — agent reads it, scores maturity, generates
-                  the exec deck. No dashboards to learn.
-                </p>
-              </div>
+              <div class="crit">Feasibility &amp; Scalability</div>
+              <h3>Free, open source, every industry</h3>
+              <p>
+                Customer's tenant, customer's tokens. Works for any of 120+ EMEA
+                markets.
+              </p>
             </div>
             <div class="s6b-card" data-step>
-              <div class="ico">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                  <line x1="9" y1="9" x2="15" y2="15" />
-                  <line x1="15" y1="9" x2="9" y2="15" />
-                </svg>
-              </div>
-              <div>
-                <h3>Trusted AI: never deletes</h3>
-                <p>
-                  Enforced in code, not policy. Runs in the customer's tenant
-                  with their tokens. Safest agent in the room.
-                </p>
-              </div>
+              <div class="crit">Responsible &amp; Trusted AI</div>
+              <h3>Built by Microsoft. Open by design.</h3>
+              <p>
+                MIT license. Every prompt &amp; tool call visible. Never deletes
+                — enforced in code.
+              </p>
             </div>
             <div class="s6b-card" data-step>
-              <div class="ico">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path
-                    d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.01-.02-1.99-3.2.69-3.87-1.54-3.87-1.54-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.69 1.25 3.35.96.1-.74.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.97 10.97 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.74.81 1.18 1.84 1.18 3.1 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.13 0 1.54-.01 2.78-.01 3.16 0 .31.21.68.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"
-                    fill="currentColor"
-                    stroke="none"
-                  />
-                </svg>
-              </div>
-              <div>
-                <h3>Scalability: built by Microsoft, for Microsoft</h3>
-                <p>
-                  In Azure-Samples. Microsoft Agent Framework. +200 commits.
-                  Endorsed, vetted, ready for any of the 120+ EMEA markets.
-                </p>
-              </div>
+              <div class="crit">Clarity &amp; Proof</div>
+              <h3>Working code. Named pilots.</h3>
+              <p>
+                +200 commits. Live at azure-finops-agent.com. Maersk + Novo
+                Nordisk in flight.
+              </p>
             </div>
           </div>
           <div class="s6b-punch" data-step>
-            We can't sell trust. We can build it — in the open.
+            Bring it to your next renewal conversation — today.
           </div>
         </div>
       </section>
@@ -3921,6 +3898,18 @@
       const dotEls = dotsWrap.querySelectorAll(".dot-nav");
       const pad = (n) => String(n).padStart(2, "0");
 
+      // Demo video: when it ends, auto-advance to next slide
+      (function () {
+        const v = document.getElementById("demoVideo");
+        if (!v) return;
+        v.addEventListener("ended", () => {
+          if (current < total - 1) {
+            current++;
+            update();
+          }
+        });
+      })();
+
       function update() {
         slides.forEach((s, i) => {
           s.classList.remove("active", "prev");
@@ -3944,6 +3933,23 @@
         progressBar.style.width = ((current + 1) / total) * 100 + "%";
         // Update URL hash for deep linking
         history.replaceState(null, "", "#" + (current + 1));
+        // Demo video: autoplay on enter, reset+pause on leave
+        const demoVideo = document.getElementById("demoVideo");
+        if (demoVideo) {
+          const onVideoSlide =
+            slides[current] && slides[current].classList.contains("s-video");
+          if (onVideoSlide) {
+            try {
+              demoVideo.currentTime = 0;
+            } catch (_) {}
+            demoVideo.play().catch(() => {});
+          } else {
+            demoVideo.pause();
+            try {
+              demoVideo.currentTime = 0;
+            } catch (_) {}
+          }
+        }
       }
       // Reveal the next pending step inside the active slide; returns true if one was revealed.
       function revealNextStep() {
@@ -3978,6 +3984,24 @@
         return false;
       }
       const next = () => {
+        // Video slide: seek +20s instead of advancing; only advance past end
+        const activeSlide = slides[current];
+        if (activeSlide && activeSlide.classList.contains("s-video")) {
+          const v = document.getElementById("demoVideo");
+          if (
+            v &&
+            !v.ended &&
+            (v.duration ? v.currentTime < v.duration - 0.5 : true)
+          ) {
+            v.currentTime = Math.min(
+              (v.duration || v.currentTime + 20) - 0.01,
+              v.currentTime + 20,
+            );
+            if (v.paused) v.play().catch(() => {});
+            fadeHint();
+            return;
+          }
+        }
         if (revealNextStep()) {
           fadeHint();
           return;
@@ -4023,6 +4047,17 @@
         return true;
       }
       const prev = () => {
+        // Video slide: seek -20s instead of going back; only go back if at start
+        const activeSlide = slides[current];
+        if (activeSlide && activeSlide.classList.contains("s-video")) {
+          const v = document.getElementById("demoVideo");
+          if (v && v.currentTime > 0.5) {
+            v.currentTime = Math.max(0, v.currentTime - 20);
+            if (v.paused) v.play().catch(() => {});
+            fadeHint();
+            return;
+          }
+        }
         if (unrevealLastStep()) {
           fadeHint();
           return;

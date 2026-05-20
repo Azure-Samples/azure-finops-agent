@@ -22,7 +22,7 @@ public static class ChatEndpoints
         AiTelemetry telemetry,
         ILogger logger)
     {
-        app.MapPost("/api/chat", (Delegate)(async (HttpContext ctx, IHttpClientFactory httpFactory) =>
+        app.MapPost("/api/chat", async (HttpContext ctx, IHttpClientFactory httpFactory) =>
         {
             var userJson = ctx.Session.GetString("user");
             if (userJson is null)
@@ -182,7 +182,7 @@ public static class ChatEndpoints
                 await ctx.Response.WriteAsync("data: [DONE]\n\n");
                 await ctx.Response.Body.FlushAsync();
             }
-        }));
+        });
 
         app.MapPost("/api/chat/reset", async (HttpContext ctx) =>
         {

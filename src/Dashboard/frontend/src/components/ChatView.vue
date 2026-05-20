@@ -23,10 +23,6 @@
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <span class="portal-title">Azure FinOps Agent</span>
-      </div>
-      <div class="portal-trustline" aria-hidden="false">
-        <span class="portal-trustline-item">Built by Microsoft</span>
         <a
           class="portal-trustline-link"
           href="https://github.com/Azure-Samples/azure-finops-agent"
@@ -47,6 +43,28 @@
           </svg>
           <span>Open source</span>
         </a>
+      </div>
+      <!-- Build/branch badge in the top-right corner. Highlights non-main
+           (preview slot) deployments so it's obvious which build you're on. -->
+      <div
+        v-if="buildBranch && buildBranch !== 'main'"
+        class="portal-build-badge portal-build-badge--preview"
+        :title="`Branch ${buildBranch} · Build ${buildNumber} · ${buildSha}`"
+      >
+        <span class="portal-build-badge-branch">{{ buildBranch }}</span>
+        <span class="portal-build-badge-sep">·</span>
+        <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
+      </div>
+      <div
+        v-else-if="buildNumber && buildNumber !== '0'"
+        class="portal-build-badge"
+        :title="`Branch ${buildBranch || 'main'} · Build ${buildNumber} · ${buildSha}`"
+      >
+        <span class="portal-build-badge-branch">{{
+          buildBranch || "main"
+        }}</span>
+        <span class="portal-build-badge-sep">·</span>
+        <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
       </div>
       <!-- Hidden for Dragon's Den pitch — email + disconnect are already shown in the sidebar.
            Re-enable by removing v-if="false". -->
@@ -928,47 +946,43 @@
                   <div class="hero-card">
                     <div class="hero-card-title">Quantified savings</div>
                     <div class="hero-card-desc">
-                      Reservations, Savings Plans, Hybrid Benefit, rightsizing,
-                      idle &amp; orphaned — ranked by annual $ impact.
+                      Reservations. Savings Plans. Hybrid Benefit. Rightsizing.
+                      Idle &amp; orphaned — ranked by annual $ impact.
                     </div>
                   </div>
                   <div class="hero-card">
                     <div class="hero-card-title">Maturity score</div>
                     <div class="hero-card-desc">
-                      FinOps Foundation Crawl / Walk / Run, scored 0–5 per
-                      capability — the consultant assessment in a chat.
+                      FinOps Foundation Crawl / Walk / Run. Scored 0–5 per
+                      capability. The consultant assessment, in a chat.
                     </div>
                   </div>
                   <div class="hero-card">
-                    <div class="hero-card-title">Acts, not dashboards</div>
+                    <div class="hero-card-title">Agentic remediation</div>
                     <div class="hero-card-desc">
-                      Applies tags, sets budgets &amp; anomaly alerts, drafts
-                      cleanup scripts. Never deletes.
+                      Applies tags. Sets budgets. Drafts cleanup scripts. Never
+                      deletes.
                     </div>
                   </div>
                   <div class="hero-card">
-                    <div class="hero-card-title">
-                      Anomalies &amp; chargeback
-                    </div>
+                    <div class="hero-card-title">Spots cost spikes</div>
                     <div class="hero-card-desc">
-                      Catches cost spikes &amp; explains the why. Showback by
-                      tag, team, or business unit.
+                      Catches anomalies the moment they happen. Explains the
+                      why. Tells you who to bill.
                     </div>
                   </div>
                   <div class="hero-card">
-                    <div class="hero-card-title">
-                      M365 license &amp; Copilot ROI
-                    </div>
+                    <div class="hero-card-title">License &amp; Copilot ROI</div>
                     <div class="hero-card-desc">
-                      Microsoft Graph surfaces unused licenses, Copilot seat
-                      usage, SKU mismatch — beyond Cost Management.
+                      Microsoft Graph surfaces unused M365 licenses, idle
+                      Copilot seats, SKU mismatches — savings other tools miss.
                     </div>
                   </div>
                   <div class="hero-card">
                     <div class="hero-card-title">CFO-ready decks</div>
                     <div class="hero-card-desc">
-                      20+ inline charts plus a one-click branded HTML
-                      presentation — walk in with the deck already built.
+                      20+ inline charts. One-click branded HTML deck. Walk in
+                      with the presentation already built.
                     </div>
                   </div>
                 </div>
@@ -1137,7 +1151,14 @@
                     >
                       {{ msg.script.description }}
                     </div>
+                    <button
+                      class="script-toggle-btn"
+                      @click="msg.script.expanded = !msg.script.expanded"
+                    >
+                      {{ msg.script.expanded ? "Hide script" : "View script" }}
+                    </button>
                     <pre
+                      v-if="msg.script.expanded"
                       class="script-code"
                     ><code>{{ msg.script.content }}</code></pre>
                   </div>
@@ -1680,9 +1701,6 @@
         </div>
       </div>
     </Teleport>
-
-    <!-- Build badge -->
-    <div class="build-badge">B{{ buildNumber }}</div>
   </div>
 </template>
 
@@ -1973,6 +1991,7 @@ function toggleSection(key) {
 }
 const buildSha = ref("");
 const buildNumber = ref("0");
+const buildBranch = ref("");
 const sidebarOpen = ref(
   typeof window !== "undefined" ? window.innerWidth > 768 : true,
 );
@@ -2286,6 +2305,7 @@ onMounted(async () => {
       const v = await r.json();
       buildSha.value = v.sha || "";
       buildNumber.value = v.build || "0";
+      buildBranch.value = v.branch || "";
     }
   } catch {}
   // Fetch available models and Azure status in parallel
@@ -3904,7 +3924,7 @@ async function requestAnalyze() {
 
 function requestPresentation() {
   input.value =
-    "Build a leadership-ready HTML presentation from our conversation. Frame it for executive stakeholders: if the findings are healthy, position it as a FinOps maturity & wins story; if there are issues, position it as a prioritized action plan. Maximum 4 slides. Use the data we've already discussed, and generate it now — no need to ask me first.";
+    "Build a 6-slide deck for my FinOps team: where we're wasting money and the fixes the agent will run for us.";
   send();
 }
 
@@ -3984,6 +4004,19 @@ async function send() {
             break;
 
           case "tool_start":
+            // If we already streamed text BEFORE this tool call, that text was
+            // mid-turn narration ("I'm rerunning…", "I've got the estate shape…")
+            // — not the final answer. Wipe it; the real answer streams after the
+            // last tool completes.
+            if (hasDeltas) {
+              if (textAnimFrame) {
+                cancelAnimationFrame(textAnimFrame);
+                textAnimFrame = null;
+              }
+              pendingText = "";
+              streamBuffer.value = "";
+              hasDeltas = false;
+            }
             activeTools.value = [...activeTools.value, data.tool];
             toolCalls.push({
               id: data.id,
@@ -4075,6 +4108,7 @@ async function send() {
               language: data.language,
               description: data.description,
               content: data.content,
+              expanded: false,
             };
             scrollToBottom();
             break;
@@ -4249,6 +4283,7 @@ async function send() {
   padding: 0 12px;
   flex-shrink: 0;
   z-index: 100;
+  position: relative;
 }
 .portal-trustline {
   display: inline-flex;
@@ -4349,6 +4384,34 @@ async function send() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.portal-build-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  white-space: nowrap;
+}
+.portal-build-badge--preview {
+  background: #ffb900;
+  color: #1f1f1f;
+}
+.portal-build-badge-sep {
+  opacity: 0.6;
+}
+.portal-build-badge-branch {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-transform: lowercase;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .portal-header-email {
   font-size: 14px;
@@ -4567,15 +4630,17 @@ async function send() {
   background: #fff;
   cursor: pointer;
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease,
-    transform 0.1s ease;
+    border-color 0.2s ease,
+    box-shadow 0.25s ease,
+    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
   user-select: none;
 }
 .maturity-card:hover:not(.maturity-card--disabled) {
-  border-color: #c8c6c4;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
-  transform: translateY(-1px);
+  border-color: #0078d4;
+  box-shadow:
+    0 8px 20px rgba(0, 120, 212, 0.18),
+    0 2px 6px rgba(15, 23, 42, 0.08);
+  transform: translateY(-3px);
 }
 .maturity-card:focus-visible {
   outline: 2px solid #c8c6c4;
@@ -7059,22 +7124,6 @@ async function send() {
   outline: none;
 }
 
-/* ── Build badge ── */
-.build-badge {
-  position: fixed;
-  bottom: 12px;
-  right: 16px;
-  font-size: 14px;
-  font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
-  color: #605e5c;
-  background: #f3f2f1;
-  padding: 2px 8px;
-  border-radius: 4px;
-  pointer-events: none;
-  z-index: 1000;
-  font-weight: 600;
-}
-
 /* ── HTML deck — compact download card ── */
 .html-deck-card {
   margin-top: 12px;
@@ -7231,6 +7280,23 @@ async function send() {
   background: #f9f9f9;
   border-bottom: 1px solid #e1dfdd;
 }
+.script-toggle-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  background: #f3f2f1;
+  color: #323130;
+  border: none;
+  border-bottom: 1px solid #e1dfdd;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+.script-toggle-btn:hover {
+  background: #edebe9;
+}
 .script-code {
   margin: 0;
   padding: 12px 14px;
@@ -7257,20 +7323,28 @@ async function send() {
   margin-top: 12px;
 }
 .follow-up-btn {
-  background: #deecf9;
+  background: #fff;
   color: #0078d4;
-  border: 1px solid rgba(0, 120, 212, 0.3);
-  border-radius: 4px;
-  padding: 6px 14px;
+  border: 1px solid #e1dfdd;
+  border-radius: 8px;
+  padding: 8px 14px;
   font-size: 13px;
   cursor: pointer;
-  transition: background 0.15s;
   line-height: 1.4;
   text-align: left;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.25s ease,
+    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .follow-up-btn:hover {
-  background: #c7e0f4;
+  background: #fff;
   border-color: #0078d4;
+  box-shadow:
+    0 8px 20px rgba(0, 120, 212, 0.18),
+    0 2px 6px rgba(15, 23, 42, 0.08);
+  transform: translateY(-3px);
 }
 
 /* ── Mobile ── */
@@ -7389,9 +7463,6 @@ async function send() {
     display: none;
   }
   .tool-popover {
-    display: none;
-  }
-  .build-badge {
     display: none;
   }
   .portal-user-text {

@@ -14,6 +14,19 @@ This project has adopted the [Microsoft Open Source Code of Conduct](https://ope
 4. Push to the branch (`git push origin feature/my-feature`).
 5. Open a Pull Request.
 
+## Branch Naming Convention
+
+New branches must use one of two prefixes (kept simple on purpose):
+
+| Prefix | Use |
+|---|---|
+| `feature/<short-desc>` | new functionality, refactor, docs, chore |
+| `bug/<short-desc>` | bug fix or hotfix |
+
+Pushing to any non-`main` branch deploys it to the test slot at
+<https://finops-agent-container-test.azurewebsites.net> via `feature.yml`.
+The branch name is shown in the top-right badge of the running app.
+
 ## Development Setup
 
 ### Prerequisites
