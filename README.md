@@ -60,6 +60,10 @@ Override defaults via `azd env set` before running `azd up`:
 
 Tear down with `azd down --purge` (purge is required because Cognitive Services soft-deletes by default).
 
+### Required permissions
+
+`azd up` needs rights on the Azure subscription **and** the Microsoft Entra tenant. The easiest combination is **Owner** on the subscription plus the ability to **create app registrations** in the tenant. For the least-privilege breakdown (Contributor + User Access Administrator, Application Administrator role, resource providers, quota), see [docs/azd-up-permissions.md](docs/azd-up-permissions.md).
+
 ## Running Locally
 
 ### Prerequisites
