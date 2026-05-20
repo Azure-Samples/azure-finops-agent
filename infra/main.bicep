@@ -18,14 +18,14 @@ param aoaiLocation string = 'swedencentral'
 @description('App Service Plan SKU. B1 (~$13/mo) is the recommended evaluation default; P0V3 matches production.')
 param appServicePlanSku string = 'B1'
 
-@description('Azure OpenAI model name to deploy (must be available in `aoaiLocation`).')
-param aoaiModelName string = 'gpt-4o'
+@description('Azure OpenAI model name to deploy (must be available in `aoaiLocation`). The agent requires a reasoning model — `ReasoningEffort=xhigh` is set in code (see CopilotSessionFactory.cs). gpt-4o / gpt-4 will not work.')
+param aoaiModelName string = 'gpt-5.4'
 
 @description('Azure OpenAI model version (use the latest GA version for the chosen model).')
-param aoaiModelVersion string = '2024-11-20'
+param aoaiModelVersion string = '2025-08-07'
 
 @description('Azure OpenAI deployment name surfaced as `AzureOpenAI__DeploymentName` to the app.')
-param aoaiDeploymentName string = 'gpt-4o'
+param aoaiDeploymentName string = 'gpt-5.4'
 
 @description('Azure OpenAI model deployment capacity (TPM in thousands).')
 param aoaiModelCapacity int = 30

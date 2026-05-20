@@ -15,13 +15,13 @@
       "value": "${APP_SERVICE_PLAN_SKU=B1}"
     },
     "aoaiModelName": {
-      "value": "${AZURE_OPENAI_MODEL_NAME=gpt-4o}"
+      "value": "${AZURE_OPENAI_MODEL_NAME=gpt-5.4}"
     },
     "aoaiModelVersion": {
-      "value": "${AZURE_OPENAI_MODEL_VERSION=2024-11-20}"
+      "value": "${AZURE_OPENAI_MODEL_VERSION=2025-08-07}"
     },
     "aoaiDeploymentName": {
-      "value": "${AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o}"
+      "value": "${AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.4}"
     },
     "aoaiModelCapacity": {
       "value": "${AZURE_OPENAI_MODEL_CAPACITY=30}"

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "17194863635066490569"
+      "templateHash": "11102783782836268633"
     }
   },
   "parameters": {
@@ -52,21 +52,21 @@
     },
     "aoaiModelName": {
       "type": "string",
-      "defaultValue": "gpt-4o",
+      "defaultValue": "gpt-5.4",
       "metadata": {
-        "description": "Azure OpenAI model name to deploy (must be available in `aoaiLocation`)."
+        "description": "Azure OpenAI model name to deploy (must be available in `aoaiLocation`). The agent requires a reasoning model — `ReasoningEffort=xhigh` is set in code (see CopilotSessionFactory.cs). gpt-4o / gpt-4 will not work."
       }
     },
     "aoaiModelVersion": {
       "type": "string",
-      "defaultValue": "2024-11-20",
+      "defaultValue": "2025-08-07",
       "metadata": {
         "description": "Azure OpenAI model version (use the latest GA version for the chosen model)."
       }
     },
     "aoaiDeploymentName": {
       "type": "string",
-      "defaultValue": "gpt-4o",
+      "defaultValue": "gpt-5.4",
       "metadata": {
         "description": "Azure OpenAI deployment name surfaced as `AzureOpenAI__DeploymentName` to the app."
       }
@@ -180,7 +180,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "8223718829157142936"
+              "templateHash": "18137422051515054256"
             }
           },
           "parameters": {
@@ -435,7 +435,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.41.2.15936",
-                      "templateHash": "12521571430439399703"
+                      "templateHash": "11187525182242144731"
                     }
                   },
                   "parameters": {
@@ -489,7 +489,7 @@
                       "properties": {
                         "customSubDomainName": "[format('aoai-finops-{0}', parameters('resourceToken'))]",
                         "publicNetworkAccess": "Enabled",
-                        "disableLocalAuth": false
+                        "disableLocalAuth": true
                       }
                     },
                     {

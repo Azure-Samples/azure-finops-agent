@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "8223718829157142936"
+      "templateHash": "18137422051515054256"
     }
   },
   "parameters": {
@@ -260,7 +260,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "12521571430439399703"
+              "templateHash": "11187525182242144731"
             }
           },
           "parameters": {
@@ -314,7 +314,7 @@
               "properties": {
                 "customSubDomainName": "[format('aoai-finops-{0}', parameters('resourceToken'))]",
                 "publicNetworkAccess": "Enabled",
-                "disableLocalAuth": false
+                "disableLocalAuth": true
               }
             },
             {

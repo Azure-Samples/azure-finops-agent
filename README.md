@@ -33,7 +33,7 @@ Vue 3 SPA → .NET 10 minimal API → GitHub Copilot SDK → Azure read APIs (Co
 One command provisions and deploys everything into your own subscription:
 
 ```powershell
-az login                          # sign into the target tenant
+az login --tenant <id>                          # sign into the target tenant
 az account set --subscription <id>
 azd auth login                    # sign into azd (same tenant)
 azd up                            # provision + build image + deploy
@@ -53,10 +53,10 @@ Override defaults via `azd env set` before running `azd up`:
 | `AZURE_LOCATION` | _(prompted)_ | Region for the resource group and most resources |
 | `AZURE_OPENAI_LOCATION` | `swedencentral` | AOAI region (model availability is region-restricted) |
 | `APP_SERVICE_PLAN_SKU` | `B1` | Use `P0V3` for production-grade (~$77/mo vs ~$13/mo) |
-| `AZURE_OPENAI_MODEL_NAME` / `_VERSION` | `gpt-4o` / `2024-11-20` | Must be available in `AZURE_OPENAI_LOCATION` |
-| `AZURE_OPENAI_DEPLOYMENT_NAME` | `gpt-4o` | Surfaced as `AzureOpenAI__DeploymentName` to the app |
+| `AZURE_OPENAI_MODEL_NAME` / `_VERSION` | `gpt-5.4` / `2025-08-07` | **Reasoning model required** — the agent sets `ReasoningEffort=xhigh` in code. gpt-4o / gpt-4 will not work. |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | `gpt-5.4` | Surfaced as `AzureOpenAI__DeploymentName` to the app |
 | `EXISTING_AOAI_RESOURCE_ID` | _(empty)_ | Full resource ID to reuse an existing AOAI account instead of creating one |
-| `AZURE_ENTRA_APP_ID` / `_CLIENT_SECRET` | _(empty)_ | Reuse an existing Entra app instead of creating one |
+| `AZURE_ENTRA_APP_ID` / `AZURE_ENTRA_CLIENT_SECRET` | _(empty)_ | Reuse an existing Entra app instead of creating one |
 
 Tear down with `azd down --purge` (purge is required because Cognitive Services soft-deletes by default).
 

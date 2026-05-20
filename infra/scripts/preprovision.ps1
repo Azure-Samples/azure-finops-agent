@@ -34,9 +34,32 @@ if ($signedInUser) {
 # ── 2. Entra app registration ──
 $envValues = azd env get-values | ConvertFrom-StringData
 $existingAppId = $envValues['AZURE_ENTRA_APP_ID']
+$existingSecret = $envValues['AZURE_ENTRA_CLIENT_SECRET']
 
 if ($existingAppId -and $existingAppId.Trim('"').Length -gt 0) {
-    Write-Host "  Reusing existing Entra app: $($existingAppId.Trim('"'))" -ForegroundColor Green
+    $appId = $existingAppId.Trim('"')
+    $secret = if ($existingSecret) { $existingSecret.Trim('"') } else { '' }
+
+    # Validate the secret is also provided — Bicep would otherwise pass an empty
+    # string into Microsoft__ClientSecret and OAuth would silently fall back to
+    # anonymous mode at runtime.
+    if ([string]::IsNullOrWhiteSpace($secret)) {
+        Write-Host "  AZURE_ENTRA_APP_ID is set but AZURE_ENTRA_CLIENT_SECRET is missing." -ForegroundColor Red
+        Write-Host "  Run: azd env set AZURE_ENTRA_CLIENT_SECRET '<your-app-secret>'" -ForegroundColor Yellow
+        exit 1
+    }
+
+    # Verify the app actually exists in this tenant and capture its objectId so
+    # postprovision.ps1 can patch the App Service hostname into the redirect URIs.
+    Write-Host "  Reusing existing Entra app: $appId" -ForegroundColor Green
+    $existingObjectId = az ad app show --id $appId --query id -o tsv 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $existingObjectId) {
+        Write-Host "  App registration $appId not found in tenant $($account.tenantId)." -ForegroundColor Red
+        Write-Host "  Either fix AZURE_ENTRA_APP_ID or unset it (azd env set AZURE_ENTRA_APP_ID '') to create a new one." -ForegroundColor Yellow
+        exit 1
+    }
+    azd env set AZURE_ENTRA_OBJECT_ID $existingObjectId | Out-Null
+    Write-Host "  Object ID:  $existingObjectId (cached for postprovision redirect-URI patch)" -ForegroundColor Gray
 } else {
     Write-Host "  Creating Entra ID app registration (multi-tenant, 5 consent tiers)..." -ForegroundColor Yellow
 
