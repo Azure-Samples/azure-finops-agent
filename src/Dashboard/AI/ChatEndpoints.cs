@@ -473,7 +473,8 @@ public static class ChatEndpoints
                     await ctx.Response.WriteAsync($"data: {donePayload}\n\n");
                     await ctx.Response.Body.FlushAsync();
                 }
-                catch { }
+                catch (OperationCanceledException) { }
+                catch (ObjectDisposedException) { }
             }
             catch (Exception ex)
             {
