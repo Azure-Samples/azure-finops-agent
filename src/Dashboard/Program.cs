@@ -281,7 +281,7 @@ app.Use(async (ctx, next) =>
                     id = record.UserId,
                     login = $"user-{record.UserId & 0xFFFF:X4}",
                     name = record.Name,
-                    avatar = (string?)null,
+                    avatar = null,
                     email = record.Email,
                 }));
             }
