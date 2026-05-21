@@ -433,7 +433,12 @@ public static class ChatEndpoints
                                     telemetry.SaveTitle(bgSessionId, generated);
                                 return generated;
                             }
-                            catch (Exception bgEx)
+                            catch (OperationCanceledException bgEx)
+                            {
+                                logger.LogWarning(bgEx, "Background title generation timed out or was canceled for session {Sid}", bgSessionId);
+                                return null;
+                            }
+                            catch (InvalidOperationException bgEx)
                             {
                                 logger.LogWarning(bgEx, "Background title generation failed for session {Sid}", bgSessionId);
                                 return null;
