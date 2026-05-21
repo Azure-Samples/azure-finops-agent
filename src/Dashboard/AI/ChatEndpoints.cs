@@ -282,7 +282,18 @@ public static class ChatEndpoints
                             logger.LogInformation("timing phase=sdk.first_event ms={Ms:F0} user={User}", firstMs, userLogin);
                             await SafeEmit(JsonSerializer.Serialize(new { type = "timing", phase = "sdk.first_event", ms = Math.Round(firstMs, 1), extra = new { evt = evt.GetType().Name } }));
                         }
-                        catch { }
+                        catch (OperationCanceledException)
+                        {
+                            logger.LogDebug("First-event timing emit canceled for user={User}", userLogin);
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            logger.LogDebug("First-event timing emit skipped because stream was disposed for user={User}", userLogin);
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            logger.LogDebug("First-event timing emit skipped due to invalid stream state for user={User}", userLogin);
+                        }
                     }
                     try
                     {
