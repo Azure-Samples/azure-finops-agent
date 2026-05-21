@@ -118,7 +118,10 @@ public static class ChatEndpoints
                 {
                     var sw = Stopwatch.StartNew();
                     try { var v = await fn(); sw.Stop(); return (name, v, sw.Elapsed.TotalMilliseconds, null); }
-                    catch (Exception ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
+                    catch (OperationCanceledException) { sw.Stop(); throw; }
+                    catch (HttpRequestException ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
+                    catch (UnauthorizedAccessException ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
+                    catch (InvalidOperationException ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
                 }
                 var fetchSw = Stopwatch.StartNew();
                 var results = await Task.WhenAll(
