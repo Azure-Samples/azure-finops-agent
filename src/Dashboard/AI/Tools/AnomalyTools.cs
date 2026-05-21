@@ -113,7 +113,7 @@ After calling, drill into each anomalous date with QueryAzure (Cost Mgmt /query 
             // writers, and these drilldowns run in parallel. Each call still
             // gets its own ActivitySource span inside HttpHelper.
             try { return (c, Breakdown: (object)await GetBreakdownForDay(token, subscriptionId, c.Date, groupBy, activity: null)); }
-            catch (Exception ex) { return (c, Breakdown: (object)new { error = ex.Message }); }
+            catch (Exception ex) { return (c, Breakdown: new { error = ex.Message }); }
         }).ToArray();
         var drilldowns = await Task.WhenAll(drilldownTasks);
         var anomalies = drilldowns.Select(d => (object)new
