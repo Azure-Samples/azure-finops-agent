@@ -257,7 +257,7 @@ public static class ChatEndpoints
                 // SSE write lock + emit helper — declared up here so the
                 // session.On callback below can use SafeEmit for the
                 // sdk.first_event timing ping.
-                var sseLock = new SemaphoreSlim(1, 1);
+                using var sseLock = new SemaphoreSlim(1, 1);
                 async Task SafeEmit(string sseData)
                 {
                     await sseLock.WaitAsync();
