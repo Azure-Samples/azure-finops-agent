@@ -11,12 +11,10 @@ namespace AzureFinOps.Dashboard.Infrastructure;
 /// </summary>
 public static class HttpHelper
 {
-    // SocketsHttpHandler with PooledConnectionLifetime so a process running for weeks on App
-    // Service eventually picks up DNS changes (the classic long-lived static HttpClient footgun).
-    private static readonly HttpClient Http = new(new SocketsHttpHandler
-    {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
-    })
+    // Shared IPv4-only SocketsHttpHandler (see Ipv4HttpHandler.cs). Corp egress
+    // drops IPv6 SYNs and the OS only gives up after ~21 s; forcing IPv4 here
+    // matches the factory defaults wired up in Program.cs.
+    private static readonly HttpClient Http = new(Ipv4HttpHandler.Create())
     { Timeout = TimeSpan.FromSeconds(60) };
 
     public static readonly ActivitySource Telemetry = new("AzureFinOps.AI");
@@ -24,13 +22,29 @@ public static class HttpHelper
     private static readonly Meter Meter = new("AzureFinOps.AI");
     private static readonly Counter<long> ThrottleRetries =
         Meter.CreateCounter<long>("finops.throttle.retries", description: "HTTP retries triggered by 429 or transient 5xx");
+    // Time the caller actually spent waiting on backoff (sum of Task.Delay
+    // across all retry attempts on a single call). Distinct from request
+    // latency — this is pure throttle penalty.
+    private static readonly Histogram<double> RetryWaitMs =
+        Meter.CreateHistogram<double>("finops.http.retry_wait_ms", "ms", "Cumulative backoff wait per HTTP call");
+    private static readonly Histogram<double> RequestTotalMs =
+        Meter.CreateHistogram<double>("finops.http.request_total_ms", "ms", "Total time per HTTP call including retries");
+
+    /// <summary>Optional logger plumbed from Program.cs so retries surface in
+    /// the console / Application Insights traces instead of being silently
+    /// counted. Null when running outside the host (tests).</summary>
+    public static ILogger? Logger { get; set; }
 
     /// <summary>
-    /// Per-request hook for reporting 429 retries to the SSE stream. Set by ChatEndpoints
-    /// before <c>session.SendAsync</c>; flows through AsyncLocal into every tool invocation
-    /// on the same async context. Null in background workers / tests — calls become no-ops.
+    /// Per-turn hook for reporting 429/5xx retries to the SSE stream. Keyed by
+    /// <c>userId:sessionId</c> (the "turn id") so it survives the JSON-RPC tool-callback
+    /// boundary from the Copilot CLI (where AsyncLocal does NOT flow), AND so concurrent
+    /// turns from the same user (two tabs, sidebar score racing chat) don't clobber each
+    /// other's reporter. ChatEndpoints stamps the turn id into Activity Baggage as
+    /// <c>finops.turn.id</c>; tools look it up via the current activity's baggage.
+    /// Null lookup = no-op. Signature: (attemptNumber, waitSeconds, url, telemetryPrefix, statusCode).
     /// </summary>
-    public static readonly AsyncLocal<Func<int, double, Task>?> RetryReporter = new();
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Func<int, double, string, string, int, Task>> RetryReporters = new();
 
     // Max retry attempts on HTTP 429. After this many failed attempts the throttled
     // response is returned to the caller so the LLM (or user) sees the throttle status.
@@ -61,6 +75,9 @@ public static class HttpHelper
     {
         method ??= HttpMethod.Get;
 
+        var totalSw = Stopwatch.StartNew();
+        var totalWaitSec = 0.0;
+        var retryCount = 0;
         HttpResponseMessage res = null!;
         for (var attempt = 0; attempt < MaxThrottleRetries; attempt++)
         {
@@ -86,19 +103,51 @@ public static class HttpHelper
             if (attempt == MaxThrottleRetries - 1) break; // last attempt — return as-is to caller
 
             var waitSeconds = ResolveRetryAfterSeconds(res, attempt);
+            totalWaitSec += waitSeconds;
+            retryCount++;
             var reason = isThrottle ? "429" : status.ToString();
             activity?.SetTag($"{telemetryPrefix}.retry_{attempt}", $"{reason}, waiting {waitSeconds:F0}s");
             ThrottleRetries.Add(1,
                 new KeyValuePair<string, object?>("status", reason),
                 new KeyValuePair<string, object?>("tool", telemetryPrefix));
-            if (RetryReporter.Value is { } report)
+            // Loud log so silent throttling can never hide a 60-second wait
+            // again. Prefix matches the tool/scope tag in App Insights.
+            Logger?.LogWarning("HTTP retry {Tool} attempt={Attempt} status={Status} waitSec={Wait:F1} url={Url}",
+                telemetryPrefix, attempt + 1, reason, waitSeconds, url);
+            // Look up the SSE reporter via Activity Baggage — baggage
+            // propagates across W3C tracecontext boundaries (including the
+            // Copilot CLI subprocess JSON-RPC tool callback) where RootId
+            // does not. ChatEndpoints stamps "finops.turn.id" (userId:sessionId)
+            // on the chat activity before SendAsync.
+            var turnKey = Activity.Current?.GetBaggageItem("finops.turn.id");
+            if (turnKey is not null && RetryReporters.TryGetValue(turnKey, out var report))
             {
-                try { await report(attempt + 1, waitSeconds); } catch { /* UI hook is best-effort */ }
+                try { await report(attempt + 1, waitSeconds, url, telemetryPrefix, status); }
+                catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE cooling_down emit failed for {Tool}", telemetryPrefix); }
+            }
+            else
+            {
+                Logger?.LogWarning("SSE cooling_down skipped — no reporter for turn={Turn} (tool={Tool})",
+                    turnKey ?? "<none>", telemetryPrefix);
             }
             await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
         }
 
         var responseBody = await res.Content.ReadAsStringAsync();
+        totalSw.Stop();
+
+        RequestTotalMs.Record(totalSw.Elapsed.TotalMilliseconds,
+            new KeyValuePair<string, object?>("tool", telemetryPrefix),
+            new KeyValuePair<string, object?>("status", (int)res.StatusCode));
+        if (retryCount > 0)
+        {
+            RetryWaitMs.Record(totalWaitSec * 1000.0,
+                new KeyValuePair<string, object?>("tool", telemetryPrefix));
+            Logger?.LogWarning("HTTP retried {Tool} retries={Retries} totalWaitSec={Wait:F1} totalMs={Total:F0} url={Url}",
+                telemetryPrefix, retryCount, totalWaitSec, totalSw.Elapsed.TotalMilliseconds, url);
+            activity?.SetTag($"{telemetryPrefix}.total_retries", retryCount);
+            activity?.SetTag($"{telemetryPrefix}.total_wait_sec", totalWaitSec);
+        }
 
         activity?.SetTag($"{telemetryPrefix}.status_code", (int)res.StatusCode);
         activity?.SetTag($"{telemetryPrefix}.response_length", responseBody.Length);

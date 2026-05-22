@@ -89,10 +89,16 @@ Common queries:
                           ?? Math.Min(Math.Pow(2, attempt + 1) + Random.Shared.NextDouble(), 30);
             var waitSeconds = Math.Max(1, retryAfter);
             activity?.SetTag($"pricing.retry_{attempt}", $"{(int)res.StatusCode}, waiting {waitSeconds:F0}s");
-            // Surface the cool-down to the chat UI on the same SSE channel HttpHelper uses.
-            if (HttpHelper.RetryReporter.Value is { } report)
+            // Surface the cool-down to the chat UI via the same baggage-keyed SSE channel HttpHelper uses.
+            var turnKey = System.Diagnostics.Activity.Current?.GetBaggageItem("finops.turn.id");
+            if (turnKey is not null && HttpHelper.RetryReporters.TryGetValue(turnKey, out var report))
             {
-                try { await report(attempt + 1, waitSeconds); } catch { /* best-effort */ }
+                try { await report(attempt + 1, waitSeconds, url, "pricing", (int)res.StatusCode); }
+                catch (Exception emitEx)
+                {
+                    HttpHelper.Logger?.LogWarning(emitEx,
+                        "SSE cooling_down emit failed for pricing attempt={Attempt}", attempt + 1);
+                }
             }
             await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
         }

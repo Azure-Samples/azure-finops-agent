@@ -25,6 +25,55 @@ public static class AzureSessionEndpoints
             var azureUserJson = ctx.Session.GetString("azure_user");
             object? azureUser = azureUserJson is not null ? JsonSerializer.Deserialize<JsonElement>(azureUserJson) : null;
 
+            // Last-resort fallback: if azure_user wasn't populated by the OAuth
+            // callback or the persistent-identity middleware, decode the JWT
+            // access-token claims directly. Guarantees the sidebar always
+            // shows the signed-in email when a valid token exists.
+            // SECURITY NOTE: we deliberately do NOT verify the JWT signature here.
+            // This path runs AFTER the same `token` has already been used
+            // successfully upstream (the caller fetched it via OAuth refresh and
+            // is about to call ARM with it). The Bearer call to management.azure.com
+            // below would fail with 401 if the token were forged, so an attacker
+            // can't get a spoofed identity past the sidebar. We're just reading
+            // claims for display.
+            if (azureUser is null)
+            {
+                try
+                {
+                    var parts = token.Split('.');
+                    if (parts.Length >= 2)
+                    {
+                        var payload = parts[1].Replace('-', '+').Replace('_', '/');
+                        switch (payload.Length % 4) { case 2: payload += "=="; break; case 3: payload += "="; break; }
+                        var claims = JsonSerializer.Deserialize<JsonElement>(Convert.FromBase64String(payload));
+                        string? upn = null, name = null, oid = null, tid = null;
+                        if (claims.TryGetProperty("upn", out var u)) upn = u.GetString();
+                        else if (claims.TryGetProperty("preferred_username", out var pu)) upn = pu.GetString();
+                        else if (claims.TryGetProperty("unique_name", out var un)) upn = un.GetString();
+                        if (claims.TryGetProperty("name", out var n)) name = n.GetString();
+                        if (claims.TryGetProperty("oid", out var o)) oid = o.GetString();
+                        if (claims.TryGetProperty("tid", out var t)) tid = t.GetString();
+                        if (upn is not null || name is not null)
+                        {
+                            var derived = new Dictionary<string, string?>
+                            {
+                                ["tenantId"] = tid,
+                                ["objectId"] = oid,
+                                ["name"] = name,
+                                ["email"] = upn,
+                            };
+                            azureUser = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(derived));
+                            // Persist so subsequent /status calls don't re-decode.
+                            ctx.Session.SetString("azure_user", JsonSerializer.Serialize(derived));
+                        }
+                    }
+                }
+                catch (Exception jwtEx)
+                {
+                    logger.LogWarning(jwtEx, "Failed to decode Azure access-token claims for /status fallback");
+                }
+            }
+
             var http = httpFactory.CreateClient();
             var subscriptions = new List<object>();
             try

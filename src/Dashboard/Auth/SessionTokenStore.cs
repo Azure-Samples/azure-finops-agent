@@ -29,28 +29,88 @@ public sealed class SessionTokenStore
         HttpClient http, string refreshToken, string scope, string? tenantOverride = null)
     {
         var effectiveTenant = tenantOverride ?? _options.TenantId;
-        using var req = new HttpRequestMessage(HttpMethod.Post,
-            $"https://login.microsoftonline.com/{Uri.EscapeDataString(effectiveTenant)}/oauth2/v2.0/token");
-        var form = new Dictionary<string, string>
+        // Up to 2 retries on transient TCP/HTTP timeouts (corporate proxy
+        // dropping SYN on cold connections is the #1 cause of token-fetch
+        // hangs). Connect timeout itself is 5 s via the named client's
+        // SocketsHttpHandler.ConnectTimeout, so worst case here is ~15 s
+        // instead of the OS default 63 s.
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            ["client_id"] = _options.ClientId,
-            ["refresh_token"] = refreshToken,
-            ["grant_type"] = "refresh_token",
-            ["scope"] = scope
-        };
-        await _credentials.AddCredentialFieldsAsync(form);
-        req.Content = new FormUrlEncodedContent(form);
+            using var req = new HttpRequestMessage(HttpMethod.Post,
+                $"https://login.microsoftonline.com/{Uri.EscapeDataString(effectiveTenant)}/oauth2/v2.0/token");
+            var form = new Dictionary<string, string>
+            {
+                ["client_id"] = _options.ClientId,
+                ["refresh_token"] = refreshToken,
+                ["grant_type"] = "refresh_token",
+                ["scope"] = scope
+            };
+            await _credentials.AddCredentialFieldsAsync(form);
+            req.Content = new FormUrlEncodedContent(form);
 
-        var res = await http.SendAsync(req);
-        if (!res.IsSuccessStatusCode) return null;
+            try
+            {
+                var res = await http.SendAsync(req);
+                if (!res.IsSuccessStatusCode) return null;
 
-        var body = await res.Content.ReadAsStringAsync();
-        var json = JsonSerializer.Deserialize<JsonElement>(body);
-        if (!json.TryGetProperty("access_token", out var tokenProp)) return null;
+                var body = await res.Content.ReadAsStringAsync();
+                var json = JsonSerializer.Deserialize<JsonElement>(body);
+                if (!json.TryGetProperty("access_token", out var tokenProp)) return null;
 
-        var expiresIn = json.TryGetProperty("expires_in", out var expProp) ? expProp.GetInt32() : 3600;
-        var rotated = json.TryGetProperty("refresh_token", out var newRt) ? newRt.GetString() : null;
-        return (tokenProp.GetString()!, DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60), rotated);
+                var expiresIn = json.TryGetProperty("expires_in", out var expProp) ? expProp.GetInt32() : 3600;
+                var rotated = json.TryGetProperty("refresh_token", out var newRt) ? newRt.GetString() : null;
+                return (tokenProp.GetString()!, DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60), rotated);
+            }
+            catch (Exception ex) when (attempt < 2 && IsTransientNetworkError(ex))
+            {
+                var delayMs = 250 * (1 << attempt); // 250 ms, 500 ms
+                _logger.LogWarning("Entra token POST failed (attempt {Attempt}/3) for scope={Scope}: {Err}. Retrying in {Delay}ms",
+                    attempt + 1, scope, ex.GetType().Name + ": " + ex.Message, delayMs);
+                await Task.Delay(delayMs);
+            }
+            catch (Exception ex) when (attempt == 2 && IsTransientNetworkError(ex))
+            {
+                // Final attempt failed with a transient network error — swallow
+                // and return null. Throwing here would surface as HTTP 500 from
+                // /auth/azure/status (observed in production telemetry). Null
+                // lets the endpoint return { connected = false } and the UI
+                // shows "sign in again" instead of a generic error page.
+                _logger.LogWarning("Entra token POST failed after 3 attempts for scope={Scope}: {Err}. Returning null (user must re-auth).",
+                    scope, ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>True for connect timeouts, socket resets, and DNS failures we
+    /// expect to clear on a fresh connection (typical of corporate proxies that
+    /// drop the first SYN). Deliberately excludes SSL/cert/auth failures —
+    /// those won't recover on retry and burning 3 attempts on them is wasteful.</summary>
+    private static bool IsTransientNetworkError(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            // Never retry auth/cert/SSL failures — they're deterministic.
+            if (e is System.Security.Authentication.AuthenticationException) return false;
+            if (e is System.Security.Cryptography.CryptographicException) return false;
+
+            if (e is TimeoutException) return true;
+            if (e is System.Net.Sockets.SocketException se)
+            {
+                return se.SocketErrorCode is
+                    System.Net.Sockets.SocketError.TimedOut or
+                    System.Net.Sockets.SocketError.ConnectionRefused or
+                    System.Net.Sockets.SocketError.ConnectionReset or
+                    System.Net.Sockets.SocketError.NetworkUnreachable or
+                    System.Net.Sockets.SocketError.HostUnreachable;
+            }
+            // HttpRequestException with no SocketException or AuthException inner is
+            // most often a connection-establishment failure (proxy / DNS / transient
+            // network) — retry. SSL handshake failures bubble up as AuthException
+            // inner and are filtered out above.
+            if (e is System.Net.Http.HttpRequestException) return true;
+        }
+        return false;
     }
 
     public async Task<string?> GetSessionTokenAsync(HttpContext ctx, IHttpClientFactory httpFactory,
@@ -93,7 +153,7 @@ public sealed class SessionTokenStore
                 ctx.Session.Remove(expiryKey);
                 return null;
             }
-            var http = httpFactory.CreateClient();
+            var http = httpFactory.CreateClient("entra-token");
             var sessionTenant = ctx.Session.GetString("auth_tenant");
             var result = await ExchangeRefreshTokenForResource(http, refreshToken, refreshScope, sessionTenant);
             if (result is null)
@@ -113,17 +173,19 @@ public sealed class SessionTokenStore
                 var azureUserJson = ctx.Session.GetString("azure_user");
                 if (azureUserJson is not null)
                 {
+                    string? oid = null;
                     try
                     {
                         var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
                         if (au.TryGetProperty("objectId", out var oidProp))
-                        {
-                            var oid = oidProp.GetString();
-                            if (!string.IsNullOrEmpty(oid))
-                                _identity.UpdateRefreshToken(oid, result.Value.RotatedRefreshToken);
-                        }
+                            oid = oidProp.GetString();
                     }
                     catch { }
+                    if (!string.IsNullOrEmpty(oid))
+                    {
+                        try { await _identity.UpdateRefreshTokenAsync(oid, result.Value.RotatedRefreshToken); }
+                        catch (Exception ex) { _logger.LogWarning(ex, "Failed to mirror rotated refresh token for oid={Oid}", oid); }
+                    }
                 }
             }
             return result.Value.Token;

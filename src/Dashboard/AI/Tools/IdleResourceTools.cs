@@ -72,11 +72,22 @@ Use for 'find waste', 'orphaned resources', 'quick cost wins'. After calling, su
              $"ResourceContainers | where type =~ 'microsoft.resources/subscriptions/resourcegroups' | join kind=leftouter (Resources | summarize count() by resourceGroup, subscriptionId) on resourceGroup, subscriptionId | where isnull(count_) or count_ == 0 | project id, name, location, subscriptionId | top {topPerPattern} by name"),
         };
 
-        var results = new Dictionary<string, object>();
-        foreach (var (label, kql) in patterns)
+        // Fan out all 8 KQL queries in parallel. Each result is wrapped
+        // in a per-query try/catch so a single failed pattern (perms,
+        // throttle, schema drift) doesn't lose the other 7. Cuts wall
+        // time from 8×latency to max(latency).
+        var queryTasks = patterns.Select(async p =>
         {
-            results[label] = await RunResourceGraphQuery(token, kql, subs, activity);
-        }
+            // Pass null activity — Activity is not safe for concurrent SetTag
+            // writers across the 8 parallel queries. HttpHelper still emits
+            // its own per-call span.
+            try { return (p.Label, Result: await RunResourceGraphQuery(token, p.Kql, subs, activity: null)); }
+            catch (HttpRequestException ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
+            catch (TaskCanceledException ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
+            catch (OperationCanceledException ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
+        }).ToArray();
+        var completed = await Task.WhenAll(queryTasks);
+        var results = completed.ToDictionary(x => x.Label, x => x.Result);
 
         var summary = new
         {

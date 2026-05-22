@@ -74,10 +74,10 @@ public sealed class PersistentIdentity
     /// writes the encrypted identity cookie. Call this from the OAuth callback
     /// after a successful id_token validation and from any path that mints a
     /// new refresh_token.</summary>
-    public void SaveIdentity(HttpContext ctx, IdentityRecord record)
+    public async Task SaveIdentityAsync(HttpContext ctx, IdentityRecord record)
     {
         var sem = LockFor(record.Oid);
-        sem.Wait();
+        await sem.WaitAsync();
         try
         {
             var dir = GetUserDir(record.Oid);
@@ -204,25 +204,25 @@ public sealed class PersistentIdentity
     /// <summary>Updates only the refresh token + recorded scopes on an existing
     /// identity file. Used by <see cref="SessionTokenStore"/> when a refresh
     /// rotates the token (Entra rotates refresh tokens on use).</summary>
-    public void UpdateRefreshToken(string oid, string newRefreshToken)
+    public Task UpdateRefreshTokenAsync(string oid, string newRefreshToken)
     {
-        UpdateRecord(oid, r => { r.RefreshToken = newRefreshToken; });
+        return UpdateRecordAsync(oid, r => { r.RefreshToken = newRefreshToken; });
     }
 
     /// <summary>Persists the comma-separated list of consented Graph tiers so a
     /// post-restart hydration restores the user's full add-on set, not just the
     /// base ARM scope.</summary>
-    public void UpdateGraphTier(string oid, string? graphTier)
+    public Task UpdateGraphTierAsync(string oid, string? graphTier)
     {
-        UpdateRecord(oid, r => { r.GraphTier = graphTier; });
+        return UpdateRecordAsync(oid, r => { r.GraphTier = graphTier; });
     }
 
-    private void UpdateRecord(string oid, Action<IdentityRecord> mutate)
+    private async Task UpdateRecordAsync(string oid, Action<IdentityRecord> mutate)
     {
         var path = Path.Combine(GetUserDir(oid), "identity.json");
         if (!File.Exists(path)) return;
         var sem = LockFor(oid);
-        sem.Wait();
+        await sem.WaitAsync();
         try
         {
             var existing = JsonSerializer.Deserialize<IdentityRecord>(_protector.Unprotect(File.ReadAllText(path)));

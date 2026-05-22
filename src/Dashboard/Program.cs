@@ -50,6 +50,21 @@ builder.Services.AddSession(options =>
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
 });
 builder.Services.AddHttpClient();
+// Force IPv4 + 5-s connect cap on EVERY factory-created HttpClient (default
+// and all named clients). Corporate egress drops IPv6 SYNs and the OS retries
+// for ~21 s before falling back, wedging every outbound call. See
+// Infrastructure/Ipv4HttpHandler.cs for the rationale.
+builder.Services.ConfigureHttpClientDefaults(b =>
+    b.ConfigurePrimaryHttpMessageHandler(AzureFinOps.Dashboard.Infrastructure.Ipv4HttpHandler.Create));
+// Dedicated client for Microsoft Entra token endpoints. Inherits the IPv4-only
+// handler from ConfigureHttpClientDefaults above; only overrides Timeout and
+// HTTP version for token-endpoint specifics.
+builder.Services.AddHttpClient("entra-token", c =>
+{
+    // Budget enough headroom for retries above the 5-s per-attempt connect cap.
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestVersion = System.Net.HttpVersion.Version20;
+});
 
 if (!builder.Environment.IsDevelopment())
     builder.Services.AddHttpsRedirection(options => options.HttpsPort = 443);
@@ -87,6 +102,10 @@ var app = builder.Build();
 var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
 var logger = loggerFactory.CreateLogger("AzureFinOps.AI");
 logger.LogInformation("Application starting. AppInsights configured: {Configured}", !string.IsNullOrEmpty(appInsightsCs));
+// Plumb a logger into HttpHelper so 429/5xx retries surface in stdout +
+// Application Insights instead of being only a silent counter.
+AzureFinOps.Dashboard.Infrastructure.HttpHelper.Logger =
+    loggerFactory.CreateLogger("AzureFinOps.AI.HttpHelper");
 
 await using var copilotFactory = await CopilotSessionFactory.CreateAsync(
     telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, loggerFactory);
@@ -213,14 +232,6 @@ app.Use(async (ctx, next) =>
 
 // CSRF defense — for state-changing requests, require Origin/Referer to match this host.
 // Combined with SameSite=Lax cookies this defeats the standard CSRF surface.
-var allowedOriginHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-{
-    "azure-finops-agent.com",
-    "www.azure-finops-agent.com",
-    "finops-agent-container.azurewebsites.net",
-    "localhost:5000",
-    "localhost:5173",
-};
 app.Use(async (ctx, next) =>
 {
     var method = ctx.Request.Method;
@@ -234,7 +245,8 @@ app.Use(async (ctx, next) =>
         if (Uri.TryCreate(origin, UriKind.Absolute, out var oUri)) sourceHost = oUri.Authority;
         else if (Uri.TryCreate(referer, UriKind.Absolute, out var rUri)) sourceHost = rUri.Authority;
 
-        if (string.IsNullOrEmpty(sourceHost) || !allowedOriginHosts.Contains(sourceHost))
+        var ownHost = ctx.Request.Host.Value ?? "";
+        if (string.IsNullOrEmpty(sourceHost) || !string.Equals(sourceHost, ownHost, StringComparison.OrdinalIgnoreCase))
         {
             ctx.Response.StatusCode = 403;
             await ctx.Response.WriteAsync("Forbidden: cross-origin write blocked");
@@ -250,33 +262,45 @@ app.Use(async (ctx, next) =>
 var persistentIdentity = app.Services.GetRequiredService<PersistentIdentity>();
 app.Use(async (ctx, next) =>
 {
-    if (ctx.Session.GetString("user") is null)
+    var hasUser = ctx.Session.GetString("user") is not null;
+    var hasAzureUser = ctx.Session.GetString("azure_user") is not null;
+    if (!hasUser || !hasAzureUser)
     {
         var record = persistentIdentity.Load(ctx);
         if (record is not null && !string.IsNullOrEmpty(record.Oid))
         {
             // Returning Entra user: rebuild the session blobs deterministically.
-            ctx.Session.SetString("user", JsonSerializer.Serialize(new
+            // We rehydrate `azure_user` even when `user` is already set so the
+            // sidebar always shows the signed-in email after a backend restart
+            // (the in-memory session middleware loses azure_user across
+            // process boundaries; the persistent identity cookie survives).
+            if (!hasUser)
             {
-                id = record.UserId,
-                login = $"user-{record.UserId & 0xFFFF:X4}",
-                name = record.Name,
-                avatar = (string?)null,
-                email = record.Email,
-            }));
-            ctx.Session.SetString("azure_user", JsonSerializer.Serialize(new Dictionary<string, string?>
+                ctx.Session.SetString("user", JsonSerializer.Serialize(new
+                {
+                    id = record.UserId,
+                    login = $"user-{record.UserId & 0xFFFF:X4}",
+                    name = record.Name,
+                    avatar = null,
+                    email = record.Email,
+                }));
+            }
+            if (!hasAzureUser)
             {
-                ["tenantId"] = record.TenantId,
-                ["objectId"] = record.Oid,
-                ["name"] = record.Name,
-                ["email"] = record.Email,
-            }));
-            if (!string.IsNullOrEmpty(record.RefreshToken))
+                ctx.Session.SetString("azure_user", JsonSerializer.Serialize(new Dictionary<string, string?>
+                {
+                    ["tenantId"] = record.TenantId,
+                    ["objectId"] = record.Oid,
+                    ["name"] = record.Name,
+                    ["email"] = record.Email,
+                }));
+            }
+            if (!string.IsNullOrEmpty(record.RefreshToken) && ctx.Session.GetString("azure_refresh_token") is null)
                 ctx.Session.SetString("azure_refresh_token", record.RefreshToken);
-            if (!string.IsNullOrEmpty(record.GraphTier))
+            if (!string.IsNullOrEmpty(record.GraphTier) && ctx.Session.GetString("graph_tier") is null)
                 ctx.Session.SetString("graph_tier", record.GraphTier);
         }
-        else
+        else if (!hasUser)
         {
             // Brand-new visitor: crypto-random anonymous id keyed only in this session.
             var sessionUserId = (long)(RandomNumberGenerator.GetInt32(1_000_000, int.MaxValue)) << 24

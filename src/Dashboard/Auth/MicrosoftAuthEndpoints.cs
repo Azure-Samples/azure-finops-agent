@@ -257,7 +257,9 @@ public static class MicrosoftAuthEndpoints
 
                 ctx.Session.Remove("ms_oauth_state");
 
-                var http = httpFactory.CreateClient();
+                // Named client with 30 s overall timeout. IPv4-only transport is
+                // already applied by ConfigureHttpClientDefaults in Program.cs.
+                var http = httpFactory.CreateClient("entra-token");
                 var redirectUri = $"{MicrosoftOAuthOptions.NormalizeCallbackHost(ctx)}/auth/microsoft/callback";
                 var effectiveTenant = ctx.Session.GetString("auth_tenant") ?? options.TenantId;
 
@@ -400,7 +402,7 @@ public static class MicrosoftAuthEndpoints
                         // GraphTier in sync as the user adds add-on consents incrementally.
                         if (!string.IsNullOrEmpty(refreshToken))
                         {
-                            persistentIdentity.SaveIdentity(ctx, new IdentityRecord
+                            await persistentIdentity.SaveIdentityAsync(ctx, new IdentityRecord
                             {
                                 Oid = oid,
                                 TenantId = validated.TenantId ?? "",
@@ -416,7 +418,7 @@ public static class MicrosoftAuthEndpoints
                             // Edge case: re-consent without a fresh refresh_token. Update only
                             // the GraphTier so post-restart hydration still reflects the new
                             // add-on without clobbering the existing refresh token.
-                            persistentIdentity.UpdateGraphTier(oid, ctx.Session.GetString("graph_tier"));
+                            await persistentIdentity.UpdateGraphTierAsync(oid, ctx.Session.GetString("graph_tier"));
                         }
                     }
                 }
