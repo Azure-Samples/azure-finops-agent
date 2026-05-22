@@ -82,7 +82,9 @@ Use for 'find waste', 'orphaned resources', 'quick cost wins'. After calling, su
             // writers across the 8 parallel queries. HttpHelper still emits
             // its own per-call span.
             try { return (p.Label, Result: await RunResourceGraphQuery(token, p.Kql, subs, activity: null)); }
-            catch (Exception ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
+            catch (HttpRequestException ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
+            catch (TaskCanceledException ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
+            catch (OperationCanceledException ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
         }).ToArray();
         var completed = await Task.WhenAll(queryTasks);
         var results = completed.ToDictionary(x => x.Label, x => x.Result);
