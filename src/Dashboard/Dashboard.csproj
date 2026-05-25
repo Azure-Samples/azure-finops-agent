@@ -11,7 +11,7 @@
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.5.0" />
-    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.0-beta.4" />
+    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.0-beta.7" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.18.0" />
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.18.0" />
     <PackageReference Include="OpenTelemetry" Version="1.15.3" />
