@@ -55,6 +55,21 @@ public static class HttpHelper
     // 30–60s; bigger waits are clamped to keep tool latency bounded.
     private const int MaxRetryWaitSeconds = 60;
 
+    // Cost Management / Consumption / Billing share an aggressive per-tenant throttle pool.
+    // App Insights showed 87/89 (97.8%) of /query calls returning 429 inside a single 34s burst
+    // — the LLM (esp. via BulkAzureRequest with parallelism=20) was fan-firing parallel queries
+    // that all collided. This semaphore globally serializes those calls to a small concurrency,
+    // turning a retry storm into ordered execution. Other ARM/Graph/LogAnalytics calls are
+    // unaffected and still parallelize freely.
+    private static readonly SemaphoreSlim CostMgmtGate = new(2, 2);
+    private const int CostMgmtQueueNotifyMs = 250;
+
+    private static bool IsCostManagementUrl(string url) =>
+        url.Contains("/Microsoft.CostManagement/", StringComparison.OrdinalIgnoreCase)
+        || url.Contains("/Microsoft.Consumption/", StringComparison.OrdinalIgnoreCase)
+        || url.Contains("/Microsoft.Billing/", StringComparison.OrdinalIgnoreCase)
+        || url.Contains("/Microsoft.CostManagementExports/", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Sends an HTTP request with silent retry on 429 (up to 5 attempts). On each 429 we honor,
     /// in priority order: Cost Management's <c>x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after</c>,
@@ -79,6 +94,49 @@ public static class HttpHelper
         var totalWaitSec = 0.0;
         var retryCount = 0;
         HttpResponseMessage res = null!;
+
+        // Resolve the per-turn SSE reporter ONCE up front — used for queue waits,
+        // in-flight heartbeats, and retry backoffs alike. Returns no-op when absent.
+        var turnKey = Activity.Current?.GetBaggageItem("finops.turn.id");
+        RetryReporters.TryGetValue(turnKey ?? "", out var report);
+
+        // Gate Cost Management / Consumption / Billing calls behind a small global
+        // semaphore (2 concurrent). Without this, the LLM (esp. via BulkAzureRequest
+        // parallelism=20) fan-fires parallel /query calls that all collide on the
+        // per-tenant throttle. While queued we emit cooling_down so the UI shows
+        // "waiting in queue" instead of a frozen tool row.
+        var isCostMgmt = IsCostManagementUrl(url);
+        var heldGate = false;
+        if (isCostMgmt)
+        {
+            if (!await CostMgmtGate.WaitAsync(CostMgmtQueueNotifyMs))
+            {
+                // Couldn't grab the gate immediately — surface a queue-wait event
+                // and keep retrying every ~3s so the ghost row stays alive in the UI.
+                var queuedSw = Stopwatch.StartNew();
+                while (!await CostMgmtGate.WaitAsync(3000))
+                {
+                    Logger?.LogInformation("HTTP queued {Tool} waitedSec={Wait:F1} url={Url}",
+                        telemetryPrefix, queuedSw.Elapsed.TotalSeconds, url);
+                    if (report is not null)
+                    {
+                        try { await report(0, 5, url, telemetryPrefix + " (queued)", 0); }
+                        catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE queued emit failed for {Tool}", telemetryPrefix); }
+                    }
+                }
+                // One final emit on acquire so the UI clears stale wait time.
+                if (report is not null)
+                {
+                    try { await report(0, 1, url, telemetryPrefix + " (queued)", 0); }
+                    catch { /* swallow */ }
+                }
+                activity?.SetTag($"{telemetryPrefix}.queued_sec", queuedSw.Elapsed.TotalSeconds);
+            }
+            heldGate = true;
+        }
+
+        try
+        {
         for (var attempt = 0; attempt < MaxThrottleRetries; attempt++)
         {
             using var req = new HttpRequestMessage(method, url);
@@ -92,7 +150,35 @@ public static class HttpHelper
             if (jsonBody is not null)
                 req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-            res = await Http.SendAsync(req);
+            // Heartbeat: if the request itself takes >5s (slow CM backend, async report
+            // generation, etc.) emit periodic cooling_down events keyed by url so the
+            // UI ghost row stays alive instead of looking frozen. Runs concurrently
+            // with the actual request; cancelled the instant the response arrives.
+            using var hbCts = new CancellationTokenSource();
+            var heartbeat = report is null ? Task.CompletedTask : Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(5000, hbCts.Token);
+                    while (!hbCts.IsCancellationRequested)
+                    {
+                        try { await report(0, 6, url, telemetryPrefix + " (slow)", 0); }
+                        catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE slow emit failed for {Tool}", telemetryPrefix); }
+                        await Task.Delay(5000, hbCts.Token);
+                    }
+                }
+                catch (OperationCanceledException) { /* expected on response */ }
+            }, hbCts.Token);
+
+            try
+            {
+                res = await Http.SendAsync(req);
+            }
+            finally
+            {
+                hbCts.Cancel();
+                try { await heartbeat; } catch { /* heartbeat already swallows */ }
+            }
 
             // Retry on 429 (throttle) and transient 5xx (502/503/504 — typical ARM regional
             // failover or backend hiccups). Other non-success codes return to the caller.
@@ -119,8 +205,7 @@ public static class HttpHelper
             // Copilot CLI subprocess JSON-RPC tool callback) where RootId
             // does not. ChatEndpoints stamps "finops.turn.id" (userId:sessionId)
             // on the chat activity before SendAsync.
-            var turnKey = Activity.Current?.GetBaggageItem("finops.turn.id");
-            if (turnKey is not null && RetryReporters.TryGetValue(turnKey, out var report))
+            if (report is not null)
             {
                 try { await report(attempt + 1, waitSeconds, url, telemetryPrefix, status); }
                 catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE cooling_down emit failed for {Tool}", telemetryPrefix); }
@@ -131,6 +216,11 @@ public static class HttpHelper
                     turnKey ?? "<none>", telemetryPrefix);
             }
             await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
+        }
+        }
+        finally
+        {
+            if (heldGate) CostMgmtGate.Release();
         }
 
         var responseBody = await res.Content.ReadAsStringAsync();
