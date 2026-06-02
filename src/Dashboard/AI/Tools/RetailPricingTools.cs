@@ -19,19 +19,25 @@ public static class RetailPricingTools
             @"PUBLIC (no auth): Queries the Azure Retail Prices API for current pay-as-you-go, reservation, and savings plan pricing. Use this BEFORE QueryAzure when comparing SKUs, regions, or estimating cost for a workload that hasn't been deployed yet.
 
 CRITICAL FILTERING (always provide as much as possible to keep results small):
-- serviceName: e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Azure App Service', 'Foundry Models', 'Azure OpenAI'
+- serviceName: e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Azure App Service', 'Foundry Models' (covers ALL AOAI + open-model inference — the legacy 'Azure OpenAI' serviceName returns 0 rows)
 - armRegionName: e.g. 'eastus', 'westeurope', 'northeurope' (lowercase, no spaces)
 - armSkuName: e.g. 'Standard_D4s_v5', 'Standard_E16ads_v5'
 - priceType: 'Consumption' (PAYG), 'Reservation' (1y/3y RI), 'DevTestConsumption'
 - meterName: e.g. 'D4s v5' for VMs, or 'Hot LRS Data Stored' for storage
 
-Returns up to $top items (default 50, max 100). For broad surveys, ALWAYS aggregate client-side after this returns; never call without filters.
+Returns up to $top items (default 50, max 100). Note: the API sometimes ignores $top and returns a full page (~1000 rows) — always filter aggressively. For broad surveys, aggregate client-side; never call without filters.
+
+FOUNDRY MODELS (serviceName='Foundry Models') — productName is a FAMILY bucket, the specific model + I/O direction lives in skuName/meterName:
+- productName values: 'Azure OpenAI GPT5', 'Azure OpenAI Reasoning', 'Azure OpenAI Embedding', 'Azure OpenAI Media', 'Azure OpenAI', 'Azure OpenAI PP FT GPT4s' (fine-tune), 'Azure OpenAI OSS Models', 'Azure Phi Models', 'Azure Llama Models', 'Azure Mistral Models', 'Azure Grok Models', 'Azure Deepseek Models', 'Azure Fireworks Models', 'Azure BFL Flux Models', 'Azure Kimi', 'Cohere Models', 'Qwen models', 'MAI Models', 'Azure AI Foundry Provisioned Throughput Reservation', 'Managed Compute'.
+- skuName examples: 'gpt 4.1 Inp regnl', 'gpt 4.1 Outp glbl', 'o3 Inp regnl' — encodes model, Inp/Outp, regnl(regional)/glbl(global)/dtstr(data zone).
+- Use productNameContains='GPT' / 'Llama' / 'Phi' / 'OpenAI' to scope. Do NOT pass model strings like 'gpt-4' to productNameContains — they won't match.
 
 Common queries:
 - Compare regions: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + priceType='Consumption'
 - RI vs PAYG: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + armRegionName='eastus' (returns both)
 - Storage tier costs: serviceName='Storage' + armRegionName='eastus' + meterName contains 'LRS'
-- AOAI per-token: serviceName='Foundry Models' + armRegionName='eastus' (model-specific via productName filter)
+- GPT-5 per-token: serviceName='Foundry Models' + armRegionName='eastus' + productNameContains='GPT' (then filter skuName client-side)
+- Llama / Phi / Mistral: serviceName='Foundry Models' + productNameContains='Llama' (or 'Phi', 'Mistral')
 - Spot vs on-demand: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + meterName contains 'Spot'");
     }
 
@@ -41,7 +47,7 @@ Common queries:
         [Description("ARM SKU name, e.g. 'Standard_D4s_v5'. Empty = all SKUs.")] string? armSkuName = null,
         [Description("Price type: 'Consumption' (PAYG), 'Reservation' (1y/3y RI), 'DevTestConsumption'. Empty = all.")] string? priceType = null,
         [Description("Substring match on meterName, e.g. 'Spot' or 'LRS'. Empty = no meter filter.")] string? meterNameContains = null,
-        [Description("Substring match on productName, e.g. 'gpt-4' or 'Premium SSD'. Empty = no product filter.")] string? productNameContains = null,
+        [Description("Substring match on productName, e.g. 'GPT' / 'Llama' / 'Phi' for Foundry Models, or 'Premium SSD' for storage. Foundry productName is a family bucket — use 'GPT' not 'gpt-4'. Empty = no product filter.")] string? productNameContains = null,
         [Description("Currency code (default 'USD'). Supported: USD, EUR, GBP, JPY, NOK, etc.")] string? currencyCode = null,
         [Description("Max results (default 50, max 100). Lower = faster.")] int top = 50)
     {

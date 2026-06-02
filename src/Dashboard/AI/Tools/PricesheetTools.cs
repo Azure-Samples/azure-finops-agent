@@ -62,8 +62,8 @@ When ready: tell user the link is ready, OR if small enough use FetchPublicWebPa
         billingScope = billingScope.TrimEnd('/');
 
         // Pricesheet download API supports both EA and MCA scopes.
-        // Reference: GET/POST {scope}/providers/Microsoft.CostManagement/pricesheets/default/download?api-version=2023-11-01
-        var url = $"https://management.azure.com{billingScope}/providers/Microsoft.CostManagement/pricesheets/default/download?api-version=2023-11-01";
+        // Reference: GET/POST {scope}/providers/Microsoft.CostManagement/pricesheets/default/download?api-version=2025-03-01
+        var url = $"https://management.azure.com{billingScope}/providers/Microsoft.CostManagement/pricesheets/default/download?api-version=2025-03-01";
 
         using var activity = HttpHelper.Telemetry.StartActivity("StartPricesheetDownload");
         activity?.SetTag("pricesheet.scope", billingScope);

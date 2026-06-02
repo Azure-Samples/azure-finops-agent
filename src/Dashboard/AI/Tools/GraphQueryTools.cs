@@ -26,7 +26,7 @@ DATA SCOPING: ALWAYS use $select to pick only needed fields, $top to limit rows,
 Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant areas:
 - Licenses: /v1.0/subscribedSkus (consumedUnits vs prepaidUnits.enabled = unused licenses), /v1.0/users?$select=assignedLicenses
 - M365 usage reports (period='D30'): /v1.0/reports/getOffice365ActiveUserDetail, getMailboxUsageDetail, getTeamsUserActivityUserDetail, getOneDriveUsageAccountDetail, getSharePointSiteUsageDetail, getM365AppUserDetail
-- M365 Copilot usage (now GA in v1.0 — prefer over /beta/): getMicrosoft365CopilotUsageUserDetail, getMicrosoft365CopilotUserCountSummary — find users with Copilot licenses but no activity
+- M365 Copilot usage (BETA-ONLY — v1.0 returns 404): GET /beta/reports/getMicrosoft365CopilotUsageUserDetail(period='D30'), GET /beta/reports/getMicrosoft365CopilotUserCountSummary(period='D30') — find users with Copilot licenses but no activity
 - Intune: /v1.0/deviceManagement/managedDevices (use /beta/ only for preview-only fields)
 - Directory / chargeback: /v1.0/organization, /v1.0/users (department/companyName/officeLocation), /v1.0/groups, /v1.0/administrativeUnits, /v1.0/users/{id}/manager
 - Security: /v1.0/security/secureScores
