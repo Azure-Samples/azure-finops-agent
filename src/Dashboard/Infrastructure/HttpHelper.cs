@@ -55,20 +55,43 @@ public static class HttpHelper
     // 30–60s; bigger waits are clamped to keep tool latency bounded.
     private const int MaxRetryWaitSeconds = 60;
 
-    // Cost Management / Consumption / Billing share an aggressive per-tenant throttle pool.
-    // App Insights showed 87/89 (97.8%) of /query calls returning 429 inside a single 34s burst
-    // — the LLM (esp. via BulkAzureRequest with parallelism=20) was fan-firing parallel queries
-    // that all collided. This semaphore globally serializes those calls to a small concurrency,
-    // turning a retry storm into ordered execution. Other ARM/Graph/LogAnalytics calls are
-    // unaffected and still parallelize freely.
-    private static readonly SemaphoreSlim CostMgmtGate = new(2, 2);
-    private const int CostMgmtQueueNotifyMs = 250;
+    // Per-API-family concurrency gates. Each family has its own SemaphoreSlim so
+    // unrelated APIs don't block each other. Picked based on App Insights data
+    // (the CM /query storm: 87/89 calls = 97.8% 429 in a single 34s burst) and
+    // each service's documented throttle ceiling:
+    //   - Cost Management / Consumption / Billing: aggressive per-tenant pool,
+    //     measured retry storms. 2 concurrent.
+    //   - Resource Graph: documented 15 req / 5s per user; fan-out from multi-sub
+    //     discovery can burst-throttle. 4 concurrent.
+    //   - Microsoft Graph reports: per-app throttle, 60s+ Retry-After when hit.
+    //     Low risk today but cheap insurance. 4 concurrent.
+    // Everything else (ARM CRUD, retail pricing, Log Analytics KQL, generic Graph,
+    // health RSS) is uncapped — no observed throttle issues there.
+    private sealed record ApiFamily(string Name, SemaphoreSlim Gate, Func<string, bool> Match);
 
-    private static bool IsCostManagementUrl(string url) =>
-        url.Contains("/Microsoft.CostManagement/", StringComparison.OrdinalIgnoreCase)
-        || url.Contains("/Microsoft.Consumption/", StringComparison.OrdinalIgnoreCase)
-        || url.Contains("/Microsoft.Billing/", StringComparison.OrdinalIgnoreCase)
-        || url.Contains("/Microsoft.CostManagementExports/", StringComparison.OrdinalIgnoreCase);
+    private static readonly ApiFamily[] Families =
+    {
+        new("costmgmt", new SemaphoreSlim(2, 2), u =>
+            u.Contains("/Microsoft.CostManagement/", StringComparison.OrdinalIgnoreCase)
+            || u.Contains("/Microsoft.Consumption/", StringComparison.OrdinalIgnoreCase)
+            || u.Contains("/Microsoft.Billing/", StringComparison.OrdinalIgnoreCase)
+            || u.Contains("/Microsoft.CostManagementExports/", StringComparison.OrdinalIgnoreCase)),
+        new("resourcegraph", new SemaphoreSlim(4, 4), u =>
+            u.Contains("/Microsoft.ResourceGraph/", StringComparison.OrdinalIgnoreCase)),
+        new("graph-reports", new SemaphoreSlim(4, 4), u =>
+            u.StartsWith("https://graph.microsoft.com/", StringComparison.OrdinalIgnoreCase)
+            && (u.Contains("/reports/", StringComparison.OrdinalIgnoreCase)
+                || u.Contains("/getOffice365", StringComparison.OrdinalIgnoreCase))),
+    };
+
+    private const int GateQueueNotifyMs = 250;
+
+    private static ApiFamily? MatchFamily(string url)
+    {
+        foreach (var f in Families)
+            if (f.Match(url)) return f;
+        return null;
+    }
 
     /// <summary>
     /// Sends an HTTP request with silent retry on 429 (up to 5 attempts). On each 429 we honor,
@@ -100,37 +123,34 @@ public static class HttpHelper
         var turnKey = Activity.Current?.GetBaggageItem("finops.turn.id");
         RetryReporters.TryGetValue(turnKey ?? "", out var report);
 
-        // Gate Cost Management / Consumption / Billing calls behind a small global
-        // semaphore (2 concurrent). Without this, the LLM (esp. via BulkAzureRequest
-        // parallelism=20) fan-fires parallel /query calls that all collide on the
-        // per-tenant throttle. While queued we emit cooling_down so the UI shows
-        // "waiting in queue" instead of a frozen tool row.
-        var isCostMgmt = IsCostManagementUrl(url);
+        // Gate calls behind a per-API-family semaphore so a single LLM fan-out
+        // can't trigger 429 storms (see Families table for rationale + sizing).
+        // While queued we emit cooling_down so the UI ghost row shows "waiting in
+        // queue" instead of looking frozen. Families that don't match -> no gating.
+        var family = MatchFamily(url);
         var heldGate = false;
-        if (isCostMgmt)
+        if (family is not null)
         {
-            if (!await CostMgmtGate.WaitAsync(CostMgmtQueueNotifyMs))
+            if (!await family.Gate.WaitAsync(GateQueueNotifyMs))
             {
-                // Couldn't grab the gate immediately — surface a queue-wait event
-                // and keep retrying every ~3s so the ghost row stays alive in the UI.
                 var queuedSw = Stopwatch.StartNew();
-                while (!await CostMgmtGate.WaitAsync(3000))
+                while (!await family.Gate.WaitAsync(3000))
                 {
-                    Logger?.LogInformation("HTTP queued {Tool} waitedSec={Wait:F1} url={Url}",
-                        telemetryPrefix, queuedSw.Elapsed.TotalSeconds, url);
+                    Logger?.LogInformation("HTTP queued {Tool} family={Family} waitedSec={Wait:F1} url={Url}",
+                        telemetryPrefix, family.Name, queuedSw.Elapsed.TotalSeconds, url);
                     if (report is not null)
                     {
-                        try { await report(0, 5, url, telemetryPrefix + " (queued)", 0); }
+                        try { await report(0, 5, url, telemetryPrefix + $" (queued:{family.Name})", 0); }
                         catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE queued emit failed for {Tool}", telemetryPrefix); }
                     }
                 }
-                // One final emit on acquire so the UI clears stale wait time.
                 if (report is not null)
                 {
-                    try { await report(0, 1, url, telemetryPrefix + " (queued)", 0); }
+                    try { await report(0, 1, url, telemetryPrefix + $" (queued:{family.Name})", 0); }
                     catch { /* swallow */ }
                 }
                 activity?.SetTag($"{telemetryPrefix}.queued_sec", queuedSw.Elapsed.TotalSeconds);
+                activity?.SetTag($"{telemetryPrefix}.gate_family", family.Name);
             }
             heldGate = true;
         }
@@ -220,7 +240,7 @@ public static class HttpHelper
         }
         finally
         {
-            if (heldGate) CostMgmtGate.Release();
+            if (heldGate && family is not null) family.Gate.Release();
         }
 
         var responseBody = await res.Content.ReadAsStringAsync();
