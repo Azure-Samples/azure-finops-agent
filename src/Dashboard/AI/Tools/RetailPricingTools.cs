@@ -41,7 +41,17 @@ HOW TO PICK THE RIGHT ROW (the #1 mistake is reporting a cheaper variant as the 
 - HEADLINE pay-as-you-go = Standard + Global: skuName has NO 'Batch', ends in 'Gl', and for input uses 'Inp' (NOT 'cd Inp'). Example gpt-5.4-nano: 'X nano Inp Gl' = input, 'X nano cd Inp Gl' = cached input, 'X nano Opt Gl' = output.
 - prices.azure.com repeats the SAME price across every armRegionName (the value is flat per zone) AND returns every Batch / Data Zone / Regional / cached variant in the same response. So the result set legitimately contains many rows at DIFFERENT prices for one model.
 - NEVER take the minimum retailPrice across rows. The lowest row is almost always Batch + cached — not the real price. Instead, match the EXACT skuName for the variant asked about (default Standard + Global) and report THAT row's retailPrice.
-- ALWAYS state the variant you are quoting, e.g. 'gpt-5.4-nano, Global Standard — input $0.20, cached input $0.02, output $1.25 per 1M tokens'. Mention Batch / Data Zone only as clearly-labelled separate options, never as the headline.
+
+MANDATORY — ALWAYS STATE THE BASIS OF EVERY PRICE YOU QUOTE. Never give a bare number. Every price MUST be labelled with the full context it is based on:
+  • Deployment type — Standard (real-time) or Batch (async, ~50% off)
+  • Zone — Global / Data Zone / Regional
+  • Direction — input / cached input / output
+  • Context tier (gpt-5.5 family) — ShortContext / LongContext / Priority Processing, when present
+  • Region — the armRegionName (or 'flat across all regions' if it does not vary)
+  • Currency + unit — e.g. USD per 1M tokens
+  Template: '<model>, <Deployment> <Zone>[ , <tier>], <region> — input $X, cached input $Y, output $Z per 1M tokens (<currency>)'.
+  Example: 'gpt-5.4-nano, Global Standard, flat across all regions — input $0.20, cached input $0.02, output $1.25 per 1M tokens (USD)'.
+  In a comparison table, add explicit columns/labels for Deployment, Zone, and Region so the basis is visible per row. Mention Batch / Data Zone / Regional / cached only as clearly-labelled separate options, NEVER as the headline. If you cannot determine the deployment/zone/region for a row, say so rather than guessing.
 
 Common queries:
 - Compare regions: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + priceType='Consumption'
