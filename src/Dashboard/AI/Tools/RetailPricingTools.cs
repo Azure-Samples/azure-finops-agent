@@ -27,16 +27,27 @@ CRITICAL FILTERING (always provide as much as possible to keep results small):
 
 Returns up to $top items (default 50, max 100). Note: the API sometimes ignores $top and returns a full page (~1000 rows) — always filter aggressively. For broad surveys, aggregate client-side; never call without filters.
 
-FOUNDRY MODELS (serviceName='Foundry Models') — productName is a FAMILY bucket, the specific model + I/O direction lives in skuName/meterName:
+FOUNDRY MODELS (serviceName='Foundry Models') — productName is a FAMILY bucket; the specific model, I/O direction, residency zone, and deployment type all live INSIDE skuName/meterName:
 - productName values: 'Azure OpenAI GPT5', 'Azure OpenAI Reasoning', 'Azure OpenAI Embedding', 'Azure OpenAI Media', 'Azure OpenAI', 'Azure OpenAI PP FT GPT4s' (fine-tune), 'Azure OpenAI OSS Models', 'Azure Phi Models', 'Azure Llama Models', 'Azure Mistral Models', 'Azure Grok Models', 'Azure Deepseek Models', 'Azure Fireworks Models', 'Azure BFL Flux Models', 'Azure Kimi', 'Cohere Models', 'Qwen models', 'MAI Models', 'Azure AI Foundry Provisioned Throughput Reservation', 'Managed Compute'.
-- skuName examples: 'gpt 4.1 Inp regnl', 'gpt 4.1 Outp glbl', 'o3 Inp regnl' — encodes model, Inp/Outp, regnl(regional)/glbl(global)/dtstr(data zone).
 - Use productNameContains='GPT' / 'Llama' / 'Phi' / 'OpenAI' to scope. Do NOT pass model strings like 'gpt-4' to productNameContains — they won't match.
+
+DECODE skuName TOKEN-BY-TOKEN BEFORE QUOTING ANY PRICE (this is where wrong prices come from — every token changes the price):
+- Direction: 'Inp'/'Input' = input · 'Outp'/'Opt'/'Output' = output · 'cd Inp' = CACHED input (only applies to cache hits, far cheaper than normal input).
+- Zone: ends in 'Gl' (or 'glbl') = Global · 'Dz' (or 'dtstr') = Data Zone · 'regnl' = Regional. Different zones are different products at different prices.
+- Deployment: contains 'Batch' = Batch API (async, ~50% off, NOT real-time). NO 'Batch' token = Standard (real-time) — this is the default/headline.
+- Context tier (gpt-5.5 family): 'ShortCo' = short-context · 'LongCo' = long-context · 'PP' = priority processing. Each is a separate price.
+
+HOW TO PICK THE RIGHT ROW (the #1 mistake is reporting a cheaper variant as the headline price):
+- HEADLINE pay-as-you-go = Standard + Global: skuName has NO 'Batch', ends in 'Gl', and for input uses 'Inp' (NOT 'cd Inp'). Example gpt-5.4-nano: 'X nano Inp Gl' = input, 'X nano cd Inp Gl' = cached input, 'X nano Opt Gl' = output.
+- prices.azure.com repeats the SAME price across every armRegionName (the value is flat per zone) AND returns every Batch / Data Zone / Regional / cached variant in the same response. So the result set legitimately contains many rows at DIFFERENT prices for one model.
+- NEVER take the minimum retailPrice across rows. The lowest row is almost always Batch + cached — not the real price. Instead, match the EXACT skuName for the variant asked about (default Standard + Global) and report THAT row's retailPrice.
+- ALWAYS state the variant you are quoting, e.g. 'gpt-5.4-nano, Global Standard — input $0.20, cached input $0.02, output $1.25 per 1M tokens'. Mention Batch / Data Zone only as clearly-labelled separate options, never as the headline.
 
 Common queries:
 - Compare regions: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + priceType='Consumption'
 - RI vs PAYG: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + armRegionName='eastus' (returns both)
 - Storage tier costs: serviceName='Storage' + armRegionName='eastus' + meterName contains 'LRS'
-- GPT-5 per-token: serviceName='Foundry Models' + armRegionName='eastus' + productNameContains='GPT' (then filter skuName client-side)
+- GPT model per-token: serviceName='Foundry Models' + productNameContains='GPT' (returns ALL variants — then pick the exact skuName: no 'Batch', ends 'Gl', 'Inp'/'Opt'/'cd Inp' — for Global Standard; do NOT min across rows)
 - Llama / Phi / Mistral: serviceName='Foundry Models' + productNameContains='Llama' (or 'Phi', 'Mistral')
 - Spot vs on-demand: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + meterName contains 'Spot'");
     }
@@ -56,6 +67,7 @@ Common queries:
 
         top = Math.Clamp(top, 1, 100);
         currencyCode = string.IsNullOrWhiteSpace(currencyCode) ? "USD" : currencyCode.Trim().ToUpperInvariant();
+        var isFoundry = serviceName.Trim().Equals("Foundry Models", StringComparison.OrdinalIgnoreCase);
 
         var filters = new List<string> { $"serviceName eq '{Esc(serviceName)}'" };
         if (!string.IsNullOrWhiteSpace(armRegionName)) filters.Add($"armRegionName eq '{Esc(armRegionName.Trim().ToLowerInvariant())}'");
@@ -113,6 +125,20 @@ Common queries:
         activity?.SetTag("pricing.response_length", body.Length);
 
         var header = $"HTTP {(int)res.StatusCode} {res.StatusCode}\nQuery: {filter} (top={top}, currency={currencyCode})\nUTC: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}\n";
+
+        // Foundry pricing is the one place an agent reliably mis-reads the raw rows: the response
+        // mixes Standard/Batch, Global/DataZone/Regional, and cached/non-cached SKUs (all at
+        // different prices, each repeated per region). The full JSON is still returned below — we
+        // only PREPEND a reminder so the model picks the right skuName instead of the cheapest row.
+        // This is guidance text, not response parsing (raw-JSON contract preserved).
+        if (isFoundry)
+            header +=
+                "FOUNDRY PRICING — READ skuName BEFORE QUOTING: headline PAYG = Standard + Global "
+                + "(skuName has NO 'Batch', ends in 'Gl', input is 'Inp' not 'cd Inp'). The same price "
+                + "repeats across every region, and Batch/DataZone/Regional/cached variants are mixed in "
+                + "at different prices. Match the EXACT variant asked for (default Standard+Global) and "
+                + "state which one you quote. NEVER report the minimum retailPrice across rows.\n";
+
         if (body.Length > 200_000)
             return header + body[..200_000] + $"\n\n[TRUNCATED — {body.Length / 1024}KB total. Add more filters (armRegionName, armSkuName, priceType) to narrow results.]";
         return header + body;
