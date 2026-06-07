@@ -39,6 +39,8 @@ DESIGN RULES:
 - No 'Thank You' / 'Questions?' slides. No padding — if 4 slides is the report, ship 4.
 
 DEFAULT CURRENT-STATE PATTERN ('show me where we stand'): title → kpi (4 cards, accent green/amber/red) → alerts (3-6 findings) → chart (horizontal_bar top 5-10) → table (5-10 rows: Name, Owner, $, Status) → maturity (single-state) → closing (3-5 verbs-first next steps + optional CTA). Switch to before/after mode (waterfall + before≠after) ONLY when user explicitly asks for a remediation recap.
+
+NOTE: this is a SLIDE DECK for quick exec summaries. For a DEEP FinOps maturity ASSESSMENT (canonical 19-capability FinOps Foundation report with per-capability evidence, per-subscription breakdown, priority/effort, and a phased roadmap), use GenerateMaturityReport instead — it renders a scrolling print/PDF report, which this deck format cannot.
 ");
     }
 

@@ -341,6 +341,8 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         sharedTools.AddRange(ScoreTools.Create());
         sharedTools.AddRange(ScriptTools.Create());
         sharedTools.AddRange(RetailPricingTools.Create());
+        sharedTools.AddRange(CostEstimateTools.Create());
+        sharedTools.AddRange(MaturityReportTools.Create());
         sharedTools.AddRange(WebFetchTools.Create());
 
         var logger = loggerFactory.CreateLogger("AzureFinOps.AI");

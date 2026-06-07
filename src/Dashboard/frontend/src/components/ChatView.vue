@@ -1068,10 +1068,10 @@
                     </div>
                     <div class="html-deck-card-body">
                       <div class="html-deck-card-title">
-                        FinOps presentation ready
+                        {{ htmlCardTitle(msg.html.slideCount) }}
                       </div>
                       <div class="html-deck-card-meta">
-                        {{ msg.html.slideCount }} slides<span
+                        {{ htmlCardMeta(msg.html.slideCount) }}<span
                           v-if="msg.html.createdAt"
                         >
                           · {{ msg.html.createdAt }}</span
@@ -1234,9 +1234,9 @@
             </svg>
           </div>
           <div class="html-deck-card-body">
-            <div class="html-deck-card-title">FinOps presentation ready</div>
+            <div class="html-deck-card-title">{{ htmlCardTitle(htmlReady.slideCount) }}</div>
             <div class="html-deck-card-meta">
-              {{ htmlReady.slideCount }} slides<span v-if="htmlReady.createdAt">
+              {{ htmlCardMeta(htmlReady.slideCount) }}<span v-if="htmlReady.createdAt">
                 · {{ htmlReady.createdAt }}</span
               >
             </div>
@@ -3134,6 +3134,21 @@ function starColor(score) {
   if (score >= 3) return "#ff8c00";
   if (score >= 1) return "#d83b01";
   return "#a19f9d";
+}
+
+// The HTML download card is shared by the slide-deck renderer and the maturity
+// report renderer (both emit the same __HTML_READY__ marker). Decks put a bare
+// number in the count slot (e.g. "7"); the report puts a labelled string (e.g.
+// "3 capabilities"). Detect which and word the card accordingly.
+function htmlCardIsReport(count) {
+  return /[a-zA-Z]/.test(String(count ?? ""));
+}
+function htmlCardTitle(count) {
+  return htmlCardIsReport(count) ? "FinOps report ready" : "FinOps presentation ready";
+}
+function htmlCardMeta(count) {
+  const s = String(count ?? "");
+  return htmlCardIsReport(count) ? s : `${s} slides`;
 }
 
 // Sidebar categories (FinOps maturity Crawl/Walk/Run/Playbook + Pricing) — see data/sidebarCategories.js

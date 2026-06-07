@@ -7,6 +7,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **`EstimateTokenCost` tool (`CostEstimateTools`)** — deterministic C# calculator for monthly/volume LLM token costs. The agent looks up per-1M rates, then delegates the arithmetic here so the headline, summary table, and step-by-step always reconcile (components are summed in code and a ready-made per-model `breakdown` string is returned). Fixes inconsistent monthly totals where the table disagreed with the step-by-step or two token assumptions were blended.
+- **Expanded FinOps maturity framework** — `ReportMaturityScore` now enumerates all ~19 capabilities across Crawl (7), Walk (6: reservations & savings plans, right-sizing, dev/test scheduling, tag policy enforcement, hybrid benefit & licensing, storage & lifecycle), and Run (6: executive reporting, chargeback readiness, unit economics, anomaly detection, cost allocation & MG governance, AI/GPU cost) — each with explicit "what to check" guidance, mandatory evidence numbers, and per-subscription spread.
+- **Deep maturity report pattern** — `GenerateHtmlPresentation` gained a "FinOps Maturity Assessment Report" structure (score banner → exec summary → domain scores → all-capability chart → per-capability evidence tables → per-subscription summary → Crawl→Walk→Run roadmap → data-source appendix) for assessments that need full depth instead of a 5-slide summary.
+
+### Changed
+
+- **`GetAzureRetailPricing` Foundry guidance** — the tool description now decodes `skuName` token-by-token (Direction / Zone / Deployment / Context tier) and makes stating the pricing basis (Standard vs Batch, Global vs Data Zone vs Regional, region, currency) mandatory, so model prices are no longer mis-reported by silently picking the cheapest Batch/cached/Data-Zone row.
+
+
 ## [0.2.0] - 2026-05-14
 
 Persistent sessions, hardened auth, richer chat UX.
