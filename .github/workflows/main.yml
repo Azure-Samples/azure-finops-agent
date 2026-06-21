@@ -31,7 +31,7 @@ jobs:
     steps:
       # Shallow checkout — build number now comes from github.run_number,
       # so we don't need full git history any more.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Azure Login (OIDC)
         uses: azure/login@v3
