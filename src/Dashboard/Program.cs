@@ -135,7 +135,7 @@ app.Use(async (ctx, next) =>
             "worker-src 'self' blob:; " +
             "style-src 'self' 'unsafe-inline'; " +
             "img-src 'self' data:; " +
-            "connect-src 'self' blob: data: https://cdn.jsdelivr.net https://js.monitor.azure.com https://canadacentral-1.in.applicationinsights.azure.com https://canadacentral.livediagnostics.monitor.azure.com; " +
+            "connect-src 'self' blob: data: https://cdn.jsdelivr.net https://js.monitor.azure.com https://*.in.applicationinsights.azure.com https://*.livediagnostics.monitor.azure.com; " +
             "font-src 'self'; " +
             "frame-ancestors 'none'";
     }
@@ -204,7 +204,15 @@ app.Use(async (ctx, next) =>
         if (Uri.TryCreate(origin, UriKind.Absolute, out var oUri)) sourceHost = oUri.Authority;
         else if (Uri.TryCreate(referer, UriKind.Absolute, out var rUri)) sourceHost = rUri.Authority;
 
-        if (string.IsNullOrEmpty(sourceHost) || !allowedOriginHosts.Contains(sourceHost))
+        // Same-origin writes are always allowed: the Origin/Referer host equals the
+        // host this request arrived on. This makes the agent work on ANY deployment
+        // hostname (e.g. azd's app-finops-<token>.azurewebsites.net) with no config.
+        // The allowlist below only adds extra *cross-host* origins (www → apex, custom domain).
+        var selfHost = ctx.Request.Host.Value ?? "";
+        var sameOrigin = !string.IsNullOrEmpty(sourceHost) &&
+                         string.Equals(sourceHost, selfHost, StringComparison.OrdinalIgnoreCase);
+
+        if (string.IsNullOrEmpty(sourceHost) || (!sameOrigin && !allowedOriginHosts.Contains(sourceHost)))
         {
             ctx.Response.StatusCode = 403;
             await ctx.Response.WriteAsync("Forbidden: cross-origin write blocked");
