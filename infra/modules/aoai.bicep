@@ -1,7 +1,7 @@
-// Azure OpenAI account + model deployment. Conditionally created — when
-// `existingAoaiResourceId` is provided, the module skips creation and reads
-// the endpoint/name from the existing account so the Web App MI gets the role
-// grant on whichever account is targeted.
+// Azure AI Foundry (Cognitive Services, kind=AIServices) account + model deployment.
+// Conditionally created — when `existingAoaiResourceId` is provided, the module
+// skips creation and reads the endpoint/name from the existing account so the
+// Web App MI gets the role grant on whichever account is targeted.
 param aoaiLocation string
 param resourceToken string
 param tags object
@@ -20,11 +20,11 @@ var existingSubId = useExisting ? existingSegments[2] : subscription().subscript
 var existingRg = useExisting ? existingSegments[4] : resourceGroup().name
 var existingName = useExisting ? existingSegments[8] : ''
 
-resource newAccount 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = if (!useExisting) {
+resource newAccount 'Microsoft.CognitiveServices/accounts@2026-03-01' = if (!useExisting) {
   name: 'aoai-finops-${resourceToken}'
   location: aoaiLocation
   tags: tags
-  kind: 'OpenAI'
+  kind: 'AIServices'
   sku: {
     name: 'S0'
   }
@@ -32,13 +32,16 @@ resource newAccount 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = 
     type: 'SystemAssigned'
   }
   properties: {
+    // Foundry account (enables projects/agents/evals later). Key auth OFF —
+    // access is managed-identity / Entra token only (no API keys).
+    allowProjectManagement: true
     customSubDomainName: 'aoai-finops-${resourceToken}'
     publicNetworkAccess: 'Enabled'
     disableLocalAuth: true
   }
 }
 
-resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = if (!useExisting) {
+resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2026-03-01' = if (!useExisting) {
   parent: newAccount
   name: deploymentName
   sku: {
@@ -54,7 +57,7 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-
   }
 }
 
-resource existingAccount 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' existing = if (useExisting) {
+resource existingAccount 'Microsoft.CognitiveServices/accounts@2026-03-01' existing = if (useExisting) {
   name: existingName
   scope: resourceGroup(existingSubId, existingRg)
 }

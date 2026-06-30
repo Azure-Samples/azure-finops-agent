@@ -41,8 +41,8 @@ azd up                            # provision + build image + deploy
 
 What `azd up` does:
 
-1. Creates a resource group, Log Analytics + Application Insights, Azure Container Registry (Basic, admin disabled), Azure OpenAI account + model deployment, Linux App Service Plan, and the containerised Web App with system-assigned managed identity.
-2. Grants the Web App's MI `AcrPull` on the registry and `Cognitive Services User` on Azure OpenAI (BYOK).
+1. Creates a resource group, Log Analytics + Application Insights, Azure Container Registry (Basic, admin disabled), Azure AI Foundry (`AIServices`) account + `gpt-5.4` model deployment, Linux App Service Plan, and the containerised Web App with system-assigned managed identity.
+2. Grants the Web App's MI `AcrPull` on the registry and `Cognitive Services OpenAI User` on the Foundry account (BYOK via managed identity — no API keys).
 3. Creates a multi-tenant Microsoft Entra ID app registration with the 5 incremental-consent permission tiers (ARM, Microsoft Graph, Log Analytics, Azure Storage) — see [setup-entra-app.ps1](src/Dashboard/setup-entra-app.ps1).
 4. Builds the Docker image server-side via `az acr build` (no local Docker daemon required) and restarts the Web App.
 
