@@ -327,6 +327,7 @@ app.MapMicrosoftAuthEndpoints(oauthOptions, entraCredentials, idTokenValidator, 
 app.MapAzureSessionEndpoints(tokenStore, telemetry, logger);
 app.MapChatEndpoints(copilotFactory, tokenStore, telemetry, logger);
 app.MapSessionEndpoints(copilotFactory, telemetry, logger);
+app.MapKnowledgeEndpoints();
 app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
 app.MapUploadEndpoints();
