@@ -40,6 +40,10 @@ param(
     # Extra redirect URIs to register beyond the localhost + ProductionUrl defaults.
     # Used by the azd preprovision hook to register additional callbacks (e.g. App Service hostname).
     [string[]]$ExtraRedirectUris = @(),
+    # When set, no client secret is created — the app authenticates via a federated
+    # identity credential (App Service managed identity), configured by the azd
+    # postprovision hook. Fully secretless (Workload Identity Federation).
+    [switch]$NoSecret,
     # When set, suppresses all human-readable Write-Host output and prints a single
     # JSON object {appId, clientSecret, tenantId, redirectUris} to stdout — intended
     # for consumption by the azd preprovision hook.
@@ -192,24 +196,31 @@ Write-Status ""
 Write-Status "  NOTE: All Graph and Log Analytics scopes use incremental consent —" 'DarkYellow'
 Write-Status "  users only see consent prompts when they opt into each tier." 'DarkYellow'
 
-# ── 5. Create client secret ──
-Write-Status "`n[5/6] Creating client secret (valid $SecretExpiryMonths months)..." 'Yellow'
-
-$endDate = (Get-Date).AddMonths($SecretExpiryMonths).ToString("yyyy-MM-ddTHH:mm:ssZ")
-$secretJson = az ad app credential reset `
-    --id $objectId `
-    --display-name "FinOps Agent Secret" `
-    --end-date $endDate `
-    --query "{password: password}" `
-    2>$null
-
-if (-not $secretJson) {
-    Write-Status "  Failed to create client secret." 'Red'
-    exit 1
+# ── 5. Create client secret (skipped for federated managed-identity mode) ──
+if ($NoSecret) {
+    Write-Status "`n[5/6] Skipping client secret — federated managed identity (no secret)." 'Yellow'
+    $secret = ''
+    $endDate = ''
 }
+else {
+    Write-Status "`n[5/6] Creating client secret (valid $SecretExpiryMonths months)..." 'Yellow'
 
-$secret = ($secretJson | ConvertFrom-Json).password
-Write-Status "  Secret created (expires: $endDate)" 'Gray'
+    $endDate = (Get-Date).AddMonths($SecretExpiryMonths).ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $secretJson = az ad app credential reset `
+        --id $objectId `
+        --display-name "FinOps Agent Secret" `
+        --end-date $endDate `
+        --query "{password: password}" `
+        2>$null
+
+    if (-not $secretJson) {
+        Write-Status "  Failed to create client secret." 'Red'
+        exit 1
+    }
+
+    $secret = ($secretJson | ConvertFrom-Json).password
+    Write-Status "  Secret created (expires: $endDate)" 'Gray'
+}
 
 # ── 6. Output configuration ──
 if ($OutputJson) {

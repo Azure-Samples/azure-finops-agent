@@ -48,16 +48,6 @@ if ([string]::IsNullOrWhiteSpace($envName)) { $envName = 'finops-agent' }
 
 if (-not [string]::IsNullOrWhiteSpace($existingAppId)) {
     $appId = $existingAppId
-    $secret = $existingSecret
-
-    # Validate the secret is also provided — Bicep would otherwise pass an empty
-    # string into Microsoft__ClientSecret and OAuth would silently fall back to
-    # anonymous mode at runtime.
-    if ([string]::IsNullOrWhiteSpace($secret)) {
-        Write-Host "  AZURE_ENTRA_APP_ID is set but AZURE_ENTRA_CLIENT_SECRET is missing." -ForegroundColor Red
-        Write-Host "  Run: azd env set AZURE_ENTRA_CLIENT_SECRET '<your-app-secret>'" -ForegroundColor Yellow
-        exit 1
-    }
 
     # Verify the app actually exists in this tenant and capture its objectId so
     # postprovision.ps1 can patch the App Service hostname into the redirect URIs.
@@ -86,7 +76,9 @@ if (-not [string]::IsNullOrWhiteSpace($existingAppId)) {
 
     # Production redirect URI is unknown until Bicep runs. Register localhost now;
     # postprovision.ps1 patches the App Service hostname in afterwards.
-    $jsonOutput = & $entraScript -AppName $appName -OutputJson
+    # -NoSecret: no client secret — the App Service managed identity is federated
+    # to this app in postprovision (Workload Identity Federation, fully secretless).
+    $jsonOutput = & $entraScript -AppName $appName -NoSecret -OutputJson
     if ($LASTEXITCODE -ne 0 -or -not $jsonOutput) {
         Write-Host "  setup-entra-app.ps1 failed." -ForegroundColor Red
         exit 1
@@ -94,14 +86,11 @@ if (-not [string]::IsNullOrWhiteSpace($existingAppId)) {
 
     $appInfo = $jsonOutput | ConvertFrom-Json
     azd env set AZURE_ENTRA_APP_ID $appInfo.appId | Out-Null
-    azd env set AZURE_ENTRA_CLIENT_SECRET $appInfo.clientSecret | Out-Null
     azd env set AZURE_ENTRA_OBJECT_ID $appInfo.objectId | Out-Null
     # azd created this app — the postdown hook will delete it on `azd down`.
     azd env set AZURE_ENTRA_APP_CREATED_BY_AZD true | Out-Null
 
-    Write-Host "  Created app: $($appInfo.appId)" -ForegroundColor Green
-    Write-Host "  Secret stored in azd env (AZURE_ENTRA_CLIENT_SECRET)." -ForegroundColor Gray
-    Write-Host "  Service-principal propagation can take 30-60s; Bicep will retry on first failure." -ForegroundColor DarkGray
+    Write-Host "  Created app: $($appInfo.appId) (secretless — App Service MI federation set up in postprovision)" -ForegroundColor Green
 }
 
 Write-Host "=== preprovision complete ===`n" -ForegroundColor Cyan

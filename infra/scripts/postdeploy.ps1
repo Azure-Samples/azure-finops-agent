@@ -12,7 +12,7 @@ $dashboardDir = Join-Path $repoRoot 'src/Dashboard'
 
 Write-Host "`n=== azd postdeploy ===" -ForegroundColor Cyan
 
-$envValues = azd env get-values | ConvertFrom-StringData
+$envValues = azd env get-values -o json 2>$null | ConvertFrom-Json -AsHashtable
 $acrName    = $envValues['AZURE_CONTAINER_REGISTRY_NAME']
 $image      = $envValues['AZURE_CONTAINER_REGISTRY_IMAGE']
 $webApp     = $envValues['WEB_APP_NAME']
@@ -20,7 +20,7 @@ $webUrl     = $envValues['WEB_APP_URL']
 $rg         = $envValues['AZURE_RESOURCE_GROUP']
 
 foreach ($v in 'acrName','image','webApp','rg') {
-    if (-not (Get-Variable -Name $v -ValueOnly).Trim('"')) {
+    if (-not "$((Get-Variable -Name $v -ValueOnly))".Trim('"')) {
         Write-Host "  Missing azd env var: $v. Aborting." -ForegroundColor Red
         exit 1
     }
