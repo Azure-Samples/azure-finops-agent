@@ -4328,7 +4328,7 @@ function buildWowTable(headerCells, dataRows) {
   const headHtml = headerCells
     .map(
       (h, c) =>
-        `<th class="${numericColumns[c] ? "wt-num" : ""}">${escapeHtml(h)}</th>`,
+        `<th class="${numericColumns[c] ? "wt-num" : ""}">${h}</th>`,
     )
     .join("");
 
@@ -4374,7 +4374,8 @@ function parseNumeric(cell) {
 }
 
 function enhanceCell(raw) {
-  const safe = escapeHtml(raw);
+  // `raw` arrives already HTML-escaped from renderContent, so don't re-escape.
+  const safe = raw;
   // Status pills
   const trimmed = raw.trim();
   const lower = trimmed.toLowerCase();
@@ -4420,10 +4421,10 @@ function enhanceCell(raw) {
 
   // Delta arrows  ▲ +14%   ▼ -8%   — flat
   const upMatch = trimmed.match(/^(?:▲|↑|\+)\s*([\d.,]+\s*%?)$/);
-  if (upMatch) return `<span class="wt-up">▲ ${escapeHtml(upMatch[1])}</span>`;
+  if (upMatch) return `<span class="wt-up">▲ ${upMatch[1]}</span>`;
   const downMatch = trimmed.match(/^(?:▼|↓|-)\s*([\d.,]+\s*%?)$/);
   if (downMatch)
-    return `<span class="wt-down">▼ ${escapeHtml(downMatch[1])}</span>`;
+    return `<span class="wt-down">▼ ${downMatch[1]}</span>`;
   if (/^(—|flat|n\/a|-)$/i.test(trimmed))
     return `<span class="wt-flat">—</span>`;
 
@@ -4440,7 +4441,12 @@ function escapeHtml(s) {
 
 function renderContent(text) {
   if (!text) return "";
-  let html = text.replace(
+  // Neutralise any raw HTML in the message body FIRST so model or tool output
+  // can't inject markup (styled banners, <script>, phishing links). Every
+  // markdown tag below is inserted AFTER this step, and the table/code builders
+  // no longer re-escape, so legitimate rendering is unaffected.
+  let html = escapeHtml(text);
+  html = html.replace(
     /```(\w*)\n([\s\S]*?)```/g,
     '<pre><code class="lang-$1">$2</code></pre>',
   );
