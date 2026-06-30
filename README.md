@@ -50,10 +50,10 @@ Override defaults via `azd env set` before running `azd up`:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `AZURE_LOCATION` | _(prompted)_ | Region for the resource group and most resources |
-| `AZURE_OPENAI_LOCATION` | `swedencentral` | AOAI region (model availability is region-restricted) |
+| `AZURE_LOCATION` | _(prompted)_ | Region for the resource group and most resources. Restricted to the 29 regions where the full stack (incl. gpt-5.4 Global Standard) is available |
+| `AZURE_OPENAI_LOCATION` | `swedencentral` | AOAI region. Restricted to the 29 regions offering gpt-5.4 Global Standard |
 | `APP_SERVICE_PLAN_SKU` | `B1` | Use `P0V3` for production-grade (~$77/mo vs ~$13/mo) |
-| `AZURE_OPENAI_MODEL_NAME` / `_VERSION` | `gpt-5.4` / `2025-08-07` | **Reasoning model required** — the agent sets `ReasoningEffort=xhigh` in code. gpt-4o / gpt-4 will not work. |
+| `AZURE_OPENAI_MODEL_NAME` / `_VERSION` | `gpt-5.4` / `2026-03-05` | **Reasoning model required** — the agent sets `ReasoningEffort=xhigh` in code. gpt-4o / gpt-4 will not work. |
 | `AZURE_OPENAI_DEPLOYMENT_NAME` | `gpt-5.4` | Surfaced as `AzureOpenAI__DeploymentName` to the app |
 | `EXISTING_AOAI_RESOURCE_ID` | _(empty)_ | Full resource ID to reuse an existing AOAI account instead of creating one |
 | `AZURE_ENTRA_APP_ID` / `AZURE_ENTRA_CLIENT_SECRET` | _(empty)_ | Reuse an existing Entra app instead of creating one |
