@@ -186,9 +186,12 @@ public static class ChatEndpoints
                 sb.Append("]\n[ANSWER SHAPE FOR FILE ANALYSIS: (1) ONE-sentence headline naming the #1 waste with $ amount + concrete owner/RG/resource. (2) ONE visual — RenderChart (horizontal_bar of top-5 by $) when ≥3 data points, else a tight ≤5-row markdown table with an Owner column. NEVER both. NEVER long bullet lists of generic advice. (3) Optional 1-line takeaway. Then call SuggestFollowUp.]\n[FOLLOW-UP DIRECTIVE: After answering, you MUST call SuggestFollowUp. When the answer involved file analysis, prefer 2-3 distinct actions via the optional label2/prompt2 + label3/prompt3 parameters. Each action must propose a concrete next ACTION on these files (e.g. 'Rank top 5 prioritized actions across all files', 'Generate a cleanup script for the disks identified', 'Build a CFO deck from these uploads', 'Tag the untagged resources via PATCH'). Never propose a follow-up that just re-asks for analysis the user already saw.]");
                 uploadsContext = sb.ToString();
             }
-            prompt = string.IsNullOrEmpty(uploadsContext)
-                ? $"{connectionContext}\n{prompt}"
-                : $"{connectionContext}\n{uploadsContext}\n{prompt}";
+            // The connection/uploads context blocks are assembled here, but the final
+            // prompt is composed after the session is acquired (below) so the
+            // organizational-knowledge block can use the active sessionId for its
+            // per-session injection de-duplication. Order: CONTEXT → KNOWLEDGE →
+            // UPLOADED FILES → user prompt.
+            var userPrompt = prompt;
 
             ctx.Response.Headers.ContentType = "text/event-stream";
             ctx.Response.Headers.CacheControl = "no-cache";
@@ -231,6 +234,14 @@ public static class ChatEndpoints
                 sessionSw.Stop();
                 RecordPhase($"session.{sessionAcquireMode}", sessionSw.Elapsed.TotalMilliseconds);
                 var activeSessionId = session.SessionId;
+
+                // Compose the final prompt now that we know the session id. The
+                // organizational-knowledge block uses it for per-session injection
+                // de-duplication (inject once per session, re-inject on change /
+                // periodically) to keep token cost bounded. Empty blocks are skipped.
+                var knowledgeContext = AzureFinOps.Dashboard.Services.KnowledgeStore.BuildContextBlock(userId, activeSessionId);
+                prompt = string.Join("\n", new[] { connectionContext, knowledgeContext, uploadsContext, userPrompt }
+                    .Where(s => !string.IsNullOrEmpty(s)));
 
                 var done = new TaskCompletionSource();
                 var cancelled = false;
