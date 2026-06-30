@@ -401,6 +401,101 @@
               </div>
             </div>
           </div>
+
+          <!-- Knowledge Base (Entra-only — persistent org context) -->
+          <div
+            v-if="azureConnected"
+            class="sidebar-category sidebar-category--border"
+          >
+            <div
+              class="sidebar-category-label sidebar-category-label--toggle"
+              @click="toggleSection('knowledge')"
+            >
+              <span>Knowledge Base ({{ knowledgeArticles.length }})</span>
+              <svg
+                class="collapse-chevron"
+                :class="{
+                  'collapse-chevron--collapsed': collapsedSections.knowledge,
+                }"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <path
+                  d="M4 6l4 4 4-4"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </div>
+            <div
+              class="collapse-body"
+              :class="{
+                'collapse-body--collapsed': collapsedSections.knowledge,
+              }"
+            >
+              <p class="kb-intro">
+                Org context the agent applies to every conversation —
+                subscription mappings, cost-center owners, SLAs, analysis rules.
+                <a
+                  href="https://github.com/Azure-Samples/azure-finops-agent/blob/main/docs/knowledge-authoring-guide.md"
+                  target="_blank"
+                  rel="noopener"
+                  class="kb-help-link"
+                  >How to write knowledge →</a
+                >
+              </p>
+
+              <div
+                v-for="a in knowledgeArticles"
+                :key="a.id"
+                class="kb-item"
+                :class="{ 'kb-item--inactive': !a.active }"
+                :title="a.title"
+                @click="editKnowledgeArticle(a)"
+              >
+                <div class="kb-item-main">
+                  <span class="kb-item-title">{{ a.title }}</span>
+                  <span class="kb-item-cat">{{
+                    knowledgeCategoryLabel(a.category)
+                  }}</span>
+                </div>
+                <div class="kb-item-actions">
+                  <button
+                    type="button"
+                    class="kb-icon-btn"
+                    :title="a.active ? 'Disable' : 'Enable'"
+                    @click.stop="toggleKnowledgeActive(a)"
+                  >
+                    {{ a.active ? "On" : "Off" }}
+                  </button>
+                  <button
+                    type="button"
+                    class="kb-icon-btn kb-icon-btn--danger"
+                    title="Delete"
+                    @click.stop="deleteKnowledgeArticle(a)"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                class="kb-add-btn"
+                :disabled="knowledgeArticles.length >= knowledgeLimits.maxArticles"
+                :title="
+                  knowledgeArticles.length >= knowledgeLimits.maxArticles
+                    ? 'Article limit reached'
+                    : 'Add knowledge'
+                "
+                @click="openKnowledgeModal()"
+              >
+                + Add knowledge
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- Bottom section -->
@@ -1365,6 +1460,101 @@
           </div>
         </div>
 
+        <!-- Knowledge editor modal -->
+        <div
+          v-if="showKnowledgeModal"
+          class="kb-modal-overlay"
+          @click.self="closeKnowledgeModal"
+        >
+          <div class="kb-modal" role="dialog" aria-modal="true">
+            <div class="kb-modal-head">
+              <span class="kb-modal-title">{{
+                kbForm.id ? "Edit knowledge" : "Add knowledge"
+              }}</span>
+              <button
+                type="button"
+                class="kb-modal-close"
+                title="Close"
+                @click="closeKnowledgeModal"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div class="kb-modal-body">
+              <label class="kb-field-label" for="kb-title">Title</label>
+              <input
+                id="kb-title"
+                v-model="kbForm.title"
+                type="text"
+                class="kb-input"
+                :maxlength="120"
+                placeholder="e.g. Production subscription map"
+              />
+
+              <label class="kb-field-label" for="kb-category">Category</label>
+              <select
+                id="kb-category"
+                v-model="kbForm.category"
+                class="kb-input"
+              >
+                <option
+                  v-for="c in knowledgeCategories"
+                  :key="c"
+                  :value="c"
+                >
+                  {{ knowledgeCategoryLabel(c) }}
+                </option>
+              </select>
+
+              <label class="kb-field-label" for="kb-content"
+                >Content
+                <span class="kb-char-count"
+                  >{{ kbForm.content.length }} /
+                  {{ knowledgeLimits.maxArticleChars }}</span
+                ></label
+              >
+              <textarea
+                id="kb-content"
+                v-model="kbForm.content"
+                class="kb-textarea"
+                :maxlength="knowledgeLimits.maxArticleChars"
+                rows="12"
+                placeholder="Markdown is supported. Be concise — this is sent to the model as context. See the authoring guide for examples."
+              ></textarea>
+
+              <p v-if="kbError" class="kb-modal-error">{{ kbError }}</p>
+            </div>
+
+            <div class="kb-modal-foot">
+              <a
+                href="https://github.com/Azure-Samples/azure-finops-agent/blob/main/docs/knowledge-authoring-guide.md"
+                target="_blank"
+                rel="noopener"
+                class="kb-help-link kb-modal-help"
+                >Authoring guide →</a
+              >
+              <div class="kb-modal-foot-actions">
+                <button
+                  type="button"
+                  class="kb-btn kb-btn--ghost"
+                  @click="closeKnowledgeModal"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="kb-btn kb-btn--primary"
+                  :disabled="kbSaving || !kbForm.title.trim() || !kbForm.content.trim()"
+                  @click="saveKnowledgeArticle"
+                >
+                  {{ kbSaving ? "Saving…" : "Save" }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Input bar -->
         <div class="input-area">
           <!-- (Removed) Analyze CTA above input — replaced by the Analyze button inside the input bar. -->
@@ -2140,6 +2330,7 @@ function flushText() {
 const hoveredTool = ref(null);
 const collapsedSections = reactive({
   subs: true,
+  knowledge: true,
   crawl: true,
   walk: true,
   run: true,
@@ -2188,6 +2379,152 @@ const currentTenantId = ref("");
 const showTenantSwitcher = ref(false);
 const tenantError = ref(false);
 const clearing = ref(false);
+
+// ── Knowledge Base state (Entra-only) ────────────────────────────
+// Persistent organizational knowledge the agent injects into every
+// conversation. List holds metadata only; full content is fetched lazily
+// when an article is opened for editing.
+const knowledgeArticles = ref([]);
+const knowledgeCategories = ref([
+  "subscriptions",
+  "cost_centers",
+  "instructions",
+  "architecture",
+  "sla",
+  "custom",
+]);
+const knowledgeLimits = reactive({
+  maxArticles: 20,
+  maxArticleChars: 10000,
+  maxTotalChars: 50000,
+});
+const showKnowledgeModal = ref(false);
+const kbSaving = ref(false);
+const kbError = ref("");
+const kbForm = reactive({ id: "", title: "", category: "custom", content: "" });
+
+const KNOWLEDGE_CATEGORY_LABELS = {
+  subscriptions: "Subscription mappings",
+  cost_centers: "Cost centers",
+  instructions: "Analysis instructions",
+  architecture: "Architecture",
+  sla: "SLA / RTO / RPO",
+  custom: "Custom",
+};
+function knowledgeCategoryLabel(key) {
+  return KNOWLEDGE_CATEGORY_LABELS[key] || key;
+}
+
+async function loadKnowledge() {
+  try {
+    const r = await fetch("/api/knowledge");
+    if (!r.ok) {
+      // 401 = anonymous session; quietly skip (feature is Entra-only).
+      knowledgeArticles.value = [];
+      return;
+    }
+    const data = await r.json();
+    knowledgeArticles.value = data.articles || [];
+    if (Array.isArray(data.categories) && data.categories.length) {
+      knowledgeCategories.value = data.categories;
+    }
+    if (data.limits) {
+      knowledgeLimits.maxArticles = data.limits.maxArticles ?? knowledgeLimits.maxArticles;
+      knowledgeLimits.maxArticleChars =
+        data.limits.maxArticleChars ?? knowledgeLimits.maxArticleChars;
+      knowledgeLimits.maxTotalChars =
+        data.limits.maxTotalChars ?? knowledgeLimits.maxTotalChars;
+    }
+  } catch {
+    knowledgeArticles.value = [];
+  }
+}
+
+function openKnowledgeModal() {
+  if (knowledgeArticles.value.length >= knowledgeLimits.maxArticles) return;
+  kbForm.id = "";
+  kbForm.title = "";
+  kbForm.category = "custom";
+  kbForm.content = "";
+  kbError.value = "";
+  showKnowledgeModal.value = true;
+}
+
+async function editKnowledgeArticle(a) {
+  kbError.value = "";
+  kbForm.id = a.id;
+  kbForm.title = a.title;
+  kbForm.category = a.category;
+  kbForm.content = "";
+  showKnowledgeModal.value = true;
+  try {
+    const r = await fetch(`/api/knowledge/${a.id}`);
+    if (r.ok) {
+      const full = await r.json();
+      // Guard against a stale open if the user closed the modal meanwhile.
+      if (showKnowledgeModal.value && kbForm.id === full.id) {
+        kbForm.content = full.content || "";
+      }
+    }
+  } catch {}
+}
+
+function closeKnowledgeModal() {
+  showKnowledgeModal.value = false;
+}
+
+async function saveKnowledgeArticle() {
+  if (kbSaving.value) return;
+  kbError.value = "";
+  kbSaving.value = true;
+  try {
+    const body = {
+      title: kbForm.title.trim(),
+      category: kbForm.category,
+      content: kbForm.content,
+    };
+    const isEdit = !!kbForm.id;
+    const r = await fetch(
+      isEdit ? `/api/knowledge/${kbForm.id}` : "/api/knowledge",
+      {
+        method: isEdit ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      kbError.value = err.error || "Could not save. Please try again.";
+      return;
+    }
+    showKnowledgeModal.value = false;
+    await loadKnowledge();
+  } catch {
+    kbError.value = "Network error. Please try again.";
+  } finally {
+    kbSaving.value = false;
+  }
+}
+
+async function toggleKnowledgeActive(a) {
+  try {
+    const r = await fetch(`/api/knowledge/${a.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active: !a.active }),
+    });
+    if (r.ok) await loadKnowledge();
+  } catch {}
+}
+
+async function deleteKnowledgeArticle(a) {
+  if (!confirm(`Delete "${a.title}"? This cannot be undone.`)) return;
+  try {
+    const r = await fetch(`/api/knowledge/${a.id}`, { method: "DELETE" });
+    if (r.ok) await loadKnowledge();
+  } catch {}
+}
+
 
 // ── Multi-session state (Entra-only) ─────────────────────────────
 // `sessions` mirrors the server's view of the user's saved Copilot sessions.
@@ -2511,6 +2848,8 @@ async function checkAzureStatus() {
         storageEnabled.value = data.storageEnabled || false;
         // Fetch tenant list after connecting
         fetchTenants();
+        // Load the user's persistent knowledge base (Entra-only)
+        loadKnowledge();
         // First-time onboarding: glow-tour the add-on rows
         runAddonsTour();
       }
@@ -2570,6 +2909,7 @@ async function disconnectAzure() {
     azureConnected.value = false;
     azureUserEmail.value = "";
     azureSubscriptions.value = [];
+    knowledgeArticles.value = [];
     azureManagementGroups.value = [];
     azureApis.value = [];
     graphEnabled.value = false;
@@ -2600,6 +2940,7 @@ async function revokeAllPermissions() {
     azureConnected.value = false;
     azureUserEmail.value = "";
     azureSubscriptions.value = [];
+    knowledgeArticles.value = [];
     azureManagementGroups.value = [];
     azureApis.value = [];
     graphEnabled.value = false;
@@ -2691,6 +3032,7 @@ watch(
       azureConnected.value = false;
       azureUserEmail.value = "";
       azureSubscriptions.value = [];
+      knowledgeArticles.value = [];
       azureManagementGroups.value = [];
       azureApis.value = [];
       input.value = "";
@@ -6320,6 +6662,256 @@ async function send() {
   min-height: 0;
   overflow: hidden;
   position: relative;
+}
+
+/* ── Knowledge Base (sidebar + modal) ── */
+.kb-intro {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #605e5c;
+  margin: 4px 2px 8px;
+}
+.kb-help-link {
+  color: #0078d4;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.kb-help-link:hover {
+  text-decoration: underline;
+}
+.kb-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.kb-item:hover {
+  background: #f3f2f1;
+}
+.kb-item--inactive {
+  opacity: 0.55;
+}
+.kb-item-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.kb-item-title {
+  font-size: 12px;
+  color: #323130;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-item-cat {
+  font-size: 10px;
+  color: #797775;
+}
+.kb-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.kb-icon-btn {
+  border: 1px solid #e1dfdd;
+  background: #fff;
+  color: #605e5c;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.kb-icon-btn:hover {
+  background: #f3f2f1;
+  border-color: #c8c6c4;
+}
+.kb-icon-btn--danger:hover {
+  background: #fef0f1;
+  border-color: #f3d6d8;
+  color: #a4262c;
+}
+.kb-add-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 10px;
+  border: 1px dashed #c8c6c4;
+  background: #fff;
+  color: #0078d4;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.kb-add-btn:hover:not(:disabled) {
+  background: #f3f9fd;
+  border-color: #0078d4;
+}
+.kb-add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Modal */
+.kb-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.kb-modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.kb-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #edebe9;
+}
+.kb-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #201f1e;
+}
+.kb-modal-close {
+  border: none;
+  background: transparent;
+  color: #605e5c;
+  font-size: 15px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 4px;
+}
+.kb-modal-close:hover {
+  background: #f3f2f1;
+}
+.kb-modal-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+.kb-field-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #323130;
+  margin: 12px 0 4px;
+}
+.kb-field-label:first-child {
+  margin-top: 0;
+}
+.kb-char-count {
+  font-weight: 400;
+  color: #797775;
+  margin-left: 6px;
+}
+.kb-input,
+.kb-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #e1dfdd;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #323130;
+  background: #faf9f8;
+  outline: none;
+  box-sizing: border-box;
+  font-family: inherit;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.kb-textarea {
+  resize: vertical;
+  line-height: 1.5;
+  min-height: 160px;
+}
+.kb-input:focus,
+.kb-textarea:focus {
+  border-color: #0078d4;
+  background: #fff;
+  box-shadow: 0 0 0 1px #0078d4;
+}
+.kb-modal-error {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #fef0f1;
+  border: 1px solid #f3d6d8;
+  font-size: 12px;
+  color: #a4262c;
+}
+.kb-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-top: 1px solid #edebe9;
+}
+.kb-modal-help {
+  font-size: 12px;
+}
+.kb-modal-foot-actions {
+  display: flex;
+  gap: 8px;
+}
+.kb-btn {
+  padding: 7px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.kb-btn--ghost {
+  background: #fff;
+  border-color: #e1dfdd;
+  color: #323130;
+}
+.kb-btn--ghost:hover {
+  background: #f3f2f1;
+}
+.kb-btn--primary {
+  background: #0078d4;
+  color: #fff;
+}
+.kb-btn--primary:hover:not(:disabled) {
+  background: #106ebe;
+}
+.kb-btn--primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Drag-drop overlay ── */
