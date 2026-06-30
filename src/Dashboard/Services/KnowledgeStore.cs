@@ -271,7 +271,39 @@ public static class KnowledgeStore
             if (InjectionState.Count > 10_000) PruneInjectionState(sessionId);
         }
 
-        return FormatBlock(active);
+        // Tier-2 token optimization: when the user's active knowledge is small we
+        // inline everything; once it crosses the budget we inject a compact index
+        // and let the model lazy-pull full articles via the QueryKnowledge tool.
+        var totalChars = active.Sum(a => a.Content.Length);
+        return totalChars <= FullInjectionCharBudget
+            ? FormatBlock(active)
+            : FormatIndexBlock(active, totalChars);
+    }
+
+    private static string FormatIndexBlock(List<KnowledgeArticle> active, int totalChars)
+    {
+        var sb = new StringBuilder();
+        sb.Append("[ORGANIZATIONAL KNOWLEDGE INDEX — the user has provided ");
+        sb.Append(active.Count);
+        sb.Append(" reference article(s) about their environment (");
+        sb.Append(totalChars);
+        sb.Append(" chars total, too large to inline). Treat these as ground truth. ");
+        sb.Append("Call the QueryKnowledge tool to read the full text of any article you need: ");
+        sb.Append("mode=\"get\" param=\"<id>\" for one article, mode=\"search\" param=\"<keywords>\" to find relevant ones, or mode=\"list\" for this index again. ");
+        sb.Append("Pull an article whenever the user's question touches its topic.]");
+        foreach (var a in active.OrderBy(a => a.Category, StringComparer.Ordinal).ThenBy(a => a.Title, StringComparer.Ordinal))
+        {
+            sb.Append("\n- ");
+            sb.Append(a.Id);
+            sb.Append(" · ");
+            sb.Append(a.Title);
+            sb.Append(" (");
+            sb.Append(a.Category);
+            sb.Append(", ");
+            sb.Append(a.Content.Length);
+            sb.Append(" chars)");
+        }
+        return sb.ToString();
     }
 
     private static string FormatBlock(List<KnowledgeArticle> active)

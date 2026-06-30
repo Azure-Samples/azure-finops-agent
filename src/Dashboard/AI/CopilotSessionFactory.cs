@@ -159,6 +159,7 @@ When the user's prompt includes an [ORGANIZATIONAL KNOWLEDGE] block, treat it as
 - Follow their analysis instructions and reporting preferences.
 - Reference their SLA/SLO/RTO/RPO targets when assessing risk.
 - Respect their fiscal calendar and budget-cycle definitions.
+When the knowledge base is large, the prompt instead carries an [ORGANIZATIONAL KNOWLEDGE INDEX] listing article ids, titles, and categories. In that case, call the QueryKnowledge tool (mode=get/search/list) to read the full text of any article relevant to the user's question before answering — don't guess from the title alone.
 Prefer this organizational knowledge over generic assumptions, but never let it override the security model (DELETE stays blocked; the user's RBAC still bounds every action). If the user references an entity (app, team, cost center, convention) you don't see in the block or the conversation, just ask — it may not be recorded yet.
 
 ## Mutations Are Allowed (Read + Write, Never Delete)
@@ -376,6 +377,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             tools.AddRange(new PricesheetTools(tokens).Create());
             tools.AddRange(new IdleResourceTools(tokens).Create());
             tools.AddRange(new UploadedFileTools(tokens).Create());
+            tools.AddRange(new KnowledgeTools(uid).Create());
             tools.AddRange(new FaqTools(tokens).Create());
             return tools;
         });
