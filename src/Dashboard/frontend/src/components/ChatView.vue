@@ -494,6 +494,25 @@
               >
                 + Add knowledge
               </button>
+              <button
+                type="button"
+                class="kb-import-btn"
+                :disabled="
+                  kbImporting ||
+                  knowledgeArticles.length >= knowledgeLimits.maxArticles
+                "
+                title="Import a .csv, .tsv, .txt, .json, .md or .log file"
+                @click="triggerKnowledgeImport()"
+              >
+                {{ kbImporting ? "Importing…" : "↑ Import file" }}
+              </button>
+              <input
+                ref="kbFileInput"
+                type="file"
+                accept=".csv,.tsv,.txt,.json,.md,.log"
+                style="display: none"
+                @change="onKnowledgeFileSelected"
+              />
             </div>
           </div>
         </div>
@@ -2402,6 +2421,8 @@ const showKnowledgeModal = ref(false);
 const kbSaving = ref(false);
 const kbError = ref("");
 const kbForm = reactive({ id: "", title: "", category: "custom", content: "" });
+const kbFileInput = ref(null);
+const kbImporting = ref(false);
 
 const KNOWLEDGE_CATEGORY_LABELS = {
   subscriptions: "Subscription mappings",
@@ -2523,6 +2544,35 @@ async function deleteKnowledgeArticle(a) {
     const r = await fetch(`/api/knowledge/${a.id}`, { method: "DELETE" });
     if (r.ok) await loadKnowledge();
   } catch {}
+}
+
+function triggerKnowledgeImport() {
+  if (kbImporting.value) return;
+  if (knowledgeArticles.value.length >= knowledgeLimits.maxArticles) return;
+  kbFileInput.value?.click();
+}
+
+async function onKnowledgeFileSelected(e) {
+  const file = e.target.files && e.target.files[0];
+  // Reset the input so selecting the same file again re-fires change.
+  e.target.value = "";
+  if (!file) return;
+  kbImporting.value = true;
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/knowledge/import", { method: "POST", body: fd });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert(err.error || "Could not import file.");
+      return;
+    }
+    await loadKnowledge();
+  } catch {
+    alert("Network error during import.");
+  } finally {
+    kbImporting.value = false;
+  }
 }
 
 
@@ -6762,6 +6812,29 @@ async function send() {
   border-color: #0078d4;
 }
 .kb-add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.kb-import-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px solid #e1dfdd;
+  background: #fff;
+  color: #605e5c;
+  font-size: 11.5px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.kb-import-btn:hover:not(:disabled) {
+  background: #f3f2f1;
+  border-color: #c8c6c4;
+}
+.kb-import-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

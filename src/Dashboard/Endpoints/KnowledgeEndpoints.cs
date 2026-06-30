@@ -110,7 +110,64 @@ public static class KnowledgeEndpoints
             var ok = KnowledgeStore.Delete(userId, id);
             return ok ? Results.Ok(new { deleted = true }) : Results.NotFound();
         });
+
+        // Import a text file (CSV/TSV/TXT/JSON/MD) as a new article. Binary
+        // formats are rejected — knowledge is plain text the model reads as
+        // context. Oversized files are truncated to the per-article limit.
+        app.MapPost("/api/knowledge/import", async (HttpContext ctx) =>
+        {
+            if (!TryResolveEntraUser(ctx, out var userId)) return Results.Unauthorized();
+
+            if (!ctx.Request.HasFormContentType)
+                return Results.BadRequest(new { error = "multipart/form-data required." });
+
+            var form = await ctx.Request.ReadFormAsync();
+            var file = form.Files.FirstOrDefault();
+            if (file is null || file.Length <= 0)
+                return Results.BadRequest(new { error = "No file in request." });
+
+            var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+            if (!ImportableExtensions.Contains(ext))
+                return Results.BadRequest(new
+                {
+                    error = $"Unsupported file type '{ext}'. Import a text file: {string.Join(", ", ImportableExtensions)}.",
+                });
+
+            string content;
+            using (var reader = new StreamReader(file.OpenReadStream()))
+            {
+                // Read at most one article's worth + a small margin to detect overflow.
+                var buf = new char[KnowledgeStore.MaxArticleChars];
+                var read = await reader.ReadBlockAsync(buf, 0, buf.Length);
+                content = new string(buf, 0, read);
+            }
+
+            if (string.IsNullOrWhiteSpace(content))
+                return Results.BadRequest(new { error = "File is empty or not readable as text." });
+
+            var category = form["category"].ToString();
+            if (string.IsNullOrWhiteSpace(category)) category = "custom";
+
+            var title = Path.GetFileNameWithoutExtension(file.FileName);
+            if (string.IsNullOrWhiteSpace(title)) title = "Imported knowledge";
+            if (title.Length > 120) title = title[..120];
+
+            try
+            {
+                var a = KnowledgeStore.Create(userId, title, category, content);
+                UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
+                return Results.Ok(new { a.Id, a.Title, a.Category, a.Active, a.UpdatedUtc, charCount = a.Content.Length });
+            }
+            catch (KnowledgeValidationException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        })
+        .DisableAntiforgery();
     }
+
+    private static readonly HashSet<string> ImportableExtensions =
+        new(StringComparer.OrdinalIgnoreCase) { ".csv", ".tsv", ".txt", ".json", ".md", ".log" };
 
     /// <summary>
     /// Resolves the user id from the session and requires a stable Entra identity.
