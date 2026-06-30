@@ -69,6 +69,14 @@ if (-not [string]::IsNullOrWhiteSpace($existingAppId)) {
         exit 1
     }
     azd env set AZURE_ENTRA_OBJECT_ID $existingObjectId | Out-Null
+    # Mark as user-supplied so postdown won't delete it — but NEVER downgrade a
+    # prior azd-created marker (re-running `azd up` after a partial failure lands
+    # here too, with AZURE_ENTRA_APP_ID already stored from the first run).
+    $priorCreated = azd env get-value AZURE_ENTRA_APP_CREATED_BY_AZD 2>$null
+    if ($LASTEXITCODE -ne 0) { $priorCreated = '' }
+    if ("$priorCreated".Trim().Trim('"') -ne 'true') {
+        azd env set AZURE_ENTRA_APP_CREATED_BY_AZD false | Out-Null
+    }
     Write-Host "  Object ID:  $existingObjectId (cached for postprovision redirect-URI patch)" -ForegroundColor Gray
 } else {
     Write-Host "  Creating Entra ID app registration (multi-tenant, 5 consent tiers)..." -ForegroundColor Yellow
@@ -88,6 +96,8 @@ if (-not [string]::IsNullOrWhiteSpace($existingAppId)) {
     azd env set AZURE_ENTRA_APP_ID $appInfo.appId | Out-Null
     azd env set AZURE_ENTRA_CLIENT_SECRET $appInfo.clientSecret | Out-Null
     azd env set AZURE_ENTRA_OBJECT_ID $appInfo.objectId | Out-Null
+    # azd created this app — the postdown hook will delete it on `azd down`.
+    azd env set AZURE_ENTRA_APP_CREATED_BY_AZD true | Out-Null
 
     Write-Host "  Created app: $($appInfo.appId)" -ForegroundColor Green
     Write-Host "  Secret stored in azd env (AZURE_ENTRA_CLIENT_SECRET)." -ForegroundColor Gray

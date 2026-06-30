@@ -45,3 +45,14 @@ hooks:
       shell: pwsh
       run: ./infra/scripts/postdeploy.ps1
       interactive: true
+  postdown:
+    posix:
+      shell: pwsh
+      run: ./infra/scripts/postdown.ps1
+      interactive: true
+      continueOnError: true
+    windows:
+      shell: pwsh
+      run: ./infra/scripts/postdown.ps1
+      interactive: true
+      continueOnError: true

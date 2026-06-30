@@ -58,7 +58,7 @@ Override defaults via `azd env set` before running `azd up`:
 | `EXISTING_AOAI_RESOURCE_ID` | _(empty)_ | Full resource ID to reuse an existing AOAI account instead of creating one |
 | `AZURE_ENTRA_APP_ID` / `AZURE_ENTRA_CLIENT_SECRET` | _(empty)_ | Reuse an existing Entra app instead of creating one |
 
-Tear down with `azd down --purge` (purge is required because Cognitive Services soft-deletes by default).
+Tear down with `azd down --purge` (purge is required because Cognitive Services soft-deletes by default). A `postdown` hook then deletes the Entra app registration that `azd up` created — only when azd created it; a bring-your-own `AZURE_ENTRA_APP_ID` is left untouched — so no orphaned app or secret is left behind.
 
 ### Required permissions
 
