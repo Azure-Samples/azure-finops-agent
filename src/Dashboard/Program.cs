@@ -184,7 +184,7 @@ app.Use(async (ctx, next) =>
             "worker-src 'self' blob:; " +
             "style-src 'self' 'unsafe-inline'; " +
             "img-src 'self' data:; " +
-            "connect-src 'self' blob: data: https://cdn.jsdelivr.net https://js.monitor.azure.com https://canadacentral-1.in.applicationinsights.azure.com https://canadacentral.livediagnostics.monitor.azure.com; " +
+            "connect-src 'self' blob: data: https://cdn.jsdelivr.net https://js.monitor.azure.com https://*.in.applicationinsights.azure.com https://*.livediagnostics.monitor.azure.com; " +
             "font-src 'self'; " +
             "frame-ancestors 'none'";
     }

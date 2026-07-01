@@ -28,6 +28,12 @@ public class FaqTools
         string.Equals(Environment.GetEnvironmentVariable("FAQ_AUTO_APPROVE"), "true", StringComparison.OrdinalIgnoreCase);
     private static readonly string ApprovalKey = Environment.GetEnvironmentVariable("FAQ_APPROVAL_KEY") ?? "";
     private static readonly string IndexNowKey = Environment.GetEnvironmentVariable("INDEXNOW_KEY") ?? "finopsagent2026";
+    // Public site host for IndexNow submissions (e.g. "azure-finops-agent.com"). IndexNow requires
+    // domain ownership plus a key file, so this only applies to a public owner deployment. When
+    // unset (customer / internal deployments), IndexNow pinging is skipped instead of announcing
+    // a domain the deployment does not own.
+    private static readonly string? PublicSiteHost =
+        Environment.GetEnvironmentVariable("PUBLIC_SITE_HOST");
 
     static FaqTools()
     {
@@ -150,13 +156,15 @@ public class FaqTools
 
     private static async Task PingIndexNowAsync(string slug)
     {
+        // No public domain configured — skip IndexNow (nothing to announce / not owned).
+        if (string.IsNullOrWhiteSpace(PublicSiteHost)) return;
         try
         {
             using var http = new HttpClient(AzureFinOps.Dashboard.Infrastructure.Ipv4HttpHandler.Create(), disposeHandler: true) { Timeout = TimeSpan.FromSeconds(10) };
             var body = JsonSerializer.Serialize(new
             {
-                host = "azure-finops-agent.com",
-                urlList = new[] { $"https://azure-finops-agent.com/faq/{slug}" },
+                host = PublicSiteHost,
+                urlList = new[] { $"https://{PublicSiteHost}/faq/{slug}" },
                 key = IndexNowKey
             });
             await http.PostAsync("https://api.indexnow.org/indexnow",

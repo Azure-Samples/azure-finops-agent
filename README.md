@@ -47,6 +47,42 @@ flowchart LR
     ENTRA --> API
 ```
 
+## Deploy to Azure (`azd up`)
+
+One command provisions and deploys everything into your own subscription:
+
+```powershell
+az login --tenant <id>                          # sign into the target tenant
+az account set --subscription <id>
+azd auth login                    # sign into azd (same tenant)
+azd up                            # provision + build image + deploy
+```
+
+What `azd up` does:
+
+1. Creates a resource group, Log Analytics + Application Insights, Azure Container Registry (Basic, admin disabled), Azure AI Foundry (`AIServices`) account + `gpt-5.4` model deployment, Linux App Service Plan, and the containerised Web App with system-assigned managed identity.
+2. Grants the Web App's MI `AcrPull` on the registry and `Cognitive Services OpenAI User` on the Foundry account (BYOK via managed identity — no API keys).
+3. Creates a multi-tenant Microsoft Entra ID app registration with the 5 incremental-consent permission tiers (ARM, Microsoft Graph, Log Analytics, Azure Storage) — see [setup-entra-app.ps1](src/Dashboard/setup-entra-app.ps1).
+4. Builds the Docker image server-side via `az acr build` (no local Docker daemon required) and restarts the Web App.
+
+Override defaults via `azd env set` before running `azd up`:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `AZURE_LOCATION` | _(prompted)_ | Region for the resource group and most resources. Restricted to the 29 regions where the full stack (incl. gpt-5.4 Global Standard) is available |
+| `AZURE_OPENAI_LOCATION` | `swedencentral` | AOAI region. Restricted to the 29 regions offering gpt-5.4 Global Standard |
+| `APP_SERVICE_PLAN_SKU` | `B1` | Use `P0V3` for production-grade (~$77/mo vs ~$13/mo) |
+| `AZURE_OPENAI_MODEL_NAME` / `_VERSION` | `gpt-5.4` / `2026-03-05` | **Reasoning model required** — the agent sets `ReasoningEffort=xhigh` in code. gpt-4o / gpt-4 will not work. |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | `gpt-5.4` | Surfaced as `AzureOpenAI__DeploymentName` to the app |
+| `EXISTING_AOAI_RESOURCE_ID` | _(empty)_ | Full resource ID to reuse an existing AOAI account instead of creating one |
+| `AZURE_ENTRA_APP_ID` / `AZURE_ENTRA_CLIENT_SECRET` | _(empty)_ | Reuse an existing Entra app instead of creating one |
+
+Tear down with `azd down --purge` (purge is required because Cognitive Services soft-deletes by default). A `postdown` hook then deletes the Entra app registration that `azd up` created — only when azd created it; a bring-your-own `AZURE_ENTRA_APP_ID` is left untouched — so no orphaned app or secret is left behind.
+
+### Required permissions
+
+`azd up` needs rights on the Azure subscription **and** the Microsoft Entra tenant. The easiest combination is **Owner** on the subscription plus the ability to **create app registrations** in the tenant. For the least-privilege breakdown (Contributor + User Access Administrator, Application Administrator role, resource providers, quota), see [docs/azd-up-permissions.md](docs/azd-up-permissions.md).
+
 ## Running Locally
 
 ### Prerequisites

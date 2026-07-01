@@ -6,9 +6,8 @@ COPY frontend/package.json frontend/package-lock.json* ./
 # Use `npm install` instead of `npm ci` so that Linux-only platform-optional
 # deps (e.g. @emnapi/*) that aren't present when the lockfile was last
 # regenerated on a Windows dev machine still resolve cleanly in CI.
-# BuildKit cache mount keeps ~/.npm warm across CI builds.
-RUN --mount=type=cache,target=/root/.npm \
-    npm install --no-audit --no-fund --prefer-offline
+# Plain RUN (no BuildKit cache mount) so azd's `az acr build` classic builder works.
+RUN npm install --no-audit --no-fund --prefer-offline
 COPY frontend/ ./
 RUN npx vite build --outDir ../wwwroot
 
@@ -16,36 +15,26 @@ RUN npx vite build --outDir ../wwwroot
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY Dashboard.csproj ./
-RUN --mount=type=cache,target=/root/.nuget/packages \
-    dotnet restore -r linux-x64
+RUN dotnet restore -r linux-x64
 COPY . .
 COPY --from=frontend /app/wwwroot ./wwwroot/
-# Note: we deliberately do NOT pass --no-restore here. BuildKit cache mounts
-# only exist for the duration of a single RUN, so the restore step above
-# can't share its /root/.nuget/packages with this step. Re-mounting the
-# cache makes the second restore essentially free (everything cache-hits).
-RUN --mount=type=cache,target=/root/.nuget/packages \
-    dotnet publish -c Release -r linux-x64 --self-contained false -o /app/publish
+RUN dotnet publish -c Release -r linux-x64 --self-contained false -o /app/publish
 
 # ── Stage 3: Final runtime image ──
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 
-# Install Python 3 + CLI tools. apt cache mounted so re-installs are cheap; we
-# disable the apt auto-clean docker hook so the cache survives the RUN.
-RUN rm -f /etc/apt/apt.conf.d/docker-clean
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update -qq && \
+# Install Python 3 + CLI tools (plain RUN — classic-builder compatible, no BuildKit).
+RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
-    python3 python3-pip \
-    jq sqlite3 && \
-    ln -sf /usr/bin/python3 /usr/bin/python
+      python3 python3-pip \
+      jq sqlite3 && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
+    rm -rf /var/lib/apt/lists/*
 
-# Pip packages — cached separately so changing apt vs pip doesn't bust both.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install --break-system-packages \
-    requests pandas numpy openpyxl tabulate python-dateutil \
-    "pdfminer.six>=20240706" "pyarrow>=17.0"
+# Pip packages for the file-analysis tool (plain RUN — classic-builder compatible).
+RUN pip3 install --break-system-packages \
+      requests pandas numpy openpyxl tabulate python-dateutil \
+      "pdfminer.six>=20240706" "pyarrow>=17.0"
 
 # OpenTelemetry Collector (contrib build — needed for the azuremonitor exporter).
 # Bridges OTLP from the Copilot CLI subprocess into Azure Application Insights.

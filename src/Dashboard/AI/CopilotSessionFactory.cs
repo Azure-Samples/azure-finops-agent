@@ -601,9 +601,17 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             OnPermissionRequest = (_, _) => Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved }),
             Provider = new ProviderConfig
             {
-                Type = "azure",
-                BaseUrl = _endpoint.TrimEnd('/'),
+                // Azure AI Foundry exposes an OpenAI-compatible endpoint at /openai/v1/.
+                // GPT-5 series models AND ReasoningEffort require the Responses API, which is
+                // only reachable via the "openai" provider type with WireApi="responses".
+                // The classic "azure" type uses the Chat Completions API (api-version 2024-10-21)
+                // and does not support reasoning on these models — the request never completes.
+                // See GitHub Copilot SDK BYOK docs (Azure AI Foundry OpenAI-compatible endpoint):
+                // https://github.com/github/copilot-sdk/blob/main/docs/auth/byok.md
+                Type = "openai",
+                BaseUrl = $"{_endpoint.TrimEnd('/')}/openai/v1/",
                 BearerToken = bearerToken,
+                WireApi = "responses",
             },
             SystemMessage = new SystemMessageConfig
             {
@@ -629,9 +637,17 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             OnPermissionRequest = (_, _) => Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved }),
             Provider = new ProviderConfig
             {
-                Type = "azure",
-                BaseUrl = _endpoint.TrimEnd('/'),
+                // Azure AI Foundry exposes an OpenAI-compatible endpoint at /openai/v1/.
+                // GPT-5 series models AND ReasoningEffort require the Responses API, which is
+                // only reachable via the "openai" provider type with WireApi="responses".
+                // The classic "azure" type uses the Chat Completions API (api-version 2024-10-21)
+                // and does not support reasoning on these models — the request never completes.
+                // See GitHub Copilot SDK BYOK docs (Azure AI Foundry OpenAI-compatible endpoint):
+                // https://github.com/github/copilot-sdk/blob/main/docs/auth/byok.md
+                Type = "openai",
+                BaseUrl = $"{_endpoint.TrimEnd('/')}/openai/v1/",
                 BearerToken = bearerToken,
+                WireApi = "responses",
             },
             SystemMessage = new SystemMessageConfig
             {
