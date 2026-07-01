@@ -55,7 +55,7 @@ public static class SeoEndpoints
 
     public static void MapSeoEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/faq/{slug}", (string slug) =>
+        app.MapGet("/faq/{slug}", (string slug, HttpContext ctx) =>
         {
             string title, question, answer, prompt, date;
             if (StaticFaqs.TryGetValue(slug, out var page))
@@ -71,19 +71,24 @@ public static class SeoEndpoints
                 return Results.NotFound("FAQ page not found") as IResult;
             }
 
-            return Results.Content(RenderFaqHtml(slug, title, question, answer, prompt, date), "text/html; charset=utf-8");
+            return Results.Content(RenderFaqHtml(BaseUrl(ctx), slug, title, question, answer, prompt, date), "text/html; charset=utf-8");
         });
 
-        app.MapGet("/faq", () => Results.Content(RenderFaqIndex(), "text/html"));
+        app.MapGet("/faq", (HttpContext ctx) => Results.Content(RenderFaqIndex(BaseUrl(ctx)), "text/html"));
 
-        app.MapGet("/sitemap.xml", () => Results.Content(RenderSitemap(), "application/xml"));
+        app.MapGet("/sitemap.xml", (HttpContext ctx) => Results.Content(RenderSitemap(BaseUrl(ctx)), "application/xml"));
     }
 
-    private static string RenderFaqHtml(string slug, string title, string question, string answer, string prompt, string date)
+    // Public base URL for canonical links, sitemap, and structured data — derived from the
+    // incoming request so the deployed hostname is used automatically. Works on any azd
+    // deployment host, a custom domain, or localhost, with no hardcoded domain.
+    private static string BaseUrl(HttpContext ctx) => $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+
+    private static string RenderFaqHtml(string baseUrl, string slug, string title, string question, string answer, string prompt, string date)
     {
         Func<string?, string> e = System.Net.WebUtility.HtmlEncode!;
         var desc = answer.Length > 155 ? answer[..155] + "..." : answer;
-        var faqUrl = $"https://azure-finops-agent.com/faq/{slug}";
+        var faqUrl = $"{baseUrl}/faq/{slug}";
         var isoDate = date + "T00:00:00+00:00";
         var jsonLd = JsonSerializer.Serialize(new Dictionary<string, object>
         {
@@ -101,7 +106,7 @@ public static class SeoEndpoints
                 {
                     ["@type"] = "Organization",
                     ["name"] = "Azure FinOps Agent",
-                    ["url"] = "https://azure-finops-agent.com"
+                    ["url"] = baseUrl
                 },
                 ["acceptedAnswer"] = new Dictionary<string, object>
                 {
@@ -115,7 +120,7 @@ public static class SeoEndpoints
                     {
                         ["@type"] = "Organization",
                         ["name"] = "Azure FinOps Agent",
-                        ["url"] = "https://azure-finops-agent.com"
+                        ["url"] = baseUrl
                     }
                 }
             }
@@ -142,7 +147,7 @@ public static class SeoEndpoints
             + "</body></html>";
     }
 
-    private static string RenderFaqIndex()
+    private static string RenderFaqIndex(string baseUrl)
     {
         Func<string?, string> e = System.Net.WebUtility.HtmlEncode!;
         var listItems = string.Join("", StaticFaqs.Select(kv =>
@@ -155,7 +160,7 @@ public static class SeoEndpoints
             + "<title>Azure FinOps FAQ &mdash; Cloud Cost Optimization Questions &amp; Answers</title>"
             + "<meta name=\"description\" content=\"Frequently asked questions about Azure cloud cost optimization, VM pricing, reserved instances, FinOps best practices, and cost management.\">"
             + "<meta name=\"robots\" content=\"index, follow\">"
-            + "<link rel=\"canonical\" href=\"https://azure-finops-agent.com/faq\">"
+            + "<link rel=\"canonical\" href=\"" + baseUrl + "/faq\">"
             + "<style>body{font-family:Segoe UI,system-ui,sans-serif;max-width:800px;margin:0 auto;padding:2rem 1rem;color:#1a1a2e;line-height:1.7}h1{color:#0078d4}ul{padding-left:1.2rem}li{margin:0.75rem 0}a{color:#0078d4}.cta{display:inline-block;background:#0078d4;color:#fff;padding:0.75rem 1.5rem;border-radius:8px;text-decoration:none;margin-top:1.5rem;font-weight:600}</style>"
             + "</head><body>"
             + "<h1>Azure FinOps FAQ</h1>"
@@ -166,17 +171,17 @@ public static class SeoEndpoints
             + "</body></html>";
     }
 
-    private static string RenderSitemap()
+    private static string RenderSitemap(string baseUrl)
     {
         var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
-        var urls = "<url><loc>https://azure-finops-agent.com/</loc><lastmod>" + today + "</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>"
-            + "<url><loc>https://azure-finops-agent.com/faq</loc><lastmod>" + today + "</lastmod><changefreq>weekly</changefreq><priority>0.9</priority></url>";
+        var urls = "<url><loc>" + baseUrl + "/</loc><lastmod>" + today + "</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>"
+            + "<url><loc>" + baseUrl + "/faq</loc><lastmod>" + today + "</lastmod><changefreq>weekly</changefreq><priority>0.9</priority></url>";
 
         foreach (var kv in StaticFaqs)
-            urls += "<url><loc>https://azure-finops-agent.com/faq/" + kv.Key + "</loc><lastmod>" + today + "</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>";
+            urls += "<url><loc>" + baseUrl + "/faq/" + kv.Key + "</loc><lastmod>" + today + "</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>";
 
         foreach (var kv in FaqTools.GetAll())
-            urls += "<url><loc>https://azure-finops-agent.com/faq/" + kv.Key + "</loc><lastmod>" + kv.Value.CreatedUtc + "</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>";
+            urls += "<url><loc>" + baseUrl + "/faq/" + kv.Key + "</loc><lastmod>" + kv.Value.CreatedUtc + "</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>";
 
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">" + urls + "</urlset>";
     }
