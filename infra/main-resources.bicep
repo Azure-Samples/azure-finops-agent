@@ -88,5 +88,6 @@ output webAppUrl string = 'https://${appservice.outputs.hostname}'
 output webAppPrincipalId string = appservice.outputs.principalId
 output aoaiEndpoint string = aoai.outputs.endpoint
 output aoaiDeploymentName string = aoai.outputs.deploymentName
+output aiProjectName string = aoai.outputs.projectName
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output logAnalyticsWorkspaceId string = monitoring.outputs.logAnalyticsWorkspaceId

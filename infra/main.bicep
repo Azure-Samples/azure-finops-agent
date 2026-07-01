@@ -158,6 +158,7 @@ output WEB_APP_PRINCIPAL_ID string = resources.outputs.webAppPrincipalId
 
 output AZURE_OPENAI_ENDPOINT string = resources.outputs.aoaiEndpoint
 output AZURE_OPENAI_DEPLOYMENT_NAME string = resources.outputs.aoaiDeploymentName
+output AZURE_AI_PROJECT_NAME string = resources.outputs.aiProjectName
 
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = resources.outputs.appInsightsConnectionString
 output AZURE_LOG_ANALYTICS_WORKSPACE_ID string = resources.outputs.logAnalyticsWorkspaceId

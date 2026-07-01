@@ -57,6 +57,25 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2026-
   }
 }
 
+// Foundry project — a workspace under the account for the AI Foundry portal
+// experience (agents, evals, playground). NOT required by the app runtime (the
+// app calls the account's /openai/v1/ endpoint + deployment directly), but
+// provisioning it completes the Foundry reference architecture and gives the
+// deployment a visible project home in ai.azure.com. Only created for a new
+// account; an existing reused account keeps its own project layout.
+resource project 'Microsoft.CognitiveServices/accounts/projects@2026-03-01' = if (!useExisting) {
+  parent: newAccount
+  name: 'proj-finops-${resourceToken}'
+  location: aoaiLocation
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    displayName: 'Azure FinOps Agent'
+    description: 'Azure FinOps Agent Foundry project'
+  }
+}
+
 resource existingAccount 'Microsoft.CognitiveServices/accounts@2026-03-01' existing = if (useExisting) {
   name: existingName
   scope: resourceGroup(existingSubId, existingRg)
@@ -67,3 +86,4 @@ output accountName string = useExisting ? existingName : newAccount!.name
 output deploymentName string = deploymentName
 output resourceGroup string = useExisting ? existingRg : resourceGroup().name
 output subscriptionId string = useExisting ? existingSubId : subscription().subscriptionId
+output projectName string = useExisting ? '' : 'proj-finops-${resourceToken}'
