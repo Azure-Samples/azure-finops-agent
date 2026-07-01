@@ -88,8 +88,8 @@ param aoaiModelVersion string = '2026-03-05'
 @description('Azure OpenAI deployment name surfaced as `AzureOpenAI__DeploymentName` to the app.')
 param aoaiDeploymentName string = 'gpt-5.4'
 
-@description('Azure OpenAI model deployment capacity (TPM in thousands).')
-param aoaiModelCapacity int = 30
+@description('Azure OpenAI model deployment capacity — TPM in THOUSANDS (100 = 100K tokens/min). For GlobalStandard this is purely a rate-limit knob billed per-token, so raising it costs nothing. The agent uses xhigh reasoning (token-heavy) — 30 hits 429 rate limits under real use. Default 100. Lower it only if your subscription''s gpt-5.4 GlobalStandard quota is under 100K; raise it (200-300) for heavy demo traffic.')
+param aoaiModelCapacity int = 100
 
 @description('Optional resource ID of an existing Azure OpenAI account to reuse instead of creating a new one. When set, `aoaiLocation`/`aoaiModelName`/`aoaiModelVersion` are ignored — the deployment must already exist on the existing account.')
 param existingAoaiResourceId string = ''

@@ -24,7 +24,7 @@
       "value": "${AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.4}"
     },
     "aoaiModelCapacity": {
-      "value": "${AZURE_OPENAI_MODEL_CAPACITY=30}"
+      "value": "${AZURE_OPENAI_MODEL_CAPACITY=100}"
     },
     "existingAoaiResourceId": {
       "value": "${EXISTING_AOAI_RESOURCE_ID=}"
