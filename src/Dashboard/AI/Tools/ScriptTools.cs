@@ -24,16 +24,12 @@ public static class ScriptTools
     {
         yield return AIFunctionFactory.Create(GenerateScript, "GenerateScript",
             @"Generates a downloadable Azure CLI or PowerShell script from FinOps recommendations.
-Call this ONLY after you have:
-1. Already analyzed the user's Azure environment and found actionable recommendations (e.g., orphaned resources, untagged resources, right-sizing, idle VMs, unattached disks, missing budgets, etc.)
-2. Discussed the specific recommendations with the user and confirmed they want a script generated.
 
-If the conversation has no actionable recommendations yet, do NOT call this tool. Instead, tell the user:
-'I don't have any actionable recommendations to script yet. Let me first analyze your environment to find optimization opportunities.'
+Call ONLY AFTER you have analyzed the user's environment, found actionable recommendations (orphaned resources, untagged, right-sizing, idle VMs, unattached disks, missing budgets, etc.) AND confirmed the user wants a script.
 
-The script should implement the specific FinOps actions discussed (e.g., delete orphaned disks, apply tags, resize VMs, set budgets).
-Always include safety features: --what-if or confirmation prompts, comments explaining each step, and a dry-run mode.
-Prefer Azure CLI (az) scripts unless the user specifically asks for PowerShell.");
+If no actionable recommendations yet, do NOT call this tool. Tell the user: 'I don't have actionable recommendations to script yet — let me first analyze your environment.'
+
+Script MUST include safety features: --what-if / confirmation prompts / dry-run mode, comments per logical step. Prefer Azure CLI (`az`) unless user asks for PowerShell.");
     }
 
     private static Task<string> GenerateScript(

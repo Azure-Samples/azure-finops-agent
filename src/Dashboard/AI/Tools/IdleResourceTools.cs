@@ -21,23 +21,17 @@ public class IdleResourceTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(FindIdleResources, "FindIdleResources",
-            @"ONE-SHOT WASTE SCAN: Runs a battery of Resource Graph queries to find common Azure cost waste patterns and returns a consolidated report:
-- Unattached managed disks (orphan disks billed at full rate)
-- Unassociated public IPs (still charged)
-- Stopped (not deallocated) VMs (still billed for compute)
-- Empty App Service plans (no apps deployed)
+            @"ONE-SHOT WASTE SCAN: runs a battery of Resource Graph KQL queries for common Azure waste patterns and returns a consolidated JSON report:
+- Unattached managed disks
+- Unassociated public IPs
+- Stopped (not deallocated) VMs (still billed)
+- Empty App Service plans
 - Idle load balancers (no backend pool)
 - Unused NICs
 - Empty resource groups
 - Old snapshots (>30 days)
 
-Use when the user asks:
-- 'Find waste in my subscription'
-- 'What resources can I clean up?'
-- 'Show me orphaned resources'
-- 'Quick wins for cost reduction'
-
-Output is JSON with one section per pattern, including resource id, name, location, and an estimated monthly waste indicator where applicable. After calling, suggest GenerateScript to produce a cleanup script for the user to review.");
+Use for 'find waste', 'orphaned resources', 'quick cost wins'. After calling, suggest GenerateScript for cleanup.");
     }
 
     private async Task<string> FindIdleResources(
@@ -78,11 +72,22 @@ Output is JSON with one section per pattern, including resource id, name, locati
              $"ResourceContainers | where type =~ 'microsoft.resources/subscriptions/resourcegroups' | join kind=leftouter (Resources | summarize count() by resourceGroup, subscriptionId) on resourceGroup, subscriptionId | where isnull(count_) or count_ == 0 | project id, name, location, subscriptionId | top {topPerPattern} by name"),
         };
 
-        var results = new Dictionary<string, object>();
-        foreach (var (label, kql) in patterns)
+        // Fan out all 8 KQL queries in parallel. Each result is wrapped
+        // in a per-query try/catch so a single failed pattern (perms,
+        // throttle, schema drift) doesn't lose the other 7. Cuts wall
+        // time from 8×latency to max(latency).
+        var queryTasks = patterns.Select(async p =>
         {
-            results[label] = await RunResourceGraphQuery(token, kql, subs, activity);
-        }
+            // Pass null activity — Activity is not safe for concurrent SetTag
+            // writers across the 8 parallel queries. HttpHelper still emits
+            // its own per-call span.
+            try { return (p.Label, Result: await RunResourceGraphQuery(token, p.Kql, subs, activity: null)); }
+            catch (HttpRequestException ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
+            catch (TaskCanceledException ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
+            catch (OperationCanceledException ex) { return (p.Label, Result: new { error = "query exception", detail = ex.Message }); }
+        }).ToArray();
+        var completed = await Task.WhenAll(queryTasks);
+        var results = completed.ToDictionary(x => x.Label, x => x.Result);
 
         var summary = new
         {

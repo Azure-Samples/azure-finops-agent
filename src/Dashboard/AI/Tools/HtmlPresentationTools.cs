@@ -25,72 +25,22 @@ public static class HtmlPresentationTools
     public static IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateHtmlPresentation, "GenerateHtmlPresentation",
-            @"Generates a beautiful self-contained HTML presentation deck (one .html file). Animated, interactive, opens in any browser, full-screen demo-ready.
+            @"Generates a self-contained HTML deck (one .html file). Use for any 'presentation', 'deck', 'slides', or 'exec summary' — there's no other format. Built-in nav: ←/→ navigate, ↑ fullscreen, ↓/Esc exit, number keys jump, touch swipe, dot nav, progress bar.
 
-NAVIGATION (built into the deck):
-- ← → arrow keys, click zones, or on-screen arrows to move between slides
-- ↑ to enter fullscreen, ↓ or Esc to exit
-- Number keys jump to slide N
-- Touch swipe on mobile/tablet
-- Dot nav at the bottom, progress bar at the top, slide counter bottom-right
+LAYOUTS: title | kpi | chart | content | two_column | maturity | alerts | table | closing.
+Use 'alerts' for findings (good/warn/bad). Use 'table' for top-N rankings (Status col auto-colors OK/Watch/Alert; numeric col auto-renders inline bar). 'maturity' single-state mode: omit `before` (or set =after).
 
-WHEN TO USE THIS:
-- Any time the user asks for a 'presentation', 'deck', 'slides', or 'exec summary' — use this tool. There is no other presentation format available.
-- After a maturity score or estate review, generate the canonical CURRENT-STATE deck (see PATTERN below).
+DESIGN RULES:
+- Report CURRENT state, not a narrative. Metric + 3-word verdict (good/watch/bad). No multi-quarter arcs unless asked.
+- Max 5 bullets/slide, ≤10 words each, no paragraphs. Always include units ($12.4K/mo, 47 VMs).
+- Slide title = the CONCLUSION, not the topic. Bad: 'VM Costs'. Good: 'VMs drive 38% of spend — too concentrated'.
+- One chart OR one table per slide, never both. Chart values are numbers. Use chart only when ≥3 data points.
+- Chart types: pie/doughnut (composition ≤6), horizontal_bar (top-N rankings, preferred), bar (small comparison), line (time series 7+), waterfall (only for explicit before→after impact stacking).
+- No 'Thank You' / 'Questions?' slides. No padding — if 4 slides is the report, ship 4.
 
-═══ DESIGN RULES (the LLM is responsible for these) ═══
+DEFAULT CURRENT-STATE PATTERN ('show me where we stand'): title → kpi (4 cards, accent green/amber/red) → alerts (3-6 findings) → chart (horizontal_bar top 5-10) → table (5-10 rows: Name, Owner, $, Status) → maturity (single-state) → closing (3-5 verbs-first next steps + optional CTA). Switch to before/after mode (waterfall + before≠after) ONLY when user explicitly asks for a remediation recap.
 
-REPORT VOICE — CURRENT STATE, NOT NARRATIVE
-- Report the state of things RIGHT NOW. Don't speculate about 'before' or 'after' unless the user explicitly asked for a remediation recap.
-- For each finding: state the metric, then a SHORT verdict (good / watch / bad). Don't write a story arc.
-  ✅ '142 untagged resources — bad. Chargeback impossible.'
-  ❌ 'Last quarter we had 200 untagged, this quarter 142, projecting 80 next quarter…'
-- Use 'alerts' layout (good/warn/bad rows) for findings — much faster to skim than narrative bullets.
-- Use 'table' layout for top-N rankings with a status column — most demo-ready CFO view.
-- The 'maturity' layout supports CURRENT-STATE mode: set every row's `before` equal to `after` (or omit `before`) and the renderer collapses to a single-state column.
-
-CONTENT DENSITY
-- Max 5 bullets per slide. ≤10 words per bullet. No paragraphs.
-- Lead with the number, then a 3-word verdict. Always include units ($12.4K/mo, 47 VMs).
-- Slide title should be the CONCLUSION, not the topic. ❌ 'VM Costs' ✅ 'VMs drive 38% of spend — too concentrated'
-
-CHARTS
-- Use a chart whenever you have ≥3 numeric data points.
-- Pick the right chart type:
-    * pie / doughnut → composition (≤6 slices)
-    * horizontal_bar → ranking (top N by cost) — PREFER for 'top services' / 'top RGs'
-    * bar            → comparison across small set
-    * line           → time series (7+ points)
-    * waterfall      → ONLY use if user explicitly asks for before→after impact stacking. values=[baseline, +d1, +d2, ..., final]. Default: don't.
-- Chart values are NUMBERS not strings.
-
-LAYOUTS
-- 'title'      → opening hero slide
-- 'kpi'        → 2-4 big metric cards with verdict colors (CFO snapshot — use right after title)
-- 'chart'      → chart-dominant slide with 1-line verdict below
-- 'content'    → bullets + optional inline chart
-- 'two_column' → side-by-side comparisons (e.g. 'on-demand vs reserved'). Skip for current-state reports.
-- 'maturity'   → star table per dimension. Use single-state mode for current scoring.
-- 'alerts'     → ⭐ color-coded findings list (good/warn/bad). USE THIS for 'biggest issues' / 'risks' / 'wins' slides.
-- 'table'      → ⭐ ranked data table with auto bars + status tags. USE THIS for 'top N' rankings.
-- 'closing'    → CTA / next-steps slide with optional CTA button.
-
-WHAT NOT TO DO
-- ❌ Don't add 'Thank You' / 'Questions?' slides.
-- ❌ Don't render a chart with <3 data points.
-- ❌ Don't tell a multi-quarter story unless the user explicitly asked for trend analysis.
-- ❌ Don't pad. If the report is 4 slides, ship 4 slides.
-
-═══ RECOMMENDED CURRENT-STATE DECK PATTERN (default for any 'show me where we stand' request) ═══
-1. title   — '{Customer} FinOps Snapshot' / '{Month YYYY}'
-2. kpi     — 'Where you stand right now': 4 KPI cards. Use accent colors as verdicts: green = healthy, amber = watch, red = action needed.
-3. alerts  — 'Biggest issues': 3-6 color-coded findings. Each: title (the metric), detail (one-line context), impact ($/mo or count), severity (good/warn/bad).
-4. chart   — 'Spend concentration' (horizontal_bar of top 5-10) with a 1-line verdict.
-5. table   — 'Top resources to act on': 5-10 rows, columns like [Name, Owner, Monthly cost, Status]. Status column auto-colors OK/Watch/Alert.
-6. maturity (single-state) — Current scores per dimension. Set before=after for each row.
-7. closing — 'What to do next': 3-5 verbs-first bullets with owner + timing. Optional CTA.
-
-If user explicitly says 'show me what we fixed' or 'remediation recap', THEN switch to before/after mode (use waterfall chart, set before≠after on maturity rows).
+NOTE: this is a SLIDE DECK for quick exec summaries. For a DEEP FinOps maturity ASSESSMENT (canonical 19-capability FinOps Foundation report with per-capability evidence, per-subscription breakdown, priority/effort, and a phased roadmap), use GenerateMaturityReport instead — it renders a scrolling print/PDF report, which this deck format cannot.
 ");
     }
 

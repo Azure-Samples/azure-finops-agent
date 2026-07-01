@@ -1,0 +1,1 @@
+Start the app with browser tools and ask the user to log in. Run a timer that checks every second until the user is logged in, then trigger Crawl. After it completes, look into the logs and produce a granular timetable outlining how long each step took and where the bottlenecks are.

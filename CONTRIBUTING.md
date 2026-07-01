@@ -40,14 +40,14 @@ The branch name is shown in the top-right badge of the running app.
 - **Backend**: .NET 10 minimal API in `src/Dashboard/`
 - **Frontend**: Vue 3 + Vite SPA in `src/Dashboard/frontend/`
 
-```bash
+```powershell
 # One-time: Create Entra ID app registration
 cd src/Dashboard
 .\setup-entra-app.ps1
-# Copy the output ClientId/ClientSecret into appsettings.Local.json
+# Store the output ClientId/ClientSecret via dotnet user-secrets (see README → Running Locally)
 
 # Build the Vue frontend to wwwroot/
-cd client
+cd frontend
 npm install
 npm run build
 
@@ -59,13 +59,14 @@ dotnet run --urls "http://localhost:5000"
 # Open http://localhost:5000
 ```
 
-> **Important**: You must set `ASPNETCORE_ENVIRONMENT=Development` before running. Without it, the app defaults to Production, loads `appsettings.Production.json`, and causes OAuth redirect_uri mismatch errors.
+> **Important**: You must set `ASPNETCORE_ENVIRONMENT=Development` before running. Without it, the app defaults to Production and the OAuth `redirect_uri` will mismatch.
 
 ### Secrets
 
-- `appsettings.Local.json` — local dev Microsoft Entra ID and Azure OpenAI secrets (gitignored, only loaded in Development)
-- `appsettings.Production.json` — production OAuth secrets (gitignored)
+Local dev secrets are managed via [`dotnet user-secrets`](https://learn.microsoft.com/aspnet/core/security/app-secrets) — they live outside the repo and cannot be committed by accident. See [README → Running Locally](README.md#running-locally) for the full list of keys.
+
 - `appsettings.json` — base config with empty placeholders (committed)
+- `appsettings.Production.json` — production secrets (gitignored, App Service only)
 
 ### Project Structure
 
@@ -73,8 +74,8 @@ dotnet run --urls "http://localhost:5000"
 src/Dashboard/
 ├── Program.cs              # App composition, middleware, endpoint mapping
 ├── AI/                     # Copilot SDK session factory, chat SSE endpoint, tools
-├── Auth/                   # Microsoft Entra ID OAuth, session token store
-├── Web/                    # Upload/download/SEO/meta endpoints
+├── Auth/                   # Microsoft Entra ID OAuth, session token store, persistent identity
+├── Endpoints/              # Sessions, downloads, uploads, SEO/meta endpoints
 ├── Infrastructure/         # HTTP helper, temp file helper
 ├── Observability/          # OpenTelemetry sources/meters
 ├── frontend/src/components/  # Vue 3 components (ChatView, Dashboard)

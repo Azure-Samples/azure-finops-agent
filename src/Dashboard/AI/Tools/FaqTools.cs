@@ -160,7 +160,7 @@ public class FaqTools
         if (string.IsNullOrWhiteSpace(PublicSiteHost)) return;
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            using var http = new HttpClient(AzureFinOps.Dashboard.Infrastructure.Ipv4HttpHandler.Create(), disposeHandler: true) { Timeout = TimeSpan.FromSeconds(10) };
             var body = JsonSerializer.Serialize(new
             {
                 host = PublicSiteHost,

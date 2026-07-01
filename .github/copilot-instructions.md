@@ -1,5 +1,7 @@
 # Azure FinOps Agent - Copilot Instructions
 
+<!-- last refreshed: 2026-05-14 — see CHANGELOG [Unreleased] for the corresponding tool/description edits -->
+
 ## Pre-Test Checklist
 
 Before asking the user to test OAuth consent flows locally or in production, **always revoke existing consent grants first** so the Microsoft consent screen appears fresh:
@@ -48,7 +50,7 @@ The agent acts as a frontend on top of Azure Cost Management, Billing, ARM REST 
 
 - **Backend**: .NET 10 minimal API (`src/Dashboard/`)
 - **Frontend**: Vue 3 + Vite SPA (`src/Dashboard/frontend/`) with ECharts for data visualization
-- **AI**: GitHub Copilot SDK (`GitHub.Copilot.SDK`) with BYOK (Bring Your Own Key) using Azure OpenAI via Entra ID bearer tokens. Sessions managed via `CopilotClient` / `CopilotSession`. Reasoning effort set to `xhigh`. The Copilot CLI provides built-in tools (file operations, bash, grep, glob, web fetch, memory) — custom tools handle Azure-specific APIs.
+- **AI**: GitHub Copilot SDK (`GitHub.Copilot.SDK` 1.0.0-beta.4) with BYOK (Bring Your Own Key) using Azure OpenAI via Entra ID bearer tokens. Sessions managed via `CopilotClient` / `CopilotSession`. Reasoning effort set to `xhigh`. The Copilot CLI provides built-in tools (file operations, bash, grep, glob, web fetch, memory) — custom tools handle Azure-specific APIs. Multi-session per user: each user can keep many conversations, listed in the right sidebar; the SDK auto-disconnects idle sessions after 30 min (`SessionIdleTimeoutSeconds = 1800`) while preserving on-disk state for resume.
 - **Auth**: Auto-assigned anonymous sessions (no login required for chat); Microsoft Entra ID OAuth (multi-tenant) for Azure ARM, Microsoft Graph, and Log Analytics APIs
 - **Data Sources**: Azure Retail Prices API (no auth), Azure Service Health (no auth), Azure Cost Management APIs, Microsoft Graph APIs, Azure Monitor / Log Analytics APIs, ECharts visualization
 - **Observability**: OpenTelemetry end-to-end. The .NET app uses `UseAzureMonitor()` (auto-instruments HttpClient, ASP.NET Core, custom `ActivitySource("AzureFinOps.AI")` + `Meter("AzureFinOps.AI")`). The Copilot CLI subprocess emits OTLP via the SDK's built-in `TelemetryConfig` (GenAI + MCP semantic conventions — every tool call, LLM round-trip, prompt, tool args, result, token usage). Both feeds reach Application Insights via an in-container **OpenTelemetry Collector** (`otel/opentelemetry-collector-contrib`) using the `azuremonitor` exporter — config at `src/Dashboard/otel-collector-config.yaml`, launched by `entrypoint.sh` before the .NET app. Trace context (W3C `traceparent`) is auto-propagated SDK→CLI so Application Map shows one continuous transaction. Custom metrics (`finops.chat.requests`, `finops.tool.calls`, `finops.sessions.active`, etc.) keep flowing through the .NET exporter. Frontend telemetry in `frontend/src/main.js` captures page views, failed browser dependencies, uncaught JS errors, unhandled promise rejections, Vue component errors, and CSP violations. Third-party correlation headers are excluded for `cdn.jsdelivr.net` and `js.monitor.azure.com`.
@@ -112,12 +114,14 @@ src/Dashboard/
 - GitHub Copilot SDK manages the AI session lifecycle — a shared `CopilotClient` spawns the CLI process, per-user `CopilotSession` instances maintain conversation history.
 - The Copilot SDK provides built-in tools (file operations, bash, grep, glob, web fetch, memory) — custom tools handle Azure-specific APIs and unique UI features.
 - Custom tools are registered as `AIFunction` instances via `AIFunctionFactory.Create` and passed to `CopilotSession` via `SessionConfig.Tools`. Shared (stateless) tools are created once; per-user tools (requiring tokens) are created per user via closure over `UserTokens`.
-- BYOK authentication: `ClientSecretCredential` generates bearer tokens for `https://cognitiveservices.azure.com/.default`, passed to the Copilot SDK via `ProviderConfig.BearerToken`. Tokens are cached and auto-refreshed before expiry.
-- **BYOK token lifecycle (critical)**: `ProviderConfig.BearerToken` is a **static string baked into the Copilot CLI subprocess at session creation** — there is no callback/delegate to push refreshed tokens into a running session. AOAI tokens last ~1h, so any `CopilotSession` older than its token's expiry will fail every prompt with `HTTP 401 Authentication failed with provider`. `CopilotSessionFactory` mitigates this by tracking `_sessionTokenExpiry[userId]` (the bearer expiry baked into each user's session) and **proactively recycling the session** in `GetOrCreateSessionAsync` when `expiry - now < 10 min`. If you ever swap providers or change the BYOK credential type, preserve this proactive-recycle pattern — refreshing only the cached token string is NOT enough.
-- The backend streams responses via **Server-Sent Events (SSE)** using session event subscriptions (`session.On()`) — deltas, tool starts/completions, chart events, errors.
-- The Vue frontend consumes SSE and renders streaming text (character-by-character animation), tool call status in the sidebar, intent text next to the AI avatar, and ECharts visualizations inline.
+- BYOK authentication: `DefaultAzureCredential` generates bearer tokens for `https://cognitiveservices.azure.com/.default`, passed to the Copilot SDK via `ProviderConfig.BearerToken`. Tokens are cached and auto-refreshed before expiry.
+- **BYOK token lifecycle (critical)**: `ProviderConfig.BearerToken` is a **static string baked into the Copilot CLI subprocess at session creation** — there is no callback/delegate to push refreshed tokens into a running session. AOAI tokens last ~1h, so any `CopilotSession` older than its token's expiry will fail every prompt with `HTTP 401 Authentication failed with provider`. `CopilotSessionFactory` mitigates this by tracking `LiveSessionInfo.BearerExpiry` (per live session, stored inside the `LiveSessions` dict in `AiTelemetry`) and **proactively recycling via `ResumeSessionAsync` with a fresh token** in `GetOrCreateSessionAsync` when `expiry - now < 10 min` — preserves history. If you ever swap providers or change the BYOK credential type, preserve this proactive-recycle pattern — refreshing only the cached token string is NOT enough.
+- **Session persistence**: `CopilotClientOptions.CopilotHome` is set to `/home/copilot` (App Service `/home` Azure Files mount). The CLI writes session state to `{CopilotHome}/.copilot/session-state/{sessionId}/` so chat history survives container restarts, redeploys, scale-up, and slot swaps. Per-user isolation: each session's `WorkingDirectory` is `{CopilotHome}/users/{entraOid}` (or `/anon/{userId}` for anonymous), and `ListSessionsAsync` filters by `Cwd` so users only see their own.
+- **Session idle disconnect**: `CopilotClientOptions.SessionIdleTimeoutSeconds = 1800` releases the in-memory CLI side after 30 min idle. Disk state is preserved; the next prompt rehydrates via `ResumeSessionAsync(sessionId, fresh-bearer)`.
+- The backend streams responses via **Server-Sent Events (SSE)** using session event subscriptions (`session.On()`) — deltas, tool starts/completions, chart events, session-id sync, errors.
+- The Vue frontend consumes SSE and renders streaming text (character-by-character animation), tool call status in the sidebar, intent text next to the AI avatar, ECharts visualizations inline, and a vertical-split right sidebar (Agent on top, past Conversations on bottom).
 - Data should be retrieved from APIs at runtime — the agent stores dynamic FAQ entries to disk for SEO but no user data.
-- **Session management**: `/api/chat/reset` disposes the `CopilotSession`. The next `/api/chat` creates a fresh session via `copilotClient.CreateSessionAsync()`.
+- **Session management endpoints**: `GET /api/sessions` lists the user's past conversations (filtered by `Cwd`); `POST /api/sessions/new` creates a new one; `DELETE /api/sessions/{id}` removes it. The chat SSE endpoint accepts an optional `sessionId` to resume a specific conversation. `UserStateJanitor` background service deletes sessions older than 30 days.
 - **Exception handling**: Tools do NOT use try/catch internally. The Copilot CLI handles tool errors and returns them to the LLM. `UseAzureMonitor()` auto-instruments all `HttpClient` calls as dependency telemetry in App Insights.
 - The solution is designed for **customer deployment** — customers deploy it in their own Azure subscription.
 
@@ -172,7 +176,7 @@ When creating tools for the agent:
 - **ChartTools** (`RenderChart` / `RenderAdvancedChart`) returns a serialized JSON object with chart config — the frontend detects `tool_done` for `RenderChart` or `RenderAdvancedChart` and emits a separate `chart` SSE event. `RenderAdvancedChart` accepts raw ECharts option JSON for world maps, heatmaps, treemaps, radar, gauge, etc.
 - **FaqTools** (`PublishFAQ`) dynamically publishes useful public Q&As as SEO-indexable HTML pages at `/faq/{slug}`. Entries are stored in a JSON file on disk and auto-submitted to IndexNow for Bing indexing. The sitemap at `/sitemap.xml` is dynamically generated to include both static and community FAQ entries.
 - **HtmlPresentationTools** (`GenerateHtmlPresentation`) generates a self-contained HTML executive deck. Pure C#, no Python. Chart.js (CDN) for charts; keyboard nav (←/→ slides, ↑ fullscreen, ↓ exit), click zones, dot nav, progress bar, swipe. Layouts: `title`, `kpi`, `chart`, `content`, `two_column`, `maturity` (single-state or before/after), `alerts` (color-coded findings), `table` (auto-bars + status tags), `closing` (CTA). Charts: bar, horizontal_bar, line, pie, doughnut, waterfall. Returns a `__HTML_READY__:{fileId}:{fileName}:{slideCount}` marker. The SSE handler emits an `html_ready` event, and the frontend shows a compact download card. Files are served via `/api/download/html/{fileId}` (with `?inline=true` for in-browser viewing) and auto-cleaned after 30 minutes. Default deck pattern is **current-state**: title → kpi → alerts → chart → table → maturity → closing.
-- **AzureQueryTools** (`QueryAzure`) is a **read-only** tool that queries Azure ARM REST APIs (GET and allowlisted POST only) using the user's delegated token from `UserTokens.AzureToken`. Returns raw JSON for the LLM to interpret. **Security**: PUT, PATCH, and DELETE methods are rejected at the code level. POST requests are restricted to an allowlist of known read-only endpoints (`/query`, `/forecast`, `/resources`, `/generateCostDetailsReport`, `/generateReservationDetailsReport`, `/calculatePrice`, `/calculateExchange`, `/validatePurchase`, `/carbonEmissionReports`, `/getEntities`, `/summarize`). Mutating POST actions (e.g., `/deallocate`, `/start`, `/restart`, `/return`) are blocked with HTTP 403. Covers Cost Management (queries, forecasts, cost details report, reservation details report, exports, scheduled actions, views), Budgets, Billing, Consumption (pricesheets, reservation summaries/recommendations/transactions, lots, credits, balances, charges), Reservations, Savings Plans, Advisor, Resource Graph, Monitor, Activity Log, Compute/VMs/VMSS, AKS, Network (ExpressRoute, VPN, public IPs, App Gateways, NAT Gateways), Storage, SQL, SQL Managed Instances, App Service, Azure ML (workspaces, compute instances, GPU clusters, endpoints), Databricks (workspaces, pricing tiers), Cosmos DB (accounts, throughput/RU analysis), Redis Cache, Data Factory, Synapse (SQL pools, Spark pools), Container Apps, Resource Health, Defender for Cloud (security assessments, secure scores), RBAC (role assignments), Locks, Quota, Carbon, Policy/PolicyInsights, Management Groups, Tags, Migrate, and Support. Note: Consumption usageDetails/marketplaces are deprecated — prefer Cost Details API or Exports. Consumption reservationDetails is deprecated — prefer generateReservationDetailsReport (Microsoft.CostManagement). **Latest API versions** are embedded in the tool description and include: CostManagement 2025-03-01, Consumption 2025-07-01, Billing 2024-04-01, Capacity 2022-11-01, BillingBenefits 2022-11-01, Advisor 2025-01-01, ResourceGraph 2024-04-01, Insights/metrics 2024-02-01, Compute VMs 2025-11-01, Compute Disks 2025-01-02, Compute SKUs 2021-07-01, ContainerService 2026-02-01, Network core 2025-07-01 (gateways/firewall/expressRoute 2025-09-01), Storage 2025-08-01, Sql 2025-01-01, Web 2025-05-01, OperationalInsights 2025-07-01, MachineLearningServices 2026-03-01, CognitiveServices 2026-03-01, Databricks 2026-01-01, DocumentDB 2025-10-15, Cache 2024-11-01, DataFactory 2018-06-01, Synapse 2023-05-01, App 2026-01-01, ResourceHealth 2025-05-01, Security 2025-05-04 (assessments)/2020-01-01 (secureScores), Authorization/RBAC 2022-04-01, Authorization/Policy 2025-11-01, Authorization/Locks 2020-05-01, PolicyInsights 2024-10-01, Management 2023-04-01, Resources 2023-07-01 (subscriptions 2022-12-01), Quota 2025-09-01, Carbon 2025-04-01, Migrate 2024-01-15, Support 2024-04-01. **Spot/GPU Quota**: Spot vCPU quota is a single regional bucket called `lowPriorityCores` (not per VM family). H100 standard quotas are per-family: `standardNDSH100v5Family`, `StandardNCadsH100v5Family`. The Quota RP scope is `/subscriptions/{subId}/providers/Microsoft.Compute/locations/{region}/providers/Microsoft.Quota/quotas`.
+- **AzureQueryTools** (`QueryAzure`) is a **read-only** tool that queries Azure ARM REST APIs (GET and allowlisted POST only) using the user's delegated token from `UserTokens.AzureToken`. Returns raw JSON for the LLM to interpret. **Security**: PUT, PATCH, and DELETE methods are rejected at the code level. POST requests are restricted to an allowlist of known read-only endpoints (`/query`, `/forecast`, `/resources`, `/generateCostDetailsReport`, `/generateReservationDetailsReport`, `/calculatePrice`, `/calculateExchange`, `/validatePurchase`, `/carbonEmissionReports`, `/getEntities`, `/summarize`). Mutating POST actions (e.g., `/deallocate`, `/start`, `/restart`, `/return`) are blocked with HTTP 403. Covers Cost Management (queries, forecasts, cost details report, reservation details report, exports, scheduled actions, views), Budgets, Billing, Consumption (pricesheets, reservation summaries/recommendations/transactions, lots, credits, balances, charges), Reservations, Savings Plans, Advisor, Resource Graph, Monitor, Activity Log, Compute/VMs/VMSS, AKS, Network (ExpressRoute, VPN, public IPs, App Gateways, NAT Gateways), Storage, SQL, SQL Managed Instances, App Service, Azure ML (workspaces, compute instances, GPU clusters, endpoints), Databricks (workspaces, pricing tiers), Cosmos DB (accounts, throughput/RU analysis), Redis Cache, Data Factory, Synapse (SQL pools, Spark pools), Container Apps, Resource Health, Defender for Cloud (security assessments, secure scores), RBAC (role assignments), Locks, Quota, Carbon, Policy/PolicyInsights, Management Groups, Tags, Migrate, and Support. Note: Consumption usageDetails/marketplaces are deprecated — prefer Cost Details API or Exports. Consumption reservationDetails is deprecated — prefer generateReservationDetailsReport (Microsoft.CostManagement). **Latest API versions** are embedded in the tool description and include: CostManagement 2025-03-01, Consumption 2025-07-01, Billing 2024-04-01, Capacity 2022-11-01, BillingBenefits 2022-11-01, Advisor 2025-01-01, ResourceGraph 2024-04-01, Insights/metrics 2024-02-01, Compute VMs 2025-11-01, Compute Disks 2025-01-02, Compute SKUs 2021-07-01, ContainerService 2026-02-01, Network core 2025-07-01 (gateways/firewall/expressRoute 2025-09-01), Storage 2025-08-01, Sql 2025-01-01, Web 2025-05-01, OperationalInsights 2025-07-01, MachineLearningServices 2026-03-01, CognitiveServices 2026-03-01, Databricks 2026-01-01, DocumentDB 2025-10-15, Cache 2024-11-01, DataFactory 2018-06-01, Synapse 2023-05-01, App 2026-01-01, ResourceHealth 2025-05-01, Security 2025-05-04 (assessments)/2020-01-01 (secureScores), Authorization/RBAC 2022-04-01, Authorization/Policy 2025-11-01, Authorization/Locks 2020-05-01, PolicyInsights 2024-10-01, Management 2023-04-01, Resources 2023-07-01 (subscriptions 2022-12-01), Quota 2025-09-01, Carbon 2025-04-01, Migrate 2024-01-15 (note: resource type is `assessmentProjects`, NOT `migrateProjects`), Support 2024-04-01. **Spot/GPU Quota**: Spot vCPU quota is a single regional bucket called `lowPriorityCores` (not per VM family). H100 standard quotas are per-family: `standardNDSH100v5Family`, `StandardNCadsH100v5Family`. The Quota RP scope is `/subscriptions/{subId}/providers/Microsoft.Compute/locations/{region}/providers/Microsoft.Quota/quotas`.
 - **GraphQueryTools** (`QueryGraph`) is **read-only** — GET only. calls Microsoft Graph API using `TokenContext.GraphToken`. Used for license inventory, M365 usage reports (Exchange, Teams, OneDrive, SharePoint), M365 Copilot seat usage, M365 app-level usage, Intune device management, directory objects, org structure for FinOps chargebacks.
 - **LogAnalyticsQueryTools** (`QueryLogAnalytics`) is **read-only** — runs KQL queries (POST to query API only) against Log Analytics workspaces or App Insights using `TokenContext.LogAnalyticsToken`. Used for VM/container metrics, diagnostics, cost attribution (AzureActivity table), and ingestion cost analysis.
 - **TokenContext** (`TokenContext.cs`) provides per-user mutable token storage via `UserTokens` — one instance per user in a `ConcurrentDictionary<long, UserTokens>`. Token fields use `volatile` for cross-thread visibility. A `SemaphoreSlim RefreshLock` serializes token refresh operations within a user session. `UserTokens` instances are passed to tool constructors via closure, so tools always read the latest tokens via direct reference.
@@ -259,6 +263,21 @@ Prompt shortcuts are available in `.github/prompts/`:
 
 - `debug-local.prompt.md` for non-container local debugging
 - `debug-local-docker.prompt.md` for Docker-based local debugging
+
+## Testing Protocol (Local UI Tests)
+
+When the user asks for "testing", "test the change", "verify it works", or any equivalent — and the test would benefit from driving the live UI — you MUST follow this exact protocol:
+
+1. **Check that the VS Code integrated Playwright browser tools are loadable.** Run two `tool_search` calls:
+   - `"playwright browser navigate screenshot read page type"` (yields `navigate_page`, `screenshot_page`, `read_page`, `type_in_page`, `hover_element`, `run_playwright_code`)
+   - `"open browser page url click element handle dialog"` (yields `open_browser_page`, `click_element`, `handle_dialog`, `drag_element`)
+   If either search returns nothing, STOP and tell the user the test must run inside VS Code Insiders. Do not fall back to a system browser, do not ask the user to test manually.
+2. **Check whether a local backend is already running** at `http://localhost:5000` via `(Invoke-WebRequest -Uri http://localhost:5000/api/version -UseBasicParsing).StatusCode`. If 200, reuse it; if not, follow `.github/prompts/debug-local.prompt.md` to bring it up.
+3. **Confirm a browser page is shared** with you (look for the `Browser Pages` attachment in the conversation context). If none, call `open_browser_page url=http://localhost:5000` and capture the `pageId`.
+4. **Run the test against the live page** — `read_page` for state, `click_element` / `type_in_page` for actions, `screenshot_page` after each meaningful step. Verify the change actually took effect in the rendered DOM, not just in the source.
+5. **Only after the live test passes** (or fails with a captured screenshot + reproduction steps) should you report the result. Never declare a UI change "tested" based on `npm run build` succeeding alone — the build only proves it compiles.
+
+Skip this protocol only when the change has no UI surface (pure backend refactor, doc edits, infra-only changes).
 
 ## Deploying to Azure
 
@@ -370,198 +389,3 @@ This file must always be kept up to date so that Copilot has accurate context ab
 
 - The `PublishFAQ` tool dynamically creates SEO pages from useful public Q&As. Over time, the `/faq` section grows organically as users ask FinOps questions, creating a knowledge base that drives organic search traffic.
 - Consider adding a moderation layer to review dynamically published FAQs before they go live.
-
-I work for Microsoft, Ali Rexa Farahnak, and I am a Cloud Solution Architect within the AI and Apps domain and I work for Customer Success organization in Microsoft Denmark, I am participating in a cup I want you to help me win, this is the challenge:
-Skip to main content
-
-Microsoft
-SharePoint
-Search this site
-
-AFAF
-
-Microsoft
-
-Discover
-
-Publish
-
-Build
-
-OneDrive
-
-New SharePoint
-
-EMEA AI Innovation
-HomeEMEA Dragon's DenEMEA AI Agent Creation PlaybookAI Transformation (AIT)Related EMEA programs
-
-General
-EMEA Dragons Den AI Agent Challenge
-EMEA Dragon’s Den AI Agent Challenge
-📍 10 OUs 📍 3 Finalist across OUs 📍 1 EMEA Champion
-
-🚀 1. What’s the mission?
-
-We’re kicking off a region-wide challenge to accelerate AI Agent usage and shine a spotlight on the amazing talent across EMEA.
-
-Our objectives:
-
-Build mindshare on the use of Agents across the field.
-
-Encourage usage of the Frontier Cup agents.
-
-Showcase the creativity and impact of EMEA teams in AI Agent creation.
-
-Inspire daily adoption of Agents as Customer Zero.
-
-🟣 2. Campaign premise
-
-The competition will run as an individual competition and unfold as follows:
-
-Each OU will run its own local competition, showcasing AI Agents created within the OU. The local Champ Lead and V-team will select the ultimate OU representative.
-
-All submissions will be reviewed by the OU Champ Community and LT. Note: 1 submission per person.
-
-The top Agent from each OU will advance to the EMEA semi final review board, where the Top 3 Finalists will be selected.
-
-These Top 3 finalists will be invited to a surprise location, where they’ll pitch their AI Agent to the Dragons (selected members of the EMEA LT) in a 6- minute pitch.
-
-One winner will be crowned the EMEA AI Agent Champion, with their story showcased to the entire EMEA community in June.
-
-What is not allowed: No direct copies or re-branding of existing wide agents and / or already scaled use cases.
-
-          Compliance: submissions must adhere to the principles of Responsible & Trusted AI!
-
-📅 3. How to submit your agent and by when
-
-Submit your AI Agent as a one-slide submission, including your name and alias, OU, a link to the agent and your pitch (video, text, audio, be creative!). Please send your submission to your OU mailbox listed below by the April 24th deadline.
-
-Europe North
-
-Europe South
-
-France
-
-Germany & Austria
-
-MEA
-
-Netherlands
-
-SDP
-
-Switzerland
-
-United Kingdom & Ireland
-
-EMEA SE&O
-
-Key Dates
-
-March 2nd: EMEA Enablement Session – Build Agents with Ease (L100) - Please Click here to join (or check the OneEMEA Learning Calendar).
-
-March 2nd - April 24th: OU auditions open
-
-April 24th EOD: OU auditions close
-
-April 27th - May 4th: OU Top nominations review by local Champ Leads and local LT
-
-May 6th: OUs submit their Top 10 nominations
-
-May 11th - May 15th (final date TBC): EMEA semi final: Top 3 finalists selected
-
-May 18th: Top 3 winners announced
-
-May 18th - June 3rd: Top 3 winners can book their trip (secret location)!
-
-Early June (final date TBC): Top 3 winners pitch their Agent: 6-min pitch - 1 EMEA Champion crowned
-
-🏆 4. How will Agents be judged? - The 2 Rs
-
-REAL
-
-Does it deliver tangible customer or business impact?
-
-What specific customer pain point or internal challenge does it address?
-
-Was the Agent used in a new or innovative way?
-
-Are there clear "Aha!" moments that will capture the Dragons attention?
-
-REMARKABLE
-
-Is this a story compelling enough to make the Dragons want to invest and help it scale further?
-
-Did the Agent change or change the "status quo"? (e.g., from a 3-week process to a 3-minute task).
-
-Did it increase pipeline? Shorten the sales cycle by X$ or X% or save X hours of manual work?
-
-Can this win be replicated by across EMEA, or was it a "one-hit wonder"?
-
-🐉 DRAGONS SCORING METHOD
-
-Category
-
-What the Dragons Should Look For...
-
-Problem & Value
-
-Is the problem clearly defined? Does the agent solve a real, meaningful business or customer problem? Is the value obvious?
-
-Impact & Outcomes
-
-If scaled, would this agent save time, reduce cost, improve quality, or unlock growth? Is the impact measurable or believable?
-
-Innovation & Creativity
-
-Is this more than a simple automation? Does it show creative use of AI agents, reasoning, orchestration, or autonomy?
-
-User Experience (UX)
-
-Is it easy to use and intuitive? Would a non‑technical user feel confident using it?
-
-Feasibility & Scalability
-
-Can this realistically be deployed and scaled across teams, markets, or customers?
-
-Responsible & Trusted AI
-
-Does it respect data security, privacy, compliance, and responsible AI principles?
-
-Clarity of Pitch
-
-Was the idea clearly explained? Did the team articulate what it does, why it matters, and how it works?
-
-Bonus – WOW Factor: Did it genuinely surprise or excite you? Would you champion this idea?
-
-Bonus (if tie breaker) – Weekly Leaderboard
-
-🥇 1st place OU: +3 points
-
-🥈 2nd place OU: +2 points
-
-🥉 3rd place OU: +1 point
-
-See all
-
-MAR-APR
-2-24
-Dragons Den Competition
-EMEA Dragon's Den submissions
-Mon 2 Mar, All day
-APR-MAY
-27-4
-Dragons Den Competition
-OU Top nominations review by local Champ Leads and local LT
-Mon 27 Apr, All day
-MAY
-6
-Dragons Den Competition
-OUs submit their Top 10 nominations
-Wed 6 May, All day
-MAY
-11-15
-Dragons Den Competition
-EMEA semi final: Top 3 finalists selection
-Mon 11 May, All day
-

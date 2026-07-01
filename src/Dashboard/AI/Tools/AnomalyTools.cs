@@ -21,27 +21,20 @@ public class AnomalyTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(DetectCostAnomalies, "DetectCostAnomalies",
-            @"Detects cost anomalies (spikes/drops) in a subscription's recent daily spend using statistical baselining (z-score over rolling window).
+            @"Detects cost spikes/drops in a subscription's recent daily spend via z-score over a rolling window.
 
-Use when the user asks about:
-- 'Why did costs spike?'
-- 'Are there any cost anomalies?'
-- 'Did anything unusual happen in our spending last week?'
-- 'Investigate cost increase'
+Use when user asks 'why did costs spike?', 'are there anomalies?', 'investigate cost increase', etc.
 
-Returns JSON with:
-- baseline_mean, baseline_stddev, threshold (mean + 2*stddev)
-- anomalies[]: dates where cost > threshold, with magnitude and grouping breakdown
-- summary: human-readable explanation
+Returns JSON: baseline_mean, baseline_stddev, threshold (mean + 2*stddev), anomalies[] (date, magnitude, grouping breakdown), summary.
 
-After calling, drill into anomalous dates with QueryAzure (Cost Management /query grouped by ResourceGroup or ServiceName for the specific date range) to find the root cause.");
+After calling, drill into each anomalous date with QueryAzure (Cost Mgmt /query grouped by ResourceGroupName or ServiceName for that date range) to find root cause.");
     }
 
     private async Task<string> DetectCostAnomalies(
         [Description("Subscription ID to analyze")] string subscriptionId,
         [Description("Days of history to fetch (baseline + detection window). Default 35.")] int days = 35,
         [Description("Z-score threshold for flagging an anomaly. Default 2.0 (= ~95% confidence). Use 1.5 for more sensitive, 3.0 for stricter.")] double zThreshold = 2.0,
-        [Description("Optional grouping for breakdown of anomalous days: 'ServiceName', 'ResourceGroup', 'MeterCategory'. Default 'ServiceName'.")] string groupBy = "ServiceName")
+        [Description("Optional grouping for breakdown of anomalous days: 'ServiceName', 'ResourceGroupName', 'MeterCategory'. Default 'ServiceName'.")] string groupBy = "ServiceName")
     {
         var token = _tokens.AzureToken;
         if (string.IsNullOrEmpty(token))
@@ -103,26 +96,35 @@ After calling, drill into anomalous dates with QueryAzure (Cost Management /quer
         var threshold = mean + zThreshold * stddev;
         var lowThreshold = Math.Max(0, mean - zThreshold * stddev);
 
-        var anomalies = new List<object>();
+        // Build the list of anomalous days first (cheap, in-memory), then
+        // fan out the per-day cost-breakdown drilldowns in parallel. Each
+        // drilldown is an independent Cost Management query; serialising
+        // them was needlessly multiplying wall time by N anomalies.
+        var anomalyCandidates = new List<(DateTime Date, double Cost, double Z)>();
         foreach (var p in detection)
         {
             if (stddev < 0.01) continue; // flat baseline, can't detect
             var z = (p.Cost - mean) / stddev;
-            if (Math.Abs(z) >= zThreshold)
-            {
-                // Drill down for this specific day
-                var breakdown = await GetBreakdownForDay(token, subscriptionId, p.Date, groupBy, activity);
-                anomalies.Add(new
-                {
-                    date = p.Date.ToString("yyyy-MM-dd"),
-                    cost = Math.Round(p.Cost, 2),
-                    z_score = Math.Round(z, 2),
-                    deviation_pct = mean > 0.01 ? Math.Round((p.Cost - mean) / mean * 100, 1) : 0,
-                    direction = z > 0 ? "spike" : "drop",
-                    top_contributors = breakdown
-                });
-            }
+            if (Math.Abs(z) >= zThreshold) anomalyCandidates.Add((p.Date, p.Cost, z));
         }
+        var drilldownTasks = anomalyCandidates.Select(async c =>
+        {
+            // Pass null activity — Activity is not safe for concurrent SetTag
+            // writers, and these drilldowns run in parallel. Each call still
+            // gets its own ActivitySource span inside HttpHelper.
+            try { return (c, Breakdown: (object)await GetBreakdownForDay(token, subscriptionId, c.Date, groupBy, activity: null)); }
+            catch (Exception ex) { return (c, Breakdown: new { error = ex.Message }); }
+        }).ToArray();
+        var drilldowns = await Task.WhenAll(drilldownTasks);
+        var anomalies = drilldowns.Select(d => (object)new
+        {
+            date = d.c.Date.ToString("yyyy-MM-dd"),
+            cost = Math.Round(d.c.Cost, 2),
+            z_score = Math.Round(d.c.Z, 2),
+            deviation_pct = mean > 0.01 ? Math.Round((d.c.Cost - mean) / mean * 100, 1) : 0,
+            direction = d.c.Z > 0 ? "spike" : "drop",
+            top_contributors = d.Breakdown
+        }).ToList();
 
         var result = new
         {

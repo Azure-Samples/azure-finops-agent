@@ -66,7 +66,7 @@
         <span class="portal-build-badge-sep">·</span>
         <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
       </div>
-      <!-- Hidden for Dragon's Den pitch — email + disconnect are already shown in the sidebar.
+      <!-- Hidden — email + disconnect are already shown in the sidebar.
            Re-enable by removing v-if="false". -->
       <div
         v-if="false && azureConnected && azureUserEmail"
@@ -138,8 +138,8 @@
                     cat.subtitle
                   }}</span>
                 </div>
-                <span class="maturity-card-cta">
-                  {{ maturityScores[cat.key] ? "Re-score" : "Score" }}
+                <span v-if="maturityScores[cat.key]" class="maturity-card-cta">
+                  Re-score
                 </span>
               </div>
               <div class="maturity-card-body">
@@ -156,33 +156,55 @@
                       : "☆☆☆☆☆"
                   }}</span
                 >
-                <span class="maturity-card-score">
-                  {{
-                    maturityScores[cat.key]
-                      ? maturityNumeric(cat.key) + " / 5"
-                      : "not scored"
-                  }}
-                </span>
+                <svg
+                  v-if="maturityScores[cat.key]"
+                  class="collapse-chevron maturity-card-chevron"
+                  :class="{
+                    'collapse-chevron--collapsed':
+                      collapsedSections['cm_' + cat.key],
+                  }"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="
+                    collapsedSections['cm_' + cat.key] ? 'Expand' : 'Collapse'
+                  "
+                  @click.stop="toggleSection('cm_' + cat.key)"
+                  @keydown.enter.stop="toggleSection('cm_' + cat.key)"
+                >
+                  <path
+                    d="M4 6l4 4 4-4"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
               </div>
               <!-- Per-dimension breakdown (only after scoring) -->
               <div
                 v-if="maturityScores[cat.key]"
-                class="assessment-summary"
-                @click.stop
+                class="collapse-body"
+                :class="{
+                  'collapse-body--collapsed': collapsedSections['cm_' + cat.key],
+                }"
               >
-                <div
-                  v-for="sc in maturityScores[cat.key]"
-                  :key="sc.id"
-                  class="assessment-row"
-                >
-                  <div class="assessment-label">{{ sc.label }}</div>
+                <div class="assessment-summary">
                   <div
-                    class="assessment-stars"
-                    :style="{ color: starColor(sc.score) }"
+                    v-for="sc in maturityScores[cat.key]"
+                    :key="sc.id"
+                    class="assessment-row"
                   >
-                    {{ starsText(sc.score) }}
+                    <div class="assessment-label">{{ sc.label }}</div>
+                    <div
+                      class="assessment-stars"
+                      :style="{ color: starColor(sc.score) }"
+                    >
+                      {{ starsText(sc.score) }}
+                    </div>
+                    <div class="assessment-detail-text">{{ sc.detail }}</div>
                   </div>
-                  <div class="assessment-detail-text">{{ sc.detail }}</div>
                 </div>
               </div>
             </div>
@@ -575,7 +597,7 @@
               </div>
             </div>
             <!-- Incremental consent: one row per scope, all delegated, separate Entra ID consent each -->
-            <!-- HIDDEN for Dragon's Den pitch — single-button Connect Azure only.
+            <!-- HIDDEN — single-button Connect Azure only.
                  Re-enable by removing v-if="false" to bring back License Optimization,
                  Cost Allocation, Log Analytics, Cost Exports add-on tiers. -->
             <div v-if="false" class="addons-section">
@@ -908,7 +930,7 @@
                 </div>
               </div>
 
-              <!-- HIDDEN for Dragon's Den pitch — keep UI to email + X disconnect only.
+              <!-- HIDDEN — keep UI to email + X disconnect only.
                    Re-enable by removing v-if="false" to bring back the revoke-all button. -->
               <button
                 v-if="false"
@@ -1046,10 +1068,10 @@
                     </div>
                     <div class="html-deck-card-body">
                       <div class="html-deck-card-title">
-                        FinOps presentation ready
+                        {{ htmlCardTitle(msg.html.slideCount) }}
                       </div>
                       <div class="html-deck-card-meta">
-                        {{ msg.html.slideCount }} slides<span
+                        {{ htmlCardMeta(msg.html.slideCount) }}<span
                           v-if="msg.html.createdAt"
                         >
                           · {{ msg.html.createdAt }}</span
@@ -1212,9 +1234,9 @@
             </svg>
           </div>
           <div class="html-deck-card-body">
-            <div class="html-deck-card-title">FinOps presentation ready</div>
+            <div class="html-deck-card-title">{{ htmlCardTitle(htmlReady.slideCount) }}</div>
             <div class="html-deck-card-meta">
-              {{ htmlReady.slideCount }} slides<span v-if="htmlReady.createdAt">
+              {{ htmlCardMeta(htmlReady.slideCount) }}<span v-if="htmlReady.createdAt">
                 · {{ htmlReady.createdAt }}</span
               >
             </div>
@@ -1579,86 +1601,198 @@
         </div>
       </div>
 
-      <!-- Right sidebar: Tool calls -->
+      <!-- Right sidebar: Agent (tool calls) + Sessions (Entra-only) -->
       <aside
         class="tools-sidebar"
-        :class="{ 'tools-sidebar--open': allToolCalls.length > 0 || streaming }"
+        :class="{
+          'tools-sidebar--open':
+            allToolCalls.length > 0 || streaming || azureConnected,
+        }"
       >
-        <div class="tools-sidebar-header">
-          <div class="tools-sidebar-header-text">
-            <span class="tools-sidebar-title">Agent</span>
-            <span class="tools-sidebar-status">
-              <span
-                v-if="streaming"
-                class="tools-sidebar-status-dot tools-sidebar-status-dot--live"
-              ></span>
-              <span class="tools-sidebar-status-text">{{ agentStatus }}</span>
-            </span>
+        <!-- ── Top half: Agent ── -->
+        <div class="tools-sidebar-pane tools-sidebar-pane--agent">
+          <div class="tools-sidebar-header">
+            <div class="tools-sidebar-header-text">
+              <span class="tools-sidebar-title">Agent</span>
+              <span class="tools-sidebar-status">
+                <span
+                  class="tools-sidebar-status-dot"
+                  :class="{ 'tools-sidebar-status-dot--live': streaming }"
+                ></span>
+                <span class="tools-sidebar-status-text">{{ agentStatus }}</span>
+              </span>
+            </div>
+            <span class="st-count">{{ allToolCalls.length }}</span>
           </div>
-          <span class="st-count">{{ allToolCalls.length }}</span>
+          <div class="tools-sidebar-scroll">
+            <template v-for="tc in reversedToolCalls" :key="tc._uid">
+              <!-- Ghost cooling-down row: animated, expand-to-detail, ephemeral -->
+              <div
+                v-if="tc._isCooler"
+                :class="['st-row', 'st-row--cooler', { 'st-row--cooler-open': tc.expanded }]"
+                @click.stop="tc.expanded = !tc.expanded"
+                :title="`Cooling down ${tc.tool} (HTTP ${tc.status}) attempt ${tc.attempt}, waiting ${Math.round(tc.wait)}s`"
+              >
+                <svg class="st-icon st-icon--cooler" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6 4">
+                    <animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="1.4s" repeatCount="indefinite"/>
+                  </circle>
+                </svg>
+                <span class="st-name">Cooling down… {{ Math.round(tc.wait) }}s (attempt {{ tc.attempt }})</span>
+                <span class="st-time">HTTP {{ tc.status }}</span>
+                <div v-if="tc.expanded" class="st-cooler-detail" @click.stop>
+                  <div class="st-cooler-row"><strong>Tool:</strong> {{ tc.tool }}</div>
+                  <div class="st-cooler-row"><strong>Status:</strong> HTTP {{ tc.status }}</div>
+                  <div class="st-cooler-row"><strong>Attempt:</strong> {{ tc.attempt }} of 5</div>
+                  <div class="st-cooler-row"><strong>Wait:</strong> {{ Math.round(tc.wait) }}s</div>
+                  <div class="st-cooler-row st-cooler-url"><strong>URL:</strong> <code>{{ tc.url }}</code></div>
+                </div>
+              </div>
+              <!-- Normal tool row -->
+              <div
+                v-else
+                :class="[
+                  'st-row',
+                  { 'st-row--running': !tc.done, 'st-row--clickable': tc.done },
+                ]"
+                @click.stop="
+                  tc.done && (hoveredTool = hoveredTool === tc ? null : tc)
+                "
+              >
+              <svg
+                v-if="!tc.done"
+                class="st-icon st-icon--spin"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="6"
+                  stroke="#bf8700"
+                  stroke-width="2"
+                  stroke-dasharray="28"
+                  stroke-dashoffset="8"
+                  stroke-linecap="round"
+                />
+              </svg>
+              <svg
+                v-else-if="tc.success"
+                class="st-icon st-icon--ok"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="7"
+                  stroke="#1a7f37"
+                  stroke-width="1.5"
+                />
+                <path
+                  d="M5 8.2 7 10.2 11 6"
+                  stroke="#1a7f37"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <svg
+                v-else
+                class="st-icon st-icon--fail"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="7"
+                  stroke="#cf222e"
+                  stroke-width="1.5"
+                />
+                <path
+                  d="M5.5 5.5 10.5 10.5M10.5 5.5 5.5 10.5"
+                  stroke="#cf222e"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+              <span class="st-name">{{ friendlyToolLabel(tc) }}</span>
+              <span v-if="tc.done" class="st-time">{{
+                formatDuration(tc.durationMs)
+              }}</span>
+            </div>
+            </template>
+          </div>
         </div>
-        <div class="tools-sidebar-scroll">
-          <div
-            v-for="tc in reversedToolCalls"
-            :key="tc._uid"
-            :class="[
-              'st-row',
-              { 'st-row--running': !tc.done, 'st-row--clickable': tc.done },
-            ]"
-            @click.stop="
-              tc.done && (hoveredTool = hoveredTool === tc ? null : tc)
-            "
-          >
-            <svg
-              v-if="!tc.done"
-              class="st-icon st-icon--spin"
-              viewBox="0 0 16 16"
-              fill="none"
+        <!-- ── Bottom half: Conversations (works for anonymous + signed-in) ── -->
+        <div
+          class="tools-sidebar-pane tools-sidebar-pane--sessions"
+        >
+          <div class="tools-sidebar-header sessions-header">
+            <div class="tools-sidebar-header-text">
+              <span class="tools-sidebar-title">Conversations</span>
+              <span class="tools-sidebar-status">
+                <span class="tools-sidebar-status-text"
+                  >{{ sessions.length }} saved</span
+                >
+              </span>
+            </div>
+            <button
+              class="sessions-new-btn"
+              :disabled="clearing"
+              @click="newSession"
+              title="Start a new conversation"
             >
-              <circle
-                cx="8"
-                cy="8"
-                r="6"
-                stroke="#bf8700"
-                stroke-width="2"
-                stroke-dasharray="28"
-                stroke-dashoffset="8"
-                stroke-linecap="round"
-              />
-            </svg>
-            <svg
-              v-else-if="tc.success"
-              class="st-icon st-icon--ok"
-              viewBox="0 0 16 16"
-              fill="none"
+              + New
+            </button>
+          </div>
+          <div class="tools-sidebar-scroll sessions-scroll">
+            <div v-if="sessions.length === 0" class="sessions-empty">
+              No saved conversations yet — chat to create one.
+            </div>
+            <div
+              v-for="s in sessions"
+              :key="s.id"
+              :class="[
+                'session-row',
+                { 'session-row--current': s.id === currentSessionId },
+                { 'session-row--running': runningSessions.has(s.id) },
+              ]"
+              @click="selectSession(s.id)"
+              :title="s.summary"
             >
-              <circle cx="8" cy="8" r="7" stroke="#1a7f37" stroke-width="1.5" />
-              <path
-                d="M5 8.2 7 10.2 11 6"
-                stroke="#1a7f37"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-            <svg
-              v-else
-              class="st-icon st-icon--fail"
-              viewBox="0 0 16 16"
-              fill="none"
-            >
-              <circle cx="8" cy="8" r="7" stroke="#cf222e" stroke-width="1.5" />
-              <path
-                d="M5.5 5.5 10.5 10.5M10.5 5.5 5.5 10.5"
-                stroke="#cf222e"
-                stroke-width="1.5"
-                stroke-linecap="round"
-              />
-            </svg>
-            <span class="st-name">{{ friendlyToolLabel(tc) }}</span>
-            <span v-if="tc.done" class="st-time">{{
-              formatDuration(tc.durationMs)
-            }}</span>
+              <span
+                class="tools-sidebar-status-dot"
+                :class="{
+                  'tools-sidebar-status-dot--live': runningSessions.has(s.id),
+                }"
+                :aria-label="
+                  runningSessions.has(s.id) ? 'Conversation is running' : 'Idle'
+                "
+                :title="
+                  runningSessions.has(s.id)
+                    ? 'This conversation is still running'
+                    : ''
+                "
+              ></span>
+              <div class="session-row-main">
+                <span class="session-row-title">{{
+                  s.summary || "Untitled conversation"
+                }}</span>
+                <span class="session-row-time">{{
+                  formatRelativeTime(s.modified)
+                }}</span>
+              </div>
+              <button
+                class="session-row-delete"
+                @click.stop="deleteSession(s.id)"
+                title="Delete this conversation"
+                aria-label="Delete conversation"
+              >
+                ×
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -1710,17 +1844,17 @@ import hljs from "highlight.js/lib/core";
 import hljsJson from "highlight.js/lib/languages/json";
 import "highlight.js/styles/github-dark.css";
 import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  reactive,
-  ref,
-  watch,
+    computed,
+    nextTick,
+    onBeforeUnmount,
+    onMounted,
+    reactive,
+    ref,
+    watch,
 } from "vue";
 import {
-  maturityCategories,
-  pricingCategory,
+    maturityCategories,
+    pricingCategory,
 } from "../data/sidebarCategories.js";
 hljs.registerLanguage("json", hljsJson);
 
@@ -1731,11 +1865,41 @@ const emit = defineEmits(["logout", "login"]);
 
 const messages = ref([]);
 const input = ref("");
-const streaming = ref(false);
+// Sessions that currently have an in-flight stream — drives the small pulsing
+// dot on each row in the Conversations sidebar so the user can tell at a
+// glance which conversation is still working. Sentinel "__pending__" is used
+// while a brand-new session is waiting for the backend to assign its id.
+const runningSessions = reactive(new Set());
+// `streaming` is derived: true iff the currently-viewed session has an
+// in-flight stream. This lets the user navigate to a different session
+// while another keeps running in the background — the input box is only
+// disabled for the session that is actually busy.
+const streaming = computed(() =>
+  runningSessions.has(currentSessionId.value || "__pending__"),
+);
 const streamBuffer = ref("");
 const activeTools = ref([]);
-const streamToolCalls = ref([]);
-const streamCharts = ref([]);
+// Per-session live-stream tool calls / charts. Keyed by sessionId (or the
+// "__pending__" sentinel before the server echoes the real id). This keeps
+// each in-flight stream's UI state isolated so switching between concurrently
+// streaming sessions never blanks out the right-rail tool list. The visible
+// streamToolCalls / streamCharts are computeds derived from these maps for
+// whichever session the user is currently viewing.
+const perSessionToolCalls = reactive(new Map());
+const perSessionCharts = reactive(new Map());
+// Per-session ephemeral "cooling down" ghost rows. NOT persisted into
+// messages/IndexedDB — they vanish at stream end. Each entry:
+// { _uid, _isCooler:true, tool, url, attempt, wait, status, ts, expanded, _timer }
+const perSessionCoolers = reactive(new Map());
+const streamToolCalls = computed(
+  () => perSessionToolCalls.get(currentSessionId.value || "__pending__") || [],
+);
+const streamCharts = computed(
+  () => perSessionCharts.get(currentSessionId.value || "__pending__") || [],
+);
+const streamCoolers = computed(
+  () => perSessionCoolers.get(currentSessionId.value || "__pending__") || [],
+);
 const streamFollowUp = ref(null);
 const streamIntent = ref("");
 const htmlReady = ref(null);
@@ -1985,6 +2149,11 @@ const collapsedSections = reactive({
   pb_walk: true,
   pb_run: true,
   pb_playbook: true,
+  // Maturity cards default to expanded after scoring
+  cm_crawl: false,
+  cm_walk: false,
+  cm_run: false,
+  cm_playbook: false,
 });
 function toggleSection(key) {
   collapsedSections[key] = !collapsedSections[key];
@@ -2019,6 +2188,265 @@ const currentTenantId = ref("");
 const showTenantSwitcher = ref(false);
 const tenantError = ref(false);
 const clearing = ref(false);
+
+// ── Multi-session state (Entra-only) ─────────────────────────────
+// `sessions` mirrors the server's view of the user's saved Copilot sessions.
+// `currentSessionId` is the one the next /api/chat request will hit. The
+// backend echoes it back as the first SSE event of every chat so we always
+// stay in sync even if the user clicked a row mid-stream.
+const sessions = ref([]);
+const currentSessionId = ref(null);
+
+async function loadSessions() {
+  if (!azureConnected.value) {
+    sessions.value = [];
+    currentSessionId.value = null;
+    return;
+  }
+  try {
+    const res = await fetch("/api/sessions", { credentials: "same-origin" });
+    if (!res.ok) return;
+    const data = await res.json();
+    sessions.value = Array.isArray(data.sessions) ? data.sessions : [];
+    // Only adopt the server's notion of "current" when the client has none.
+    // Otherwise a periodic refresh would yank the user out of the session
+    // they explicitly selected.
+    if (data.currentSessionId && currentSessionId.value == null) {
+      currentSessionId.value = data.currentSessionId;
+    }
+  } catch {
+    /* network blip — keep prior list */
+  }
+}
+
+async function newSession() {
+  if (clearing.value) return;
+  // Note: we do NOT abort an in-flight stream here. If another session is
+  // running in the background, let it keep running — the SSE handlers will
+  // detect that the user has navigated away and stop writing to the UI.
+  clearing.value = true;
+  messages.value = [];
+  streamBuffer.value = "";
+  // User-initiated wipe — drop every session's live buckets.
+  perSessionToolCalls.clear();
+  perSessionCharts.clear();
+  scriptReady.value = null;
+  htmlReady.value = null;
+  attachments.value = [];
+  activeTools.value = [];
+  hoveredTool.value = null;
+  input.value = "";
+  chartInstances.forEach((c) => {
+    try {
+      c.dispose();
+    } catch {}
+  });
+  chartInstances.length = 0;
+  maturityScores.crawl = null;
+  maturityScores.walk = null;
+  maturityScores.run = null;
+  maturityScores.playbook = null;
+  try {
+    const res = await fetch("/api/sessions/new", { method: "POST" });
+    if (res.ok) {
+      const j = await res.json();
+      currentSessionId.value = j.sessionId || null;
+    }
+  } catch {}
+  await loadSessions();
+  clearing.value = false;
+}
+
+async function selectSession(sessionId) {
+  if (!sessionId || sessionId === currentSessionId.value) return;
+  // Allow switching even if another session is streaming in the background;
+  // the in-flight SSE handlers will detect the navigation and skip UI writes.
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/select`, {
+      method: "POST",
+    });
+  } catch {
+    return;
+  }
+  currentSessionId.value = sessionId;
+  // Fetch the persisted transcript from the SDK and replay it so the user
+  // sees their actual past messages and tool calls — not a placeholder.
+  // Wipe transient view-scoped UI refs (intent ticker, partial text buffer,
+  // follow-up CTA) so nothing from the previous view leaks. Do NOT touch
+  // perSessionToolCalls / perSessionCharts — those are keyed by sessionId
+  // and a still-streaming background session needs its bucket intact so the
+  // tool list is whole when the user switches back.
+  streamFollowUp.value = null;
+  streamBuffer.value = "";
+  streamIntent.value = "";
+  if (intentAnimTimer) {
+    clearInterval(intentAnimTimer);
+    intentAnimTimer = null;
+  }
+  activeTools.value = [];
+  hoveredTool.value = null;
+  scriptReady.value = null;
+  htmlReady.value = null;
+  try {
+    const res = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
+    );
+    if (res.ok) {
+      const j = await res.json();
+      const restored = (j.messages || []).map((m) => ({
+        role: m.role,
+        content: m.content || "",
+        toolCalls: (m.toolCalls || []).map((tc) => ({
+          id: tc.id,
+          tool: tc.name,
+          args: tc.args || "",
+          result: tc.result || null,
+          error: tc.error || null,
+          success: tc.success !== false,
+          intent: tc.intent || "",
+          durationMs: null,
+          done: true,
+          expanded: false,
+        })),
+        charts: m.charts || [],
+        html: m.html || null,
+        script: m.script ? { ...m.script, expanded: false } : null,
+      }));
+      console.log(
+        "[loadMessages] /messages returned",
+        restored.length,
+        "messages. roles=",
+        restored.map((m) => m.role).join(","),
+        "assistant lengths=",
+        restored
+          .filter((m) => m.role === "assistant")
+          .map((m) => m.content.length),
+      );
+      // If this session is still streaming in the background, drop any
+      // trailing assistant message — it is the in-progress turn that the
+      // SDK has already persisted. The live SSE stream will commit the
+      // final version on completion. Otherwise the streaming indicator
+      // (which renders its own AI avatar) would appear directly below the
+      // partial assistant row, producing two stacked AI avatars.
+      if (
+        runningSessions.has(sessionId) &&
+        restored.length &&
+        restored[restored.length - 1].role === "assistant"
+      ) {
+        restored.pop();
+      }
+      messages.value = restored.length
+        ? restored
+        : [
+            {
+              role: "system",
+              content: "Resumed conversation. Ask anything to continue.",
+            },
+          ];
+
+      // Replay any ReportMaturityScore tool calls so the sidebar stars
+      // reflect the conversation's last-known scores. Latest call per level wins.
+      maturityScores.crawl = null;
+      maturityScores.walk = null;
+      maturityScores.run = null;
+      maturityScores.playbook = null;
+      for (const m of restored) {
+        for (const tc of m.toolCalls || []) {
+          if (tc.tool !== "ReportMaturityScore") continue;
+          let level = null;
+          let scoresJson = null;
+          // Prefer the SSE marker baked into the tool result.
+          const marker =
+            typeof tc.result === "string" &&
+            tc.result.startsWith("__MATURITY_SCORE__:")
+              ? tc.result
+              : null;
+          if (marker) {
+            const rest = marker.slice("__MATURITY_SCORE__:".length);
+            const idx = rest.indexOf(":");
+            if (idx > 0) {
+              level = rest.slice(0, idx).toLowerCase();
+              scoresJson = rest.slice(idx + 1);
+            }
+          } else if (tc.args) {
+            // Fallback: parse the tool args (level + scores).
+            try {
+              const a =
+                typeof tc.args === "string" ? JSON.parse(tc.args) : tc.args;
+              level = (a.level || "").toLowerCase();
+              scoresJson = a.scores;
+            } catch {}
+          }
+          if (
+            level &&
+            ["crawl", "walk", "run", "playbook"].includes(level) &&
+            scoresJson
+          ) {
+            try {
+              const arr =
+                typeof scoresJson === "string"
+                  ? JSON.parse(scoresJson)
+                  : scoresJson;
+              if (Array.isArray(arr)) maturityScores[level] = arr;
+            } catch {}
+          }
+        }
+      }
+    } else {
+      const meta = sessions.value.find((s) => s.id === sessionId);
+      messages.value = [
+        {
+          role: "system",
+          content: `Resumed conversation: ${meta?.summary || "Untitled"}.`,
+        },
+      ];
+    }
+  } catch {
+    messages.value = [{ role: "system", content: "Resumed conversation." }];
+  }
+}
+
+async function deleteSession(sessionId) {
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+  } catch {
+    return;
+  }
+  if (sessionId === currentSessionId.value) {
+    currentSessionId.value = null;
+    messages.value = [];
+    streamFollowUp.value = null;
+    scriptReady.value = null;
+    htmlReady.value = null;
+    maturityScores.crawl = null;
+    maturityScores.walk = null;
+    maturityScores.run = null;
+    maturityScores.playbook = null;
+  }
+  // Drop the live-stream buckets for the deleted session regardless of view —
+  // a backgrounded stream may still be writing to it; abandon those writes.
+  perSessionToolCalls.delete(sessionId);
+  perSessionCharts.delete(sessionId);
+  await loadSessions();
+}
+
+function formatRelativeTime(iso) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (!t) return "";
+  const diff = Date.now() - t;
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.round(hr / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.round(d / 30);
+  return `${mo}mo ago`;
+}
 
 // Add-ons collapsible parent + per-row open state + onboarding glow tour
 // Defaults to collapsed; the first-login tour expands → animates each row → collapses again.
@@ -2188,7 +2616,11 @@ async function revokeAllPermissions() {
 // When Azure connects, force Crawl/Walk/Run/Playbook/Pricing to collapsed.
 // This guarantees a clean initial state every time the user reconnects.
 watch(azureConnected, async (connected, wasConnected) => {
-  if (!connected) return;
+  if (!connected) {
+    sessions.value = [];
+    currentSessionId.value = null;
+    return;
+  }
   collapsedSections.pricing = true;
   collapsedSections.crawl = true;
   collapsedSections.walk = true;
@@ -2202,6 +2634,8 @@ watch(azureConnected, async (connected, wasConnected) => {
   // Auto-clear chat when Azure connects — removes stale "Connect Azure first" messages
   // and resets the Copilot session so the LLM knows the user is now connected
   if (!wasConnected) await clearMessages();
+  // Hydrate the Conversations sidebar with this user's saved sessions.
+  await loadSessions();
 });
 
 // Reset Copilot session when addon tiers are enabled so LLM picks up new tokens
@@ -2260,7 +2694,6 @@ watch(
       azureManagementGroups.value = [];
       azureApis.value = [];
       input.value = "";
-      streaming.value = false;
       if (abortController) {
         abortController.abort();
         abortController = null;
@@ -2271,6 +2704,44 @@ watch(
 
 onMounted(async () => {
   document.addEventListener("click", dismissPopover);
+  // Dev helper: window.__simulateCool(waitSec?) injects a synthetic ghost
+  // "cooling down" row in the current session's tool sidebar so you can
+  // verify the throttle UI without forcing a real 429. Removes itself
+  // after the wait elapses, just like a real cooler. Dev-build only —
+  // gated on Vite's import.meta.env.DEV so production bundles don't ship it.
+  if (import.meta.env.DEV) {
+    window.__simulateCool = (wait = 15, status = 429) => {
+      const sid = currentSessionId.value || "__pending__";
+      const list = perSessionCoolers.get(sid) || [];
+      const cooler = {
+        _uid: `c-sim-${Date.now()}`,
+        _key: `sim|${Date.now()}`,
+        _isCooler: true,
+        tool: "azure",
+        url: "https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CostManagement/query?api-version=2025-03-01",
+        attempt: 1,
+        wait,
+        status,
+        ts: Date.now(),
+        expanded: false,
+        done: false,
+      };
+      cooler._timer = setTimeout(() => {
+        const arr = perSessionCoolers.get(sid) || [];
+        perSessionCoolers.set(sid, arr.filter((x) => x._uid !== cooler._uid));
+      }, wait * 1000 + 500);
+      list.push(cooler);
+      perSessionCoolers.set(sid, [...list]);
+      // eslint-disable-next-line no-console
+      console.log("[simulateCool] injected ghost row for", wait, "s in session", sid);
+      return cooler._uid;
+    };
+  }
+  // Load saved conversations once we know whether the user is Azure-connected.
+  // (The auth check fires on mount too; loadSessions is a no-op until then.)
+  setTimeout(() => {
+    loadSessions();
+  }, 500);
   // Restore auth loading state after OAuth redirect (page reload clears ref)
   const pendingAuth = sessionStorage.getItem("authLoading");
   if (pendingAuth) {
@@ -2329,16 +2800,24 @@ async function clearMessages() {
     abortController.abort();
     abortController = null;
   }
-  streaming.value = false;
   messages.value = [];
   streamBuffer.value = "";
-  streamToolCalls.value = [];
-  streamCharts.value = [];
+  perSessionToolCalls.clear();
+  perSessionCharts.clear();
+  streamFollowUp.value = null;
+  streamIntent.value = "";
+  if (intentAnimTimer) {
+    clearInterval(intentAnimTimer);
+    intentAnimTimer = null;
+  }
   scriptReady.value = null;
   htmlReady.value = null;
   attachments.value = [];
   activeTools.value = [];
   hoveredTool.value = null;
+  // Drop any tracked background streams — on logout/reset they belong to
+  // a different identity and would otherwise leave stale "live" dots.
+  runningSessions.clear();
   input.value = "";
   chartInstances.forEach((c) => {
     try {
@@ -2352,8 +2831,15 @@ async function clearMessages() {
   maturityScores.run = null;
   maturityScores.playbook = null;
   try {
-    await fetch("/api/chat/reset", { method: "POST" });
+    const r = await fetch("/api/chat/reset", { method: "POST" });
+    if (r.ok) {
+      try {
+        const j = await r.json();
+        if (j && j.sessionId) currentSessionId.value = j.sessionId;
+      } catch {}
+    }
   } catch {}
+  await loadSessions();
   clearing.value = false;
 }
 
@@ -2447,7 +2933,20 @@ const AZURE_API_LABELS = [
 
 function _arm_label(path) {
   if (!path) return null;
-  for (const [re, label] of AZURE_API_LABELS) if (re.test(path)) return label;
+  for (const [re, label] of AZURE_API_LABELS) {
+    if (!re.test(path)) continue;
+    // Several distinct REST operations can share the same friendly label
+    // (e.g. /query, /dimensions, /alerts all map to "Cost Management").
+    // Append the last action/segment so parallel calls don't look like duplicates.
+    const tail = (path.split("?")[0].match(/\/([A-Za-z0-9_-]+)\/?$/) || [])[1];
+    if (tail && !new RegExp(tail, "i").test(label)) {
+      const t = tail.toLowerCase();
+      // Skip noisy id-like tails (guids, version segments).
+      if (!/^[0-9a-f]{8,}$/i.test(tail) && !/^\d{4}-\d{2}-\d{2}/.test(tail))
+        return `${label} · ${t}`;
+    }
+    return label;
+  }
   return "ARM";
 }
 
@@ -2473,6 +2972,17 @@ function _graph_label(path) {
 
 function friendlyToolLabel(tc) {
   if (!tc) return "";
+  // Live 429 backoff — set by cooling_down SSE event mid-flight.
+  if (tc.cooling && !tc.done) {
+    const w = Math.round(tc.cooling.wait || 0);
+    return `Cooling down… ${w}s`;
+  }
+  // Throttled HTTP calls: the tool itself succeeded (returned a string), but the
+  // body starts with "HTTP 429 …". Show a friendly status instead of the tool name
+  // so the user understands it was rate-limited, not a hard failure.
+  if (tc.done && typeof tc.result === "string" && tc.result.startsWith("HTTP 429")) {
+    return "Cooling down…";
+  }
   const tool = tc.tool;
   let args = tc.args;
   if (args && typeof args === "string") {
@@ -2624,6 +3134,21 @@ function starColor(score) {
   if (score >= 3) return "#ff8c00";
   if (score >= 1) return "#d83b01";
   return "#a19f9d";
+}
+
+// The HTML download card is shared by the slide-deck renderer and the maturity
+// report renderer (both emit the same __HTML_READY__ marker). Decks put a bare
+// number in the count slot (e.g. "7"); the report puts a labelled string (e.g.
+// "3 capabilities"). Detect which and word the card accordingly.
+function htmlCardIsReport(count) {
+  return /[a-zA-Z]/.test(String(count ?? ""));
+}
+function htmlCardTitle(count) {
+  return htmlCardIsReport(count) ? "FinOps report ready" : "FinOps presentation ready";
+}
+function htmlCardMeta(count) {
+  const s = String(count ?? "");
+  return htmlCardIsReport(count) ? s : `${s} slides`;
 }
 
 // Sidebar categories (FinOps maturity Crawl/Walk/Run/Playbook + Pricing) — see data/sidebarCategories.js
@@ -2838,7 +3363,12 @@ function buildEChartsOption(raw) {
     return null;
   }
 
-  const chartType = (parsed.type || "bar").toLowerCase();
+  let chartType = (parsed.type || "bar").toLowerCase();
+  // Translate `horizontal_bar` to a regular bar with swapped axes — ECharts
+  // has no native `horizontal_bar` series type, so without this we'd render
+  // an empty chart (axes only, no bars). The LLM frequently emits this value.
+  const isHorizontal = chartType === "horizontal_bar";
+  if (isHorizontal) chartType = "bar";
   const title = parsed.title || "";
   const seriesName = parsed.seriesName || "";
   const xAxisName = parsed.xAxisName || "";
@@ -3061,7 +3591,42 @@ function buildEChartsOption(raw) {
     };
   }
 
-  const values = dataArr.map((d) => (Array.isArray(d) ? d[1] : d.value));
+  // Extract numeric values robustly. Accept any of:
+  //   [name, value]                          (array form)
+  //   {name, value}                           (canonical object form)
+  //   {name, <seriesName>}                    (LLM-named value key, e.g. {name:'A', USD:100})
+  // Without the third fallback, single-series bar charts whose value key
+  // matches the seriesName render with empty bars.
+  const values = dataArr.map((d) => {
+    if (Array.isArray(d)) return d[1];
+    if (d && "value" in d) return d.value;
+    if (d && typeof d === "object") {
+      const k = Object.keys(d).find((k) => k !== "name");
+      return k ? d[k] : undefined;
+    }
+    return undefined;
+  });
+
+  // Horizontal bar: keep categories on the value-perpendicular axis, swap
+  // which axis is `category` vs `value`. xAxisName/yAxisName already reflect
+  // the user's intent (xAxis=USD, yAxis=Service for horizontal_bar).
+  const categoryAxis = {
+    type: "category",
+    data: categories,
+    name: isHorizontal ? yAxisName : xAxisName,
+    nameLocation: "center",
+    nameGap: isHorizontal ? 60 : 30,
+    axisLabel: isHorizontal
+      ? { fontSize: 11, color: "#1f2328", fontWeight: 500 }
+      : xAxisLabel,
+  };
+  const valueAxis = {
+    type: "value",
+    name: isHorizontal ? xAxisName : yAxisName,
+    nameLocation: "center",
+    nameGap: isHorizontal ? 30 : 45,
+    axisLabel: yAxisLabel,
+  };
 
   return {
     title: {
@@ -3071,22 +3636,9 @@ function buildEChartsOption(raw) {
     },
     tooltip: { trigger: "axis" },
     color: colors,
-    grid: { left: 60, right: 20, bottom: 40, top: 50 },
-    xAxis: {
-      type: "category",
-      data: categories,
-      name: xAxisName,
-      nameLocation: "center",
-      nameGap: 30,
-      axisLabel: xAxisLabel,
-    },
-    yAxis: {
-      type: "value",
-      name: yAxisName,
-      nameLocation: "center",
-      nameGap: 45,
-      axisLabel: yAxisLabel,
-    },
+    grid: { left: isHorizontal ? 120 : 60, right: 20, bottom: 40, top: 50 },
+    xAxis: isHorizontal ? valueAxis : categoryAxis,
+    yAxis: isHorizontal ? categoryAxis : valueAxis,
     series: [
       {
         name: seriesName,
@@ -3622,19 +4174,46 @@ onBeforeUnmount(() => {
 });
 
 // ── Aggregated tool calls for sidebar ──
+// Dedupe by tool-call id. The same tool call can appear in both the
+// persisted message history (loaded via /messages on session resume) AND
+// in the live stream's toolCalls list when the user navigates away from
+// a running session and back. Stream entries reflect the freshest state
+// (running spinner, latest result), so they win.
 const allToolCalls = computed(() => {
-  const result = [];
-  for (const msg of messages.value) {
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) {
-        result.push({ ...tc, _uid: `msg-${tc.id}`, done: true });
-      }
+  const byId = new Map();
+  const order = [];
+  const add = (tc, uidPrefix) => {
+    const id = tc.id;
+    if (id == null) {
+      // Anonymous tool call — keep as-is, no dedupe possible.
+      const entry = { ...tc, _uid: `${uidPrefix}-anon-${order.length}` };
+      order.push(entry);
+      return;
     }
+    if (byId.has(id)) {
+      // Stream wins over history — overwrite in place, keep ordering stable.
+      const idx = byId.get(id);
+      order[idx] = { ...tc, _uid: `${uidPrefix}-${id}` };
+    } else {
+      const entry = { ...tc, _uid: `${uidPrefix}-${id}` };
+      byId.set(id, order.length);
+      order.push(entry);
+    }
+  };
+  for (const msg of messages.value) {
+    if (!msg.toolCalls) continue;
+    for (const tc of msg.toolCalls) add(tc, "msg");
   }
-  for (const tc of streamToolCalls.value) {
-    result.push({ ...tc, _uid: `stream-${tc.id}` });
+  for (const tc of streamToolCalls.value) add(tc, "stream");
+  // Append any live cooling-down ghosts at the end so they pin to the top of
+  // the reversed sidebar view. They are ephemeral and never get committed.
+  // IMPORTANT: pass the original reference (no spread) so toggling
+  // tc.expanded in the template mutates the reactive source.
+  for (const c of streamCoolers.value) {
+    c._uid = c._uid || `cool-${crypto.randomUUID()}`;
+    order.push(c);
   }
-  return result;
+  return order;
 });
 
 // -- Connected sources --
@@ -3941,28 +4520,67 @@ function copyScript(content) {
 async function send() {
   if (!props.user || clearing.value) return;
   const prompt = input.value.trim();
-  if (!prompt || streaming.value) return;
+  if (!prompt) return;
+  // Per-session gate: only block sending another prompt to the SAME session
+  // while it is already streaming. Other sessions can keep running in the
+  // background.
+  const startSessionId = currentSessionId.value;
+  if (runningSessions.has(startSessionId || "__pending__")) return;
 
   messages.value.push({ role: "user", content: prompt });
   input.value = "";
   nextTick(() => {
     if (inputEl.value) inputEl.value.style.height = "auto";
   });
-  streaming.value = true;
+  // Track this stream's session id locally so we can detect (a) when the
+  // user has navigated to a different session mid-stream, and (b) which
+  // entry to drop from runningSessions when we finish.
+  let streamingId = startSessionId || "__pending__";
+  runningSessions.add(streamingId);
+  const isActiveView = () =>
+    streamingId === (currentSessionId.value || "__pending__");
   streamBuffer.value = "";
   activeTools.value = [];
-  streamToolCalls.value = [];
   scrollToBottom();
 
   abortController = new AbortController();
-  const toolCalls = [];
+  // Per-stream buckets live in perSessionToolCalls / perSessionCharts keyed
+  // by streamingId. Writing through the map (instead of a closure-local
+  // array) means the right-rail UI — driven by the streamToolCalls /
+  // streamCharts computeds — picks up new tool events even for backgrounded
+  // sessions, and the data survives the user switching away and back.
+  const ensureBuckets = (sid) => {
+    if (!perSessionToolCalls.has(sid)) perSessionToolCalls.set(sid, []);
+    if (!perSessionCharts.has(sid)) perSessionCharts.set(sid, []);
+  };
+  ensureBuckets(streamingId);
+  let toolCalls = perSessionToolCalls.get(streamingId);
+  let charts = perSessionCharts.get(streamingId);
   let hasDeltas = false;
+
+  // === TIMING HOOKS ===
+  // Captures every meaningful moment of the turn so we can build a flat
+  // timing table afterwards. Records: client send, each SSE event arrival
+  // (with type/tool), backend phase timings (token.*, session.*, sdk.*,
+  // chat.total), tool durations from tool_done.durationMs, and 429 retries
+  // from cooling_down. Dumped to console.table + window.__lastTimings
+  // when the stream ends.
+  const t0 = performance.now();
+  const timings = [];
+  const recordTiming = (entry) => {
+    timings.push({ t_ms: Math.round(performance.now() - t0), ...entry });
+  };
+  recordTiming({ kind: "client", phase: "send.start", prompt: prompt.slice(0, 60) });
 
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model: selectedModel.value }),
+      body: JSON.stringify({
+        prompt,
+        model: selectedModel.value,
+        sessionId: currentSessionId.value || undefined,
+      }),
       signal: abortController.signal,
     });
 
@@ -3990,7 +4608,110 @@ async function send() {
           continue;
         }
 
+        // Capture every SSE event's arrival timestamp for the timing table.
+        // Backend-emitted `timing` events are stored verbatim (they carry their
+        // own ms measurement); all other events get a client-arrival t_ms.
+        if (data.type === "timing") {
+          recordTiming({ kind: "server", phase: data.phase, server_ms: data.ms, extra: data.extra });
+        } else if (data.type === "tool_done") {
+          recordTiming({ kind: "event", phase: "tool_done", tool: data.tool, durationMs: data.durationMs, success: data.success });
+        } else if (data.type === "tool_start") {
+          recordTiming({ kind: "event", phase: "tool_start", tool: data.tool });
+        } else if (data.type === "cooling_down") {
+          // eslint-disable-next-line no-console
+          console.log("[SSE cooling_down arrived]", data);
+          recordTiming({ kind: "event", phase: "cooling_down", attempt: data.attempt, waitSec: data.waitSeconds });
+        } else if (data.type === "delta") {
+          if (!timings.some((x) => x.phase === "first_delta")) {
+            recordTiming({ kind: "event", phase: "first_delta" });
+          }
+        } else if (data.type !== "message") {
+          recordTiming({ kind: "event", phase: data.type });
+        }
+
+        // Routing/sidebar events are handled regardless of which session the
+        // user is currently viewing. Everything else is gated on isActiveView()
+        // below so a backgrounded stream keeps draining bytes (the server
+        // needs us to keep reading) without polluting the foreground view.
+        const routingEvent =
+          data.type === "session" || data.type === "session_title" || data.type === "timing";
+        // Tool / chart / completion-marker events go into the per-session
+        // map so a backgrounded stream still accumulates state and the user
+        // sees a complete tool list when they switch back. Only delta/text
+        // and intent ticker events are gated on the active view (their UI
+        // lives in shared single-value refs that can only show one stream).
+        const sessionScopedEvent =
+          data.type === "tool_start" ||
+          data.type === "tool_done" ||
+          data.type === "cooling_down" ||
+          data.type === "chart" ||
+          data.type === "html_ready" ||
+          data.type === "script_ready" ||
+          data.type === "maturity_score";
+        if (!routingEvent && !sessionScopedEvent && !isActiveView()) continue;
+
         switch (data.type) {
+          case "session":
+            // Backend echoes the active sessionId at the start of each chat.
+            // Swap our local streamingId/runningSessions key from the
+            // "__pending__" sentinel (or stale id) to the real id so the
+            // pulsing dot follows the right row.
+            if (data.id) {
+              if (streamingId !== data.id) {
+                runningSessions.delete(streamingId);
+                // Migrate any tool/chart events that arrived under the
+                // "__pending__" sentinel into the real session bucket so
+                // the right-rail UI stays continuous across the id swap.
+                const pendingTools = perSessionToolCalls.get(streamingId);
+                const pendingCharts = perSessionCharts.get(streamingId);
+                if (pendingTools && pendingTools.length) {
+                  perSessionToolCalls.set(data.id, pendingTools);
+                }
+                if (pendingCharts && pendingCharts.length) {
+                  perSessionCharts.set(data.id, pendingCharts);
+                }
+                perSessionToolCalls.delete(streamingId);
+                perSessionCharts.delete(streamingId);
+                streamingId = data.id;
+                runningSessions.add(streamingId);
+                ensureBuckets(streamingId);
+                toolCalls = perSessionToolCalls.get(streamingId);
+                charts = perSessionCharts.get(streamingId);
+              }
+              // Only move the user's view to the new id if they haven't
+              // navigated away to a different session in the meantime.
+              if (
+                currentSessionId.value === null ||
+                currentSessionId.value === startSessionId
+              ) {
+                currentSessionId.value = data.id;
+              }
+            }
+            break;
+
+          case "session_title": {
+            const idx = sessions.value.findIndex((s) => s.id === data.id);
+            if (idx >= 0) {
+              const updated = { ...sessions.value[idx], summary: data.title };
+              sessions.value = [
+                ...sessions.value.slice(0, idx),
+                updated,
+                ...sessions.value.slice(idx + 1),
+              ];
+            } else {
+              // New session not yet in sidebar — prepend a stub row.
+              sessions.value = [
+                {
+                  id: data.id,
+                  summary: data.title,
+                  modifiedTime: new Date().toISOString(),
+                },
+                ...sessions.value,
+              ];
+            }
+            break;
+          }
+
           case "delta":
             clearInterval(intentAnimTimer);
             intentAnimTimer = null;
@@ -4009,6 +4730,12 @@ async function send() {
             // — not the final answer. Wipe it; the real answer streams after the
             // last tool completes.
             if (hasDeltas) {
+              console.log(
+                "[tool_start wipe] streamBuffer length before wipe=",
+                streamBuffer.value.length,
+                "first 60=",
+                streamBuffer.value.slice(0, 60),
+              );
               if (textAnimFrame) {
                 cancelAnimationFrame(textAnimFrame);
                 textAnimFrame = null;
@@ -4018,18 +4745,42 @@ async function send() {
               hasDeltas = false;
             }
             activeTools.value = [...activeTools.value, data.tool];
-            toolCalls.push({
-              id: data.id,
-              tool: data.tool,
-              args: data.args || null,
-              result: null,
-              error: null,
-              success: null,
-              durationMs: null,
-              done: false,
-              expanded: false,
-            });
-            streamToolCalls.value = [...toolCalls];
+            {
+              const existingIdx = toolCalls.findIndex((t) => t.id === data.id);
+              if (existingIdx >= 0) {
+                console.warn(
+                  "[tool_start] duplicate id, skipping push",
+                  data.id,
+                  data.tool,
+                  data.args,
+                );
+              } else {
+                console.log(
+                  "[tool_start]",
+                  data.id,
+                  data.tool,
+                  typeof data.args === "string"
+                    ? data.args.slice(0, 120)
+                    : JSON.stringify(data.args || {}).slice(0, 120),
+                );
+                toolCalls.push({
+                  id: data.id,
+                  tool: data.tool,
+                  args: data.args || null,
+                  result: null,
+                  error: null,
+                  success: null,
+                  durationMs: null,
+                  done: false,
+                  expanded: false,
+                });
+              }
+            }
+            // Reseat the map entry so the reactive Map notifies — the
+            // streamToolCalls computed re-derives off this map, so all
+            // viewers of this session (now or later) see the update.
+            perSessionToolCalls.set(streamingId, [...toolCalls]);
+            toolCalls = perSessionToolCalls.get(streamingId);
             if (data.tool === "report_intent" && data.args) {
               try {
                 const parsed =
@@ -4067,9 +4818,11 @@ async function send() {
                 tc.durationMs = data.durationMs;
                 tc.result = data.result || null;
                 tc.error = data.error || null;
+                tc.cooling = null;
               }
             }
-            streamToolCalls.value = [...toolCalls];
+            perSessionToolCalls.set(streamingId, [...toolCalls]);
+            toolCalls = perSessionToolCalls.get(streamingId);
             if (
               data.tool === "SuggestFollowUp" &&
               data.success &&
@@ -4083,9 +4836,71 @@ async function send() {
             break;
 
           case "chart":
-            streamCharts.value = [...streamCharts.value, data.options];
-            scrollToBottom();
+            charts.push(data.options);
+            perSessionCharts.set(streamingId, [...charts]);
+            charts = perSessionCharts.get(streamingId);
+            if (isActiveView()) scrollToBottom();
             break;
+
+          case "cooling_down": {
+            // 429/5xx backoff in flight. Insert/refresh a separate ephemeral
+            // ghost row in perSessionCoolers — NOT a label swap on the real
+            // tool. The ghost has its own animated background and an
+            // expand-to-detail panel showing the throttled URL. It auto-
+            // removes after the wait elapses (or sooner if tool_done arrives).
+            const list = perSessionCoolers.get(streamingId) || [];
+            const key = `${data.tool || "http"}|${data.url || ""}`;
+            const existing = list.find((c) => c._key === key);
+            if (existing) {
+              existing.attempt = data.attempt;
+              existing.wait = data.waitSeconds;
+              existing.status = data.status;
+              existing.ts = Date.now();
+              if (existing._timer) clearTimeout(existing._timer);
+              existing._timer = setTimeout(() => {
+                const arr = perSessionCoolers.get(streamingId) || [];
+                perSessionCoolers.set(
+                  streamingId,
+                  arr.filter((x) => x._uid !== existing._uid),
+                );
+              }, (data.waitSeconds || 5) * 1000 + 500);
+              perSessionCoolers.set(streamingId, [...list]);
+            } else {
+              const cooler = {
+                _uid: `c-${Date.now()}-${crypto.randomUUID().slice(0, 4)}`,
+                _key: key,
+                _isCooler: true,
+                tool: data.tool || "http",
+                url: data.url || "",
+                attempt: data.attempt,
+                wait: data.waitSeconds,
+                status: data.status,
+                ts: Date.now(),
+                expanded: false,
+                done: false,
+              };
+              cooler._timer = setTimeout(() => {
+                const arr = perSessionCoolers.get(streamingId) || [];
+                perSessionCoolers.set(
+                  streamingId,
+                  arr.filter((x) => x._uid !== cooler._uid),
+                );
+              }, (data.waitSeconds || 5) * 1000 + 500);
+              list.push(cooler);
+              perSessionCoolers.set(streamingId, [...list]);
+            }
+            // Legacy label swap on the in-flight tool — kept for accessibility.
+            const inFlight = [...toolCalls].reverse().find((t) => !t.done);
+            if (inFlight) {
+              inFlight.cooling = {
+                attempt: data.attempt,
+                wait: data.waitSeconds,
+              };
+              perSessionToolCalls.set(streamingId, [...toolCalls]);
+              toolCalls = perSessionToolCalls.get(streamingId);
+            }
+            break;
+          }
 
           case "html_ready":
             htmlReady.value = {
@@ -4137,6 +4952,10 @@ async function send() {
           case "error":
             streamBuffer.value += `\n**Error:** ${data.message}`;
             break;
+
+          case "timing":
+            // Already captured above; no UI action needed.
+            break;
         }
       }
     }
@@ -4154,7 +4973,7 @@ async function send() {
       role: "assistant",
       content: clean,
       toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
-      charts: [...streamCharts.value],
+      charts: [...charts],
       followUp: streamFollowUp.value ? { ...streamFollowUp.value } : null,
     };
     if (htmlReady.value) {
@@ -4165,18 +4984,32 @@ async function send() {
       msgObj.script = { ...scriptReady.value };
       scriptReady.value = null;
     }
-    messages.value.push(msgObj);
+    // Only commit the assistant message into the visible message list if
+    // the user is still viewing this stream's session. Otherwise the
+    // server has already persisted it and the user will see it via the
+    // /messages reload when they navigate back.
+    if (isActiveView()) {
+      console.log(
+        "[push assistant] live-stream commit. content length=",
+        clean.length,
+        "first 80=",
+        clean.slice(0, 80),
+        "messages.length now=",
+        messages.value.length + 1,
+      );
+      messages.value.push(msgObj);
+    }
   } catch (err) {
     if (err.name === "AbortError") {
-      if (streamBuffer.value) {
+      if (streamBuffer.value && isActiveView()) {
         messages.value.push({
           role: "assistant",
           content: streamBuffer.value + "\n\n*(generation stopped)*",
           toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
-          charts: [...streamCharts.value],
+          charts: [...charts],
         });
       }
-    } else {
+    } else if (isActiveView()) {
       messages.value.push({
         role: "assistant",
         content: `**Connection error:** ${err.message}`,
@@ -4185,18 +5018,49 @@ async function send() {
   } finally {
     clearInterval(intentAnimTimer);
     intentAnimTimer = null;
-    flushText();
-    streaming.value = false;
-    streamBuffer.value = "";
-    activeTools.value = [];
-    streamToolCalls.value = [];
-    streamCharts.value = [];
-    streamFollowUp.value = null;
-    streamIntent.value = "";
-    scriptReady.value = null;
-    htmlReady.value = null;
-    abortController = null;
-    nextTick(() => inputEl.value?.focus());
+    runningSessions.delete(streamingId);
+
+    // === TIMING DUMP ===
+    // Stash on window for easy copy-paste; print a flat table to the
+    // devtools console so we can eyeball where the time went.
+    recordTiming({ kind: "client", phase: "send.end" });
+    try {
+      window.__lastTimings = timings;
+      window.__lastTimingsPrompt = prompt;
+      // eslint-disable-next-line no-console
+      console.groupCollapsed(`[timing] ${prompt.slice(0, 60)} — ${timings.length} events, total ${timings[timings.length - 1]?.t_ms ?? 0}ms`);
+      // eslint-disable-next-line no-console
+      console.table(timings);
+      // eslint-disable-next-line no-console
+      console.groupEnd();
+    } catch {}
+    // Only wipe the live-stream UI refs if this stream's session is still
+    // the foreground view. If the user navigated to a different session,
+    // those refs reflect *that* session's state and must not be touched.
+    // Stream is done — the persisted assistant message snapshot owns
+    // toolCalls/charts now, so drop the live bucket for this session
+    // unconditionally. Doing this regardless of isActiveView() keeps the
+    // per-session map from accumulating stale entries when the user is
+    // viewing a different tab at completion.
+    perSessionToolCalls.delete(streamingId);
+    perSessionCharts.delete(streamingId);
+    // Discard any lingering cooling-down ghosts — they're stream-scoped only.
+    const lingering = perSessionCoolers.get(streamingId) || [];
+    for (const c of lingering) { if (c._timer) clearTimeout(c._timer); }
+    perSessionCoolers.delete(streamingId);
+    if (isActiveView()) {
+      flushText();
+      streamBuffer.value = "";
+      activeTools.value = [];
+      streamFollowUp.value = null;
+      streamIntent.value = "";
+      scriptReady.value = null;
+      htmlReady.value = null;
+      abortController = null;
+      nextTick(() => inputEl.value?.focus());
+    }
+    // Refresh the Conversations sidebar so the new/updated summary shows up.
+    loadSessions();
     if (availableModels.value.length <= 1) {
       try {
         const mr = await fetch("/api/models");
@@ -4629,6 +5493,9 @@ async function send() {
   border-radius: 8px;
   background: #fff;
   cursor: pointer;
+  box-shadow:
+    0 2px 4px rgba(15, 23, 42, 0.06),
+    0 1px 2px rgba(15, 23, 42, 0.04);
   transition:
     border-color 0.2s ease,
     box-shadow 0.25s ease,
@@ -4636,22 +5503,22 @@ async function send() {
   user-select: none;
 }
 .maturity-card:hover:not(.maturity-card--disabled) {
-  border-color: #0078d4;
+  border-color: #c8c6c4;
   box-shadow:
-    0 8px 20px rgba(0, 120, 212, 0.18),
-    0 2px 6px rgba(15, 23, 42, 0.08);
-  transform: translateY(-3px);
+    0 8px 16px rgba(15, 23, 42, 0.12),
+    0 2px 4px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
 }
+.maturity-card:focus,
 .maturity-card:focus-visible {
-  outline: 2px solid #c8c6c4;
-  outline-offset: 2px;
+  outline: none;
 }
 .maturity-card--disabled {
   opacity: 0.55;
   cursor: default;
 }
 .maturity-card--scored {
-  background: #fafbfc;
+  background: #fff;
 }
 .maturity-card-header {
   display: flex;
@@ -4678,18 +5545,15 @@ async function send() {
 }
 .maturity-card-cta {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  color: #0078d4;
-  padding: 3px 10px;
-  border: 1px solid #0078d4;
-  border-radius: 12px;
-  background: transparent;
+  color: #8a8886;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
   white-space: nowrap;
 }
 .maturity-card:hover:not(.maturity-card--disabled) .maturity-card-cta {
-  background: #0078d4;
-  color: #fff;
+  color: #1f2328;
 }
 .maturity-card-body {
   display: flex;
@@ -4703,13 +5567,25 @@ async function send() {
   letter-spacing: 3px;
   line-height: 1;
 }
-.maturity-card-score {
-  font-size: 13px;
-  font-weight: 600;
-  color: #656d76;
+.maturity-card-chevron {
+  width: 16px;
+  height: 16px;
+  color: #8a8886;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  transition:
+    transform 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
 }
-.maturity-card--scored .maturity-card-score {
+.maturity-card-chevron:hover {
+  background: rgba(15, 23, 42, 0.06);
   color: #1f2328;
+}
+.maturity-card-chevron:focus,
+.maturity-card-chevron:focus-visible {
+  outline: none;
 }
 
 .sidebar-subgroup {
@@ -6636,7 +7512,7 @@ async function send() {
   font-size: 13px;
 }
 .tools-sidebar--open {
-  width: 220px;
+  width: 250px;
 }
 .tools-sidebar-header {
   display: flex;
@@ -6700,6 +7576,130 @@ async function send() {
   overflow-y: auto;
   padding: 4px 8px;
   scrollbar-width: thin;
+}
+/* ── Right sidebar split: Agent (top) + Conversations (bottom) ── */
+.tools-sidebar-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.tools-sidebar-pane--agent {
+  flex: 1 1 50%;
+  min-height: 120px;
+}
+.tools-sidebar-pane--sessions {
+  flex: 1 1 50%;
+  min-height: 140px;
+  border-top: 1px solid #e1dfdd;
+  background: #fff;
+}
+.sessions-header {
+  background: #fff;
+}
+.sessions-new-btn {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #e1dfdd;
+  background: #fff;
+  color: #323130;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.sessions-new-btn:hover:not(:disabled) {
+  background: #fff;
+  border-color: #d2d0ce;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+.sessions-new-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sessions-scroll {
+  padding: 4px 8px 8px;
+}
+.sessions-empty {
+  padding: 12px 8px;
+  font-size: 11.5px;
+  color: #8a8886;
+  font-style: italic;
+  text-align: center;
+}
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease;
+  position: relative;
+}
+.session-row:hover {
+  background: rgba(15, 23, 42, 0.04);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.session-row--current {
+  background: #f3f2f1;
+}
+.session-row--current:hover {
+  background: #f3f2f1;
+}
+.session-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.session-row-title {
+  font-size: 13px;
+  font-weight: 400;
+  color: #323130;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+.session-row-time {
+  font-size: 10.5px;
+  color: #8a8886;
+}
+.session-row-delete {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+  color: #a19f9d;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    background 0.12s,
+    color 0.12s;
+}
+.session-row:hover .session-row-delete {
+  opacity: 1;
+}
+.session-row-delete:hover {
+  background: #fde7e9;
+  color: #a4262c;
 }
 .st-count {
   font-size: 11px;
@@ -6774,6 +7774,72 @@ async function send() {
   flex-shrink: 0;
   color: #605e5c;
   font-size: 11px;
+}
+
+/* ── Cooling-down ghost row (ephemeral, 429/5xx) ── */
+/* Same row chrome as .st-row (size, padding, font weight 400, height);
+   only the background + text colour differ so the user can spot retries.
+   Gradient mirrors the Azure top bar (#005a9e → #0078d4 → #0098e0) and
+   sweeps horizontally — never goes to white so dark blues stay readable. */
+.st-row--cooler {
+  cursor: pointer;
+  position: relative;
+  flex-wrap: wrap;
+  background: linear-gradient(
+    90deg,
+    #005a9e 0%,
+    #0078d4 25%,
+    #0098e0 50%,
+    #0078d4 75%,
+    #005a9e 100%
+  );
+  background-size: 200% 100%;
+  animation: cool-sweep 2.4s linear infinite;
+}
+.st-row--cooler:hover {
+  filter: brightness(1.05);
+}
+.st-row--cooler .st-name,
+.st-row--cooler .st-time {
+  color: #fff;
+}
+.st-icon--cooler {
+  width: 14px;
+  height: 14px;
+  color: #fff;
+}
+.st-cooler-detail {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: default;
+}
+.st-cooler-row {
+  margin-bottom: 2px;
+}
+.st-cooler-row strong {
+  color: #fff;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.st-cooler-url code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  word-break: break-all;
+  display: inline-block;
+  max-width: 100%;
+}
+@keyframes cool-sweep {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
 }
 
 /* ── Tool popover ── */
@@ -7324,7 +8390,7 @@ async function send() {
 }
 .follow-up-btn {
   background: #fff;
-  color: #0078d4;
+  color: #323130;
   border: 1px solid #e1dfdd;
   border-radius: 8px;
   padding: 8px 14px;
@@ -7334,17 +8400,15 @@ async function send() {
   text-align: left;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   transition:
-    border-color 0.2s ease,
-    box-shadow 0.25s ease,
-    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
 }
 .follow-up-btn:hover {
   background: #fff;
-  border-color: #0078d4;
-  box-shadow:
-    0 8px 20px rgba(0, 120, 212, 0.18),
-    0 2px 6px rgba(15, 23, 42, 0.08);
-  transform: translateY(-3px);
+  border-color: #d2d0ce;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
 }
 
 /* ── Mobile ── */

@@ -1,7 +1,12 @@
 # Azure FinOps Agent
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/Azure-Samples/azure-finops-agent?label=release&color=0078D4)](https://github.com/Azure-Samples/azure-finops-agent/releases/latest)
 [![Live demo](https://img.shields.io/badge/demo-azure--finops--agent.com-0078D4?logo=microsoftazure&logoColor=white)](https://azure-finops-agent.com)
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com)
+[![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org)
+[![Open issues](https://img.shields.io/github/issues/Azure-Samples/azure-finops-agent)](https://github.com/Azure-Samples/azure-finops-agent/issues)
+[![Last commit](https://img.shields.io/github/last-commit/Azure-Samples/azure-finops-agent)](https://github.com/Azure-Samples/azure-finops-agent/commits/main)
 
 **Replace a multi-week FinOps assessment with a single conversation.**
 
@@ -26,7 +31,21 @@ No Azure tenant? Two ways to demo:
 
 Vue 3 SPA → .NET 10 minimal API → GitHub Copilot SDK → Azure read APIs (Cost Management, Resource Graph, Microsoft Graph, Log Analytics) using your delegated Entra tokens. Hosted on Azure App Service or Container Apps. OpenTelemetry to your Application Insights.
 
-## [See the architecture diagram →](https://azure-finops-agent.com/slides#4)
+## Architecture
+
+```mermaid
+flowchart LR
+    U[User] --> FE[Vue 3 SPA]
+    FE --> API[.NET 10 API]
+    API --> SDK[Copilot SDK]
+    SDK --> AOAI[Azure OpenAI]
+    SDK --> TOOLS[Azure Tools]
+    TOOLS --> ARM[ARM / Cost Mgmt]
+    TOOLS --> GRAPH[Microsoft Graph]
+    TOOLS --> LA[Log Analytics]
+    U -. OAuth .-> ENTRA[Entra ID]
+    ENTRA --> API
+```
 
 ## Deploy to Azure (`azd up`)
 

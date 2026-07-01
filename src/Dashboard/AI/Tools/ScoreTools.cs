@@ -22,27 +22,38 @@ public static class ScoreTools
         yield return AIFunctionFactory.Create(GetScoreHistory);
     }
 
-    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call this AFTER you have queried the relevant APIs and determined the scores. Each dimension gets a score from 0-5:
-0 = Not started / no data
-1 = Critical issues found
-2 = Needs significant work
-3 = Acceptable but room for improvement
-4 = Good shape
-5 = Excellent / best practice
-Scores are automatically saved to history for trend analysis.
+    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores. Each dimension gets 0-5: 0=no data, 1=critical, 2=needs work, 3=acceptable, 4=good, 5=best practice. Auto-saved to history for trend analysis.
 
-When the user asks about their FinOps maturity, biggest issues, or Crawl-level assessment (or anything similar), automatically evaluate ALL 7 Crawl dimensions below using QueryAzure and score each 0-5 with a one-line `detail` citing concrete numbers from the environment. Do not ask the user which dimensions to score — score them all.
+Evaluate ALL the dimensions for the requested level via QueryAzure (and GraphQuery/LogAnalytics where relevant) and score each 0-5 with a one-line `detail`. Don't ask which to score — score them all.
 
-Crawl dimensions (label / what to check):
-  1. 'Budgets & thresholds' — list Cost Management budgets: count, amounts, and whether notifications are configured. Flag unrealistic amounts (e.g. $999,999,999) or missing alerts.
-  2. 'Tagging for accountability' — query Resource Graph for total resource count and % carrying CostCenter, Owner, Environment (exact key names). Flag inconsistent casing (e.g. 'department' vs 'Department') and placeholder values like 'unassigned' or 'unknown'.
-  3. 'Cost data exports' — list Cost Management exports. Score 0 if none exist.
-  4. 'Cost alerts & scheduled actions' — list Cost Management anomaly alerts and scheduled actions. Score 0 if none.
-  5. 'Governance guardrails' — list management-group policy assignments and check whether any enforce FinOps-specific tagging or cost controls at subscription scope.
-  6. 'Waste identification & cleanup' — count unattached disks, unassociated public IPs, empty App Service plans, and empty resource groups via Resource Graph.
-  7. 'Cost visibility & ownership' — month-to-date spend grouped by resource group and by top services.
+EVIDENCE IS MANDATORY: every `detail` must cite the concrete numbers behind the score (counts, %, $ MTD, recommendation counts, savings estimates). A score with no number is not acceptable. When the estate spans multiple subscriptions, note the spread in `detail` (e.g. 'tagged 0% in Prod-EU, 38% in Sandbox') so the assessment reflects per-subscription reality, not one blended figure.
 
-Return the scores array with id = short slug, label = exact dimension name above, score = 0-5, detail = the one-line reason with numbers.")]
+CRAWL — Visibility & Baseline (id slug — label — what to check):
+  1. budgets — 'Budgets & thresholds' — Cost Mgmt budgets: count, amounts, notification config. Flag unrealistic (≥$1M placeholders) and missing alerts.
+  2. tagging — 'Tagging for accountability' — Resource Graph: total resources + % carrying CostCenter, Owner, Environment (exact key names). Flag inconsistent casing ('department' vs 'Department') and placeholder values ('unassigned', 'unknown').
+  3. exports — 'Cost data exports' — list Cost Mgmt exports. Score 0 if none.
+  4. alerts — 'Cost alerts & scheduled actions' — list anomaly alerts + scheduled actions. Score 0 if none.
+  5. policy — 'Governance guardrails' — management-group/subscription policy assignments enforcing FinOps tagging or cost controls.
+  6. waste — 'Waste identification & cleanup' — counts of unattached disks, orphaned public IPs, empty App Service plans, empty resource groups.
+  7. visibility — 'Cost visibility & ownership' — MTD spend grouped by RG and by top services.
+
+WALK — Optimization & Governance (id slug — label — what to check):
+  1. commitments — 'Reservations & Savings Plans' — RI/SP coverage % and utilization; Advisor RI/SP recommendations + their $ savings. Score 0 if no commitments and recommendations are being ignored.
+  2. rightsizing — 'Right-sizing' — Advisor cost right-sizing/SKU recommendations: count + estimated $ savings; underutilized VMs/disks.
+  3. devtest — 'Dev/Test scheduling' — auto-shutdown / start-stop schedules on non-prod VMs; count of non-prod VMs running 24x7 with no schedule.
+  4. tagpolicy — 'Tag policy enforcement' — Azure Policy assignments that require/append/deny on tags (effects: Require, Modify, Deny) and their compliance %.
+  5. ahub — 'Hybrid Benefit & licensing' — Windows/SQL Azure Hybrid Benefit applied vs eligible; SQL license type; reserved capacity for licensing.
+  6. storageopt — 'Storage & lifecycle optimization' — blob lifecycle management policies, access-tier distribution (Hot/Cool/Archive), stale snapshots, premium disks on deallocated VMs.
+
+RUN — Scale & Accountability (id slug — label — what to check):
+  1. execreporting — 'Executive reporting & forecasting' — Cost Mgmt views, scheduled exports feeding BI, forecast usage, budget/anomaly trendlines for leadership.
+  2. chargeback — 'Chargeback / showback readiness' — % of spend attributable to a cost owner via CostCenter/Owner tags or subscription/MG mapping; cost allocation rules configured.
+  3. uniteconomics — 'Unit economics' — feasibility of cost-per-unit metrics (cost/customer, cost/transaction) from tags + meters; presence of business dimensions on resources.
+  4. anomaly — 'Anomaly detection' — cost anomaly alerts at subscription/resource scope: count + routing/recipients. Score 0 if none.
+  5. allocation — 'Cost allocation & MG governance' — management-group hierarchy depth, policy at MG scope, subscription-to-team mapping, Cost Mgmt cost-allocation rules.
+  6. aicost — 'AI / GPU & emerging cost' — Azure OpenAI/Foundry spend, GPU VM/AKS spend, PTU vs PAYG mix; flag uncommitted GPU/AI spend. Carbon optional.
+
+Return scores array: id=slug, label=exact name above, score=0-5, detail=one-line reason WITH numbers (and per-subscription spread when relevant).")]
     private static string ReportMaturityScore(
         [Description("Level: 'crawl', 'walk', 'run', or 'playbook'")] string level,
         [Description(@"JSON array of score objects, e.g.: [{""id"":""tagging"",""label"":""Tagging"",""score"":3,""detail"":""45% of resources tagged""}]")] string scores)
@@ -69,7 +80,7 @@ Return the scores array with id = short slug, label = exact dimension name above
         return $"__MATURITY_SCORE__:{level}:{scores}";
     }
 
-    [Description(@"Retrieve historical FinOps maturity scores for trend analysis. Returns all past scores so you can compare current vs previous assessments and show improvement or regression over time. Use this when the user asks about score trends, progress, or historical comparison.")]
+    [Description(@"Retrieve historical FinOps maturity scores for trend analysis (current vs previous, improvement/regression over time). Use when user asks about score trends, progress, or historical comparison.")]
     private static string GetScoreHistory(
         [Description("Optional: filter by level ('crawl', 'walk', 'run', 'playbook'). Omit to get all levels.")] string? level = null)
     {
