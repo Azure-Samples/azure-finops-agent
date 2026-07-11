@@ -7,7 +7,7 @@ using Azure.Identity;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Observability;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 
 namespace AzureFinOps.Dashboard.AI;
@@ -216,7 +216,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     private readonly TokenCredential _credential;
     private readonly string _endpoint;
     private readonly string _deployment;
-    private readonly List<AIFunction> _sharedTools;
+    private readonly List<AIFunctionDeclaration> _sharedTools;
     private readonly ILogger _logger;
 
     private readonly SemaphoreSlim _bearerTokenLock = new(1, 1);
@@ -266,7 +266,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         TokenCredential credential,
         string endpoint,
         string deployment,
-        List<AIFunction> sharedTools,
+        List<AIFunctionDeclaration> sharedTools,
         ILogger logger)
     {
         _telemetry = telemetry;
@@ -296,7 +296,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             // Azure Files mount on App Service. Replaces the older HOME env var
             // hack — same effect, but explicit. Falls back to Path.GetTempPath()
             // locally when COPILOT_HOME isn't set.
-            CopilotHome = CopilotHome,
+            BaseDirectory = CopilotHome,
             // Disconnect idle sessions from the in-memory CLI after 30 min to free
             // resources. Disk state is preserved — ResumeSessionAsync rehydrates
             // from /home/copilot/.copilot/session-state/{id}/ on the next prompt.
@@ -333,7 +333,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         });
 
         var chartLogger = loggerFactory.CreateLogger("AzureFinOps.AI.Charts");
-        var sharedTools = new List<AIFunction>();
+        var sharedTools = new List<AIFunctionDeclaration>();
         sharedTools.AddRange(ChartTools.Create(chartLogger));
         sharedTools.AddRange(HealthTools.Create());
         sharedTools.AddRange(HtmlPresentationTools.Create());
@@ -353,12 +353,12 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             azureOpenAIEndpoint, azureOpenAIDeployment, sharedTools, logger);
     }
 
-    public List<AIFunction> GetOrCreateUserTools(long userId)
+    public List<AIFunctionDeclaration> GetOrCreateUserTools(long userId)
     {
         return _telemetry.UserTools.GetOrAdd(userId, uid =>
         {
             var tokens = _telemetry.UserTokens.GetOrAdd(uid, id => new UserTokens { UserId = id });
-            var tools = new List<AIFunction>(_sharedTools);
+            var tools = new List<AIFunctionDeclaration>(_sharedTools);
             tools.AddRange(new AzureQueryTools(tokens).Create());
             tools.AddRange(new GraphQueryTools(tokens).Create());
             tools.AddRange(new LogAnalyticsQueryTools(tokens).Create());
@@ -396,7 +396,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             {
                 var workdir = GetWorkingDirectory(userId, entraOid);
                 var listed = await _copilotClient.ListSessionsAsync(
-                    new SessionListFilter { Cwd = workdir }, CancellationToken.None);
+                    new SessionListFilter { WorkingDirectory = workdir }, CancellationToken.None);
                 var mostRecent = listed?
                     .OrderByDescending(s => s.ModifiedTime)
                     .FirstOrDefault();
@@ -489,7 +489,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         // Both Entra and anonymous users have a deterministic workdir scope
         // (`/users/{oid}` vs `/anon/{userId}`), so we can safely list either.
         var workdir = GetWorkingDirectory(userId, entraOid);
-        var listed = await _copilotClient.ListSessionsAsync(new SessionListFilter { Cwd = workdir }, ct);
+        var listed = await _copilotClient.ListSessionsAsync(new SessionListFilter { WorkingDirectory = workdir }, ct);
         return listed?.OrderByDescending(s => s.ModifiedTime).ToList() ?? new List<SessionMetadata>();
     }
 
@@ -538,12 +538,12 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         // read off that instance — don't churn a second resume.
         if (_telemetry.LiveSessions.TryGetValue(sessionId, out var live))
         {
-            return await live.Session.GetMessagesAsync(ct);
+            return await live.Session.GetEventsAsync(ct);
         }
 
         var resumeConfig = await CreateResumeConfigAsync(userId, entraOid);
         var ephemeral = await _copilotClient.ResumeSessionAsync(sessionId, resumeConfig, ct);
-        try { return await ephemeral.GetMessagesAsync(ct); }
+        try { return await ephemeral.GetEventsAsync(ct); }
         finally { try { await ephemeral.DisposeAsync(); } catch { } }
     }
 
@@ -562,7 +562,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             // Linux file paths are case-sensitive; Entra OIDs are lowercase
             // GUIDs and our roots are constructed from a known constant, so
             // an Ordinal compare is both correct and slightly faster.
-            var c = s.Context?.Cwd ?? "";
+            var c = s.Context?.WorkingDirectory ?? "";
             return c.StartsWith(usersRoot, StringComparison.Ordinal)
                 || c.StartsWith(anonRoot, StringComparison.Ordinal);
         }).ToList();
@@ -598,7 +598,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),
-            OnPermissionRequest = (_, _) => Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved }),
+            OnPermissionRequest = PermissionHandler.ApproveAll,
             Provider = new ProviderConfig
             {
                 // Azure AI Foundry exposes an OpenAI-compatible endpoint at /openai/v1/.
@@ -634,7 +634,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),
-            OnPermissionRequest = (_, _) => Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved }),
+            OnPermissionRequest = PermissionHandler.ApproveAll,
             Provider = new ProviderConfig
             {
                 // Azure AI Foundry exposes an OpenAI-compatible endpoint at /openai/v1/.
