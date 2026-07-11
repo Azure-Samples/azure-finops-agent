@@ -30,7 +30,11 @@ if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
         "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-RESOURCE.openai.azure.com/\" " +
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
-var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.4";
+var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.6-sol";
+// Reasoning effort for reasoning-capable models (low|medium|high|xhigh).
+// Default "high": xhigh was measured at 8+ minutes for a single LLM round-trip
+// in production (App Insights, 2026-07-11) — the dominant cause of slow chats.
+var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "high";
 var appInsightsCs = builder.Configuration["ApplicationInsights:ConnectionString"];
 
 // ── Services ───────────────────────────────────────────────────
@@ -108,7 +112,7 @@ AzureFinOps.Dashboard.Infrastructure.HttpHelper.Logger =
     loggerFactory.CreateLogger("AzureFinOps.AI.HttpHelper");
 
 await using var copilotFactory = await CopilotSessionFactory.CreateAsync(
-    telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, loggerFactory);
+    telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort, loggerFactory);
 
 // Start the janitor now that the factory exists; tie its lifecycle to the host.
 var janitor = new UserStateJanitor(telemetry, copilotFactory, loggerFactory.CreateLogger<UserStateJanitor>());

@@ -216,6 +216,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     private readonly TokenCredential _credential;
     private readonly string _endpoint;
     private readonly string _deployment;
+    private readonly string _reasoningEffort;
     private readonly List<AIFunctionDeclaration> _sharedTools;
     private readonly ILogger _logger;
 
@@ -260,12 +261,20 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         try { Directory.CreateDirectory(CopilotHome); } catch { }
     }
 
+    // The Copilot CLI's `task` tool spawns a NESTED general-purpose agent that
+    // can loop for many minutes on a single call (App Insights showed one
+    // 8-minute Tool:task span inside a 12.7-minute chat turn). FinOps work
+    // never needs a sub-agent — the model has direct tools for everything —
+    // so exclude it from every session.
+    private static readonly string[] ExcludedBuiltInTools = { "task" };
+
     private CopilotSessionFactory(
         AiTelemetry telemetry,
         CopilotClient copilotClient,
         TokenCredential credential,
         string endpoint,
         string deployment,
+        string reasoningEffort,
         List<AIFunctionDeclaration> sharedTools,
         ILogger logger)
     {
@@ -274,6 +283,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         _credential = credential;
         _endpoint = endpoint;
         _deployment = deployment;
+        _reasoningEffort = reasoningEffort;
         _sharedTools = sharedTools;
         _logger = logger;
     }
@@ -283,6 +293,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         MicrosoftOAuthOptions oauthOptions,
         string azureOpenAIEndpoint,
         string azureOpenAIDeployment,
+        string reasoningEffort,
         ILoggerFactory loggerFactory)
     {
         // Forward CLI telemetry (GenAI + MCP semantic conventions) to the local
@@ -350,7 +361,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             azureOpenAIEndpoint, azureOpenAIDeployment);
 
         return new CopilotSessionFactory(telemetry, copilotClient, credential,
-            azureOpenAIEndpoint, azureOpenAIDeployment, sharedTools, logger);
+            azureOpenAIEndpoint, azureOpenAIDeployment, reasoningEffort, sharedTools, logger);
     }
 
     public List<AIFunctionDeclaration> GetOrCreateUserTools(long userId)
@@ -588,7 +599,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     private async Task<SessionConfig> CreateSessionConfigAsync(long userId, string? entraOid)
     {
         var bearerToken = await GetAzureOpenAIBearerTokenAsync();
-        var effort = IsReasoningModel(_deployment) ? "xhigh" : null;
+        var effort = IsReasoningModel(_deployment) ? _reasoningEffort : null;
         _logger.LogInformation("SessionConfig(create) model={Model} reasoningEffort={Effort} isReasoning={IsReasoning}",
             _deployment, effort ?? "<null>", IsReasoningModel(_deployment));
         return new SessionConfig
@@ -597,6 +608,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             ReasoningEffort = effort,
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
+            ExcludedTools = ExcludedBuiltInTools,
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),
             OnPermissionRequest = PermissionHandler.ApproveAll,
             Provider = new ProviderConfig
@@ -624,7 +636,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     private async Task<ResumeSessionConfig> CreateResumeConfigAsync(long userId, string? entraOid)
     {
         var bearerToken = await GetAzureOpenAIBearerTokenAsync();
-        var effort = IsReasoningModel(_deployment) ? "xhigh" : null;
+        var effort = IsReasoningModel(_deployment) ? _reasoningEffort : null;
         _logger.LogInformation("SessionConfig(resume) model={Model} reasoningEffort={Effort} isReasoning={IsReasoning} — NOTE: CLI may retain original-session effort",
             _deployment, effort ?? "<null>", IsReasoningModel(_deployment));
         return new ResumeSessionConfig
@@ -633,6 +645,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             ReasoningEffort = effort,
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
+            ExcludedTools = ExcludedBuiltInTools,
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),
             OnPermissionRequest = PermissionHandler.ApproveAll,
             Provider = new ProviderConfig
