@@ -263,7 +263,7 @@ public static class SessionEndpoints
         while (s.StartsWith('['))
         {
             var close = s.IndexOf(']');
-            if (close < 0) break;
+            if (close < 0) return ""; // truncated context block — no user content follows
             s = s[(close + 1)..].TrimStart();
         }
         return s;
@@ -316,7 +316,15 @@ public static class SessionEndpoints
         while (s.StartsWith('['))
         {
             var close = s.IndexOf(']');
-            if (close < 0) break;
+            if (close < 0)
+            {
+                // The SDK truncates long first prompts when deriving a summary,
+                // which can cut a [CONTEXT: ...] block before its closing bracket.
+                // Nothing after the '[' is user content — discard it entirely
+                // instead of surfacing prompt scaffolding in the sidebar.
+                s = "";
+                break;
+            }
             s = s[(close + 1)..].TrimStart();
         }
         // Take the first non-empty line so multi-line prompts surface cleanly.

@@ -41,6 +41,7 @@ Do NOT answer literally — RUN the full Crawl scoring sweep, call ReportMaturit
 - Wait for tool results before rendering charts.
 - Parallelize independent tool calls in ONE response.
 - After every answer, call SuggestFollowUp with ONE concrete next step naming a real entity (RG/owner/resource/$/region/window). Skip only at natural endpoints. Label ≤60 chars.
+- Capability/onboarding questions (""what can you help me with"", ""what can you do"", ""help"", first-message greetings): answer with the capability table, then ALWAYS call SuggestFollowUp with THREE starter actions via label/prompt + label2/prompt2 + label3/prompt3 — these render as clickable buttons and are the user's onboarding path. Not connected to Azure → offer public actions (compare VM pricing across regions, Azure service health, estimate a new deployment). Connected → offer ""Score my FinOps maturity"", ""Show this month's cost by service"", ""Find idle resources"".
 - After answering a public FinOps question, call PublishFAQ — but only if user has connected Azure. Never publish tenant data.
 - Uploaded files appear in `[UPLOADED FILES IN THIS SESSION ...]` at message start. Use QueryUploadedFile(fileId, mode, paramsJson) — start `mode='preview'`, then narrow with head/slice/filter/aggregate/text_range/json_path. ~200 rows / ~8000 chars per call. Answer from the file rather than asking them to paste data.
 - Uploaded-file follow-ups: propose a single highest-leverage *action* on their data (cleanup script, ranked actions, deck, bulk PATCH) — NOT another analytical question. ≥3 files: prefer follow-ups that cut across files and produce a meeting-ready deliverable.
@@ -713,16 +714,23 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         try
         {
             var token = await GetAzureOpenAIBearerTokenAsync();
-            var url = $"{_endpoint.TrimEnd('/')}/openai/deployments/{_deployment}/chat/completions?api-version=2024-10-21";
+            // Use the same OpenAI-compatible /openai/v1/ surface the BYOK chat
+            // path uses — the classic ?api-version=2024-10-21 endpoint predates
+            // the GPT-5 series and rejects reasoning parameters.
+            var url = $"{_endpoint.TrimEnd('/')}/openai/v1/chat/completions";
             var messages = new object[]
             {
                 new { role = "system", content = "Summarise the user's question into a 3-6 word title for a chat sidebar. No quotes, no trailing punctuation, no emoji. Title-case." },
                 new { role = "user", content = $"USER: {Truncate(userMessage, 800)}\n\nASSISTANT: {Truncate(assistantReply, 800)}" },
             };
             // GPT-5 / o-series use `max_completion_tokens`; grok and GPT-4 use `max_tokens`.
+            // Reasoning models spend completion tokens on hidden reasoning FIRST —
+            // with a tiny cap the entire budget goes to reasoning and content comes
+            // back empty. Give them headroom + minimal reasoning effort so the
+            // title lands in the visible content.
             object body = IsReasoningModel(_deployment)
-                ? new { messages, max_completion_tokens = 24 }
-                : new { messages, max_tokens = 24 };
+                ? new { model = _deployment, messages, max_completion_tokens = 512, reasoning_effort = "low" }
+                : new { model = _deployment, messages, max_tokens = 24 };
             using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(body) };
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using var resp = await _titleHttp.SendAsync(req, ct);

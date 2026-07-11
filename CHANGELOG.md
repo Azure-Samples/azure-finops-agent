@@ -7,6 +7,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sidebar titles no longer leak prompt scaffolding** — when the SDK truncated a long first prompt mid-`[CONTEXT: …]` block, `CleanSummary`/`StripContextPrefix` surfaced the raw injected context (e.g. "[CONTEXT: User is NOT…") as the conversation title. Truncated context blocks are now discarded entirely.
+- **Title generation returned empty on reasoning models** — `GenerateTitleAsync` capped `max_completion_tokens` at 24, which GPT-5-series models consume entirely on hidden reasoning. Now uses the modern `/openai/v1/chat/completions` surface with `reasoning_effort: "low"` and 512-token headroom (verified: 8 completion tokens, 0 reasoning tokens).
+- **Capability questions now end with clickable starter actions** — "what can you help me with?" answers previously rendered a static table with no follow-up chips. The system prompt now mandates three `SuggestFollowUp` starter actions (public pricing actions when not connected; scoring/cost/idle actions when connected).
+
 ### Added
 
 - **`EstimateTokenCost` tool (`CostEstimateTools`)** — deterministic C# calculator for monthly/volume LLM token costs. The agent looks up per-1M rates, then delegates the arithmetic here so the headline, summary table, and step-by-step always reconcile (components are summed in code and a ready-made per-model `breakdown` string is returned). Fixes inconsistent monthly totals where the table disagreed with the step-by-step or two token assumptions were blended.
