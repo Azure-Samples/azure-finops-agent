@@ -7335,7 +7335,7 @@ async function send() {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #0078d4, #7b61c4);
+  background: #1f2328;
   animation: dot-bounce 1.2s ease-in-out infinite;
 }
 .thinking-dots i:nth-child(2) {
