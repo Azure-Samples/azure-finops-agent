@@ -27,8 +27,9 @@ public static class HtmlPresentationTools
         yield return AIFunctionFactory.Create(GenerateHtmlPresentation, "GenerateHtmlPresentation",
             @"Generates a self-contained HTML deck (one .html file). Use for any 'presentation', 'deck', 'slides', or 'exec summary' — there's no other format. Built-in nav: ←/→ navigate, ↑ fullscreen, ↓/Esc exit, number keys jump, touch swipe, dot nav, progress bar.
 
-LAYOUTS: title | kpi | chart | content | two_column | maturity | alerts | table | closing.
-Use 'alerts' for findings (good/warn/bad). Use 'table' for top-N rankings (Status col auto-colors OK/Watch/Alert; numeric col auto-renders inline bar). 'maturity' single-state mode: omit `before` (or set =after).
+LAYOUTS: title | section | kpi | chart | content | two_column | maturity | alerts | table | roadmap | closing.
+Use 'alerts' for findings (good/warn/bad). Use 'table' for top-N rankings (Status col auto-colors OK/Watch/Alert; numeric col auto-renders inline bar). 'maturity' single-state mode: omit `before` (or set =after). Use 'roadmap' for phased plans (30/60/90-day or Crawl→Walk→Run) — the CFO wants to see the journey. Use 'section' as a divider in decks ≥8 slides.
+Every slide accepts an optional `notes` field (speaker notes — presenter toggles with N). Deck supports print-to-PDF (P key) — mention this when delivering.
 
 DESIGN RULES:
 - Report CURRENT state, not a narrative. Metric + 3-word verdict (good/watch/bad). No multi-quarter arcs unless asked.
@@ -46,9 +47,11 @@ NOTE: this is a SLIDE DECK for quick exec summaries. For a DEEP FinOps maturity 
 
     private static Task<string> GenerateHtmlPresentation(
         [Description(@"JSON array of slides. SLIDE OBJECT SCHEMA:
-- layout: 'title' | 'kpi' | 'chart' | 'content' | 'two_column' | 'maturity' | 'alerts' | 'table' | 'closing' (REQUIRED)
+- layout: 'title' | 'section' | 'kpi' | 'chart' | 'content' | 'two_column' | 'maturity' | 'alerts' | 'table' | 'roadmap' | 'closing' (REQUIRED)
 - title: slide title (REQUIRED, except 'title' layout uses it as the hero h1)
 - subtitle: optional one-line lead
+- notes: optional speaker notes shown in a presenter panel (N key). Write 2-3 sentences of delivery guidance per key slide.
+- phases: REQUIRED for 'roadmap' — [{""label"":""Crawl"",""period"":""Days 0-30"",""accent"":""blue"",""items"":[""Tag all resources"",""Set 3 budgets""]}]. 2-4 phases, ≤4 items each. accent ∈ blue|teal|green|amber|red.
 - eyebrow: optional small uppercase label above title (title/closing layouts)
 - bullets: optional string array (≤5, ≤10 words each)
 - bullets_right: right column for 'two_column' layout
@@ -123,18 +126,76 @@ EXAMPLE:
         var footnote = GetString(s, "footnote");
         var first = idx == 0 ? " active" : "";
 
-        return layout switch
+        var (html, chartJs) = layout switch
         {
             "title" => (RenderTitleSlide(idx, first, eyebrow, title, subtitle), ""),
+            "section" => (RenderSectionSlide(idx, first, eyebrow, title, subtitle), ""),
             "kpi" => (RenderKpiSlide(idx, first, title, subtitle, GetKpis(s), bullets), ""),
             "chart" => RenderChartSlide(idx, first, title, subtitle, GetChart(s), bullets),
             "two_column" => (RenderTwoColumnSlide(idx, first, title, subtitle, bullets, bulletsRight), ""),
             "maturity" => (RenderMaturitySlide(idx, first, title, subtitle, GetMaturityRows(s), footnote), ""),
             "alerts" => (RenderAlertsSlide(idx, first, title, subtitle, GetAlerts(s)), ""),
             "table" => (RenderTableSlide(idx, first, title, subtitle, GetTableColumns(s), GetTableRows(s)), ""),
+            "roadmap" => (RenderRoadmapSlide(idx, first, title, subtitle, GetRoadmapPhases(s), footnote), ""),
             "closing" => (RenderClosingSlide(idx, first, eyebrow, title, subtitle, bullets, GetCta(s)), ""),
             _ => (RenderContentSlide(idx, first, title, subtitle, bullets), ""),
         };
+
+        // Speaker notes: hidden panel toggled with the N key during presentation.
+        var notes = GetString(s, "notes");
+        if (!string.IsNullOrWhiteSpace(notes))
+        {
+            var insertAt = html.LastIndexOf("</section>", StringComparison.Ordinal);
+            if (insertAt >= 0)
+                html = html.Insert(insertAt, $@"<aside class=""notes-panel""><div class=""notes-label"">Speaker notes</div>{Esc(notes)}</aside>");
+        }
+        return (html, chartJs);
+    }
+
+    private static string RenderSectionSlide(int idx, string first, string? eyebrow, string title, string? subtitle) => $@"
+<section class=""slide s-section{first}"" data-i=""{idx}"">
+  <div class=""section-num"">{idx:00}</div>
+  {(eyebrow is null ? "" : $@"<div class=""eyebrow"">{Esc(eyebrow)}</div>")}
+  <h2 class=""section-title"">{Esc(title)}</h2>
+  {(subtitle is null ? "" : $@"<p class=""section-sub"">{Esc(subtitle)}</p>")}
+</section>";
+
+    private static string RenderRoadmapSlide(int idx, string first, string title, string? subtitle, List<RoadmapPhase> phases, string? footnote)
+    {
+        var sb = new StringBuilder();
+        sb.Append($@"<section class=""slide s-roadmap{first}"" data-i=""{idx}""><h2>{Esc(title)}</h2>");
+        if (subtitle is not null) sb.Append($@"<p class=""slide-sub"">{Esc(subtitle)}</p>");
+        sb.Append($@"<div class=""roadmap-track"">");
+        for (var i = 0; i < phases.Count; i++)
+        {
+            var p = phases[i];
+            var accent = p.Accent switch { "green" => "var(--good)", "amber" => "var(--amber)", "red" => "var(--red)", "teal" => "var(--teal)", _ => "var(--azure-blue)" };
+            sb.Append($@"<div class=""phase-card"" style=""--phase-accent:{accent}"">
+  <div class=""phase-head""><span class=""phase-dot""></span><span class=""phase-label"">{Esc(p.Label)}</span>{(p.Period is null ? "" : $@"<span class=""phase-period"">{Esc(p.Period)}</span>")}</div>
+  <ul class=""phase-items"">{string.Join("", p.Items.Select(it => $"<li>{RenderBullet(it)}</li>"))}</ul>
+</div>");
+        }
+        sb.Append("</div>");
+        if (footnote is not null) sb.Append($@"<div class=""maturity-foot"">{Esc(footnote)}</div>");
+        sb.Append("</section>");
+        return sb.ToString();
+    }
+
+    private sealed record RoadmapPhase(string Label, string? Period, List<string> Items, string? Accent);
+
+    private static List<RoadmapPhase> GetRoadmapPhases(JsonElement s)
+    {
+        var list = new List<RoadmapPhase>();
+        if (!s.TryGetProperty("phases", out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+        foreach (var p in arr.EnumerateArray())
+        {
+            var items = new List<string>();
+            if (p.TryGetProperty("items", out var ia) && ia.ValueKind == JsonValueKind.Array)
+                foreach (var it in ia.EnumerateArray())
+                    if (it.ValueKind == JsonValueKind.String) items.Add(it.GetString() ?? "");
+            list.Add(new RoadmapPhase(GetString(p, "label") ?? "Phase", GetString(p, "period"), items, GetString(p, "accent")));
+        }
+        return list;
     }
 
     private static string RenderTitleSlide(int idx, string first, string? eyebrow, string title, string? subtitle) => $@"
@@ -647,7 +708,32 @@ body:has(.s-closing.active) .hint kbd{{background:rgba(255,255,255,.15);border-c
 .click-zone{{position:fixed;top:0;bottom:0;width:18%;z-index:50;cursor:pointer}}
 .click-zone.left{{left:0}}
 .click-zone.right{{right:0}}
-@media(max-width:900px){{.kpi-cols-3,.kpi-cols-4{{grid-template-columns:1fr 1fr}};.twocol-grid{{grid-template-columns:1fr}}}}
+/* Section divider */
+.s-section{{background:linear-gradient(135deg,#f7fafd,#eef4fa);text-align:left;justify-content:center}}
+.section-num{{font-size:clamp(4rem,9vw,8rem);font-weight:800;color:rgba(0,120,212,.10);line-height:1}}
+.section-title{{font-size:clamp(2rem,4.5vw,3.6rem);font-weight:800;letter-spacing:-.02em;margin:.2em 0 0}}
+.section-sub{{font-size:clamp(1.05rem,1.6vw,1.4rem);color:var(--ink-soft);margin-top:.6em;max-width:60ch}}
+/* Roadmap */
+.roadmap-track{{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:1.2rem;margin-top:1.8rem;align-items:stretch}}
+.phase-card{{position:relative;padding:1.3rem 1.2rem;border:1px solid var(--line);border-radius:14px;background:#fff;border-top:5px solid var(--phase-accent,var(--azure-blue))}}
+.phase-head{{display:flex;align-items:center;gap:.55rem;margin-bottom:.9rem;flex-wrap:wrap}}
+.phase-dot{{width:.7rem;height:.7rem;border-radius:50%;background:var(--phase-accent,var(--azure-blue))}}
+.phase-label{{font-weight:800;font-size:1.15rem}}
+.phase-period{{margin-left:auto;font-size:.85rem;font-weight:600;color:var(--ink-mute);background:var(--bg-soft);padding:.2rem .6rem;border-radius:6px}}
+.phase-items{{list-style:none;display:flex;flex-direction:column;gap:.55rem}}
+.phase-items li{{position:relative;padding-left:1.2rem;font-size:1rem;line-height:1.45;color:var(--ink-soft)}}
+.phase-items li::before{{content:'';position:absolute;left:0;top:.5em;width:.45rem;height:.45rem;background:var(--phase-accent,var(--azure-blue));border-radius:2px}}
+/* Speaker notes (N key) */
+.notes-panel{{display:none;position:absolute;left:0;right:0;bottom:0;max-height:34%;overflow:auto;background:rgba(20,24,28,.92);color:#e8eaed;padding:1rem 2.2rem 1.2rem;font-size:1rem;line-height:1.55;z-index:70;backdrop-filter:blur(6px);white-space:pre-wrap}}
+.notes-label{{font-size:.7rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#9ecbf0;margin-bottom:.35rem}}
+body.show-notes .slide.active .notes-panel{{display:block}}
+/* Print / PDF export (P key or Ctrl+P): one slide per page */
+@media print{{
+  html,body{{overflow:visible;height:auto}}
+  .slide{{position:relative;opacity:1;transform:none;page-break-after:always;height:100vh}}
+  .progress,.nav-arrow,.fs-toggle,.dots,.counter,.hint,.click-zone,.notes-panel{{display:none!important}}
+}}
+@media(max-width:900px){{.kpi-cols-3,.kpi-cols-4{{grid-template-columns:1fr 1fr}};.twocol-grid{{grid-template-columns:1fr}};.roadmap-track{{grid-auto-flow:row}}}}
 </style>
 </head>
 <body>
@@ -684,6 +770,8 @@ document.addEventListener('keydown',e=>{{
   else if(e.key==='ArrowUp'){{e.preventDefault();fsEnter()}}
   else if(e.key==='ArrowDown'){{e.preventDefault();fsExit()}}
   else if(e.key==='Home'){{go(0)}} else if(e.key==='End'){{go(total-1)}}
+  else if(e.key==='n'||e.key==='N'){{document.body.classList.toggle('show-notes')}}
+  else if(e.key==='p'||e.key==='P'){{window.print()}}
   else if(e.key>='1'&&e.key<='9'){{const i=parseInt(e.key,10)-1;if(i<total)go(i)}}
 }});
 let tx=0;document.addEventListener('touchstart',e=>{{tx=e.touches[0].clientX}},{{passive:true}});
