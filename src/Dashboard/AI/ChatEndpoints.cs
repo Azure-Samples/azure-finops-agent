@@ -22,6 +22,14 @@ public static class ChatEndpoints
     // disk). Value = UTC start of the running turn (for staleness recovery).
     private static readonly ConcurrentDictionary<string, DateTimeOffset> ActiveTurns = new();
 
+    // Last context blocks sent per session — the [CONTEXT: …] / [UPLOADED FILES …]
+    // prefixes used to be prepended to EVERY user message and permanently
+    // accumulated in conversation history (10 turns = 10 redundant copies
+    // re-sent on every LLM round-trip). Now they're only injected when their
+    // content actually changes for that session.
+    private static readonly ConcurrentDictionary<string, string> LastConnectionContext = new();
+    private static readonly ConcurrentDictionary<string, string> LastUploadsContext = new();
+
     /// <summary>True if a turn is currently executing for this session (used by
     /// the frontend to re-attach after a refresh instead of showing dead air).</summary>
     internal static bool IsTurnActive(string sessionId) =>
@@ -180,7 +188,7 @@ public static class ChatEndpoints
             if (tokens.StorageToken is not null) connectedApis.Add("Azure Storage (ListCostExportBlobs, ReadCostExportBlob)");
             var connectionContext = connectedApis.Count > 0
                 ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}. Proceed with tool calls directly.]"
-                : "[CONTEXT: User is NOT connected to Azure. You can still answer any question that does NOT require their tenant-specific data — including public Azure information (regions, datacenters, services, pricing via RetailPrices, service health, general FinOps guidance), rendering charts/maps with public data, and explaining concepts. Use your built-in knowledge and public tools (RenderChart, RenderAdvancedChart, RetailPricing, GetAzureServiceHealth, web fetch) freely. Only ask the user to click 'Connect Azure' when the question genuinely requires their subscription/tenant data (their costs, their resources, their usage). Do NOT refuse public questions.]";
+                : "[CONTEXT: Azure NOT connected. Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only suggest 'Connect Azure' when the question needs their tenant data. Do NOT refuse public questions.]";
 
             // Surface any files the user has dropped into this session so the LLM
             // immediately knows the fileIds it can pass to QueryUploadedFile.
@@ -199,9 +207,8 @@ public static class ChatEndpoints
                 sb.Append("]\n[ANSWER SHAPE FOR FILE ANALYSIS: (1) ONE-sentence headline naming the #1 waste with $ amount + concrete owner/RG/resource. (2) ONE visual — RenderChart (horizontal_bar of top-5 by $) when ≥3 data points, else a tight ≤5-row markdown table with an Owner column. NEVER both. NEVER long bullet lists of generic advice. (3) Optional 1-line takeaway. Then call SuggestFollowUp.]\n[FOLLOW-UP DIRECTIVE: After answering, you MUST call SuggestFollowUp. When the answer involved file analysis, prefer 2-3 distinct actions via the optional label2/prompt2 + label3/prompt3 parameters. Each action must propose a concrete next ACTION on these files (e.g. 'Rank top 5 prioritized actions across all files', 'Generate a cleanup script for the disks identified', 'Build a CFO deck from these uploads', 'Tag the untagged resources via PATCH'). Never propose a follow-up that just re-asks for analysis the user already saw.]");
                 uploadsContext = sb.ToString();
             }
-            prompt = string.IsNullOrEmpty(uploadsContext)
-                ? $"{connectionContext}\n{prompt}"
-                : $"{connectionContext}\n{uploadsContext}\n{prompt}";
+            // NOTE: context blocks are merged into the prompt AFTER session
+            // acquisition (see below) so they can be deduplicated per session.
 
             ctx.Response.Headers.ContentType = "text/event-stream";
             ctx.Response.Headers.CacheControl = "no-cache";
@@ -267,6 +274,23 @@ public static class ChatEndpoints
                     }
                 }
                 turnGateSessionId = activeSessionId;
+
+                // Context dedup: only prepend [CONTEXT:]/[UPLOADED FILES:] blocks
+                // when their content changed for THIS session — they persist in
+                // the conversation history, so once sent the model retains them.
+                var contextBits = new List<string>(2);
+                if (!LastConnectionContext.TryGetValue(activeSessionId, out var prevConn) || prevConn != connectionContext)
+                {
+                    contextBits.Add(connectionContext);
+                    LastConnectionContext[activeSessionId] = connectionContext;
+                }
+                if (uploadsContext.Length > 0 && (!LastUploadsContext.TryGetValue(activeSessionId, out var prevUp) || prevUp != uploadsContext))
+                {
+                    contextBits.Add(uploadsContext);
+                    LastUploadsContext[activeSessionId] = uploadsContext;
+                }
+                if (contextBits.Count > 0)
+                    prompt = string.Join("\n", contextBits) + "\n" + prompt;
 
                 var done = new TaskCompletionSource();
                 var cancelled = false;

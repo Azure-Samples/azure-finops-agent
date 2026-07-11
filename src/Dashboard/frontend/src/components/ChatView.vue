@@ -1196,12 +1196,6 @@
                   <span v-if="streamIntent" class="stream-intent">
                     {{ streamIntent }}
                   </span>
-                  <span
-                    v-else-if="streamReasoning && !streamBuffer"
-                    class="stream-reasoning"
-                  >
-                    {{ streamReasoning }}
-                  </span>
                 </div>
                 <div class="ai-content">
                   <div
@@ -1214,8 +1208,15 @@
                     <span v-html="renderContent(streamBuffer)"></span>
                     <span class="streaming-cursor"></span>
                   </div>
+                  <div v-else-if="streamReasoning" class="stream-reasoning-block">
+                    <div class="reasoning-label">
+                      <span class="thinking-dots"><i></i><i></i><i></i></span>
+                      Thinking
+                    </div>
+                    <div class="reasoning-body">{{ streamReasoning }}</div>
+                  </div>
                   <div class="message-text" v-else-if="!streamIntent">
-                    <span class="streaming-cursor"></span>
+                    <span class="thinking-dots thinking-dots--lg"><i></i><i></i><i></i></span>
                   </div>
                 </div>
               </div>
@@ -4788,11 +4789,13 @@ async function send() {
             break;
 
           case "reasoning":
-            // Live "thinking" summary — keep only the tail so it reads as a
-            // one-line status ticker rather than a growing wall of text.
+            // Live "thinking" panel — accumulate the reasoning summary (multi-
+            // row, newlines preserved) and keep a rolling tail so the panel
+            // reads like the model's stream of thought without growing forever.
             if (data.content) {
-              const merged = (streamReasoning.value + data.content).replace(/\s+/g, " ");
-              streamReasoning.value = merged.length > 160 ? "…" + merged.slice(-160) : merged;
+              const merged = streamReasoning.value + data.content;
+              streamReasoning.value =
+                merged.length > 1500 ? "…" + merged.slice(-1500) : merged;
             }
             break;
 
@@ -7246,17 +7249,74 @@ async function send() {
   line-height: 1.4;
   animation: intent-in 0.3s ease-out;
 }
-.stream-reasoning {
-  font-style: italic;
-  color: #8a8886;
-  font-size: 13px;
-  font-weight: 400;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 640px;
-  line-height: 1.4;
+.stream-reasoning-block {
+  margin: 6px 0 2px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, #fafbfc, #f3f5f7);
+  border: 1px solid #e8eaed;
+  border-radius: 10px;
   animation: intent-in 0.3s ease-out;
+  max-width: 720px;
+}
+.reasoning-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #7a7d85;
+  margin-bottom: 6px;
+}
+.reasoning-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #8a8d94;
+  font-style: italic;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Rolling window: cap ~6 rows, keep the newest text pinned visible. */
+  max-height: 126px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+/* Animated thinking dots — three staggered pulsing orbs. */
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.thinking-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0078d4, #7b61c4);
+  animation: dot-bounce 1.2s ease-in-out infinite;
+}
+.thinking-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.thinking-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+.thinking-dots--lg i {
+  width: 9px;
+  height: 9px;
+}
+@keyframes dot-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-5px) scale(1.15);
+    opacity: 1;
+  }
 }
 @keyframes intent-in {
   from {

@@ -346,16 +346,21 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
 
         var chartLogger = loggerFactory.CreateLogger("AzureFinOps.AI.Charts");
         var sharedTools = new List<AIFunctionDeclaration>();
+        // HOT PATH — always loaded (schemas shipped in every request). Keep this
+        // set tight: every entry costs input tokens on EVERY LLM round-trip.
         sharedTools.AddRange(ChartTools.Create(chartLogger));
-        sharedTools.AddRange(HealthTools.Create());
-        sharedTools.AddRange(HtmlPresentationTools.Create());
         sharedTools.AddRange(FollowUpTools.Create());
         sharedTools.AddRange(ScoreTools.Create());
-        sharedTools.AddRange(ScriptTools.Create());
-        sharedTools.AddRange(RetailPricingTools.Create());
-        sharedTools.AddRange(CostEstimateTools.Create());
-        sharedTools.AddRange(MaturityReportTools.Create());
-        sharedTools.AddRange(WebFetchTools.Create());
+        // COLD PATH — defer=Auto: the CLI loads these on demand via tool search.
+        // Cuts ~15-20K input tokens of tool schemas per round-trip (measured:
+        // fresh "hi" carried 26K input tokens with everything always-on).
+        sharedTools.AddRange(DeferredTool.WrapAll(HealthTools.Create()));
+        sharedTools.AddRange(DeferredTool.WrapAll(HtmlPresentationTools.Create()));
+        sharedTools.AddRange(DeferredTool.WrapAll(ScriptTools.Create()));
+        sharedTools.AddRange(DeferredTool.WrapAll(RetailPricingTools.Create()));
+        sharedTools.AddRange(DeferredTool.WrapAll(CostEstimateTools.Create()));
+        sharedTools.AddRange(DeferredTool.WrapAll(MaturityReportTools.Create()));
+        sharedTools.AddRange(DeferredTool.WrapAll(WebFetchTools.Create()));
 
         var logger = loggerFactory.CreateLogger("AzureFinOps.AI");
         logger.LogInformation("CopilotClient started; Azure OpenAI BYOK endpoint={Endpoint} deployment={Deployment}",
@@ -371,15 +376,17 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         {
             var tokens = _telemetry.UserTokens.GetOrAdd(uid, id => new UserTokens { UserId = id });
             var tools = new List<AIFunctionDeclaration>(_sharedTools);
+            // HOT PATH — the two workhorse query tools stay always-loaded.
             tools.AddRange(new AzureQueryTools(tokens).Create());
             tools.AddRange(new GraphQueryTools(tokens).Create());
-            tools.AddRange(new LogAnalyticsQueryTools(tokens).Create());
-            tools.AddRange(new StorageQueryTools(tokens).Create());
-            tools.AddRange(new AnomalyTools(tokens).Create());
-            tools.AddRange(new PricesheetTools(tokens).Create());
-            tools.AddRange(new IdleResourceTools(tokens).Create());
-            tools.AddRange(new UploadedFileTools(tokens).Create());
-            tools.AddRange(new FaqTools(tokens).Create());
+            // COLD PATH — loaded on demand via tool search (see DeferredTool).
+            tools.AddRange(DeferredTool.WrapAll(new LogAnalyticsQueryTools(tokens).Create()));
+            tools.AddRange(DeferredTool.WrapAll(new StorageQueryTools(tokens).Create()));
+            tools.AddRange(DeferredTool.WrapAll(new AnomalyTools(tokens).Create()));
+            tools.AddRange(DeferredTool.WrapAll(new PricesheetTools(tokens).Create()));
+            tools.AddRange(DeferredTool.WrapAll(new IdleResourceTools(tokens).Create()));
+            tools.AddRange(DeferredTool.WrapAll(new UploadedFileTools(tokens).Create()));
+            tools.AddRange(DeferredTool.WrapAll(new FaqTools(tokens).Create()));
             return tools;
         });
     }
@@ -631,7 +638,12 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             },
             SystemMessage = new SystemMessageConfig
             {
-                Mode = SystemMessageMode.Append,
+                // Replace (not Append): Append ships the CLI's built-in multi-
+                // thousand-token "GitHub Copilot CLI terminal assistant" prompt
+                // (tone/code-editing rules irrelevant here) in EVERY request, on
+                // top of ours. Our SystemPrompt is self-contained for FinOps.
+                // Tool-calling still works — schemas travel at protocol level.
+                Mode = SystemMessageMode.Replace,
                 Content = SystemPrompt,
             },
         };
@@ -671,7 +683,8 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             },
             SystemMessage = new SystemMessageConfig
             {
-                Mode = SystemMessageMode.Append,
+                // Replace (not Append) — see CreateSessionConfigAsync for rationale.
+                Mode = SystemMessageMode.Replace,
                 Content = SystemPrompt,
             },
         };
