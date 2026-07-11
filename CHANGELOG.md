@@ -7,6 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Clickable prompt chips in AI answers** — the model marks suggested questions with `[label](prompt:full question)`; the chat renderer turns them into styled chips (inside tables, lists, and prose) that send the underlying question on click. The capability table's Examples column is now fully interactive.
+- **Per-turn reasoning-effort routing** — a conservative classifier (≤60 chars, no FinOps/data keywords) runs greetings/acknowledgements at `low` effort (~2–3 s first token) via `SetModelAsync`, while real questions keep the configured default. Applied effort is tracked per live session to skip redundant RPCs.
+- **Live reasoning panel & thinking animation** — streaming `reasoning` SSE events render as a multi-row rolling "Thinking" panel; the block cursor was replaced with animated gradient dots.
+- **Turn gate + refresh re-attach** — one running turn per session (concurrent sends get a friendly busy notice); `GET /api/sessions/{id}/active` lets the frontend re-attach after a refresh and auto-load the finished answer.
+
 ### Fixed
 
 - **Sidebar titles no longer leak prompt scaffolding** — when the SDK truncated a long first prompt mid-`[CONTEXT: …]` block, `CleanSummary`/`StripContextPrefix` surfaced the raw injected context (e.g. "[CONTEXT: User is NOT…") as the conversation title. Truncated context blocks are now discarded entirely.
