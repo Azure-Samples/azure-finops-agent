@@ -607,6 +607,9 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         {
             Model = _deployment,
             ReasoningEffort = effort,
+            // Stream concise reasoning summaries so the UI can show live
+            // "thinking" feedback during the otherwise-silent reasoning phase.
+            ReasoningSummary = effort is null ? null : ReasoningSummary.Concise,
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             ExcludedTools = ExcludedBuiltInTools,
@@ -644,6 +647,9 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         {
             Model = _deployment,
             ReasoningEffort = effort,
+            // Stream concise reasoning summaries so the UI can show live
+            // "thinking" feedback during the otherwise-silent reasoning phase.
+            ReasoningSummary = effort is null ? null : ReasoningSummary.Concise,
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             ExcludedTools = ExcludedBuiltInTools,

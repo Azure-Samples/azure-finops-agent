@@ -1196,6 +1196,12 @@
                   <span v-if="streamIntent" class="stream-intent">
                     {{ streamIntent }}
                   </span>
+                  <span
+                    v-else-if="streamReasoning && !streamBuffer"
+                    class="stream-reasoning"
+                  >
+                    {{ streamReasoning }}
+                  </span>
                 </div>
                 <div class="ai-content">
                   <div
@@ -1902,6 +1908,7 @@ const streamCoolers = computed(
 );
 const streamFollowUp = ref(null);
 const streamIntent = ref("");
+const streamReasoning = ref("");
 const htmlReady = ref(null);
 const scriptReady = ref(null);
 const messagesEl = ref(null);
@@ -2279,6 +2286,7 @@ async function selectSession(sessionId) {
   streamFollowUp.value = null;
   streamBuffer.value = "";
   streamIntent.value = "";
+  streamReasoning.value = "";
   if (intentAnimTimer) {
     clearInterval(intentAnimTimer);
     intentAnimTimer = null;
@@ -2805,7 +2813,9 @@ async function clearMessages() {
   perSessionToolCalls.clear();
   perSessionCharts.clear();
   streamFollowUp.value = null;
+  streamBuffer.value = "";
   streamIntent.value = "";
+  streamReasoning.value = "";
   if (intentAnimTimer) {
     clearInterval(intentAnimTimer);
     intentAnimTimer = null;
@@ -4567,6 +4577,7 @@ async function send() {
   // when the stream ends.
   const t0 = performance.now();
   const timings = [];
+  let watchdogFired = false;
   const recordTiming = (entry) => {
     timings.push({ t_ms: Math.round(performance.now() - t0), ...entry });
   };
@@ -4588,9 +4599,26 @@ async function send() {
     const decoder = new TextDecoder();
     let buf = "";
 
+    // Inactivity watchdog: if the server restarts mid-turn (deploy, crash),
+    // the TCP socket can stay half-open and reader.read() hangs forever —
+    // leaving a stuck blinking cursor. No event for 3 minutes (longest quiet
+    // stretch of a single LLM round-trip is well under that) ⇒ abort and
+    // surface the connection-lost recovery message.
+    const WATCHDOG_MS = 180000;
+    let watchdogTimer = null;
+    const armWatchdog = () => {
+      clearTimeout(watchdogTimer);
+      watchdogTimer = setTimeout(() => {
+        watchdogFired = true;
+        try { abortController?.abort(); } catch {}
+      }, WATCHDOG_MS);
+    };
+    armWatchdog();
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      armWatchdog();
 
       buf += decoder.decode(value, { stream: true });
       const lines = buf.split("\n");
@@ -4716,8 +4744,18 @@ async function send() {
             clearInterval(intentAnimTimer);
             intentAnimTimer = null;
             streamIntent.value = "";
+            streamReasoning.value = "";
             enqueueText(data.content);
             hasDeltas = true;
+            break;
+
+          case "reasoning":
+            // Live "thinking" summary — keep only the tail so it reads as a
+            // one-line status ticker rather than a growing wall of text.
+            if (data.content) {
+              const merged = (streamReasoning.value + data.content).replace(/\s+/g, " ");
+              streamReasoning.value = merged.length > 160 ? "…" + merged.slice(-160) : merged;
+            }
             break;
 
           case "message":
@@ -5000,7 +5038,7 @@ async function send() {
       messages.value.push(msgObj);
     }
   } catch (err) {
-    if (err.name === "AbortError") {
+    if (err.name === "AbortError" && !watchdogFired) {
       if (streamBuffer.value && isActiveView()) {
         messages.value.push({
           role: "assistant",
@@ -5010,10 +5048,21 @@ async function send() {
         });
       }
     } else if (isActiveView()) {
+      // A severed SSE stream usually means the app restarted mid-turn (deploy,
+      // scale event, crash). Any partial answer is preserved; give the user an
+      // actionable one-click retry instead of a bare error. Also re-sync auth
+      // state — a restart can invalidate the server session while the UI still
+      // shows "connected".
+      const partial = streamBuffer.value
+        ? streamBuffer.value + "\n\n---\n\n"
+        : "";
       messages.value.push({
         role: "assistant",
-        content: `**Connection error:** ${err.message}`,
+        content: `${partial}**Connection lost** — the service restarted or the network dropped mid-answer. Your conversation is saved.`,
+        followUp: { label: "Retry last question", prompt },
       });
+      checkAzureStatus();
+      loadSessions();
     }
   } finally {
     clearInterval(intentAnimTimer);
@@ -5054,6 +5103,7 @@ async function send() {
       activeTools.value = [];
       streamFollowUp.value = null;
       streamIntent.value = "";
+      streamReasoning.value = "";
       scriptReady.value = null;
       htmlReady.value = null;
       abortController = null;
@@ -7147,6 +7197,18 @@ async function send() {
   font-size: 14px;
   font-weight: 500;
   white-space: normal;
+  line-height: 1.4;
+  animation: intent-in 0.3s ease-out;
+}
+.stream-reasoning {
+  font-style: italic;
+  color: #8a8886;
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 640px;
   line-height: 1.4;
   animation: intent-in 0.3s ease-out;
 }

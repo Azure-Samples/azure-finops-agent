@@ -55,7 +55,14 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
       appSettings: [
         // Tells App Service which port the container listens on (matches Dockerfile EXPOSE 8080).
         { name: 'WEBSITES_PORT', value: '8080' }
-        { name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE', value: 'false' }
+        // CRITICAL: mount the persistent /home Azure Files share into the container.
+        // Chat history, Data Protection keys, and persisted identities (refresh
+        // tokens) all live under /home — with this 'false' every restart/deploy
+        // wiped them: users were silently logged out (cookie decrypt failed with
+        // "key not found in the key ring") and all conversations disappeared.
+        { name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE', value: 'true' }
+        // Root for Copilot SDK session state + identity store on the persistent mount.
+        { name: 'COPILOT_HOME', value: '/home/copilot' }
         // The image is heavy (node + .NET + Python + OTel collector); the first
         // cold start can exceed the 230s default. Allow up to 30 min to warm up.
         { name: 'WEBSITES_CONTAINER_START_TIME_LIMIT', value: '1800' }
@@ -63,6 +70,9 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
         // BYOK Azure OpenAI (Program.cs fail-fast key).
         { name: 'AzureOpenAI__Endpoint', value: aoaiEndpoint }
         { name: 'AzureOpenAI__DeploymentName', value: aoaiDeploymentName }
+        // Reasoning effort for reasoning-capable models. 'high' is the tested
+        // default; 'xhigh' produced 8+ minute single LLM round-trips.
+        { name: 'AzureOpenAI__ReasoningEffort', value: 'high' }
         // Entra ID OAuth (multi-tenant). Empty values disable OAuth gracefully.
         { name: 'Microsoft__ClientId', value: entraAppId }
         { name: 'Microsoft__ClientSecret', value: entraClientSecret }

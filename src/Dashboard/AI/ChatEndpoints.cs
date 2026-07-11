@@ -552,6 +552,14 @@ public static class ChatEndpoints
         {
             sseData = JsonSerializer.Serialize(new { type = "delta", content = delta.Data.DeltaContent });
         }
+        else if (evt is AssistantReasoningDeltaEvent reasoningDelta)
+        {
+            // Live "thinking" feedback — reasoning models are silent for many
+            // seconds while they reason; streaming the concise summary keeps the
+            // UI from looking frozen (bare blinking cursor).
+            if (!string.IsNullOrEmpty(reasoningDelta.Data.DeltaContent))
+                sseData = JsonSerializer.Serialize(new { type = "reasoning", content = reasoningDelta.Data.DeltaContent });
+        }
         else if (evt is AssistantMessageEvent msg)
         {
             sseData = JsonSerializer.Serialize(new { type = "message", content = msg.Data.Content });
