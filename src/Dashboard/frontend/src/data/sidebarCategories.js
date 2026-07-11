@@ -319,6 +319,11 @@ const maturityCategories = [
           "Analyze my AKS clusters. Show each cluster's node pool configuration, VM sizes, node count, and monthly cost. Identify over-provisioned node pools where CPU/memory requests are significantly below capacity. Recommend right-sizing actions with estimated savings.",
       },
       {
+        label: "AKS namespace costs",
+        prompt:
+          "Break down my AKS cluster costs by namespace using the cost analysis add-on data. Show which namespaces drive spend, and flag workloads missing CPU/memory requests that make allocation inaccurate.",
+      },
+      {
         label: "Network cost review",
         prompt:
           "Review my network-related costs: ExpressRoute circuits, VPN gateways, NAT gateways, public IPs, and Application Gateways. List each resource with its SKU, monthly cost, and utilization. Flag any that appear oversized or idle.",
@@ -359,6 +364,21 @@ const maturityCategories = [
         label: "Cost forecast",
         prompt:
           "Based on my current spending trend, forecast my Azure bill for the rest of this month. Show the projected cost vs budget as a line chart.",
+      },
+      {
+        label: "Forecast variance",
+        prompt:
+          "Show budget vs forecast vs actual variance for this month per subscription. Flag any subscription where the forecast exceeds its budget, with the % overrun.",
+      },
+      {
+        label: "Savings ledger",
+        prompt:
+          "Show my savings ledger — everything we've saved so far, estimated vs verified. Verify any executed actions against actual cost data and update their status.",
+      },
+      {
+        label: "Weekly cost digest (email)",
+        prompt:
+          "Set up a weekly scheduled email digest of my Azure costs using Cost Management scheduled actions — cost by service plus notable changes. Ask me for the recipient email and cadence in one question.",
       },
       {
         label: "Amortized cost view",

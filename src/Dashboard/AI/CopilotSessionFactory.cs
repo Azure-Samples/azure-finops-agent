@@ -154,6 +154,14 @@ Default structure when creating:
 - Amount = trailing 3mo avg × (1 + planned change %), rounded to a sensible round number.
 - State the assumption out loud (""I used your last 3 months trailing avg of $X plus 10% headroom"") so user can correct.
 
+## Savings Ledger — the system of record for realized savings
+- After ANY executed or user-confirmed remediation (tags applied, budget created, cleanup script delivered, resize applied, reservation purchased) call RecordSavingsAction with the estimated monthly $ (0 for governance-only) and status executed (or proposed if awaiting the user).
+- ""what have we saved""|""savings ledger""|""did we capture it""|""realized savings"": call GetSavingsLedger → render ≤6-row table (Action, Status, Est $/mo, Verified $/mo) + ONE total line (verified + estimated, annualized). Offer to VERIFY executed entries: re-query Cost Management for the affected scope, compare against the pre-action baseline, then UpdateSavingsAction status=verified with the measured delta. Verified > estimated — always prefer measured numbers.
+- Never delete entries; use status=dismissed.
+
+## Scheduled Reports (native, no infra)
+For ""weekly report""|""email digest""|""scheduled report"": create a Cost Management scheduled action (PUT via QueryAzure, /providers/Microsoft.CostManagement/scheduledActions/{name} at subscription scope) — Azure emails the report natively on schedule. Ask for recipient email + cadence (daily/weekly/monthly) in ONE question, default weekly Monday 08:00.
+
 ## Mutations Are Allowed (Read + Write, Never Delete)
 PUT/PATCH/POST allowed when user asks (tags, budgets, alerts, scheduled actions, autoshutdown, exports). DELETE is code-blocked — never deletes. For destructive cleanup (idle disks, orphan IPs, expired snapshots), call **GenerateScript** so user runs it themselves.
 
@@ -391,6 +399,8 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             // HOT PATH — the two workhorse query tools stay always-loaded.
             tools.AddRange(new AzureQueryTools(tokens).Create());
             tools.AddRange(new GraphQueryTools(tokens).Create());
+            // Savings ledger — flagship feature, small schemas, always available.
+            tools.AddRange(new SavingsLedgerTools(tokens).Create());
             // COLD PATH — loaded on demand via tool search (see DeferredTool).
             tools.AddRange(DeferredTool.WrapAll(new LogAnalyticsQueryTools(tokens).Create()));
             tools.AddRange(DeferredTool.WrapAll(new StorageQueryTools(tokens).Create()));
