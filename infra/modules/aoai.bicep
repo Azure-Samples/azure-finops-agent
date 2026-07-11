@@ -9,6 +9,9 @@ param modelName string
 param modelVersion string
 param deploymentName string
 param modelCapacity int
+@description('Deployment service tier. "Priority" enables priority processing (faster time-to-first-token at a premium); "Default" is standard processing.')
+@allowed(['Default', 'Priority'])
+param serviceTier string = 'Priority'
 param existingAoaiResourceId string
 
 var useExisting = !empty(existingAoaiResourceId)
@@ -54,6 +57,9 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2026-
       name: modelName
       version: modelVersion
     }
+    // Priority processing (the Foundry portal's "Priority processing" toggle):
+    // requests are served with faster time-to-first-token at a price premium.
+    serviceTier: serviceTier
   }
 }
 

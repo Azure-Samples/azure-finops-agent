@@ -115,7 +115,7 @@ public static class SessionEndpoints
             var resultsById = new Dictionary<string, (string? Result, bool Success, string? Error)>();
             foreach (var evt in events)
             {
-                if (evt is GitHub.Copilot.SDK.ToolExecutionCompleteEvent tec && tec.Data is { } d && !string.IsNullOrEmpty(d.ToolCallId))
+                if (evt is GitHub.Copilot.ToolExecutionCompleteEvent tec && tec.Data is { } d && !string.IsNullOrEmpty(d.ToolCallId))
                 {
                     resultsById[d.ToolCallId] = (
                         d.Result?.DetailedContent ?? d.Result?.Content,
@@ -154,7 +154,7 @@ public static class SessionEndpoints
 
             foreach (var evt in events)
             {
-                if (evt is GitHub.Copilot.SDK.UserMessageEvent um)
+                if (evt is GitHub.Copilot.UserMessageEvent um)
                 {
                     FlushAssistant();
                     var raw = um.Data?.Content ?? "";
@@ -162,7 +162,7 @@ public static class SessionEndpoints
                     if (string.IsNullOrWhiteSpace(clean)) continue;
                     messages.Add(new { role = "user", content = clean });
                 }
-                else if (evt is GitHub.Copilot.SDK.AssistantMessageEvent am)
+                else if (evt is GitHub.Copilot.AssistantMessageEvent am)
                 {
                     var text = am.Data?.Content;
                     if (!string.IsNullOrEmpty(text))

@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text.Json;
 using AzureFinOps.Dashboard.Auth;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 
 namespace AzureFinOps.Dashboard.Observability;
@@ -38,7 +38,7 @@ public sealed class AiTelemetry
     public ConcurrentDictionary<long, string> CurrentSessionId { get; } = new();
 
     public ConcurrentDictionary<long, UserTokens> UserTokens { get; } = new();
-    public ConcurrentDictionary<long, List<AIFunction>> UserTools { get; } = new();
+    public ConcurrentDictionary<long, List<AIFunctionDeclaration>> UserTools { get; } = new();
 
     /// <summary>
     /// SDK-generated display titles keyed by sessionId, persisted across restarts.

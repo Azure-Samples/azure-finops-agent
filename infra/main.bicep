@@ -80,13 +80,13 @@ param aoaiLocation string = 'swedencentral'
 param appServicePlanSku string = 'B1'
 
 @description('Azure OpenAI model name to deploy (must be available in `aoaiLocation`). The agent requires a reasoning model — `ReasoningEffort=xhigh` is set in code (see CopilotSessionFactory.cs). gpt-4o / gpt-4 will not work.')
-param aoaiModelName string = 'gpt-5.4'
+param aoaiModelName string = 'gpt-5.6-sol'
 
 @description('Azure OpenAI model version. Must match the model name: gpt-5.4 = 2026-03-05 (note: 2025-08-07 is the original gpt-5 version, NOT gpt-5.4).')
-param aoaiModelVersion string = '2026-03-05'
+param aoaiModelVersion string = '2026-07-09'
 
 @description('Azure OpenAI deployment name surfaced as `AzureOpenAI__DeploymentName` to the app.')
-param aoaiDeploymentName string = 'gpt-5.4'
+param aoaiDeploymentName string = 'gpt-5.6-sol'
 
 @description('Azure OpenAI model deployment capacity — TPM in THOUSANDS (100 = 100K tokens/min). For GlobalStandard this is purely a rate-limit knob billed per-token, so raising it costs nothing. The agent uses xhigh reasoning (token-heavy) — 30 hits 429 rate limits under real use. Default 100. Lower it only if your gpt-5.4 GlobalStandard quota is under 100K; raise it (200-300) for heavy demo traffic.')
 param aoaiModelCapacity int = 100

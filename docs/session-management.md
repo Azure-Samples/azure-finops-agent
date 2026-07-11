@@ -102,7 +102,7 @@ This is the _only_ place that touches the identity file on the read path; the re
 
 ### 7.1 Workdir as ownership marker
 
-Every `CopilotSession` is created with `WorkingDirectory = $COPILOT_HOME/users/{oid}` (Entra) or `…/anon/{userId}`. The SDK persists `metadata.Context.Cwd` for each session, so listing the user's conversations is just _list all sessions whose `Cwd` matches my workdir_. We never store our own session-id index — the SDK's filesystem layout is the index.
+Every `CopilotSession` is created with `WorkingDirectory = $COPILOT_HOME/users/{oid}` (Entra) or `…/anon/{userId}`. The SDK persists `metadata.Context.WorkingDirectory` for each session, so listing the user's conversations is just _list all sessions whose `WorkingDirectory` matches my workdir_. We never store our own session-id index — the SDK's filesystem layout is the index.
 
 ### 7.2 Live-vs-disk distinction (`AiTelemetry.LiveSessions`)
 

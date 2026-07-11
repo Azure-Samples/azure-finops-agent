@@ -4,7 +4,7 @@ using System.Text.Json;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Observability;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 namespace AzureFinOps.Dashboard.AI;
 
