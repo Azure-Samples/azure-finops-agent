@@ -2412,6 +2412,44 @@ async function selectSession(sessionId) {
   } catch {
     messages.value = [{ role: "system", content: "Resumed conversation." }];
   }
+
+  // Re-attach: if this session has a turn still running SERVER-side (page was
+  // refreshed mid-answer, or the SSE died while the CLI kept working), poll
+  // until it finishes and then reload the transcript — instead of leaving the
+  // user staring at a silent conversation that "doesn't respond".
+  attachToServerTurn(sessionId);
+}
+
+// One poller at a time; superseded by any newer session selection.
+let serverTurnPollToken = 0;
+async function attachToServerTurn(sessionId) {
+  const token = ++serverTurnPollToken;
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/active`);
+    if (!r.ok) return;
+    const { active } = await r.json();
+    if (!active || token !== serverTurnPollToken) return;
+    // Show a lightweight working notice while the server-side turn finishes.
+    messages.value = [
+      ...messages.value,
+      { role: "system", content: "⏳ Still working on your last question — the answer will appear here when ready." },
+    ];
+    while (token === serverTurnPollToken) {
+      await new Promise((res) => setTimeout(res, 4000));
+      const p = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/active`);
+      if (!p.ok) return;
+      const { active: still } = await p.json();
+      if (!still) {
+        if (token !== serverTurnPollToken) return;
+        // Turn finished — drop the notice and reload the persisted transcript.
+        messages.value = messages.value.filter(
+          (m) => !(m.role === "system" && String(m.content).startsWith("⏳")),
+        );
+        await selectSession(sessionId);
+        return;
+      }
+    }
+  } catch {}
 }
 
 async function deleteSession(sessionId) {
@@ -4755,6 +4793,14 @@ async function send() {
             if (data.content) {
               const merged = (streamReasoning.value + data.content).replace(/\s+/g, " ");
               streamReasoning.value = merged.length > 160 ? "…" + merged.slice(-160) : merged;
+            }
+            break;
+
+          case "busy":
+            // Server rejected this prompt because a turn is already running in
+            // this session. Surface the notice; the earlier turn keeps going.
+            if (isActiveView()) {
+              messages.value.push({ role: "system", content: `⏳ ${data.message}` });
             }
             break;
 

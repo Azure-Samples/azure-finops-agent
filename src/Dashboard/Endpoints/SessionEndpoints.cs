@@ -56,6 +56,18 @@ public static class SessionEndpoints
             return Results.Ok(new { sessionId = session.SessionId });
         });
 
+        // Turn-activity probe: lets the frontend re-attach after a page refresh —
+        // if a turn is still running it polls until done, then reloads the
+        // transcript instead of leaving the user staring at dead air.
+        app.MapGet("/api/sessions/{sessionId}/active", async (HttpContext ctx, string sessionId) =>
+        {
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
+                return Results.Unauthorized();
+            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted))
+                return Results.NotFound();
+            return Results.Ok(new { active = AzureFinOps.Dashboard.AI.ChatEndpoints.IsTurnActive(sessionId) });
+        });
+
         app.MapPost("/api/sessions/{sessionId}/select", async (HttpContext ctx, string sessionId) =>
         {
             if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))

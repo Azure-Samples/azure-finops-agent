@@ -15,6 +15,19 @@ namespace AzureFinOps.Dashboard.AI;
 /// </summary>
 public static class ChatEndpoints
 {
+    // One turn per session at a time. Without this gate, a second prompt sent
+    // while a turn is running gets queued into the same CLI session, and the
+    // FIRST SessionIdleEvent closes BOTH subscribers' SSE streams — the second
+    // turn then runs with nobody listening (blinking cursor, answer lost to
+    // disk). Value = UTC start of the running turn (for staleness recovery).
+    private static readonly ConcurrentDictionary<string, DateTimeOffset> ActiveTurns = new();
+
+    /// <summary>True if a turn is currently executing for this session (used by
+    /// the frontend to re-attach after a refresh instead of showing dead air).</summary>
+    internal static bool IsTurnActive(string sessionId) =>
+        ActiveTurns.TryGetValue(sessionId, out var startedAt)
+        && DateTimeOffset.UtcNow - startedAt <= TimeSpan.FromMinutes(15);
+
     public static void MapChatEndpoints(
         this IEndpointRouteBuilder app,
         CopilotSessionFactory copilotFactory,
@@ -199,6 +212,7 @@ public static class ChatEndpoints
             // remove this exact turn's reporter (sweeping by userId prefix would
             // clobber a concurrent turn in another tab).
             string? turnKey = null;
+            string? turnGateSessionId = null;
             try
             {
                 CopilotSession session;
@@ -231,6 +245,28 @@ public static class ChatEndpoints
                 sessionSw.Stop();
                 RecordPhase($"session.{sessionAcquireMode}", sessionSw.Elapsed.TotalMilliseconds);
                 var activeSessionId = session.SessionId;
+
+                // Turn gate: one running turn per session. Stale entries (>15 min)
+                // are treated as abandoned — e.g. a turn orphaned by a container
+                // restart whose finally never ran on this instance.
+                var now = DateTimeOffset.UtcNow;
+                if (!ActiveTurns.TryAdd(activeSessionId, now))
+                {
+                    if (ActiveTurns.TryGetValue(activeSessionId, out var startedAt)
+                        && now - startedAt > TimeSpan.FromMinutes(15))
+                    {
+                        ActiveTurns[activeSessionId] = now; // reclaim stale turn
+                    }
+                    else
+                    {
+                        logger.LogInformation("Rejected concurrent turn for session {SessionId} (running since {Start})", activeSessionId, startedAt);
+                        await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "busy", message = "I'm still working on your previous question — one moment. This message wasn't sent; try again when the current answer finishes." })}\n\n");
+                        await ctx.Response.WriteAsync("data: [DONE]\n\n");
+                        await ctx.Response.Body.FlushAsync();
+                        return;
+                    }
+                }
+                turnGateSessionId = activeSessionId;
 
                 var done = new TaskCompletionSource();
                 var cancelled = false;
@@ -498,6 +534,8 @@ public static class ChatEndpoints
                 // sidebar score racing chat) holds its own key in the dict.
                 if (turnKey is not null)
                     Infrastructure.HttpHelper.RetryReporters.TryRemove(turnKey, out _);
+                if (turnGateSessionId is not null)
+                    ActiveTurns.TryRemove(turnGateSessionId, out _);
             }
         });
 
