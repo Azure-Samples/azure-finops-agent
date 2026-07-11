@@ -36,6 +36,23 @@ public static class ChatEndpoints
         ActiveTurns.TryGetValue(sessionId, out var startedAt)
         && DateTimeOffset.UtcNow - startedAt <= TimeSpan.FromMinutes(15);
 
+    /// <summary>
+    /// Conservative trivial-prompt classifier for per-turn effort routing.
+    /// Only short prompts with NO FinOps/data signal qualify — a misclassified
+    /// deep question would get shallow reasoning, so bias heavily toward false.
+    /// </summary>
+    private static bool IsTrivialPrompt(string prompt)
+    {
+        var p = prompt.Trim();
+        if (p.Length > 60) return false;
+        // Any FinOps/data keyword disqualifies.
+        if (System.Text.RegularExpressions.Regex.IsMatch(p,
+            @"cost|price|pricing|vm|disk|budget|quota|subscri|region|reserv|saving|tag|azure|score|export|anomal|licen|graph|kql|storage|network|sql|aks|gpu|token|spend|bill|invoice|resource|advisor|polic|\$|\d",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            return false;
+        return true;
+    }
+
     public static void MapChatEndpoints(
         this IEndpointRouteBuilder app,
         CopilotSessionFactory copilotFactory,
@@ -274,6 +291,22 @@ public static class ChatEndpoints
                     }
                 }
                 turnGateSessionId = activeSessionId;
+
+                // Per-turn effort routing: greetings/acknowledgements don't need
+                // deep deliberation — run them at "low" (~2-3s first token vs ~6s).
+                // Real FinOps questions keep the configured default effort.
+                var trivialTurn = IsTrivialPrompt(prompt);
+                var targetEffort = copilotFactory.GetEffortForTurn(trivialTurn);
+                if (targetEffort is not null
+                    && telemetry.LiveSessions.TryGetValue(activeSessionId, out var liveInfo)
+                    && liveInfo.AppliedEffort != targetEffort)
+                {
+                    var effortSw = Stopwatch.StartNew();
+                    await session.SetModelAsync(copilotFactory.Deployment, targetEffort, null, ctx.RequestAborted);
+                    liveInfo.AppliedEffort = targetEffort;
+                    effortSw.Stop();
+                    RecordPhase($"effort.{targetEffort}", effortSw.Elapsed.TotalMilliseconds, new { trivial = trivialTurn });
+                }
 
                 // Context dedup: only prepend [CONTEXT:]/[UPLOADED FILES:] blocks
                 // when their content changed for THIS session — they persist in

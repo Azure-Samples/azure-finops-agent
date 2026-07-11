@@ -117,4 +117,8 @@ public sealed class LiveSessionInfo
     public required CopilotSession Session { get; init; }
     public required long UserId { get; init; }
     public required DateTimeOffset BearerExpiry { get; set; }
+
+    /// <summary>Last reasoning effort applied to this live session via
+    /// <c>SetModelAsync</c> (per-turn effort routing). Null = session default.</summary>
+    public string? AppliedEffort { get; set; }
 }

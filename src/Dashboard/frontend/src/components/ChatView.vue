@@ -2751,6 +2751,14 @@ watch(
 
 onMounted(async () => {
   document.addEventListener("click", dismissPopover);
+  // Delegated handler for model-marked prompt chips ([label](prompt:...) links
+  // rendered by renderContent). Delegation survives v-html re-renders.
+  document.addEventListener("click", (e) => {
+    const chip = e.target.closest?.(".prompt-chip");
+    if (!chip) return;
+    const q = chip.getAttribute("data-prompt");
+    if (q && !streaming.value && !clearing.value) sendPrompt(q);
+  });
   // Dev helper: window.__simulateCool(waitSec?) injects a synthetic ghost
   // "cooling down" row in the current session's tool sidebar so you can
   // verify the throttle UI without forcing a real 429. Removes itself
@@ -4509,6 +4517,17 @@ function renderContent(text) {
       const dataRows = lines.slice(2).map(splitRow);
       return buildWowTable(headerCells, dataRows);
     },
+  );
+  // Clickable prompt chips: the model marks suggested questions with
+  // [label](prompt:full question). Render as a chip; a delegated click
+  // handler sends the question. Runs AFTER table building — enhanceCell
+  // only escapes &<> so the [label](prompt:...) syntax survives into
+  // table cells and is transformed here. Deterministic — no guessing
+  // which text is clickable. Works in tables, lists, and prose.
+  html = html.replace(
+    /\[([^\]]+)\]\(prompt:([^)]+)\)/g,
+    (_, label, q) =>
+      `<button type="button" class="prompt-chip" data-prompt="${escapeHtml(q.trim()).replace(/"/g, "&quot;")}">${escapeHtml(label.trim())}</button>`,
   );
   html = html.replace(/^### (.+)$/gm, "<h4>$1</h4>");
   html = html.replace(/^## (.+)$/gm, "<h3>$1</h3>");
@@ -7257,6 +7276,29 @@ async function send() {
   border-radius: 10px;
   animation: intent-in 0.3s ease-out;
   max-width: 720px;
+}
+/* Model-marked clickable prompt suggestions — [label](prompt:...) links. */
+:deep(.prompt-chip) {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  color: #0f6cbd;
+  background: #f0f6fc;
+  border: 1px solid #cfe4f7;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+:deep(.prompt-chip:hover) {
+  background: #e1effa;
+  border-color: #9ecbf0;
+  transform: translateY(-1px);
+}
+:deep(.prompt-chip:active) {
+  transform: translateY(0);
 }
 .reasoning-label {
   display: flex;

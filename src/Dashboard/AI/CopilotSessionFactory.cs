@@ -41,7 +41,8 @@ Do NOT answer literally — RUN the full Crawl scoring sweep, call ReportMaturit
 - Wait for tool results before rendering charts.
 - Parallelize independent tool calls in ONE response.
 - After every answer, call SuggestFollowUp with ONE concrete next step naming a real entity (RG/owner/resource/$/region/window). Skip only at natural endpoints. Label ≤60 chars.
-- Capability/onboarding questions (""what can you help me with"", ""what can you do"", ""help"", first-message greetings): answer with the capability table, then ALWAYS call SuggestFollowUp with THREE starter actions via label/prompt + label2/prompt2 + label3/prompt3 — these render as clickable buttons and are the user's onboarding path. Not connected to Azure → offer public actions (compare VM pricing across regions, Azure service health, estimate a new deployment). Connected → offer ""Score my FinOps maturity"", ""Show this month's cost by service"", ""Find idle resources"".
+- CLICKABLE EXAMPLES: whenever you list example questions, capabilities, or suggested prompts in your answer text (tables, bullet lists, prose), format EACH example as a prompt link: [short label](prompt:the full ready-to-send question). These render as clickable chips that send the question when clicked. Keep the question self-contained, ≤20 words, and avoid parentheses inside it. Example table cell: [Compare VM pricing](prompt:Compare the monthly cost of a D4s_v5 VM across the 5 cheapest Azure regions with a bar chart).
+- Capability/onboarding questions (""what can you help me with"", ""what can you do"", ""help"", first-message greetings): answer with the capability table where every Examples cell is 1-2 prompt links (see CLICKABLE EXAMPLES), then ALWAYS call SuggestFollowUp with THREE starter actions via label/prompt + label2/prompt2 + label3/prompt3 — these render as clickable buttons and are the user's onboarding path. Not connected to Azure → offer public actions (compare VM pricing across regions, Azure service health, estimate a new deployment). Connected → offer ""Score my FinOps maturity"", ""Show this month's cost by service"", ""Find idle resources"".
 - After answering a public FinOps question, call PublishFAQ — but only if user has connected Azure. Never publish tenant data.
 - Uploaded files appear in `[UPLOADED FILES IN THIS SESSION ...]` at message start. Use QueryUploadedFile(fileId, mode, paramsJson) — start `mode='preview'`, then narrow with head/slice/filter/aggregate/text_range/json_path. ~200 rows / ~8000 chars per call. Answer from the file rather than asking them to paste data.
 - Uploaded-file follow-ups: propose a single highest-leverage *action* on their data (cleanup script, ranked actions, deck, bulk PATCH) — NOT another analytical question. ≥3 files: prefer follow-ups that cut across files and produce a meeting-ready deliverable.
@@ -239,6 +240,17 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         ?? Path.Combine(Path.GetTempPath(), "copilot");
 
     public string Deployment => _deployment;
+
+    /// <summary>
+    /// Per-turn effort routing: trivial prompts (greetings, acknowledgements)
+    /// don't need deep deliberation — run them at "low" for a ~2-3s first token
+    /// instead of ~6s. Returns null for non-reasoning models (no effort concept).
+    /// </summary>
+    public string? GetEffortForTurn(bool trivialTurn)
+    {
+        if (!IsReasoningModel(_deployment)) return null;
+        return trivialTurn ? "low" : _reasoningEffort;
+    }
 
     /// <summary>
     /// Resolves the per-user working directory used to scope the SDK's session
@@ -449,6 +461,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             Session = session,
             UserId = userId,
             BearerExpiry = _bearerTokenExpiry,
+            AppliedEffort = IsReasoningModel(_deployment) ? _reasoningEffort : null,
         };
         _telemetry.CurrentSessionId[userId] = session.SessionId;
         _telemetry.ActiveSessions.Add(1);
@@ -481,6 +494,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             Session = resumed,
             UserId = userId,
             BearerExpiry = _bearerTokenExpiry,
+            AppliedEffort = IsReasoningModel(_deployment) ? _reasoningEffort : null,
         };
         _telemetry.CurrentSessionId[userId] = sessionId;
         _telemetry.ActiveSessions.Add(1);
