@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- **Upgraded GitHub Copilot SDK `1.0.0-beta.4` → `1.0.5`** — migrated to the GA API surface: namespace `GitHub.Copilot.SDK` → `GitHub.Copilot`; `CopilotClientOptions.CopilotHome` → `BaseDirectory`; `OnPermissionRequest` now uses `PermissionHandler.ApproveAll` (replaces `PermissionRequestResult`); `CopilotSession.GetMessagesAsync` → `GetEventsAsync`; `SessionListFilter.Cwd` and `SessionMetadata.Context.Cwd` → `WorkingDirectory`; tool lists widened from `List<AIFunction>` to `List<AIFunctionDeclaration>` (`SessionConfig.Tools` is now `ICollection<AIFunctionDeclaration>`). Behaviour-preserving — reasoning effort, streaming, and session persistence unchanged.
 - **`GetAzureRetailPricing` Foundry guidance** — the tool description now decodes `skuName` token-by-token (Direction / Zone / Deployment / Context tier) and makes stating the pricing basis (Standard vs Batch, Global vs Data Zone vs Regional, region, currency) mandatory, so model prices are no longer mis-reported by silently picking the cheapest Batch/cached/Data-Zone row.
 
 
