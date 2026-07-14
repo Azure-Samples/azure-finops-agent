@@ -7,8 +7,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- **GitHub Copilot SDK 1.0.5 → 1.0.6** — picks up the newer `@github/copilot` runtime and the .NET `CopilotClient.DisposeAsync` graceful-shutdown fix. The CLI runtime is pinned to `@github/copilot` **1.0.68** in `Dashboard.csproj` (`<CopilotCliVersion>`) because the SDK's default `1.0.69` is not published on npm (only `1.0.69-0/-1/-2` prereleases exist) — left unpinned, the build-time `DownloadFile` 404s **both** locally and in the ACR/Docker build. Revisit when a later CLI final is published and the SDK bumps.
+- **Default reasoning effort `high` → `medium`** (`AzureOpenAI:ReasoningEffort`) — GPT-5.6 at `medium` roughly halves time-to-first-token (the dominant first-response latency) while preserving tool-orchestration and format-following quality. Trivial turns still auto-route to `low`; set `AzureOpenAI__ReasoningEffort=high` for a max-depth demo.
+- **System prompt — removed a duplicate chart-XOR-table restatement** in the Response Shape section (the rule still stands forcefully in Core Rules), trimming per-turn input tokens with no behavior change.
+
 ### Added
 
+- **Session pre-warming (`POST /api/chat/warmup`)** — the chat UI fires this once when the user's identity resolves, creating/resuming the Copilot session (system-prompt + tool-schema upload, ~300 ms) off the critical path so the first prompt hits the live-session fast path instead of paying session-creation latency. Fire-and-forget and idempotent-cheap on repeat calls.
 - **Clickable prompt chips in AI answers** — the model marks suggested questions with `[label](prompt:full question)`; the chat renderer turns them into styled chips (inside tables, lists, and prose) that send the underlying question on click. The capability table's Examples column is now fully interactive.
 - **Per-turn reasoning-effort routing** — a conservative classifier (≤60 chars, no FinOps/data keywords) runs greetings/acknowledgements at `low` effort (~2–3 s first token) via `SetModelAsync`, while real questions keep the configured default. Applied effort is tracked per live session to skip redundant RPCs.
 - **Live reasoning panel & thinking animation** — streaming `reasoning` SSE events render as a multi-row rolling "Thinking" panel; the block cursor was replaced with animated gradient dots.
@@ -16,6 +23,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- **Stale-session recovery for chat turns — no more hard error *or* silent hang.** Two related gaps in the SSE chat path when the CLI had evicted a session between turns (the first confirmed via stack trace at `ChatEndpoints.cs`): **(1)** the per-turn effort switch (`session.model.switchTo`) ran *before* the streaming subscriptions and threw `Session not found` uncaught, surfacing a raw error to the user; **(2)** the `SendAsync` recycle reassigned the session handle but left the SSE subscriptions bound to the *dead* one, so a recycled turn generated server-side yet never streamed to the browser. Both now recover: the effort switch recycles **before** subscriptions are wired, and the `SendAsync` path detaches and **rebinds** the subscriptions (`WireHandlers`) onto the live session, re-announcing the session id so the frontend keeps streaming into the right conversation. Verified: happy-path streaming (text, tool calls, chart, first-event timing, completion) is fully regression-clean through the refactored subscription wiring; the recovery branches are correct-by-construction and reuse that same proven wiring, but the underlying staleness is a non-deterministic race (idle-disconnected sessions transparently auto-reconnect from disk) that could not be force-fired in re-tests.
 - **Sidebar titles no longer leak prompt scaffolding** — when the SDK truncated a long first prompt mid-`[CONTEXT: …]` block, `CleanSummary`/`StripContextPrefix` surfaced the raw injected context (e.g. "[CONTEXT: User is NOT…") as the conversation title. Truncated context blocks are now discarded entirely.
 - **Title generation returned empty on reasoning models** — `GenerateTitleAsync` capped `max_completion_tokens` at 24, which GPT-5-series models consume entirely on hidden reasoning. Now uses the modern `/openai/v1/chat/completions` surface with `reasoning_effort: "low"` and 512-token headroom (verified: 8 completion tokens, 0 reasoning tokens).
 - **Capability questions now end with clickable starter actions** — "what can you help me with?" answers previously rendered a static table with no follow-up chips. The system prompt now mandates three `SuggestFollowUp` starter actions (public pricing actions when not connected; scoring/cost/idle actions when connected).

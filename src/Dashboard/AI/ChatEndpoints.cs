@@ -237,6 +237,9 @@ public static class ChatEndpoints
             // clobber a concurrent turn in another tab).
             string? turnKey = null;
             string? turnGateSessionId = null;
+            // Detaches the streaming subscriptions. Declared out here so it is
+            // visible in the finally; (re)assigned by WireHandlers inside the try.
+            IDisposable? handlers = null;
             try
             {
                 CopilotSession session;
@@ -302,8 +305,36 @@ public static class ChatEndpoints
                     && liveInfo.AppliedEffort != targetEffort)
                 {
                     var effortSw = Stopwatch.StartNew();
-                    await session.SetModelAsync(copilotFactory.Deployment, targetEffort, null, ctx.RequestAborted);
-                    liveInfo.AppliedEffort = targetEffort;
+                    try
+                    {
+                        await session.SetModelAsync(copilotFactory.Deployment, targetEffort, null, ctx.RequestAborted);
+                        liveInfo.AppliedEffort = targetEffort;
+                    }
+                    catch (Exception effortEx) when (effortEx.Message.Contains("Session not found", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // The in-memory CLI handle went stale (e.g. the session was
+                        // evicted after a previous turn was aborted mid-flight). This
+                        // is the FIRST call that touches the live handle, so recycle
+                        // to a fresh one NOW — before the streaming subscriptions are
+                        // wired below. Otherwise those subscriptions would bind to the
+                        // dead handle and nothing would stream (the SendAsync recycle
+                        // path can't rebind them). Move the turn gate to the new id.
+                        logger.LogWarning("Effort switch found stale session {SessionId}; recycling before streaming", activeSessionId);
+                        session = await copilotFactory.RecycleSessionAsync(userId, activeSessionId, userLogin!, entraOid);
+                        if (turnGateSessionId is not null) ActiveTurns.TryRemove(turnGateSessionId, out _);
+                        activeSessionId = session.SessionId;
+                        ActiveTurns[activeSessionId] = now;
+                        turnGateSessionId = activeSessionId;
+                        // The fresh session runs at the configured default effort,
+                        // which is fine — per-turn effort routing is a best-effort
+                        // optimisation, never worth failing the turn over.
+                    }
+                    catch (Exception effortEx)
+                    {
+                        // Any other failure: log and proceed at the current effort.
+                        // Effort routing must never fail the turn.
+                        logger.LogWarning(effortEx, "Effort switch failed for {SessionId}; proceeding at current effort", activeSessionId);
+                    }
                     effortSw.Stop();
                     RecordPhase($"effort.{targetEffort}", effortSw.Elapsed.TotalMilliseconds, new { trivial = trivialTurn });
                 }
@@ -364,58 +395,70 @@ public static class ChatEndpoints
                 // (which would log a misleading ms=0).
                 var sdkSw = Stopwatch.StartNew();
 
-                using var subscription = session.On(async (SessionEvent evt) =>
-                {
-                    if (cancelled) return;
-                    if (System.Threading.Interlocked.Exchange(ref firstEventLogged, 1) == 0)
-                    {
-                        try
-                        {
-                            var firstMs = sdkSw.Elapsed.TotalMilliseconds;
-                            logger.LogInformation("timing phase=sdk.first_event ms={Ms:F0} user={User}", firstMs, userLogin);
-                            await SafeEmit(JsonSerializer.Serialize(new { type = "timing", phase = "sdk.first_event", ms = Math.Round(firstMs, 1), extra = new { evt = evt.GetType().Name } }));
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            logger.LogDebug("First-event timing emit canceled for user={User}", userLogin);
-                        }
-                        catch (ObjectDisposedException)
-                        {
-                            logger.LogDebug("First-event timing emit skipped because stream was disposed for user={User}", userLogin);
-                        }
-                        catch (InvalidOperationException)
-                        {
-                            logger.LogDebug("First-event timing emit skipped due to invalid stream state for user={User}", userLogin);
-                        }
-                    }
-                    try
-                    {
-                        await HandleSessionEventAsync(evt, ctx, toolTracker, telemetry, copilotFactory.Deployment,
-                            userId, userLogin!, activeSessionId, chatActivity, logger, done, () => cancelled = true);
-                    }
-                    catch
-                    {
-                        cancelled = true;
-                        done.TrySetResult();
-                    }
-                });
-
                 // Capture the assistant's full reply so we can generate a sidebar
-                // title after the turn completes (CLI's title_changed event just
-                // echoes the user prompt, which makes a poor summary). Replies
-                // are streamed as deltas, so we accumulate them here.
-                // StringBuilder is NOT thread-safe — the SDK may dispatch event
-                // callbacks concurrently — so we guard every mutation/read.
+                // title after the turn completes (the CLI's title_changed event
+                // just echoes the user prompt). Declared before WireHandlers so
+                // both subscriptions are (re)attached together. StringBuilder is
+                // NOT thread-safe — the SDK may dispatch callbacks concurrently —
+                // so we guard every mutation/read.
                 var assistantBuf = new System.Text.StringBuilder();
                 var assistantBufLock = new object();
-                using var assistantCapture = session.On(async (SessionEvent evt) =>
+
+                // (Re)attaches the streaming + assistant-capture handlers to a
+                // session and returns a disposable that detaches both. Extracted
+                // so the SendAsync recovery path can REBIND onto a recycled
+                // session — otherwise the subscriptions would stay bound to the
+                // dead handle and the recycled session's events would never reach
+                // the SSE stream (a silent hang instead of a streamed answer).
+                IDisposable WireHandlers(CopilotSession s)
                 {
-                    if (evt is AssistantMessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Data.DeltaContent))
-                        lock (assistantBufLock) { assistantBuf.Append(ad.Data.DeltaContent); }
-                    else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Data.Content))
-                        lock (assistantBufLock) { assistantBuf.Clear(); assistantBuf.Append(am.Data.Content); }
-                    await Task.CompletedTask;
-                });
+                    var mainSub = s.On(async (SessionEvent evt) =>
+                    {
+                        if (cancelled) return;
+                        if (System.Threading.Interlocked.Exchange(ref firstEventLogged, 1) == 0)
+                        {
+                            try
+                            {
+                                var firstMs = sdkSw.Elapsed.TotalMilliseconds;
+                                logger.LogInformation("timing phase=sdk.first_event ms={Ms:F0} user={User}", firstMs, userLogin);
+                                await SafeEmit(JsonSerializer.Serialize(new { type = "timing", phase = "sdk.first_event", ms = Math.Round(firstMs, 1), extra = new { evt = evt.GetType().Name } }));
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                logger.LogDebug("First-event timing emit canceled for user={User}", userLogin);
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                logger.LogDebug("First-event timing emit skipped because stream was disposed for user={User}", userLogin);
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                logger.LogDebug("First-event timing emit skipped due to invalid stream state for user={User}", userLogin);
+                            }
+                        }
+                        try
+                        {
+                            await HandleSessionEventAsync(evt, ctx, toolTracker, telemetry, copilotFactory.Deployment,
+                                userId, userLogin!, activeSessionId, chatActivity, logger, done, () => cancelled = true);
+                        }
+                        catch
+                        {
+                            cancelled = true;
+                            done.TrySetResult();
+                        }
+                    });
+                    var captureSub = s.On(async (SessionEvent evt) =>
+                    {
+                        if (evt is AssistantMessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Data.DeltaContent))
+                            lock (assistantBufLock) { assistantBuf.Append(ad.Data.DeltaContent); }
+                        else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Data.Content))
+                            lock (assistantBufLock) { assistantBuf.Clear(); assistantBuf.Append(am.Data.Content); }
+                        await Task.CompletedTask;
+                    });
+                    return new CompositeDisposable(mainSub, captureSub);
+                }
+
+                handlers = WireHandlers(session);
 
                 // Emit the active sessionId as the first SSE event so the frontend
                 // can highlight it in the Conversations sidebar and include it in
@@ -465,7 +508,22 @@ public static class ChatEndpoints
                 {
                     logger.LogWarning("Copilot session expired for user {User}, recycling. Error: {Error}", userLogin, sendEx.Message);
                     chatActivity?.SetTag("ai.session_expired", true);
+                    // Detach the handlers from the dead handle, recycle, and REBIND
+                    // them to the live session — otherwise the recycled session's
+                    // events never reach the SSE stream and the turn hangs silently.
+                    handlers?.Dispose();
                     session = await copilotFactory.RecycleSessionAsync(userId, activeSessionId, userLogin!, entraOid);
+                    if (turnGateSessionId is not null && turnGateSessionId != session.SessionId)
+                    {
+                        ActiveTurns.TryRemove(turnGateSessionId, out _);
+                        ActiveTurns[session.SessionId] = now;
+                        turnGateSessionId = session.SessionId;
+                    }
+                    activeSessionId = session.SessionId;
+                    handlers = WireHandlers(session);
+                    // Re-announce the (possibly new) session id so the frontend keeps
+                    // streaming into the right conversation.
+                    await SafeEmit(JsonSerializer.Serialize(new { type = "session", id = activeSessionId }));
                     await session.SendAsync(new MessageOptions { Prompt = prompt });
                 }
 
@@ -586,6 +644,9 @@ public static class ChatEndpoints
             }
             finally
             {
+                // Detach the streaming subscriptions from whatever session they
+                // ended up bound to (original or recycled).
+                handlers?.Dispose();
                 // Release this turn's reporter only — never sweep by userId
                 // prefix, since a concurrent turn from the same user (two tabs,
                 // sidebar score racing chat) holds its own key in the dict.
@@ -624,6 +685,45 @@ public static class ChatEndpoints
             AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ClearForUser(userId);
             logger.LogInformation("Started new conversation for user {UserId} sessionId={SessionId}", userId, fresh.SessionId);
             await ctx.Response.WriteAsJsonAsync(new { sessionId = fresh.SessionId });
+        });
+
+        // Pre-warm: create/resume the user's Copilot session in the background
+        // as soon as the chat UI mounts, so the first prompt skips the
+        // session-creation cost (system-prompt + tool-schema upload to the CLI
+        // runtime, ~300 ms) that would otherwise sit on the critical path. The
+        // frontend calls this once on mount / when identity resolves. It is a
+        // no-op-cheap fast path on repeat calls (the live session is cached and
+        // mapped as the user's current). We return immediately — the heavy work
+        // must not block the request or touch the SSE turn gate.
+        app.MapPost("/api/chat/warmup", (HttpContext ctx) =>
+        {
+            var userJson = ctx.Session.GetString("user");
+            if (userJson is null) { ctx.Response.StatusCode = 401; return Task.CompletedTask; }
+
+            var user = JsonSerializer.Deserialize<JsonElement>(userJson);
+            var userId = user.GetProperty("id").GetInt64();
+            var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
+
+            string? entraOid = null;
+            var azureUserJson = ctx.Session.GetString("azure_user");
+            if (azureUserJson is not null)
+            {
+                try
+                {
+                    var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("objectId", out var oidProp))
+                        entraOid = oidProp.GetString();
+                }
+                catch { /* ignore malformed session blob */ }
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try { await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid); }
+                catch (Exception ex) { logger.LogWarning(ex, "Session warm-up failed for user {UserId}", userId); }
+            });
+            ctx.Response.StatusCode = 202;
+            return ctx.Response.WriteAsJsonAsync(new { warming = true });
         });
     }
 
@@ -884,4 +984,17 @@ public static class ChatEndpoints
 
     private static DateTimeOffset? ParseExpiry(string? raw)
         => DateTimeOffset.TryParse(raw, out var v) ? v : (DateTimeOffset?)null;
+
+    /// <summary>Disposes a set of subscriptions together; safe to call more than once.</summary>
+    private sealed class CompositeDisposable : IDisposable
+    {
+        private readonly IDisposable[] _items;
+        private int _disposed;
+        public CompositeDisposable(params IDisposable[] items) => _items = items;
+        public void Dispose()
+        {
+            if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            foreach (var d in _items) { try { d.Dispose(); } catch { } }
+        }
+    }
 }

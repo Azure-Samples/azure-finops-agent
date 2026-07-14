@@ -2724,6 +2724,19 @@ async function fetchModels() {
   } catch {}
 }
 
+// Pre-warm the Copilot session as soon as we know the user's identity, so the
+// first prompt skips server-side session creation (system-prompt + tool-schema
+// upload, ~300 ms) instead of paying it on the critical path. Fire-and-forget;
+// any failure is harmless — the first /api/chat just creates the session then.
+let warmedUp = false;
+function warmUpSession() {
+  if (warmedUp) return;
+  warmedUp = true;
+  fetch("/api/chat/warmup", { method: "POST", credentials: "same-origin" }).catch(() => {
+    warmedUp = false; // allow a later retry if the warm-up call itself failed
+  });
+}
+
 // Handle user login/logout
 watch(
   () => props.user,
@@ -2732,9 +2745,11 @@ watch(
       // User just logged in — fetch models and Azure status
       fetchModels();
       checkAzureStatus();
+      warmUpSession();
     } else if (!newUser && oldUser) {
       // User logged out — clear all UI state
       clearMessages();
+      warmedUp = false;
       azureConnected.value = false;
       azureUserEmail.value = "";
       azureSubscriptions.value = [];
@@ -2836,6 +2851,7 @@ onMounted(async () => {
   } catch {}
   // Fetch available models and Azure status in parallel
   if (props.user) {
+    warmUpSession();
     await Promise.all([fetchModels(), checkAzureStatus()]);
   }
   // Clear auth loading overlay now that status is resolved
