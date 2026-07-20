@@ -25,8 +25,8 @@
     <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.6" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.1" />
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.19.1" />
-    <PackageReference Include="OpenTelemetry" Version="1.16.0" />
-    <PackageReference Include="OpenTelemetry.Api" Version="1.16.0" />
+    <PackageReference Include="OpenTelemetry" Version="1.17.0" />
+    <PackageReference Include="OpenTelemetry.Api" Version="1.17.0" />
   </ItemGroup>
 
   <!-- Embed Python script templates as resources (loaded at runtime by tools) -->
