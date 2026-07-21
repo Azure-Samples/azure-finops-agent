@@ -46,7 +46,7 @@ RESOURCE GRAPH (POST /providers/Microsoft.ResourceGraph/resources): always use '
 
 SPOT QUOTA: Spot/low-priority VM quota is a SINGLE regional bucket called 'lowPriorityCores' (NOT per VM family) — covers ALL spot VMs including H100/A100. Standard quotas are per-family ('standardNDSH100v5Family', 'StandardNCadsH100v5Family'). Microsoft.Quota requires RP registration (PUT /subscriptions/{subId}/providers/Microsoft.Quota/register) — fall back to GET .../Microsoft.Compute/locations/{region}/usages if not registered.
 
-FOUNDRY / AZURE OPENAI QUOTA: Lives under Microsoft.CognitiveServices, NOT prices.azure.com. Per-region quota: GET /subscriptions/{id}/providers/Microsoft.CognitiveServices/locations/{region}/usages — returns name.value entries like 'OpenAI.GlobalStandard.gpt-5.5'. For deployments: GET .../accounts/{name}/deployments returns properties.model.name + sku.capacity (TPM in thousands).
+FOUNDRY / AZURE OPENAI QUOTA: Lives under Microsoft.CognitiveServices, NOT prices.azure.com. Per-region quota: GET /subscriptions/{id}/providers/Microsoft.CognitiveServices/locations/{region}/usages — returns name.value entries like 'OpenAI.GlobalStandard.gpt-5.6-sol'. For deployments: GET .../accounts/{name}/deployments returns properties.model.name + sku.capacity (TPM in thousands).
 
 MIGRATE: Use resource type 'assessmentProjects' (NOT 'migrateProjects' — returns 404).
 

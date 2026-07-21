@@ -2257,8 +2257,256 @@ function flushText() {
 // chars already queued for rAF would otherwise be frozen mid-word until the
 // user returns. (New chars arriving while hidden take the synchronous path
 // in enqueueText above; the SSE reader itself is not throttled by browsers.)
+//
+// Backgrounding/minimizing is ALSO where connections break. On desktop the
+// fetch usually stays alive (throttled) and self-heals on return; on mobile or
+// aggressive tab-freezing it can be severed. The backend never aborts the turn
+// on client disconnect — it keeps generating and persists the answer to disk
+// (see ChatEndpoints RequestAborted handler) — so recovery is always a matter
+// of reloading the persisted transcript, NOT re-running anything.
+//
+// Critical: we do NOT abort or reload a still-running stream on a client-side
+// timer. Reasoning models are legitimately silent for many seconds (time to
+// first token was measured at ~3.5s; long tool calls far longer), so any
+// "no bytes for N ms ⇒ dead" heuristic produces false positives that kill
+// healthy answers. We only reconcile once the client stream has actually ended.
 function onVisibilityChange() {
-  if (document.hidden) flushText();
+  if (document.hidden) {
+    flushText();
+    const sid = currentSessionId.value;
+    hiddenDuringStream = !!(sid && runningSessions.has(sid));
+    window.__trackAppInsightsEvent?.("chat.tab.hidden", {
+      sessionId: sid || "",
+      streaming: String(streaming.value),
+      runningWhenHidden: String(hiddenDuringStream),
+    });
+    return;
+  }
+
+  const sid = currentSessionId.value;
+  const wasStreaming = hiddenDuringStream;
+  hiddenDuringStream = false;
+  window.__trackAppInsightsEvent?.("chat.tab.visible", {
+    sessionId: sid || "",
+    wasStreamingWhenHidden: String(wasStreaming),
+    stillRunning: String(!!(sid && runningSessions.has(sid))),
+  });
+
+  // Always reconcile on return — covers both "stream ended while away" (reload
+  // the persisted answer) and "stream still running" (arm the zombie probe in
+  // case the connection died silently while frozen). No-ops fast when idle.
+  if (sid) reconcileSessionAfterReturn(sid, "visibility");
+}
+
+// Backup trigger: some browsers (notably Firefox) don't fire visibilitychange
+// when a window is minimized/restored, but window focus always fires.
+function onWindowFocus() {
+  const sid = currentSessionId.value;
+  if (sid) reconcileSessionAfterReturn(sid, "focus");
+}
+
+// Non-destructive recovery after the tab/window regains focus.
+// • Stream still running client-side → arm the zombie probe: it watches the
+//   SERVER's persisted transcript and only aborts the client stream once the
+//   answer is provably on disk yet undelivered (never a client-silence timer,
+//   which would kill healthy streams during long think/tool phases).
+// • Stream already ended without showing the answer (severed while frozen →
+//   "Connection lost", or nothing rendered) → recover from the persisted
+//   transcript via the tail-match poller.
+async function reconcileSessionAfterReturn(sid, reason) {
+  if (!sid || sid === "__pending__") return;
+  if (runningSessions.has(sid)) {
+    startZombieProbe(sid);
+    return;
+  }
+  const last = messages.value[messages.value.length - 1];
+  const lastText =
+    last && last.role === "assistant" ? String(last.content || "") : "";
+  const missingAnswer =
+    !lastText.trim() || lastText.includes("Connection lost");
+  if (!missingAnswer) return; // answer already visible — nothing to do
+  window.__trackAppInsightsEvent?.("chat.reattach.recover", {
+    sessionId: sid,
+    reason: reason || "",
+  });
+  const lastUser = [...messages.value].reverse().find((m) => m.role === "user");
+  await tryRecoverPersistedAnswer(
+    sid,
+    lastUser ? String(lastUser.content || "") : "",
+  );
+}
+
+// ── Persisted-transcript recovery ──
+// The backend never aborts a turn on client disconnect: the CLI keeps
+// generating and persists events to the on-disk session state as it goes. So
+// whenever the client's SSE dies (background-tab freeze, minimize, network
+// drop, page reload), the answer WILL appear in /api/sessions/{id}/messages —
+// we just have to wait for it and repaint. Note the turn-active probe is
+// useless here: ChatEndpoints removes the turn from ActiveTurns the moment the
+// SSE handler unwinds, seconds before the answer lands.
+
+const normText = (s) =>
+  String(s || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+// Reads the persisted tail for a session: does the LAST user message match the
+// prompt we're recovering, and does a non-empty assistant answer follow it?
+async function fetchPersistedTail(sid, normPrompt) {
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}/messages`);
+    if (!r.ok) return null;
+    const msgs = (await r.json()).messages || [];
+    let lastUserIdx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === "user") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) return { matched: false, answered: false, ansLen: 0 };
+    const u = normText(msgs[lastUserIdx].content);
+    const matched =
+      !normPrompt ||
+      u === normPrompt ||
+      u.includes(normPrompt.slice(0, 80)) ||
+      normPrompt.includes(u.slice(0, 80));
+    let ansLen = 0;
+    let answered = false;
+    for (let i = lastUserIdx + 1; i < msgs.length; i++) {
+      if (msgs[i].role === "assistant") {
+        const c = String(msgs[i].content || "").trim();
+        if (c) {
+          answered = true;
+          ansLen += c.length;
+        }
+      }
+    }
+    return { matched, answered, ansLen };
+  } catch {
+    return null;
+  }
+}
+
+// Recover the answer for a lost turn from the persisted transcript. Polls the
+// tail until the assistant's answer for THIS prompt appears (instant if it
+// already landed while the tab was away), repaints, then keeps watching
+// briefly: if the persisted answer keeps growing (mid-turn narration → final
+// answer), repaint again so the UI always converges on the final state.
+// Returns true once recovered; false on timeout/abandon.
+async function tryRecoverPersistedAnswer(sid, promptText) {
+  if (!sid || sid === "__pending__") return false;
+  if (reconcilingSid === sid) return false; // a poller is already on it
+  const isVisible = () => currentSessionId.value === sid;
+  const normPrompt = normText(promptText);
+  reconcilingSid = sid;
+  let noticeShown = false;
+  const clearNotice = () => {
+    if (noticeShown && isVisible()) {
+      messages.value = messages.value.filter(
+        (m) => !(m.role === "system" && String(m.content).startsWith("⏳")),
+      );
+    }
+  };
+  try {
+    const deadline = Date.now() + 180000; // 3 min — covers long tool chains
+    while (Date.now() < deadline) {
+      // The user started a NEW turn in this view — abandon recovery, the live
+      // stream owns the UI now.
+      if (streaming.value) return false;
+      const tail = await fetchPersistedTail(sid, normPrompt);
+      if (tail && tail.matched && tail.answered) {
+        await reloadSessionTranscript(sid);
+        window.__trackAppInsightsEvent?.("chat.stream.recovered", {
+          sessionId: sid,
+          polled: String(noticeShown),
+        });
+        // Refinement: the persisted text may still be mid-turn narration. Keep
+        // watching briefly; repaint whenever it grows, stop once stable.
+        let lastLen = tail.ansLen;
+        let stable = 0;
+        const refineDeadline = Date.now() + 60000;
+        while (Date.now() < refineDeadline && stable < 3) {
+          await new Promise((r) => setTimeout(r, 4000));
+          if (!isVisible() || streaming.value) break;
+          const t2 = await fetchPersistedTail(sid, normPrompt);
+          if (!t2 || !t2.matched) break;
+          if (t2.ansLen !== lastLen) {
+            lastLen = t2.ansLen;
+            stable = 0;
+            await reloadSessionTranscript(sid);
+          } else {
+            stable++;
+          }
+        }
+        return true;
+      }
+      // Not persisted yet — the CLI is still generating in the background.
+      if (!noticeShown && isVisible()) {
+        messages.value = [
+          ...messages.value,
+          {
+            role: "system",
+            content:
+              "⏳ Reconnecting — your last answer is still being generated and will appear here when ready.",
+          },
+        ];
+        noticeShown = true;
+      }
+      if (!isVisible()) return false; // user switched away — hands off their view
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  } catch (e) {
+    window.__trackAppInsightsException?.(e, {
+      source: "tryRecoverPersistedAnswer",
+      sessionId: sid,
+    });
+  } finally {
+    if (reconcilingSid === sid) reconcilingSid = null;
+  }
+  clearNotice();
+  return false;
+}
+
+// Watches a client stream that SHOULD still be running after the tab returns
+// to the foreground. If the server's persisted transcript already contains the
+// answer for the in-flight prompt but the client stream still hasn't delivered
+// it one confirm-tick later, the connection died silently while the tab was
+// frozen (no rejection ever fired) — abort it with the reconcile flag so the
+// send() catch recovers the persisted answer immediately. Driven purely by
+// SERVER state; a healthy stream that is merely slow never trips it because
+// its answer isn't persisted until generation completes — at which point a
+// healthy stream finishes within a tick anyway.
+function startZombieProbe(sid) {
+  const token = ++zombieProbeToken;
+  let confirmed = false;
+  const tick = async () => {
+    if (token !== zombieProbeToken) return; // superseded
+    if (!runningSessions.has(sid)) return; // stream ended naturally — done
+    const turn = inFlightTurn;
+    const normPrompt = turn && turn.sid === sid ? normText(turn.prompt) : "";
+    const tail = await fetchPersistedTail(sid, normPrompt);
+    if (token !== zombieProbeToken || !runningSessions.has(sid)) return;
+    if (tail && tail.matched && tail.answered) {
+      if (confirmed) {
+        // Answer on disk, stream still hanging one tick later → zombie.
+        window.__trackAppInsightsEvent?.("chat.stream.zombieRecover", {
+          sessionId: sid,
+        });
+        reconcileAbort = true;
+        try {
+          abortController?.abort();
+        } catch {}
+        return;
+      }
+      confirmed = true;
+    } else {
+      confirmed = false;
+    }
+    window.setTimeout(tick, 4000);
+  };
+  window.setTimeout(tick, 4000);
 }
 
 const hoveredTool = ref(null);
@@ -2289,8 +2537,8 @@ const sidebarOpen = ref(
   typeof window !== "undefined" ? window.innerWidth > 768 : true,
 );
 const plusMenuOpen = ref(false);
-const availableModels = ref(["claude-sonnet-4.6"]);
-const selectedModel = ref("claude-sonnet-4.6");
+const availableModels = ref(["gpt-5.6-sol"]);
+const selectedModel = ref("gpt-5.6-sol");
 
 // Auth loading state
 const authLoading = ref(""); // "" | "github" | "azure"
@@ -2393,6 +2641,14 @@ async function selectSession(sessionId) {
     return;
   }
   currentSessionId.value = sessionId;
+  await reloadSessionTranscript(sessionId);
+}
+
+// Fetch the persisted transcript for a session and replay it into the view
+// (messages, tool calls, charts, maturity scores). Unlike selectSession this
+// does NOT guard against the already-current session — the background-tab
+// recovery path reloads the CURRENTLY-active session after a severed stream.
+async function reloadSessionTranscript(sessionId) {
   // Fetch the persisted transcript from the SDK and replay it so the user
   // sees their actual past messages and tool calls — not a placeholder.
   // Wipe transient view-scoped UI refs (intent ticker, partial text buffer,
@@ -2894,6 +3150,7 @@ watch(
 onMounted(async () => {
   document.addEventListener("click", dismissPopover);
   document.addEventListener("visibilitychange", onVisibilityChange);
+  window.addEventListener("focus", onWindowFocus);
   // Delegated handler for model-marked prompt chips ([label](prompt:...) links
   // rendered by renderContent). Delegation survives v-html re-renders.
   document.addEventListener("click", (e) => {
@@ -2951,6 +3208,53 @@ onMounted(async () => {
   setTimeout(() => {
     loadSessions();
   }, 500);
+  // Restore the last conversation after a full page reload/navigation — the
+  // server keeps executing turns while the page is gone, so coming back should
+  // always show the conversation (and pick up an answer that finished, or poll
+  // for one still running). Works for anonymous users too via sessionStorage;
+  // Entra users additionally get currentSessionId from /api/sessions.
+  setTimeout(async () => {
+    try {
+      let sid = currentSessionId.value;
+      if (!sid) {
+        try {
+          sid = sessionStorage.getItem("finops_last_session") || null;
+        } catch {}
+        if (!sid) return;
+        const r = await fetch(
+          `/api/sessions/${encodeURIComponent(sid)}/messages`,
+        );
+        if (!r.ok) {
+          try {
+            sessionStorage.removeItem("finops_last_session");
+          } catch {}
+          return;
+        }
+        const msgs = (await r.json()).messages || [];
+        if (!msgs.length) return;
+        currentSessionId.value = sid;
+      }
+      if (messages.value.length === 0 && !streaming.value) {
+        await reloadSessionTranscript(sid);
+        window.__trackAppInsightsEvent?.("chat.session.restored", {
+          sessionId: sid,
+        });
+        // Page was reloaded mid-turn: the transcript ends with a user message
+        // and no answer yet (the reload severed the SSE but the server kept
+        // going). Poll the persisted transcript until the answer lands.
+        const restored = messages.value;
+        const last = restored[restored.length - 1];
+        const lastUser = [...restored].reverse().find((m) => m.role === "user");
+        if (
+          last &&
+          (last.role === "user" || last.role === "system") &&
+          lastUser
+        ) {
+          tryRecoverPersistedAnswer(sid, String(lastUser.content || ""));
+        }
+      }
+    } catch {}
+  }, 1200);
   // Restore auth loading state after OAuth redirect (page reload clears ref)
   const pendingAuth = sessionStorage.getItem("authLoading");
   if (pendingAuth) {
@@ -3001,6 +3305,29 @@ onMounted(async () => {
 });
 
 let abortController = null;
+// Background-tab recovery state. Browsers freeze/minimize background tabs, which
+// suspends the in-flight SSE fetch. The backend never aborts the turn on client
+// disconnect — it keeps generating and persists the answer to disk (see
+// ChatEndpoints RequestAborted handler) — so on return we reconcile against the
+// server's persisted transcript. We deliberately never abort a healthy stream
+// on a client timer: reasoning models are legitimately silent for many seconds
+// (time-to-first-token, long tool calls), so any "no bytes for N ms" rule would
+// kill good answers.
+let hiddenDuringStream = false; // a turn was in flight when we lost foreground
+let reconcilingSid = null; // session id currently being reconciled (dedupe)
+let reconcileAbort = false; // true when WE aborted a dead stream to force recovery
+let inFlightTurn = null; // { sid, prompt } while a send() is running
+let zombieProbeToken = 0; // cancels stale zombie probes
+
+// Persist the active conversation id across full page reloads (same browser
+// session). Entra users can re-find conversations via the sidebar, but for
+// anonymous users currentSessionId lives only in JS memory — without this a
+// reload orphans a conversation whose turn is still running server-side.
+watch(currentSessionId, (id) => {
+  try {
+    if (id) sessionStorage.setItem("finops_last_session", id);
+  } catch {}
+});
 
 async function clearMessages() {
   // Prevent concurrent send() while resetting
@@ -4390,6 +4717,7 @@ onBeforeUnmount(() => {
   chartInstances.forEach((c) => c.dispose());
   document.removeEventListener("click", dismissPopover);
   document.removeEventListener("visibilitychange", onVisibilityChange);
+  window.removeEventListener("focus", onWindowFocus);
 });
 
 // ── Aggregated tool calls for sidebar ──
@@ -4782,6 +5110,10 @@ async function send() {
   // entry to drop from runningSessions when we finish.
   let streamingId = startSessionId || "__pending__";
   runningSessions.add(streamingId);
+  // Register the in-flight turn for the zombie probe + recovery paths, and
+  // invalidate any probe watching a previous turn.
+  inFlightTurn = { sid: streamingId, prompt };
+  zombieProbeToken++;
   const isActiveView = () =>
     streamingId === (currentSessionId.value || "__pending__");
   streamBuffer.value = "";
@@ -4820,6 +5152,12 @@ async function send() {
     kind: "client",
     phase: "send.start",
     prompt: prompt.slice(0, 60),
+  });
+  window.__trackAppInsightsEvent?.("chat.stream.start", {
+    sessionId: currentSessionId.value || "__pending__",
+    model: selectedModel.value || "",
+    promptLen: String(prompt.length),
+    attachments: String(attachments.value.length + consumedImages.length),
   });
 
   try {
@@ -4909,6 +5247,10 @@ async function send() {
         } else if (data.type === "delta") {
           if (!timings.some((x) => x.phase === "first_delta")) {
             recordTiming({ kind: "event", phase: "first_delta" });
+            window.__trackAppInsightsEvent?.("chat.stream.firstDelta", {
+              sessionId: streamingId,
+              ms: String(Math.round(performance.now() - t0)),
+            });
           }
         } else if (data.type !== "message") {
           recordTiming({ kind: "event", phase: data.type });
@@ -4961,6 +5303,7 @@ async function send() {
                 perSessionCharts.delete(streamingId);
                 streamingId = data.id;
                 runningSessions.add(streamingId);
+                if (inFlightTurn) inFlightTurn.sid = data.id;
                 ensureBuckets(streamingId);
                 toolCalls = perSessionToolCalls.get(streamingId);
                 charts = perSessionCharts.get(streamingId);
@@ -5315,8 +5658,26 @@ async function send() {
       );
       messages.value.push(msgObj);
     }
+    window.__trackAppInsightsEvent?.("chat.stream.done", {
+      sessionId: streamingId,
+      elapsedMs: String(Math.round(performance.now() - t0)),
+      answerLen: String(clean.length),
+      toolCount: String(toolCalls.length),
+      committedToView: String(isActiveView()),
+      hadDeltas: String(hasDeltas),
+    });
   } catch (err) {
-    if (err.name === "AbortError" && !watchdogFired) {
+    // Was this abort OUR zombie-recovery (frozen background tab) rather than
+    // the user pressing Stop? If so, fall through to the recovery path.
+    const wasReconcileAbort = reconcileAbort;
+    reconcileAbort = false;
+    if (err.name === "AbortError" && !watchdogFired && !wasReconcileAbort) {
+      // User pressed Stop (or the view was reset). Keep any partial text.
+      window.__trackAppInsightsEvent?.("chat.stream.stopped", {
+        sessionId: streamingId,
+        elapsedMs: String(Math.round(performance.now() - t0)),
+        partialLen: String(streamBuffer.value.length),
+      });
       if (streamBuffer.value && isActiveView()) {
         messages.value.push({
           role: "assistant",
@@ -5326,26 +5687,43 @@ async function send() {
         });
       }
     } else if (isActiveView()) {
-      // A severed SSE stream usually means the app restarted mid-turn (deploy,
-      // scale event, crash). Any partial answer is preserved; give the user an
-      // actionable one-click retry instead of a bare error. Also re-sync auth
-      // state — a restart can invalidate the server session while the UI still
-      // shows "connected".
-      const partial = streamBuffer.value
-        ? streamBuffer.value + "\n\n---\n\n"
-        : "";
-      messages.value.push({
-        role: "assistant",
-        content: `${partial}**Connection lost** — the service restarted or the network dropped mid-answer. Your conversation is saved.`,
-        followUp: { label: "Retry last question", prompt },
+      window.__trackAppInsightsEvent?.("chat.stream.severed", {
+        sessionId: streamingId,
+        elapsedMs: String(Math.round(performance.now() - t0)),
+        watchdogFired: String(watchdogFired),
+        reconcileAbort: String(wasReconcileAbort),
+        errName: err?.name || "",
+        partialLen: String(streamBuffer.value.length),
       });
-      checkAzureStatus();
-      loadSessions();
+      // A severed SSE stream usually means the app restarted mid-turn (deploy,
+      // scale event, crash) OR the tab was backgrounded and the browser froze /
+      // dropped the fetch. In every case the CLI keeps working and persists the
+      // answer, so recover it from the server before showing an error.
+      // Drop this session from runningSessions FIRST so the transcript reload
+      // keeps (doesn't discard) the persisted trailing answer.
+      runningSessions.delete(streamingId);
+      const recovered = await tryRecoverPersistedAnswer(streamingId, prompt);
+      if (!recovered) {
+        // Nothing persisted yet — give the user an actionable one-click retry
+        // instead of a bare error. Also re-sync auth state: a restart can
+        // invalidate the server session while the UI still shows "connected".
+        const partial = streamBuffer.value
+          ? streamBuffer.value + "\n\n---\n\n"
+          : "";
+        messages.value.push({
+          role: "assistant",
+          content: `${partial}**Connection lost** — the service restarted or the network dropped mid-answer. Your conversation is saved.`,
+          followUp: { label: "Retry last question", prompt },
+        });
+        checkAzureStatus();
+        loadSessions();
+      }
     }
   } finally {
     clearInterval(intentAnimTimer);
     intentAnimTimer = null;
     runningSessions.delete(streamingId);
+    if (inFlightTurn && inFlightTurn.sid === streamingId) inFlightTurn = null;
 
     // === TIMING DUMP ===
     // Stash on window for easy copy-paste; print a flat table to the

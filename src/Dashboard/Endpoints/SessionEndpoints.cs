@@ -108,10 +108,16 @@ public static class SessionEndpoints
         {
             if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
                 return Results.Unauthorized();
-            if (string.IsNullOrEmpty(entraOid))
-                return Results.Ok(new { messages = Array.Empty<object>() });
 
-            // IDOR guard — see /select for context.
+            // NB: unlike GET /api/sessions (the sidebar list, which stays hidden
+            // for anonymous users), transcript replay IS allowed for anonymous
+            // users. It's how a backgrounded/minimized tab recovers the answer
+            // the server persisted while the SSE was frozen or severed — the
+            // client still holds the sessionId in memory even though anon convos
+            // never appear in the sidebar and can't be re-found after a refresh.
+            // The IDOR guard below (UserOwnsSessionAsync, which scopes to the
+            // caller's /anon/{userId} or /users/{oid} workdir) is the security
+            // boundary for both anon and Entra callers.
             if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
 

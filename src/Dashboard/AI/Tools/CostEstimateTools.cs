@@ -25,11 +25,11 @@ WORKFLOW: 1) look up per-1M-token rates with GetAzureRetailPricing (Standard + G
 
 The result is authoritative and already reconciled — input + output + cached costs sum exactly to totalMonthlyCost, and a ready-made 'breakdown' string is provided per model. In your reply, EVERY figure (headline, summary table, AND step-by-step) MUST equal these numbers exactly. Do NOT recompute or round differently. State the token assumption ONCE and reuse it for every model. If the user gives two scenarios (e.g. 1500/500 vs 100/400), call this tool ONCE PER scenario and keep them clearly separated — never mix.
 
-Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.4-nano, Global Standard') so the estimate states what it is based on.");
+Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-sol, Global Standard') so the estimate states what it is based on.");
     }
 
     private static string EstimateTokenCost(
-        [Description(@"JSON array of models to price, each with a label and per-1M-token rates (USD or the currency you pass). Schema: [{""label"":""gpt-5.4-nano, Global Standard"",""inputPricePer1M"":0.20,""outputPricePer1M"":1.25,""cachedInputPricePer1M"":0.02}]. cachedInputPricePer1M is optional (omit if not modeling cache hits). Rates come from GetAzureRetailPricing.")] string modelsJson,
+        [Description(@"JSON array of models to price, each with a label and per-1M-token rates (USD or the currency you pass). Schema: [{""label"":""a nano model, Global Standard"",""inputPricePer1M"":0.20,""outputPricePer1M"":1.25,""cachedInputPricePer1M"":0.02}]. cachedInputPricePer1M is optional (omit if not modeling cache hits). Rates come from GetAzureRetailPricing.")] string modelsJson,
         [Description("Average input (prompt) tokens per conversation/request. Applies to ALL models. e.g. '1500'.")] string inputTokensPerConversation,
         [Description("Average output (completion) tokens per conversation/request. Applies to ALL models. e.g. '500'.")] string outputTokensPerConversation,
         [Description("Number of conversations/requests per month. Applies to ALL models. e.g. '8000'.")] string conversationsPerMonth,

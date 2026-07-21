@@ -17,7 +17,7 @@ The Bicep in [infra/main.bicep](../infra/main.bicep) targets **subscription scop
 
 You also need available **quota** for:
 
-- Azure OpenAI in `aoaiLocation` (default `swedencentral`, 30K TPM for `gpt-5.4`).
+- Azure OpenAI in `aoaiLocation` (default `swedencentral`, 30K TPM for `gpt-5.6-sol`).
 - The chosen App Service Plan SKU in `location` (default `B1`).
 
 ## 2. Microsoft Entra ID (tenant)

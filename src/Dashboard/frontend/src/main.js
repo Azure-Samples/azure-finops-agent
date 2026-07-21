@@ -50,8 +50,19 @@ function trackFrontendTrace(message, properties = {}) {
   });
 }
 
+function trackFrontendEvent(name, properties = {}) {
+  // Custom event — surfaces in the App Insights `customEvents` table so we can
+  // chart the chat stream lifecycle (tab hidden/visible, stream done/severed,
+  // background reconnects) and finally diagnose the "came back to an empty
+  // answer" bug from real telemetry instead of guesswork.
+  withTelemetry((ai) => {
+    ai.trackEvent({ name }, properties);
+  });
+}
+
 window.__trackAppInsightsException = trackFrontendException;
 window.__trackAppInsightsTrace = trackFrontendTrace;
+window.__trackAppInsightsEvent = trackFrontendEvent;
 
 window.addEventListener("error", (event) => {
   trackFrontendException(event.error || event.message, {

@@ -9,6 +9,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- **Conversations now survive leaving the page — for everyone.** The active conversation id is persisted (sessionStorage + server-side current-session for Entra users), so a full page reload/navigation restores the transcript automatically — including for anonymous users, whose conversations previously lived only in JS memory. If the page was left mid-answer, the restored view shows a ⏳ reconnecting notice and auto-fills the answer when the server finishes (verified live: reload mid-turn → conversation restored → full answer + table appeared with no user action).
+- **Frontend stream-lifecycle telemetry in Application Insights.** New `customEvents` (`chat.stream.start/firstDelta/done/severed/stopped/recovered`, `chat.tab.hidden/visible`, `chat.reattach.recover`, `chat.stream.zombieRecover`, `chat.session.restored`) instrument the chat pipeline end-to-end so background-tab and connection-loss issues are diagnosable from production telemetry (`window.__trackAppInsightsEvent` added in `main.js`).
+
+### Fixed
+
+- **Backgrounding, minimizing, or leaving the window no longer loses the answer.** The backend keeps generating and persists the turn when a client disconnects, but the UI could come back to an empty response or a spurious “Connection lost”. Recovery is now bulletproof and non-destructive: (1) a severed stream recovers by polling the persisted transcript for THIS prompt’s answer (tail-match — instant if it landed while away) and repainting, with a brief refinement watch so mid-turn narration converges to the final answer; (2) a silently-dead “zombie” stream is detected on tab return purely from SERVER state (answer persisted but undelivered one confirm-tick later → abort + recover) — never from client-silence timers, which would kill healthy reasoning pauses; (3) `GET /api/sessions/{id}/messages` now serves anonymous users too (still IDOR-gated per-user), which recovery depends on. Verified live: sever mid-turn → answer recovered; healthy hidden/visible toggle → completes untouched.
+
+### Added
+
 - **Paste or upload screenshots into the chat (vision input).** Images (PNG/JPG/JPEG/GIF/WebP, ≤ 20 MB) can now be attached via the file picker, drag-drop, or pasted straight from the clipboard (Win+Shift+S → Ctrl+V) into the input box. Pasted clipboard images are auto-named `screenshot-<timestamp>.png` and shown as a thumbnail chip. Images bypass the Python analysis helper entirely — they ride along as **native vision attachments** (`MessageOptions.Attachments` → `AttachmentFile` with MIME type) so the model literally sees the screenshot (verified: it read the exact dollar amount off a pasted test image). Each image is consumed by the message it's sent with (delisted server-side after send, chip removed client-side); data files (CSV/XLSX/…) still persist across turns via `QueryUploadedFile`. CSP `img-src` gained `blob:` for the local thumbnail previews.
 
 ### Changed
@@ -28,6 +37,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - **GitHub Copilot SDK 1.0.5 → 1.0.6** — picks up the newer `@github/copilot` runtime and the .NET `CopilotClient.DisposeAsync` graceful-shutdown fix. The CLI runtime is pinned to `@github/copilot` **1.0.68** in `Dashboard.csproj` (`<CopilotCliVersion>`) because the SDK's default `1.0.69` is not published on npm (only `1.0.69-0/-1/-2` prereleases exist) — left unpinned, the build-time `DownloadFile` 404s **both** locally and in the ACR/Docker build. Revisit when a later CLI final is published and the SDK bumps.
 - **Default reasoning effort `high` → `medium`** (`AzureOpenAI:ReasoningEffort`) — GPT-5.6 at `medium` roughly halves time-to-first-token (the dominant first-response latency) while preserving tool-orchestration and format-following quality. Trivial turns still auto-route to `low`; set `AzureOpenAI__ReasoningEffort=high` for a max-depth demo.
 - **System prompt — removed a duplicate chart-XOR-table restatement** in the Response Shape section (the rule still stands forcefully in Core Rules), trimming per-turn input tokens with no behavior change.
+- **`gpt-5.4` references swept out everywhere** — local dev config (user-secrets, `appsettings.Local.json`), infra Bicep descriptions, README/docs tables, the frontend model label (was a cosmetic `claude-sonnet-4.6`; the backend always uses the configured BYOK deployment), and illustrative pricing examples in tool prompts are all `gpt-5.6-sol` (or model-neutral) now. Production and committed defaults were already on `gpt-5.6-sol`.
 
 ### Added
 
