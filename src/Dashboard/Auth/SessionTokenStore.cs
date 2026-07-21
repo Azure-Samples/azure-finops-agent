@@ -51,7 +51,32 @@ public sealed class SessionTokenStore
             try
             {
                 var res = await http.SendAsync(req);
-                if (!res.IsSuccessStatusCode) return null;
+                if (!res.IsSuccessStatusCode)
+                {
+                    // A non-transient 4xx from the token endpoint (typically 400
+                    // invalid_grant / interaction_required) means the persisted
+                    // refresh token can no longer mint this resource's token — the
+                    // user's Azure connection is effectively dead until they
+                    // re-consent. Previously this returned null silently, so the
+                    // AADSTS reason was invisible in telemetry (18/21 refreshes
+                    // were failing 400 in production with no diagnosable cause).
+                    // The error body carries only the error code / description /
+                    // correlation ids — never the access or refresh token.
+                    string err = "unknown", desc = "";
+                    try
+                    {
+                        var errBody = await res.Content.ReadAsStringAsync();
+                        var ej = JsonSerializer.Deserialize<JsonElement>(errBody);
+                        if (ej.TryGetProperty("error", out var e)) err = e.GetString() ?? "unknown";
+                        if (ej.TryGetProperty("error_description", out var d)) desc = d.GetString() ?? "";
+                    }
+                    catch { /* non-JSON error body — status + scope below still logged */ }
+                    _logger.LogWarning(
+                        "Entra refresh-token exchange failed: HTTP {Status} error={Error} scope={Scope} tenant={Tenant} desc={Desc}",
+                        (int)res.StatusCode, err, scope, effectiveTenant,
+                        desc.Length > 300 ? desc[..300] : desc);
+                    return null;
+                }
 
                 var body = await res.Content.ReadAsStringAsync();
                 var json = JsonSerializer.Deserialize<JsonElement>(body);
@@ -114,17 +139,37 @@ public sealed class SessionTokenStore
     }
 
     public async Task<string?> GetSessionTokenAsync(HttpContext ctx, IHttpClientFactory httpFactory,
-        string tokenKey, string expiryKey, string refreshScope)
+        string tokenKey, string expiryKey, string refreshScope, string? requiredTiers = null)
     {
         var token = ctx.Session.GetString(tokenKey);
         var expiryStr = ctx.Session.GetString(expiryKey);
 
         // No cached access token but we have a refresh token (typical right after a
-        // restart-driven session hydration) &#8212; fall through to mint a fresh one.
+        // restart-driven session hydration) — fall through to mint a fresh one.
         var hasRefresh = !string.IsNullOrEmpty(ctx.Session.GetString("azure_refresh_token"));
         if (token is null)
         {
             if (!hasRefresh) return null;
+
+            // Consent gate — only exchange the refresh token for scopes the user
+            // actually consented to. Without this, every chat message attempted
+            // Graph/Log-Analytics/Storage exchanges for base-tier users, each a
+            // guaranteed HTTP 400 (observed: 18/21 token calls failing in prod)
+            // plus 3 wasted Entra round-trips of latency per message.
+            if (requiredTiers is not null)
+            {
+                var consented = ctx.Session.GetString("graph_tier") ?? "";
+                var anyConsent = requiredTiers.Split(',').Any(t => consented.Contains(t, StringComparison.OrdinalIgnoreCase));
+                if (!anyConsent) return null;
+            }
+
+            // Failure backoff — a refresh for this scope recently failed (revoked
+            // consent, CA policy, tenant restriction). Don't retry on every
+            // message; wait out the backoff window instead.
+            var backoffStr = ctx.Session.GetString(tokenKey + "_unavailable_until");
+            if (backoffStr is not null && DateTimeOffset.TryParse(backoffStr, out var backoffUntil)
+                && backoffUntil > DateTimeOffset.UtcNow)
+                return null;
         }
         else if (expiryStr is null || !DateTimeOffset.TryParse(expiryStr, out var expiry) || expiry > DateTimeOffset.UtcNow)
         {
@@ -161,8 +206,16 @@ public sealed class SessionTokenStore
                 _logger.LogWarning("Token {Key} refresh failed; user must re-authenticate", tokenKey);
                 ctx.Session.Remove(tokenKey);
                 ctx.Session.Remove(expiryKey);
+                // Add-on scopes: back off for 15 minutes so a deterministic failure
+                // (consent revoked, CA policy) doesn't refire on every message. The
+                // base ARM scope is exempt — it must keep retrying so a reconnect
+                // is picked up immediately.
+                if (requiredTiers is not null)
+                    ctx.Session.SetString(tokenKey + "_unavailable_until",
+                        DateTimeOffset.UtcNow.AddMinutes(15).ToString("o"));
                 return null;
             }
+            ctx.Session.Remove(tokenKey + "_unavailable_until");
             ctx.Session.SetString(tokenKey, result.Value.Token);
             ctx.Session.SetString(expiryKey, result.Value.Expiry.ToString("o"));
             if (!string.IsNullOrEmpty(result.Value.RotatedRefreshToken))
@@ -202,13 +255,16 @@ public sealed class SessionTokenStore
 
     public Task<string?> GetGraphTokenAsync(HttpContext ctx, IHttpClientFactory httpFactory) =>
         GetSessionTokenAsync(ctx, httpFactory, "graph_token", "graph_token_expiry",
-            "https://graph.microsoft.com/User.Read https://graph.microsoft.com/User.Read.All https://graph.microsoft.com/Organization.Read.All https://graph.microsoft.com/Group.Read.All https://graph.microsoft.com/Reports.Read.All offline_access");
+            "https://graph.microsoft.com/User.Read https://graph.microsoft.com/User.Read.All https://graph.microsoft.com/Organization.Read.All https://graph.microsoft.com/Group.Read.All https://graph.microsoft.com/Reports.Read.All offline_access",
+            requiredTiers: "licenses,chargeback");
 
     public Task<string?> GetLogAnalyticsTokenAsync(HttpContext ctx, IHttpClientFactory httpFactory) =>
         GetSessionTokenAsync(ctx, httpFactory, "loganalytics_token", "loganalytics_token_expiry",
-            "https://api.loganalytics.io/Data.Read offline_access");
+            "https://api.loganalytics.io/Data.Read offline_access",
+            requiredTiers: "loganalytics");
 
     public Task<string?> GetStorageTokenAsync(HttpContext ctx, IHttpClientFactory httpFactory) =>
         GetSessionTokenAsync(ctx, httpFactory, "storage_token", "storage_token_expiry",
-            "https://storage.azure.com/user_impersonation offline_access");
+            "https://storage.azure.com/user_impersonation offline_access",
+            requiredTiers: "storage");
 }

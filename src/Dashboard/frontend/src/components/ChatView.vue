@@ -187,7 +187,8 @@
                 v-if="maturityScores[cat.key]"
                 class="collapse-body"
                 :class="{
-                  'collapse-body--collapsed': collapsedSections['cm_' + cat.key],
+                  'collapse-body--collapsed':
+                    collapsedSections['cm_' + cat.key],
                 }"
               >
                 <div class="assessment-summary">
@@ -1071,9 +1072,8 @@
                         {{ htmlCardTitle(msg.html.slideCount) }}
                       </div>
                       <div class="html-deck-card-meta">
-                        {{ htmlCardMeta(msg.html.slideCount) }}<span
-                          v-if="msg.html.createdAt"
-                        >
+                        {{ htmlCardMeta(msg.html.slideCount)
+                        }}<span v-if="msg.html.createdAt">
                           · {{ msg.html.createdAt }}</span
                         >
                       </div>
@@ -1208,7 +1208,10 @@
                     <span v-html="renderContent(streamBuffer)"></span>
                     <span class="streaming-cursor"></span>
                   </div>
-                  <div v-else-if="streamReasoning" class="stream-reasoning-block">
+                  <div
+                    v-else-if="streamReasoning"
+                    class="stream-reasoning-block"
+                  >
                     <div class="reasoning-label">
                       <span class="thinking-dots"><i></i><i></i><i></i></span>
                       Thinking
@@ -1216,7 +1219,9 @@
                     <div class="reasoning-body">{{ streamReasoning }}</div>
                   </div>
                   <div class="message-text" v-else-if="!streamIntent">
-                    <span class="thinking-dots thinking-dots--lg"><i></i><i></i><i></i></span>
+                    <span class="thinking-dots thinking-dots--lg"
+                      ><i></i><i></i><i></i
+                    ></span>
                   </div>
                 </div>
               </div>
@@ -1241,9 +1246,12 @@
             </svg>
           </div>
           <div class="html-deck-card-body">
-            <div class="html-deck-card-title">{{ htmlCardTitle(htmlReady.slideCount) }}</div>
+            <div class="html-deck-card-title">
+              {{ htmlCardTitle(htmlReady.slideCount) }}
+            </div>
             <div class="html-deck-card-meta">
-              {{ htmlCardMeta(htmlReady.slideCount) }}<span v-if="htmlReady.createdAt">
+              {{ htmlCardMeta(htmlReady.slideCount)
+              }}<span v-if="htmlReady.createdAt">
                 · {{ htmlReady.createdAt }}</span
               >
             </div>
@@ -1367,7 +1375,8 @@
             </svg>
             <div class="drop-overlay-title">Drop to attach</div>
             <div class="drop-overlay-sub">
-              CSV · TSV · JSON · TXT · XLSX · PDF · Parquet (≤ 100 MB)
+              CSV · TSV · JSON · TXT · XLSX · PDF · Parquet (≤ 100 MB) · PNG/JPG
+              screenshots (≤ 20 MB)
             </div>
           </div>
         </div>
@@ -1394,7 +1403,14 @@
                   att.error || `${att.kind} · ${formatBytes(att.sizeBytes)}`
                 "
               >
+                <img
+                  v-if="att.thumbUrl"
+                  :src="att.thumbUrl"
+                  class="attachment-chip-thumb"
+                  alt=""
+                />
                 <svg
+                  v-else
                   width="12"
                   height="12"
                   viewBox="0 0 24 24"
@@ -1437,6 +1453,7 @@
               rows="1"
               @keydown.enter.exact.prevent="send"
               @input="autoGrowInput"
+              @paste="onPaste"
               placeholder="Ask a question about your data"
               class="input-field"
               :disabled="!user"
@@ -1447,7 +1464,7 @@
                   ref="fileInputEl"
                   type="file"
                   multiple
-                  accept=".csv,.tsv,.json,.txt,.log,.md,.xlsx,.xls,.pdf,.parquet"
+                  accept=".csv,.tsv,.json,.txt,.log,.md,.xlsx,.xls,.pdf,.parquet,.png,.jpg,.jpeg,.gif,.webp"
                   style="display: none"
                   @change="onFilePicked"
                 />
@@ -1455,7 +1472,7 @@
                   class="input-action-btn"
                   :disabled="streaming"
                   @click="openFilePicker"
-                  title="Attach file (CSV, JSON, TXT, XLSX, PDF, Parquet)"
+                  title="Attach file (CSV, JSON, TXT, XLSX, PDF, Parquet, PNG/JPG screenshots — or paste an image)"
                 >
                   <svg
                     width="14"
@@ -1636,23 +1653,58 @@
               <!-- Ghost cooling-down row: animated, expand-to-detail, ephemeral -->
               <div
                 v-if="tc._isCooler"
-                :class="['st-row', 'st-row--cooler', { 'st-row--cooler-open': tc.expanded }]"
+                :class="[
+                  'st-row',
+                  'st-row--cooler',
+                  { 'st-row--cooler-open': tc.expanded },
+                ]"
                 @click.stop="tc.expanded = !tc.expanded"
                 :title="`Cooling down ${tc.tool} (HTTP ${tc.status}) attempt ${tc.attempt}, waiting ${Math.round(tc.wait)}s`"
               >
-                <svg class="st-icon st-icon--cooler" viewBox="0 0 16 16" fill="none">
-                  <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6 4">
-                    <animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="1.4s" repeatCount="indefinite"/>
+                <svg
+                  class="st-icon st-icon--cooler"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                >
+                  <circle
+                    cx="8"
+                    cy="8"
+                    r="6"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-dasharray="6 4"
+                  >
+                    <animateTransform
+                      attributeName="transform"
+                      type="rotate"
+                      from="0 8 8"
+                      to="360 8 8"
+                      dur="1.4s"
+                      repeatCount="indefinite"
+                    />
                   </circle>
                 </svg>
-                <span class="st-name">Cooling down… {{ Math.round(tc.wait) }}s (attempt {{ tc.attempt }})</span>
+                <span class="st-name"
+                  >Cooling down… {{ Math.round(tc.wait) }}s (attempt
+                  {{ tc.attempt }})</span
+                >
                 <span class="st-time">HTTP {{ tc.status }}</span>
                 <div v-if="tc.expanded" class="st-cooler-detail" @click.stop>
-                  <div class="st-cooler-row"><strong>Tool:</strong> {{ tc.tool }}</div>
-                  <div class="st-cooler-row"><strong>Status:</strong> HTTP {{ tc.status }}</div>
-                  <div class="st-cooler-row"><strong>Attempt:</strong> {{ tc.attempt }} of 5</div>
-                  <div class="st-cooler-row"><strong>Wait:</strong> {{ Math.round(tc.wait) }}s</div>
-                  <div class="st-cooler-row st-cooler-url"><strong>URL:</strong> <code>{{ tc.url }}</code></div>
+                  <div class="st-cooler-row">
+                    <strong>Tool:</strong> {{ tc.tool }}
+                  </div>
+                  <div class="st-cooler-row">
+                    <strong>Status:</strong> HTTP {{ tc.status }}
+                  </div>
+                  <div class="st-cooler-row">
+                    <strong>Attempt:</strong> {{ tc.attempt }} of 5
+                  </div>
+                  <div class="st-cooler-row">
+                    <strong>Wait:</strong> {{ Math.round(tc.wait) }}s
+                  </div>
+                  <div class="st-cooler-row st-cooler-url">
+                    <strong>URL:</strong> <code>{{ tc.url }}</code>
+                  </div>
                 </div>
               </div>
               <!-- Normal tool row -->
@@ -1666,76 +1718,74 @@
                   tc.done && (hoveredTool = hoveredTool === tc ? null : tc)
                 "
               >
-              <svg
-                v-if="!tc.done"
-                class="st-icon st-icon--spin"
-                viewBox="0 0 16 16"
-                fill="none"
-              >
-                <circle
-                  cx="8"
-                  cy="8"
-                  r="6"
-                  stroke="#bf8700"
-                  stroke-width="2"
-                  stroke-dasharray="28"
-                  stroke-dashoffset="8"
-                  stroke-linecap="round"
-                />
-              </svg>
-              <svg
-                v-else-if="tc.success"
-                class="st-icon st-icon--ok"
-                viewBox="0 0 16 16"
-                fill="none"
-              >
-                <circle
-                  cx="8"
-                  cy="8"
-                  r="7"
-                  stroke="#1a7f37"
-                  stroke-width="1.5"
-                />
-                <path
-                  d="M5 8.2 7 10.2 11 6"
-                  stroke="#1a7f37"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-              <svg
-                v-else
-                class="st-icon st-icon--fail"
-                viewBox="0 0 16 16"
-                fill="none"
-              >
-                <circle
-                  cx="8"
-                  cy="8"
-                  r="7"
-                  stroke="#cf222e"
-                  stroke-width="1.5"
-                />
-                <path
-                  d="M5.5 5.5 10.5 10.5M10.5 5.5 5.5 10.5"
-                  stroke="#cf222e"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                />
-              </svg>
-              <span class="st-name">{{ friendlyToolLabel(tc) }}</span>
-              <span v-if="tc.done" class="st-time">{{
-                formatDuration(tc.durationMs)
-              }}</span>
-            </div>
+                <svg
+                  v-if="!tc.done"
+                  class="st-icon st-icon--spin"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                >
+                  <circle
+                    cx="8"
+                    cy="8"
+                    r="6"
+                    stroke="#bf8700"
+                    stroke-width="2"
+                    stroke-dasharray="28"
+                    stroke-dashoffset="8"
+                    stroke-linecap="round"
+                  />
+                </svg>
+                <svg
+                  v-else-if="tc.success"
+                  class="st-icon st-icon--ok"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                >
+                  <circle
+                    cx="8"
+                    cy="8"
+                    r="7"
+                    stroke="#1a7f37"
+                    stroke-width="1.5"
+                  />
+                  <path
+                    d="M5 8.2 7 10.2 11 6"
+                    stroke="#1a7f37"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+                <svg
+                  v-else
+                  class="st-icon st-icon--fail"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                >
+                  <circle
+                    cx="8"
+                    cy="8"
+                    r="7"
+                    stroke="#cf222e"
+                    stroke-width="1.5"
+                  />
+                  <path
+                    d="M5.5 5.5 10.5 10.5M10.5 5.5 5.5 10.5"
+                    stroke="#cf222e"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                  />
+                </svg>
+                <span class="st-name">{{ friendlyToolLabel(tc) }}</span>
+                <span v-if="tc.done" class="st-time">{{
+                  formatDuration(tc.durationMs)
+                }}</span>
+              </div>
             </template>
           </div>
         </div>
         <!-- ── Bottom half: Conversations (works for anonymous + signed-in) ── -->
-        <div
-          class="tools-sidebar-pane tools-sidebar-pane--sessions"
-        >
+        <div class="tools-sidebar-pane tools-sidebar-pane--sessions">
           <div class="tools-sidebar-header sessions-header">
             <div class="tools-sidebar-header-text">
               <span class="tools-sidebar-title">Conversations</span>
@@ -1851,17 +1901,17 @@ import hljs from "highlight.js/lib/core";
 import hljsJson from "highlight.js/lib/languages/json";
 import "highlight.js/styles/github-dark.css";
 import {
-    computed,
-    nextTick,
-    onBeforeUnmount,
-    onMounted,
-    reactive,
-    ref,
-    watch,
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
 } from "vue";
 import {
-    maturityCategories,
-    pricingCategory,
+  maturityCategories,
+  pricingCategory,
 } from "../data/sidebarCategories.js";
 hljs.registerLanguage("json", hljsJson);
 
@@ -1955,6 +2005,38 @@ async function onDrop(ev) {
   if (files.length) await uploadFiles(files);
 }
 
+const IMAGE_KINDS = new Set(["image", "png", "jpg", "jpeg", "gif", "webp"]);
+const isImageAttachment = (att) =>
+  IMAGE_KINDS.has((att.kind || "").toLowerCase());
+
+// Paste-to-attach: screenshots copied to the clipboard (Win+Shift+S, browser
+// right-click → Copy image, etc.) upload straight from Ctrl+V in the input.
+// Text pastes are untouched — we only intercept when an image file is present.
+async function onPaste(ev) {
+  const items = Array.from(ev.clipboardData?.items || []);
+  const imageItems = items.filter(
+    (it) => it.kind === "file" && it.type.startsWith("image/"),
+  );
+  if (!imageItems.length) return;
+  ev.preventDefault();
+  const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  const files = imageItems
+    .map((it, i) => {
+      const f = it.getAsFile();
+      if (!f) return null;
+      // Clipboard images arrive as a generic "image.png" — give screenshots a
+      // distinguishable, timestamped name.
+      const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+      const generic = !f.name || /^image\.(png|jpe?g|gif|webp)$/i.test(f.name);
+      const name = generic
+        ? `screenshot-${stamp}${i ? `-${i + 1}` : ""}.${ext}`
+        : f.name;
+      return new File([f], name, { type: f.type });
+    })
+    .filter(Boolean);
+  if (files.length) await uploadFiles(files);
+}
+
 async function uploadFiles(files) {
   for (const file of files) {
     const placeholder = {
@@ -1966,6 +2048,10 @@ async function uploadFiles(files) {
       uploading: true,
       error: null,
       preview: null,
+      // Local thumbnail for image chips — revoked when the chip is removed.
+      thumbUrl: file.type?.startsWith("image/")
+        ? URL.createObjectURL(file)
+        : null,
     };
     attachments.value.push(placeholder);
     const idx = attachments.value.length - 1;
@@ -2004,6 +2090,11 @@ function removeAttachment(att) {
   // on disk so prior tool-call results in chat history remain valid; full
   // disposal happens on /api/chat/reset or via the 30-min TTL.
   attachments.value = attachments.value.filter((a) => a !== att);
+  if (att.thumbUrl) {
+    try {
+      URL.revokeObjectURL(att.thumbUrl);
+    } catch {}
+  }
   if (att.fileId) {
     fetch(`/api/uploads/${encodeURIComponent(att.fileId)}`, {
       method: "DELETE",
@@ -2030,6 +2121,7 @@ const PURPOSE_LABELS = {
   notes_md: "Notes / markdown",
   finops_report_pdf: "FinOps report (PDF)",
   spreadsheet_inventory: "Multi-sheet workbook",
+  image: "Screenshot / image",
 };
 
 function classifyAttachment(att) {
@@ -2080,6 +2172,7 @@ function classifyAttachment(att) {
       return PURPOSE_LABELS.cost_summary;
   }
   if (kind === "pdf") return PURPOSE_LABELS.finops_report_pdf;
+  if (isImageAttachment({ kind })) return PURPOSE_LABELS.image;
   if (kind === "txt") {
     if (/\.log$/.test(name) || /audit|access|trace/.test(name))
       return PURPOSE_LABELS.audit_log;
@@ -2096,6 +2189,12 @@ const readyAttachments = computed(() =>
 const analyzePrompt = computed(() => {
   const list = readyAttachments.value;
   if (!list.length) return "";
+  // Image-only attachments: the screenshots ride along as vision input — no
+  // QueryUploadedFile involved. Ask for a visual read instead of schema calls.
+  if (list.every(isImageAttachment)) {
+    const names = list.map((a) => `'${a.fileName}'`).join(", ");
+    return `Look at the attached ${list.length === 1 ? "screenshot" : `${list.length} screenshots`} (${names}). Describe what it shows, extract every number/cost/resource name visible, and give the top FinOps insights or anomalies you can read from it. If it shows an Azure portal view (cost analysis, Advisor, resource list), relate what you see to concrete next optimization actions. Then **call SuggestFollowUp with 3 distinct next actions**.`;
+  }
   if (list.length === 1) {
     const a = list[0];
     const label = classifyAttachment(a);
@@ -2118,6 +2217,15 @@ let pendingText = "";
 let textAnimFrame = null;
 
 function enqueueText(text) {
+  // Background tab: requestAnimationFrame is fully suspended, so the rAF
+  // drain below never runs and text piles up invisibly — the AI looked
+  // "stopped" until the tab was refocused (and then crawled at ~600 chars/s).
+  // When hidden, skip the animation entirely and render synchronously.
+  if (document.hidden) {
+    flushText();
+    streamBuffer.value += text;
+    return;
+  }
   pendingText += text;
   if (!textAnimFrame) drainText();
 }
@@ -2143,6 +2251,14 @@ function flushText() {
     streamBuffer.value += pendingText;
     pendingText = "";
   }
+}
+
+// Flush the animation queue the moment the tab goes to the background — any
+// chars already queued for rAF would otherwise be frozen mid-word until the
+// user returns. (New chars arriving while hidden take the synchronous path
+// in enqueueText above; the SSE reader itself is not throttled by browsers.)
+function onVisibilityChange() {
+  if (document.hidden) flushText();
 }
 
 const hoveredTool = ref(null);
@@ -2426,18 +2542,26 @@ let serverTurnPollToken = 0;
 async function attachToServerTurn(sessionId) {
   const token = ++serverTurnPollToken;
   try {
-    const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/active`);
+    const r = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/active`,
+    );
     if (!r.ok) return;
     const { active } = await r.json();
     if (!active || token !== serverTurnPollToken) return;
     // Show a lightweight working notice while the server-side turn finishes.
     messages.value = [
       ...messages.value,
-      { role: "system", content: "⏳ Still working on your last question — the answer will appear here when ready." },
+      {
+        role: "system",
+        content:
+          "⏳ Still working on your last question — the answer will appear here when ready.",
+      },
     ];
     while (token === serverTurnPollToken) {
       await new Promise((res) => setTimeout(res, 4000));
-      const p = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/active`);
+      const p = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/active`,
+      );
       if (!p.ok) return;
       const { active: still } = await p.json();
       if (!still) {
@@ -2732,7 +2856,10 @@ let warmedUp = false;
 function warmUpSession() {
   if (warmedUp) return;
   warmedUp = true;
-  fetch("/api/chat/warmup", { method: "POST", credentials: "same-origin" }).catch(() => {
+  fetch("/api/chat/warmup", {
+    method: "POST",
+    credentials: "same-origin",
+  }).catch(() => {
     warmedUp = false; // allow a later retry if the warm-up call itself failed
   });
 }
@@ -2766,6 +2893,7 @@ watch(
 
 onMounted(async () => {
   document.addEventListener("click", dismissPopover);
+  document.addEventListener("visibilitychange", onVisibilityChange);
   // Delegated handler for model-marked prompt chips ([label](prompt:...) links
   // rendered by renderContent). Delegation survives v-html re-renders.
   document.addEventListener("click", (e) => {
@@ -2796,14 +2924,25 @@ onMounted(async () => {
         expanded: false,
         done: false,
       };
-      cooler._timer = setTimeout(() => {
-        const arr = perSessionCoolers.get(sid) || [];
-        perSessionCoolers.set(sid, arr.filter((x) => x._uid !== cooler._uid));
-      }, wait * 1000 + 500);
+      cooler._timer = setTimeout(
+        () => {
+          const arr = perSessionCoolers.get(sid) || [];
+          perSessionCoolers.set(
+            sid,
+            arr.filter((x) => x._uid !== cooler._uid),
+          );
+        },
+        wait * 1000 + 500,
+      );
       list.push(cooler);
       perSessionCoolers.set(sid, [...list]);
       // eslint-disable-next-line no-console
-      console.log("[simulateCool] injected ghost row for", wait, "s in session", sid);
+      console.log(
+        "[simulateCool] injected ghost row for",
+        wait,
+        "s in session",
+        sid,
+      );
       return cooler._uid;
     };
   }
@@ -3053,7 +3192,11 @@ function friendlyToolLabel(tc) {
   // Throttled HTTP calls: the tool itself succeeded (returned a string), but the
   // body starts with "HTTP 429 …". Show a friendly status instead of the tool name
   // so the user understands it was rate-limited, not a hard failure.
-  if (tc.done && typeof tc.result === "string" && tc.result.startsWith("HTTP 429")) {
+  if (
+    tc.done &&
+    typeof tc.result === "string" &&
+    tc.result.startsWith("HTTP 429")
+  ) {
     return "Cooling down…";
   }
   const tool = tc.tool;
@@ -3217,7 +3360,9 @@ function htmlCardIsReport(count) {
   return /[a-zA-Z]/.test(String(count ?? ""));
 }
 function htmlCardTitle(count) {
-  return htmlCardIsReport(count) ? "FinOps report ready" : "FinOps presentation ready";
+  return htmlCardIsReport(count)
+    ? "FinOps report ready"
+    : "FinOps presentation ready";
 }
 function htmlCardMeta(count) {
   const s = String(count ?? "");
@@ -4244,6 +4389,7 @@ function mountChart(el, chartData) {
 onBeforeUnmount(() => {
   chartInstances.forEach((c) => c.dispose());
   document.removeEventListener("click", dismissPopover);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
 });
 
 // ── Aggregated tool calls for sidebar ──
@@ -4613,6 +4759,21 @@ async function send() {
 
   messages.value.push({ role: "user", content: prompt });
   input.value = "";
+  // Image attachments are consumed by THIS message — the backend attaches
+  // them as vision input and delists them after send. Mirror that here so
+  // the chips don't linger and get "re-sent" visually on the next turn.
+  // Data files (CSV/XLSX/…) stay: they remain queryable in later turns.
+  const consumedImages = attachments.value.filter(isImageAttachment);
+  if (consumedImages.length) {
+    attachments.value = attachments.value.filter((a) => !isImageAttachment(a));
+    for (const img of consumedImages) {
+      if (img.thumbUrl) {
+        try {
+          URL.revokeObjectURL(img.thumbUrl);
+        } catch {}
+      }
+    }
+  }
   nextTick(() => {
     if (inputEl.value) inputEl.value.style.height = "auto";
   });
@@ -4655,7 +4816,11 @@ async function send() {
   const recordTiming = (entry) => {
     timings.push({ t_ms: Math.round(performance.now() - t0), ...entry });
   };
-  recordTiming({ kind: "client", phase: "send.start", prompt: prompt.slice(0, 60) });
+  recordTiming({
+    kind: "client",
+    phase: "send.start",
+    prompt: prompt.slice(0, 60),
+  });
 
   try {
     const res = await fetch("/api/chat", {
@@ -4684,7 +4849,9 @@ async function send() {
       clearTimeout(watchdogTimer);
       watchdogTimer = setTimeout(() => {
         watchdogFired = true;
-        try { abortController?.abort(); } catch {}
+        try {
+          abortController?.abort();
+        } catch {}
       }, WATCHDOG_MS);
     };
     armWatchdog();
@@ -4714,15 +4881,31 @@ async function send() {
         // Backend-emitted `timing` events are stored verbatim (they carry their
         // own ms measurement); all other events get a client-arrival t_ms.
         if (data.type === "timing") {
-          recordTiming({ kind: "server", phase: data.phase, server_ms: data.ms, extra: data.extra });
+          recordTiming({
+            kind: "server",
+            phase: data.phase,
+            server_ms: data.ms,
+            extra: data.extra,
+          });
         } else if (data.type === "tool_done") {
-          recordTiming({ kind: "event", phase: "tool_done", tool: data.tool, durationMs: data.durationMs, success: data.success });
+          recordTiming({
+            kind: "event",
+            phase: "tool_done",
+            tool: data.tool,
+            durationMs: data.durationMs,
+            success: data.success,
+          });
         } else if (data.type === "tool_start") {
           recordTiming({ kind: "event", phase: "tool_start", tool: data.tool });
         } else if (data.type === "cooling_down") {
           // eslint-disable-next-line no-console
           console.log("[SSE cooling_down arrived]", data);
-          recordTiming({ kind: "event", phase: "cooling_down", attempt: data.attempt, waitSec: data.waitSeconds });
+          recordTiming({
+            kind: "event",
+            phase: "cooling_down",
+            attempt: data.attempt,
+            waitSec: data.waitSeconds,
+          });
         } else if (data.type === "delta") {
           if (!timings.some((x) => x.phase === "first_delta")) {
             recordTiming({ kind: "event", phase: "first_delta" });
@@ -4736,7 +4919,9 @@ async function send() {
         // below so a backgrounded stream keeps draining bytes (the server
         // needs us to keep reading) without polluting the foreground view.
         const routingEvent =
-          data.type === "session" || data.type === "session_title" || data.type === "timing";
+          data.type === "session" ||
+          data.type === "session_title" ||
+          data.type === "timing";
         // Tool / chart / completion-marker events go into the per-session
         // map so a backgrounded stream still accumulates state and the user
         // sees a complete tool list when they switch back. Only delta/text
@@ -4838,7 +5023,10 @@ async function send() {
             // Server rejected this prompt because a turn is already running in
             // this session. Surface the notice; the earlier turn keeps going.
             if (isActiveView()) {
-              messages.value.push({ role: "system", content: `⏳ ${data.message}` });
+              messages.value.push({
+                role: "system",
+                content: `⏳ ${data.message}`,
+              });
             }
             break;
 
@@ -4979,13 +5167,16 @@ async function send() {
               existing.status = data.status;
               existing.ts = Date.now();
               if (existing._timer) clearTimeout(existing._timer);
-              existing._timer = setTimeout(() => {
-                const arr = perSessionCoolers.get(streamingId) || [];
-                perSessionCoolers.set(
-                  streamingId,
-                  arr.filter((x) => x._uid !== existing._uid),
-                );
-              }, (data.waitSeconds || 5) * 1000 + 500);
+              existing._timer = setTimeout(
+                () => {
+                  const arr = perSessionCoolers.get(streamingId) || [];
+                  perSessionCoolers.set(
+                    streamingId,
+                    arr.filter((x) => x._uid !== existing._uid),
+                  );
+                },
+                (data.waitSeconds || 5) * 1000 + 500,
+              );
               perSessionCoolers.set(streamingId, [...list]);
             } else {
               const cooler = {
@@ -5001,13 +5192,16 @@ async function send() {
                 expanded: false,
                 done: false,
               };
-              cooler._timer = setTimeout(() => {
-                const arr = perSessionCoolers.get(streamingId) || [];
-                perSessionCoolers.set(
-                  streamingId,
-                  arr.filter((x) => x._uid !== cooler._uid),
-                );
-              }, (data.waitSeconds || 5) * 1000 + 500);
+              cooler._timer = setTimeout(
+                () => {
+                  const arr = perSessionCoolers.get(streamingId) || [];
+                  perSessionCoolers.set(
+                    streamingId,
+                    arr.filter((x) => x._uid !== cooler._uid),
+                  );
+                },
+                (data.waitSeconds || 5) * 1000 + 500,
+              );
               list.push(cooler);
               perSessionCoolers.set(streamingId, [...list]);
             }
@@ -5161,7 +5355,9 @@ async function send() {
       window.__lastTimings = timings;
       window.__lastTimingsPrompt = prompt;
       // eslint-disable-next-line no-console
-      console.groupCollapsed(`[timing] ${prompt.slice(0, 60)} — ${timings.length} events, total ${timings[timings.length - 1]?.t_ms ?? 0}ms`);
+      console.groupCollapsed(
+        `[timing] ${prompt.slice(0, 60)} — ${timings.length} events, total ${timings[timings.length - 1]?.t_ms ?? 0}ms`,
+      );
       // eslint-disable-next-line no-console
       console.table(timings);
       // eslint-disable-next-line no-console
@@ -5179,7 +5375,9 @@ async function send() {
     perSessionCharts.delete(streamingId);
     // Discard any lingering cooling-down ghosts — they're stream-scoped only.
     const lingering = perSessionCoolers.get(streamingId) || [];
-    for (const c of lingering) { if (c._timer) clearTimeout(c._timer); }
+    for (const c of lingering) {
+      if (c._timer) clearTimeout(c._timer);
+    }
     perSessionCoolers.delete(streamingId);
     if (isActiveView()) {
       flushText();
@@ -6515,6 +6713,14 @@ async function send() {
   color: #b91c1c;
   background: #fee2e2;
 }
+.attachment-chip-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border, #e2e8f0);
+}
 .attachment-chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7306,7 +7512,10 @@ async function send() {
   border: 1px solid #cfe4f7;
   border-radius: 14px;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.1s ease;
 }
 :deep(.prompt-chip:hover) {
   background: #e1effa;
@@ -7634,7 +7843,14 @@ async function send() {
   opacity: 0.6;
 }
 .input-field {
-  flex: 1;
+  /* Auto-grow: the textarea height is driven by autoGrowInput() setting an
+     inline height from scrollHeight. It MUST NOT be a flex-grow item — inside
+     the column .input-wrapper, `flex: 1` (flex-basis:0) makes the flex layout
+     ignore the inline height and collapse the field to min-height, so multi-line
+     input never expanded. `flex: 0 0 auto` lets the inline height take effect;
+     full width still comes from the wrapper's default align-items: stretch. */
+  flex: 0 0 auto;
+  width: 100%;
   background: transparent;
   border: none;
   color: #323130;
@@ -7647,6 +7863,7 @@ async function send() {
   overflow-y: hidden;
   max-height: 400px;
   min-height: 24px;
+  box-sizing: border-box;
 }
 .input-field::placeholder {
   color: #a19f9d;
@@ -8064,8 +8281,12 @@ async function send() {
   max-width: 100%;
 }
 @keyframes cool-sweep {
-  0%   { background-position: 0% 50%; }
-  100% { background-position: 200% 50%; }
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
 }
 
 /* ── Tool popover ── */

@@ -34,11 +34,14 @@ public sealed class UploadedFileTools
 
     private const int TimeoutSeconds = 30;
     private const long MaxBytes = 100L * 1024 * 1024; // 100 MB
+    private const long MaxImageBytes = 20L * 1024 * 1024; // 20 MB — vision models cap prompt image size
 
     // .xls intentionally omitted — pandas needs the (uninstalled) xlrd package for legacy xls.
+    // Images are stored as-is and attached to the model natively (vision) — no Python parsing.
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".csv", ".tsv", ".json", ".txt", ".log", ".md", ".xlsx", ".pdf", ".parquet"
+        ".csv", ".tsv", ".json", ".txt", ".log", ".md", ".xlsx", ".pdf", ".parquet",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp"
     };
 
     static UploadedFileTools()
@@ -93,6 +96,8 @@ Examples:
         var entry = FindEntryForUser(_tokens.UserId, fileId);
         if (entry is null) return Json(new { ok = false, error = "fileId not found in this session (it may have expired or been cleared)" });
         if (!File.Exists(entry.Path)) return Json(new { ok = false, error = "file no longer on disk" });
+        if (entry.Kind == "image")
+            return Json(new { ok = false, error = "This fileId is an image — it is attached to the user's message as a visual. Look at the attached image directly instead of querying it." });
 
         var requestObj = new Dictionary<string, object?>
         {
@@ -155,15 +160,33 @@ Examples:
         var size = new FileInfo(path).Length;
         var kind = KindFromExt(ext);
 
-        // Generate the preview synchronously (for the upload response)
-        var previewRequest = JsonSerializer.Serialize(new Dictionary<string, object?>
+        string previewJson;
+        string? schemaSummary;
+        if (kind == "image")
         {
-            ["mode"] = "preview",
-            ["path"] = path,
-            ["kind"] = kind,
-        });
-        var previewJson = await RunPythonAsync(previewRequest);
-        var schemaSummary = SummarizeSchema(kind, previewJson);
+            // Images bypass the Python helper entirely — they're attached to the
+            // model natively as vision content by ChatEndpoints. The preview is a
+            // synthetic stub so the upload response / chat context stay uniform.
+            if (size > MaxImageBytes)
+            {
+                try { File.Delete(path); } catch { }
+                throw new InvalidOperationException($"Image exceeds {MaxImageBytes / 1024 / 1024} MB limit for vision input.");
+            }
+            previewJson = JsonSerializer.Serialize(new { ok = true, kind = "image", note = "Image attached — the assistant sees it directly." });
+            schemaSummary = $"image ({ext.TrimStart('.').ToLowerInvariant()}, {Math.Max(1, size / 1024)} KB) — attached to the model as a visual";
+        }
+        else
+        {
+            // Generate the preview synchronously (for the upload response)
+            var previewRequest = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["mode"] = "preview",
+                ["path"] = path,
+                ["kind"] = kind,
+            });
+            previewJson = await RunPythonAsync(previewRequest);
+            schemaSummary = SummarizeSchema(kind, previewJson);
+        }
 
         var entry = new UploadEntry(fileId, userId, fileName, kind, path, size, DateTime.UtcNow, schemaSummary);
         UserFiles.GetOrAdd(userId, _ => new ConcurrentDictionary<string, UploadEntry>())[fileId] = entry;
@@ -261,7 +284,18 @@ Examples:
         ".xlsx" or ".xls" => "xlsx",
         ".pdf" => "pdf",
         ".parquet" => "parquet",
+        ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" => "image",
         _ => "txt",
+    };
+
+    /// <summary>MIME type for image attachments passed to the vision model.</summary>
+    public static string ImageMimeType(string fileName) => Path.GetExtension(fileName).ToLowerInvariant() switch
+    {
+        ".png" => "image/png",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".gif" => "image/gif",
+        ".webp" => "image/webp",
+        _ => "application/octet-stream",
     };
 
     private static void Cleanup()

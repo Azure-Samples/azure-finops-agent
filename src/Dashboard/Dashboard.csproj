@@ -8,25 +8,26 @@
     <UserSecretsId>1190b8a4-6595-436b-9479-b9951bd00f16</UserSecretsId>
     <!--
       Pin the bundled Copilot CLI runtime to a PUBLISHED version.
-      GitHub.Copilot.SDK 1.0.6 ships GitHub.Copilot.SDK.props with
-      CopilotCliVersion=1.0.69, but @github/copilot 1.0.69 (final) is NOT
-      published on npm for any platform — only 1.0.69-0/-1/-2 prereleases and
-      1.0.68 (final) exist. Left unpinned, the SDK's build-time DownloadFile
-      task 404s (locally AND in the ACR/Docker build). The v1.0.6 release notes
-      document the tested pairing as @github/copilot 1.0.68, so we pin to that.
-      Revisit when 1.0.69 (or a later final) is published and the SDK bumps.
+      GitHub.Copilot.SDK 1.0.7 ships GitHub.Copilot.SDK.props with
+      CopilotCliVersion=1.0.71, but @github/copilot 1.0.71 (final) is NOT
+      published on npm — only 1.0.71-0 (prerelease) exists; the latest
+      published final is 1.0.70. Left unpinned, the SDK's build-time
+      DownloadFile task 404s (locally AND in the ACR/Docker build) — same
+      failure mode as the 1.0.6/1.0.69 pairing before it. Verified live:
+      SDK 1.0.7 + CLI 1.0.70 boots and serves chat turns. Revisit when
+      1.0.71 (or a later final) is published.
     -->
-    <CopilotCliVersion>1.0.68</CopilotCliVersion>
+    <CopilotCliVersion>1.0.70</CopilotCliVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.5.0" />
-    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.6" />
-    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.1" />
-    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.19.1" />
-    <PackageReference Include="OpenTelemetry" Version="1.16.0" />
-    <PackageReference Include="OpenTelemetry.Api" Version="1.16.0" />
+    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.7" />
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.2" />
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.19.2" />
+    <PackageReference Include="OpenTelemetry" Version="1.17.0" />
+    <PackageReference Include="OpenTelemetry.Api" Version="1.17.0" />
   </ItemGroup>
 
   <!-- Embed Python script templates as resources (loaded at runtime by tools) -->

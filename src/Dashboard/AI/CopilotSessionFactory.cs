@@ -10,6 +10,12 @@ using AzureFinOps.Dashboard.Observability;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 
+// GHCP001: ProviderConfig.BearerTokenProvider is marked [Experimental] in SDK
+// 1.0.7. We adopt it deliberately — it is the only way to feed fresh AOAI
+// bearer tokens to a running session (the static BearerToken caused 401s after
+// ~1h and forced proactive session recycles). Revisit on each SDK bump.
+#pragma warning disable GHCP001
+
 namespace AzureFinOps.Dashboard.AI;
 
 /// <summary>
@@ -234,12 +240,13 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     private string? _cachedBearerToken;
     private DateTimeOffset _bearerTokenExpiry = DateTimeOffset.MinValue;
 
-    // BYOK token expiry note: ProviderConfig.BearerToken is a STATIC string baked
-    // into the Copilot CLI subprocess at session creation. There's no callback to
-    // push refreshed tokens. Once the bearer expires (~1h) every prompt fails 401.
-    // We track the expiry per live session in LiveSessionInfo and recycle in-place
-    // by calling ResumeSessionAsync(sameSessionId, ...) — which preserves history.
-    private static readonly TimeSpan RecycleBuffer = TimeSpan.FromMinutes(10);
+    // BYOK token lifecycle (SDK 1.0.7+): ProviderConfig.BearerTokenProvider is an
+    // on-demand callback — the runtime requests a fresh token from this process
+    // BEFORE EVERY outbound model request (it does no caching; we cache in
+    // GetAzureOpenAIBearerTokenAsync). This replaces the pre-1.0.7 hack where
+    // BearerToken was a static string baked into the CLI at session creation and
+    // sessions had to be proactively recycled (ResumeSessionAsync) before the
+    // ~1h AOAI token expired. Live sessions can now stay up indefinitely.
 
     // Root for SDK session-state. On Azure App Service /home is a persistent
     // Azure Files mount, so chat history survives restarts.
@@ -488,13 +495,10 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     {
         if (_telemetry.LiveSessions.TryGetValue(sessionId, out var live))
         {
-            if (live.BearerExpiry > DateTimeOffset.UtcNow.Add(RecycleBuffer))
-            {
-                _telemetry.CurrentSessionId[userId] = sessionId;
-                return live.Session;
-            }
-            _logger.LogInformation("Recycling Copilot session for {User} — BYOK token near expiry ({Expiry})", userLogin, live.BearerExpiry);
-            await DisposeLiveAsync(sessionId);
+            // BearerTokenProvider supplies a fresh token per model request, so a
+            // cached live session never goes stale on token expiry — no recycle.
+            _telemetry.CurrentSessionId[userId] = sessionId;
+            return live.Session;
         }
 
         var resumeConfig = await CreateResumeConfigAsync(userId, entraOid);
@@ -585,9 +589,22 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         }
 
         var resumeConfig = await CreateResumeConfigAsync(userId, entraOid);
-        var ephemeral = await _copilotClient.ResumeSessionAsync(sessionId, resumeConfig, ct);
-        try { return await ephemeral.GetEventsAsync(ct); }
-        finally { try { await ephemeral.DisposeAsync(); } catch { } }
+        try
+        {
+            var ephemeral = await _copilotClient.ResumeSessionAsync(sessionId, resumeConfig, ct);
+            try { return await ephemeral.GetEventsAsync(ct); }
+            finally { try { await ephemeral.DisposeAsync(); } catch { } }
+        }
+        catch (Exception ex) when (ex.Message.Contains("Session not found", StringComparison.OrdinalIgnoreCase))
+        {
+            // The ownership marker / session listing still exists on disk but the
+            // underlying CLI session state is gone (deleted, TTL-expired, or a
+            // listing-vs-state race). A read-only transcript load must degrade to
+            // an empty conversation rather than surfacing HTTP 500 to the user
+            // (observed in production: GET /api/sessions/{id}/messages -> 500).
+            _logger.LogWarning("LoadTranscriptAsync: session {SessionId} not found on resume; returning empty transcript", sessionId);
+            return Array.Empty<SessionEvent>();
+        }
     }
 
     /// <summary>Lists session metadata under the persistent-user roots only — the
@@ -630,6 +647,8 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
 
     private async Task<SessionConfig> CreateSessionConfigAsync(long userId, string? entraOid)
     {
+        // Seed token eagerly so the very first model call doesn't pay the
+        // credential round-trip; afterwards BearerTokenProvider serves refreshes.
         var bearerToken = await GetAzureOpenAIBearerTokenAsync();
         var effort = IsReasoningModel(_deployment) ? _reasoningEffort : null;
         _logger.LogInformation("SessionConfig(create) model={Model} reasoningEffort={Effort} isReasoning={IsReasoning}",
@@ -644,6 +663,11 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             ExcludedTools = ExcludedBuiltInTools,
+            // Explicitly pin tool-search deferral ON (SDK 1.0.7 formalized the
+            // option; default may drift across SDK/CLI bumps). Our DeferredTool
+            // wrapper marks cold-path tools defer=Auto — this keeps the CLI
+            // honoring those markers so per-request input tokens stay ~50% down.
+            ToolSearch = new ToolSearchConfig { Enabled = true },
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),
             OnPermissionRequest = PermissionHandler.ApproveAll,
             Provider = new ProviderConfig
@@ -657,7 +681,10 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
                 // https://github.com/github/copilot-sdk/blob/main/docs/auth/byok.md
                 Type = "openai",
                 BaseUrl = $"{_endpoint.TrimEnd('/')}/openai/v1/",
+                // Static seed for the first request; the provider callback below
+                // takes precedence and is invoked per outbound model request.
                 BearerToken = bearerToken,
+                BearerTokenProvider = _ => GetAzureOpenAIBearerTokenAsync(),
                 WireApi = "responses",
             },
             SystemMessage = new SystemMessageConfig
@@ -689,6 +716,8 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             Streaming = true,
             Tools = GetOrCreateUserTools(userId),
             ExcludedTools = ExcludedBuiltInTools,
+            // See CreateSessionConfigAsync — keep deferral pinned on for resumes too.
+            ToolSearch = new ToolSearchConfig { Enabled = true },
             WorkingDirectory = GetWorkingDirectory(userId, entraOid),
             OnPermissionRequest = PermissionHandler.ApproveAll,
             Provider = new ProviderConfig
@@ -702,7 +731,10 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
                 // https://github.com/github/copilot-sdk/blob/main/docs/auth/byok.md
                 Type = "openai",
                 BaseUrl = $"{_endpoint.TrimEnd('/')}/openai/v1/",
+                // Static seed for the first request; the provider callback below
+                // takes precedence and is invoked per outbound model request.
                 BearerToken = bearerToken,
+                BearerTokenProvider = _ => GetAzureOpenAIBearerTokenAsync(),
                 WireApi = "responses",
             },
             SystemMessage = new SystemMessageConfig

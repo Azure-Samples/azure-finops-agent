@@ -31,15 +31,13 @@ if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
 var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.6-sol";
-// Reasoning effort for reasoning-capable models (low|medium|high|xhigh).
-// Default "high": xhigh was measured at 8+ minutes for a single LLM round-trip
-// in production (App Insights, 2026-07-11) — the dominant cause of slow chats.
-// Default reasoning effort. `medium` is the sweet spot for GPT-5.6 on this
-// workload: it roughly halves time-to-first-token vs `high` (the dominant
-// first-response latency) while keeping tool-orchestration + format-following
-// quality. Trivial turns are still auto-routed to `low` per request. Override
-// with AzureOpenAI__ReasoningEffort=high for a max-depth demo, or `xhigh` (8+
-// min/round-trip — opt-in only).
+// Default reasoning effort (low|medium|high|xhigh) for reasoning-capable
+// models. `medium` is the sweet spot for GPT-5.6 on this workload: it roughly
+// halves time-to-first-token vs `high` (the dominant first-response latency)
+// while keeping tool-orchestration + format-following quality. Trivial turns
+// are still auto-routed to `low` per request. Override with
+// AzureOpenAI__ReasoningEffort=high for a max-depth demo, or `xhigh`
+// (measured 8+ min per LLM round-trip in production — opt-in only).
 var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "medium";
 var appInsightsCs = builder.Configuration["ApplicationInsights:ConnectionString"];
 
@@ -193,7 +191,9 @@ app.Use(async (ctx, next) =>
             "script-src 'self' 'wasm-unsafe-eval' blob:; " +
             "worker-src 'self' blob:; " +
             "style-src 'self' 'unsafe-inline'; " +
-            "img-src 'self' data:; " +
+            // blob: for local thumbnails of pasted/uploaded screenshots
+            // (URL.createObjectURL in the attachment chips).
+            "img-src 'self' data: blob:; " +
             "connect-src 'self' blob: data: https://cdn.jsdelivr.net https://js.monitor.azure.com https://*.in.applicationinsights.azure.com https://*.livediagnostics.monitor.azure.com; " +
             "font-src 'self'; " +
             "frame-ancestors 'none'";

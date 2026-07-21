@@ -22,6 +22,18 @@ public static class MicrosoftAuthEndpoints
         var hash = SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(verifier));
         return Convert.ToBase64String(hash).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
+
+    /// <summary>Appends a consented add-on tier to the session's consent list
+    /// (session key <c>graph_tier</c>, persisted via <c>IdentityRecord.GraphTier</c>).
+    /// Tracked for ALL add-on tiers — licenses, chargeback, loganalytics, storage —
+    /// so <see cref="SessionTokenStore"/> can skip refresh-token exchanges for
+    /// scopes the user never consented to (each is a guaranteed HTTP 400).</summary>
+    private static void AppendConsentTier(HttpContext ctx, string tier)
+    {
+        var existing = ctx.Session.GetString("graph_tier") ?? "";
+        if (!existing.Contains(tier, StringComparison.OrdinalIgnoreCase))
+            ctx.Session.SetString("graph_tier", string.IsNullOrEmpty(existing) ? tier : $"{existing},{tier}");
+    }
     public static void MapMicrosoftAuthEndpoints(
         this IEndpointRouteBuilder app,
         MicrosoftOAuthOptions options,
@@ -312,19 +324,22 @@ public static class MicrosoftAuthEndpoints
                 {
                     ctx.Session.SetString("graph_token", accessToken);
                     ctx.Session.SetString("graph_token_expiry", DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60).ToString("o"));
-                    var existingTier = ctx.Session.GetString("graph_tier") ?? "";
-                    if (!existingTier.Contains(authTier))
-                        ctx.Session.SetString("graph_tier", string.IsNullOrEmpty(existingTier) ? authTier : $"{existingTier},{authTier}");
+                    AppendConsentTier(ctx, authTier);
+                    ctx.Session.Remove("graph_token_unavailable_until");
                 }
                 else if (authTier == "loganalytics")
                 {
                     ctx.Session.SetString("loganalytics_token", accessToken);
                     ctx.Session.SetString("loganalytics_token_expiry", DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60).ToString("o"));
+                    AppendConsentTier(ctx, authTier);
+                    ctx.Session.Remove("loganalytics_token_unavailable_until");
                 }
                 else if (authTier == "storage")
                 {
                     ctx.Session.SetString("storage_token", accessToken);
                     ctx.Session.SetString("storage_token_expiry", DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60).ToString("o"));
+                    AppendConsentTier(ctx, authTier);
+                    ctx.Session.Remove("storage_token_unavailable_until");
                 }
                 else
                 {
@@ -346,6 +361,23 @@ public static class MicrosoftAuthEndpoints
                         logger.LogWarning("id_token failed validation — aborting login");
                         return Results.Redirect("/?azure_error=id_token_invalid");
                     }
+
+                    // Capture the PREVIOUS Entra identity (if any) before overwriting
+                    // azure_user — needed below to detect an account switch on this
+                    // browser session and isolate the two accounts' state.
+                    string? previousOid = null;
+                    var prevAzureUserJson = ctx.Session.GetString("azure_user");
+                    if (prevAzureUserJson is not null)
+                    {
+                        try
+                        {
+                            var prev = JsonSerializer.Deserialize<JsonElement>(prevAzureUserJson);
+                            if (prev.TryGetProperty("objectId", out var prevOidProp))
+                                previousOid = prevOidProp.GetString();
+                        }
+                        catch { }
+                    }
+
                     var azureUser = new Dictionary<string, string?>
                     {
                         // oid+tid is the only stable, attacker-resistant identity in a multi-tenant
@@ -363,6 +395,50 @@ public static class MicrosoftAuthEndpoints
                     var oid = validated.ObjectId;
                     if (!string.IsNullOrEmpty(oid))
                     {
+                        // A DIFFERENT Entra account signed in on a browser session that
+                        // already belonged to another Entra account (e.g. the user
+                        // switched tenant/account via "Connect Azure"). The two accounts
+                        // must be fully isolated: without this, account B inherited
+                        // account A's Graph/Log-Analytics/Storage tokens, consent tiers,
+                        // and (via the migration below) A's live conversation + ARM token
+                        // — a cross-tenant data leak observed in production.
+                        var accountSwitched = previousOid is not null
+                            && !string.Equals(previousOid, oid, StringComparison.OrdinalIgnoreCase);
+                        if (accountSwitched)
+                        {
+                            logger.LogInformation("Entra account switch detected (oid {PrevOid} → {NewOid}); isolating session state", previousOid, oid);
+                            // Purge every resource token EXCEPT the ones this callback
+                            // just minted for the new account (keyed by authTier).
+                            string[] keep = authTier switch
+                            {
+                                "licenses" or "chargeback" => ["graph_token", "graph_token_expiry"],
+                                "loganalytics" => ["loganalytics_token", "loganalytics_token_expiry"],
+                                "storage" => ["storage_token", "storage_token_expiry"],
+                                _ => ["azure_token", "azure_token_expiry"],
+                            };
+                            string[] allTokenKeys =
+                            [
+                                "azure_token", "azure_token_expiry",
+                                "graph_token", "graph_token_expiry",
+                                "loganalytics_token", "loganalytics_token_expiry",
+                                "storage_token", "storage_token_expiry",
+                                "graph_token_unavailable_until", "loganalytics_token_unavailable_until", "storage_token_unavailable_until",
+                            ];
+                            foreach (var key in allTokenKeys.Except(keep))
+                                ctx.Session.Remove(key);
+                            // Consent tiers belong to the previous account — reset to just
+                            // what this callback granted (otherwise A's tiers get persisted
+                            // into B's identity record below).
+                            if (authTier is "licenses" or "chargeback" or "loganalytics" or "storage")
+                                ctx.Session.SetString("graph_tier", authTier);
+                            else
+                                ctx.Session.Remove("graph_tier");
+                            // Without a fresh refresh token, the previous account's RT must
+                            // not survive — it would mint tokens for the WRONG account.
+                            if (refreshToken is null)
+                                ctx.Session.Remove("azure_refresh_token");
+                        }
+
                         var newUserId = PersistentIdentity.DeriveUserId(oid);
                         long? oldUserId = null;
                         var existingUserJson = ctx.Session.GetString("user");
@@ -375,10 +451,14 @@ public static class MicrosoftAuthEndpoints
                             }
                             catch { }
                         }
-                        if (oldUserId.HasValue && oldUserId.Value != newUserId)
+                        if (oldUserId.HasValue && oldUserId.Value != newUserId && !accountSwitched)
                         {
-                            // Re-key per-user dicts. Last-write wins is fine: a single user can't
-                            // be in flight under two ids on the same browser session.
+                            // Anonymous → Entra promotion ONLY. Re-key per-user dicts so the
+                            // current chat doesn't get orphaned mid-conversation. Last-write
+                            // wins is fine: a single user can't be in flight under two ids on
+                            // the same browser session. On an Entra→Entra ACCOUNT SWITCH this
+                            // migration must NOT run — it would hand account A's tokens,
+                            // tools, and active conversation to account B.
                             if (telemetry.UserTokens.TryRemove(oldUserId.Value, out var t)) telemetry.UserTokens[newUserId] = t;
                             if (telemetry.UserTools.TryRemove(oldUserId.Value, out var tools)) telemetry.UserTools[newUserId] = tools;
                             if (telemetry.CurrentSessionId.TryRemove(oldUserId.Value, out var sid)) telemetry.CurrentSessionId[newUserId] = sid;
@@ -419,6 +499,17 @@ public static class MicrosoftAuthEndpoints
                             // the GraphTier so post-restart hydration still reflects the new
                             // add-on without clobbering the existing refresh token.
                             await persistentIdentity.UpdateGraphTierAsync(oid, ctx.Session.GetString("graph_tier"));
+                            if (accountSwitched)
+                            {
+                                // SaveIdentityAsync (which rewrites the finops_id cookie) did not
+                                // run — the cookie still points at the PREVIOUS account's OID and
+                                // would resurrect that identity on the next hydration. Point it at
+                                // the new account when it has a persisted identity, else drop it.
+                                if (persistentIdentity.LoadByOid(oid) is not null)
+                                    persistentIdentity.SetIdentityCookie(ctx, oid);
+                                else
+                                    persistentIdentity.Clear(ctx, null);
+                            }
                         }
                     }
                 }

@@ -142,56 +142,56 @@ public static class ChatEndpoints
             }
             else
             {
-            var tokenLockSw = Stopwatch.StartNew();
-            await tokens.RefreshLock.WaitAsync(ctx.RequestAborted);
-            tokenLockSw.Stop();
-            RecordPhase("token.lock_wait", tokenLockSw.Elapsed.TotalMilliseconds);
-            try
-            {
-                // Fan out all four token fetches in parallel — they hit different
-                // Entra scopes and are independent. Each task wraps a try/catch so
-                // a single scope failure (e.g. user never consented to Storage)
-                // doesn't drag down the others. Saves ~1.2 s on warm turns.
-                async Task<(string Name, string? Value, double Ms, string? Error)> Fetch(string name, Func<Task<string?>> fn)
+                var tokenLockSw = Stopwatch.StartNew();
+                await tokens.RefreshLock.WaitAsync(ctx.RequestAborted);
+                tokenLockSw.Stop();
+                RecordPhase("token.lock_wait", tokenLockSw.Elapsed.TotalMilliseconds);
+                try
                 {
-                    var sw = Stopwatch.StartNew();
-                    try { var v = await fn(); sw.Stop(); return (name, v, sw.Elapsed.TotalMilliseconds, null); }
-                    catch (OperationCanceledException) { sw.Stop(); throw; }
-                    catch (HttpRequestException ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
-                    catch (UnauthorizedAccessException ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
-                    catch (InvalidOperationException ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
-                }
-                var fetchSw = Stopwatch.StartNew();
-                var results = await Task.WhenAll(
-                    Fetch("azure", () => tokenStore.GetAzureTokenAsync(ctx, httpFactory)),
-                    Fetch("graph", () => tokenStore.GetGraphTokenAsync(ctx, httpFactory)),
-                    Fetch("loganalytics", () => tokenStore.GetLogAnalyticsTokenAsync(ctx, httpFactory)),
-                    Fetch("storage", () => tokenStore.GetStorageTokenAsync(ctx, httpFactory)));
-                fetchSw.Stop();
-                foreach (var r in results)
-                {
-                    RecordPhase($"token.{r.Name}", r.Ms, new { hit = r.Value is not null, error = r.Error });
-                    if (r.Error is not null)
-                        logger.LogWarning("Token fetch failed scope={Scope} ms={Ms:F0} err={Err}", r.Name, r.Ms, r.Error);
-                }
-                RecordPhase("token.parallel_total", fetchSw.Elapsed.TotalMilliseconds);
-                tokens.AzureToken = results[0].Value;
-                tokens.GraphToken = results[1].Value;
-                tokens.LogAnalyticsToken = results[2].Value;
-                tokens.StorageToken = results[3].Value;
+                    // Fan out all four token fetches in parallel — they hit different
+                    // Entra scopes and are independent. Each task wraps a try/catch so
+                    // a single scope failure (e.g. user never consented to Storage)
+                    // doesn't drag down the others. Saves ~1.2 s on warm turns.
+                    async Task<(string Name, string? Value, double Ms, string? Error)> Fetch(string name, Func<Task<string?>> fn)
+                    {
+                        var sw = Stopwatch.StartNew();
+                        try { var v = await fn(); sw.Stop(); return (name, v, sw.Elapsed.TotalMilliseconds, null); }
+                        catch (OperationCanceledException) { sw.Stop(); throw; }
+                        catch (HttpRequestException ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
+                        catch (UnauthorizedAccessException ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
+                        catch (InvalidOperationException ex) { sw.Stop(); return (name, null, sw.Elapsed.TotalMilliseconds, ex.Message); }
+                    }
+                    var fetchSw = Stopwatch.StartNew();
+                    var results = await Task.WhenAll(
+                        Fetch("azure", () => tokenStore.GetAzureTokenAsync(ctx, httpFactory)),
+                        Fetch("graph", () => tokenStore.GetGraphTokenAsync(ctx, httpFactory)),
+                        Fetch("loganalytics", () => tokenStore.GetLogAnalyticsTokenAsync(ctx, httpFactory)),
+                        Fetch("storage", () => tokenStore.GetStorageTokenAsync(ctx, httpFactory)));
+                    fetchSw.Stop();
+                    foreach (var r in results)
+                    {
+                        RecordPhase($"token.{r.Name}", r.Ms, new { hit = r.Value is not null, error = r.Error });
+                        if (r.Error is not null)
+                            logger.LogWarning("Token fetch failed scope={Scope} ms={Ms:F0} err={Err}", r.Name, r.Ms, r.Error);
+                    }
+                    RecordPhase("token.parallel_total", fetchSw.Elapsed.TotalMilliseconds);
+                    tokens.AzureToken = results[0].Value;
+                    tokens.GraphToken = results[1].Value;
+                    tokens.LogAnalyticsToken = results[2].Value;
+                    tokens.StorageToken = results[3].Value;
 
-                // Mirror expiry from session into the volatile bag so the
-                // TenantTokenRefresher background service can refresh proactively
-                // when no HTTP request is around (browser closed, background turn).
-                tokens.AzureTokenExpiry = ParseExpiry(ctx.Session.GetString("azure_token_expiry"));
-                tokens.GraphTokenExpiry = ParseExpiry(ctx.Session.GetString("graph_token_expiry"));
-                tokens.LogAnalyticsTokenExpiry = ParseExpiry(ctx.Session.GetString("loganalytics_token_expiry"));
-                tokens.StorageTokenExpiry = ParseExpiry(ctx.Session.GetString("storage_token_expiry"));
-            }
-            finally
-            {
-                tokens.RefreshLock.Release();
-            }
+                    // Mirror expiry from session into the volatile bag so the
+                    // TenantTokenRefresher background service can refresh proactively
+                    // when no HTTP request is around (browser closed, background turn).
+                    tokens.AzureTokenExpiry = ParseExpiry(ctx.Session.GetString("azure_token_expiry"));
+                    tokens.GraphTokenExpiry = ParseExpiry(ctx.Session.GetString("graph_token_expiry"));
+                    tokens.LogAnalyticsTokenExpiry = ParseExpiry(ctx.Session.GetString("loganalytics_token_expiry"));
+                    tokens.StorageTokenExpiry = ParseExpiry(ctx.Session.GetString("storage_token_expiry"));
+                }
+                finally
+                {
+                    tokens.RefreshLock.Release();
+                }
             } // end if (entraOid is not null)
 
             logger.LogInformation("Chat tokens: azure={HasAzure} graph={HasGraph} la={HasLA} storage={HasStorage}",
@@ -209,13 +209,17 @@ public static class ChatEndpoints
 
             // Surface any files the user has dropped into this session so the LLM
             // immediately knows the fileIds it can pass to QueryUploadedFile.
+            // Images are handled separately — they're attached natively to the
+            // message (vision input) rather than exposed through the Python tool.
             var uploads = AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ListForUser(userId);
+            var imageUploads = uploads.Where(u => u.Kind == "image" && File.Exists(u.Path)).ToList();
+            var dataUploads = uploads.Where(u => u.Kind != "image").ToList();
             string uploadsContext = "";
-            if (uploads.Count > 0)
+            if (dataUploads.Count > 0)
             {
                 var sb = new System.Text.StringBuilder();
                 sb.Append("[UPLOADED FILES IN THIS SESSION — the user dropped these in. Their question is almost certainly about them. Use QueryUploadedFile(fileId, mode, paramsJson) to drill in. The schema is already shown below — you usually do NOT need a separate 'preview' call. Jump straight to head / slice / filter / aggregate / text_range / json_path. Responses are capped at ~200 rows / ~8000 chars; issue more calls if needed.");
-                foreach (var u in uploads)
+                foreach (var u in dataUploads)
                 {
                     sb.Append($"\n  - fileId={u.FileId} name='{u.FileName}' kind={u.Kind} size={u.SizeBytes}B");
                     if (!string.IsNullOrEmpty(u.SchemaSummary))
@@ -223,6 +227,20 @@ public static class ChatEndpoints
                 }
                 sb.Append("]\n[ANSWER SHAPE FOR FILE ANALYSIS: (1) ONE-sentence headline naming the #1 waste with $ amount + concrete owner/RG/resource. (2) ONE visual — RenderChart (horizontal_bar of top-5 by $) when ≥3 data points, else a tight ≤5-row markdown table with an Owner column. NEVER both. NEVER long bullet lists of generic advice. (3) Optional 1-line takeaway. Then call SuggestFollowUp.]\n[FOLLOW-UP DIRECTIVE: After answering, you MUST call SuggestFollowUp. When the answer involved file analysis, prefer 2-3 distinct actions via the optional label2/prompt2 + label3/prompt3 parameters. Each action must propose a concrete next ACTION on these files (e.g. 'Rank top 5 prioritized actions across all files', 'Generate a cleanup script for the disks identified', 'Build a CFO deck from these uploads', 'Tag the untagged resources via PATCH'). Never propose a follow-up that just re-asks for analysis the user already saw.]");
                 uploadsContext = sb.ToString();
+            }
+            // Native vision attachments for image uploads (screenshots of the
+            // Azure portal, cost dashboards, architecture diagrams…). Attached on
+            // EVERY turn while listed — the CLI uploads them with the message and
+            // the model sees them directly; no tool round-trip involved.
+            List<Attachment>? imageAttachments = null;
+            if (imageUploads.Count > 0)
+            {
+                imageAttachments = imageUploads.Select(Attachment (u) => new AttachmentFile
+                {
+                    Path = u.Path,
+                    DisplayName = u.FileName,
+                    MimeType = AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ImageMimeType(u.FileName),
+                }).ToList();
             }
             // NOTE: context blocks are merged into the prompt AFTER session
             // acquisition (see below) so they can be deduplicated per session.
@@ -502,7 +520,7 @@ public static class ChatEndpoints
 
                 try
                 {
-                    await session.SendAsync(new MessageOptions { Prompt = prompt });
+                    await session.SendAsync(new MessageOptions { Prompt = prompt, Attachments = imageAttachments });
                 }
                 catch (Exception sendEx) when (sendEx.Message.Contains("Session not found", StringComparison.OrdinalIgnoreCase))
                 {
@@ -524,7 +542,18 @@ public static class ChatEndpoints
                     // Re-announce the (possibly new) session id so the frontend keeps
                     // streaming into the right conversation.
                     await SafeEmit(JsonSerializer.Serialize(new { type = "session", id = activeSessionId }));
-                    await session.SendAsync(new MessageOptions { Prompt = prompt });
+                    await session.SendAsync(new MessageOptions { Prompt = prompt, Attachments = imageAttachments });
+                }
+
+                // Images are consumed by the message they rode in on — the CLI has
+                // uploaded them as vision content and they now live in the chat
+                // history. Delist them so subsequent turns don't re-attach the same
+                // screenshots. (RemoveForUser keeps the temp file on disk for the
+                // 30-min TTL so the CLI can finish any lazy read.)
+                if (imageUploads.Count > 0)
+                {
+                    foreach (var img in imageUploads)
+                        AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.RemoveForUser(userId, img.FileId);
                 }
 
                 await done.Task;

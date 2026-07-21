@@ -268,6 +268,9 @@ public static class AzureSessionEndpoints
         ctx.Session.Remove("loganalytics_token_expiry");
         ctx.Session.Remove("storage_token");
         ctx.Session.Remove("storage_token_expiry");
+        ctx.Session.Remove("graph_token_unavailable_until");
+        ctx.Session.Remove("loganalytics_token_unavailable_until");
+        ctx.Session.Remove("storage_token_unavailable_until");
         if (!includeForceConsent)
             ctx.Session.Remove("auth_tenant");
         else

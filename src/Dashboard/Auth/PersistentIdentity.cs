@@ -93,9 +93,19 @@ public sealed class PersistentIdentity
         }
         finally { sem.Release(); }
 
+        SetIdentityCookie(ctx, record.Oid);
+    }
+
+    /// <summary>Writes (or rewrites) the encrypted <c>finops_id</c> cookie for the
+    /// given OID. Also used on Entra account switch to repoint the cookie at the
+    /// NEW account when no fresh refresh token came back (the SaveIdentityAsync
+    /// path didn't run) — otherwise the stale cookie would resurrect the previous
+    /// account's identity on the next hydration.</summary>
+    public void SetIdentityCookie(HttpContext ctx, string oid)
+    {
         try
         {
-            var cookie = _protector.Protect(record.Oid);
+            var cookie = _protector.Protect(oid);
             ctx.Response.Cookies.Append(IdentityCookieName, cookie, new CookieOptions
             {
                 HttpOnly = true,

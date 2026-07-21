@@ -84,7 +84,7 @@ src/Dashboard/
 │   ├── HtmlPresentationTools.cs # GenerateHtmlPresentation — generates an executive HTML deck (one self-contained .html file) with Chart.js charts, keyboard nav (←/→/↑/↓), animated slides
 │   ├── ScoreTools.cs       # ReportMaturityScore — LLM reports FinOps maturity scores (0-5) per Crawl/Walk/Run level
 │   ├── ScriptTools.cs      # GenerateScript — generates downloadable Azure CLI/PowerShell scripts from FinOps recommendations
-│   └── UploadedFileTools.cs # QueryUploadedFile — inspect/query files (CSV/TSV/JSON/TXT/XLSX/PDF/Parquet) the user dropped into chat (no Azure consent needed). Backed by AI/Tools/Resources/file_inspect.py (pandas/openpyxl/pyarrow/pdfminer).
+│   └── UploadedFileTools.cs # QueryUploadedFile — inspect/query files (CSV/TSV/JSON/TXT/XLSX/PDF/Parquet) the user dropped into chat (no Azure consent needed). Backed by AI/Tools/Resources/file_inspect.py (pandas/openpyxl/pyarrow/pdfminer). Images (PNG/JPG/GIF/WebP ≤ 20 MB — upload, drag-drop, or clipboard paste) are NOT routed through Python: ChatEndpoints attaches them natively to the message as vision input (MessageOptions.Attachments → AttachmentFile) and delists them after send.
 │   └── TokenContext.cs     # UserTokens — per-user mutable token holder with volatile fields for concurrent access
 ├── Dockerfile              # Multi-stage Docker build (node:22 + dotnet/sdk:10.0 + dotnet/aspnet:10.0 + Python 3 + OTel collector)
 ├── entrypoint.sh           # Container entrypoint — starts OTel collector in background, then exec dotnet
@@ -221,7 +221,7 @@ A single **multi-tenant** Microsoft Entra ID app registration (`Azure FinOps Age
 | `storage`        | **+ Cost Exports**                 | `user_impersonation`                                                                                                                                                                                                                                                                                                                         | Azure Storage     |
 | `all` (chain)    | **🛡 Grant all remaining add-ons** | _Walks the user through every not-yet-consented add-on tier in sequence._ Each remaining tier's consent screen appears one after another; the callback redirects to the next pending tier until done. Entra v2 will not combine cross-resource scopes into one consent for a non-admin delegated flow, so sequential is the correct pattern. | (chain)           |
 
-The single source of truth for tier → scopes mapping is `GetScopesForTier()` in `Program.cs`. The `tier=all` chain logic lives in the `/auth/microsoft` handler (builds `auth_chain` session list) and the callback (consumes one chain entry per redirect).
+The single source of truth for tier → scopes mapping is `GetScopesForTier()` in `Program.cs`. The `tier=all` chain logic lives in the `/auth/microsoft` handler (builds `auth_chain` session list) and the callback (consumes one chain entry per redirect). Consent is tracked per add-on tier in the `graph_tier` session key (comma list, incl. `loganalytics`/`storage`) and persisted via `IdentityRecord.GraphTier`; `SessionTokenStore` only attempts refresh-token exchanges for consented tiers (unconsented scopes are guaranteed HTTP 400s) with a 15-min backoff after failures. The OAuth callback detects Entra account switches (OID change on the same browser session) and fully isolates the two accounts — no token/tier/conversation carry-over; the anon→Entra in-memory migration runs only for genuinely anonymous previous users.
 
 The flow:
 
@@ -271,7 +271,7 @@ When the user asks for "testing", "test the change", "verify it works", or any e
 1. **Check that the VS Code integrated Playwright browser tools are loadable.** Run two `tool_search` calls:
    - `"playwright browser navigate screenshot read page type"` (yields `navigate_page`, `screenshot_page`, `read_page`, `type_in_page`, `hover_element`, `run_playwright_code`)
    - `"open browser page url click element handle dialog"` (yields `open_browser_page`, `click_element`, `handle_dialog`, `drag_element`)
-   If either search returns nothing, STOP and tell the user the test must run inside VS Code Insiders. Do not fall back to a system browser, do not ask the user to test manually.
+     If either search returns nothing, STOP and tell the user the test must run inside VS Code Insiders. Do not fall back to a system browser, do not ask the user to test manually.
 2. **Check whether a local backend is already running** at `http://localhost:5000` via `(Invoke-WebRequest -Uri http://localhost:5000/api/version -UseBasicParsing).StatusCode`. If 200, reuse it; if not, follow `.github/prompts/debug-local.prompt.md` to bring it up.
 3. **Confirm a browser page is shared** with you (look for the `Browser Pages` attachment in the conversation context). If none, call `open_browser_page url=http://localhost:5000` and capture the `pageId`.
 4. **Run the test against the live page** — `read_page` for state, `click_element` / `type_in_page` for actions, `screenshot_page` after each meaningful step. Verify the change actually took effect in the rendered DOM, not just in the source.
