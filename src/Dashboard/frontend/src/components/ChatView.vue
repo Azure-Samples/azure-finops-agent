@@ -1229,6 +1229,35 @@
           </div>
         </div>
 
+        <!-- Floating "jump to latest" — shown while auto-follow is paused
+             because the user scrolled up. Zero-height anchor keeps it glued
+             to the bottom edge of the messages viewport. -->
+        <div class="jump-latest-anchor">
+          <!-- Plain v-show (no Transition): leave animations hang in hidden
+               or timer-throttled views, leaving a ghost pill on screen. -->
+          <button
+            v-show="!stickToBottom && messages.length > 0"
+            class="jump-latest"
+            title="Jump to the latest message"
+            @click="forceScrollToBottom(true)"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 5v14" />
+              <path d="m19 12-7 7-7-7" />
+            </svg>
+            {{ streaming ? "New activity" : "Latest" }}
+          </button>
+        </div>
+
         <!-- HTML deck (streaming) — compact card -->
         <div v-if="htmlReady" class="html-deck-card">
           <div class="html-deck-card-icon">
@@ -2292,6 +2321,11 @@ function onVisibilityChange() {
     stillRunning: String(!!(sid && runningSessions.has(sid))),
   });
 
+  // Converge the viewport: content rendered synchronously while hidden
+  // (rAF and ResizeObserver delivery are suspended in background tabs) —
+  // pin back to the newest content if the user was following.
+  scrollToBottom();
+
   // Always reconcile on return — covers both "stream ended while away" (reload
   // the persisted answer) and "stream still running" (arm the zombie probe in
   // case the connection died silently while frozen). No-ops fast when idle.
@@ -2786,6 +2820,11 @@ async function reloadSessionTranscript(sessionId) {
     messages.value = [{ role: "system", content: "Resumed conversation." }];
   }
 
+  // Land on the newest message — instantly. The messages.length watch
+  // alone missed same-length transcript swaps and smooth-crawled across
+  // long transcripts when switching conversations.
+  forceScrollToBottom();
+
   // Re-attach: if this session has a turn still running SERVER-side (page was
   // refreshed mid-answer, or the SSE died while the CLI kept working), poll
   // until it finishes and then reload the transcript — instead of leaving the
@@ -3151,6 +3190,19 @@ onMounted(async () => {
   document.addEventListener("click", dismissPopover);
   document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("focus", onWindowFocus);
+  // Sticky-scroll wiring: manual scrolls toggle following; ResizeObservers
+  // keep the view pinned through ANY height change — content growth
+  // (thinking panel, streamed text, charts) via .messages-inner, and
+  // viewport shrink (composer autogrow, deck/script cards) via .messages.
+  messagesEl.value?.addEventListener("scroll", onMessagesScroll, {
+    passive: true,
+  });
+  if (typeof ResizeObserver !== "undefined" && messagesEl.value) {
+    messagesResizeObserver = new ResizeObserver(() => scrollToBottom());
+    messagesResizeObserver.observe(messagesEl.value);
+    const inner = messagesEl.value.querySelector(".messages-inner");
+    if (inner) messagesResizeObserver.observe(inner);
+  }
   // Delegated handler for model-marked prompt chips ([label](prompt:...) links
   // rendered by renderContent). Delegation survives v-html re-renders.
   document.addEventListener("click", (e) => {
@@ -4718,6 +4770,9 @@ onBeforeUnmount(() => {
   document.removeEventListener("click", dismissPopover);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("focus", onWindowFocus);
+  messagesEl.value?.removeEventListener("scroll", onMessagesScroll);
+  messagesResizeObserver?.disconnect();
+  messagesResizeObserver = null;
 });
 
 // ── Aggregated tool calls for sidebar ──
@@ -4813,20 +4868,78 @@ function truncate(str, max) {
   return str.slice(0, max) + "\n... (truncated)";
 }
 
+// ── Sticky auto-scroll ──────────────────────────────────────────────
+// Follow new content ONLY while the user is at (or near) the bottom.
+// Scrolling up to read pauses following (no more mid-read yanking);
+// scrolling back down — or sending a message — resumes it. A
+// ResizeObserver on the content column catches EVERY height change:
+// streamed text, the "Thinking" reasoning panel appearing/growing, the
+// intent ticker, charts mounting asynchronously, tables rendering, and
+// the viewport shrinking (composer autogrow, deck/script cards).
+// Watching streamBuffer alone missed all of those.
+const stickToBottom = ref(true);
+const AUTOSCROLL_SLACK_PX = 96;
+// Grace window so a programmatic smooth scroll passing through
+// not-at-bottom positions doesn't unstick us mid-animation.
+let suppressUnstickUntil = 0;
+let messagesResizeObserver = null;
+
+function onMessagesScroll() {
+  const el = messagesEl.value;
+  if (!el) return;
+  const nearBottom =
+    el.scrollHeight - el.scrollTop - el.clientHeight <= AUTOSCROLL_SLACK_PX;
+  if (nearBottom) {
+    stickToBottom.value = true;
+  } else if (performance.now() >= suppressUnstickUntil) {
+    stickToBottom.value = false;
+  }
+}
+
+// Sticky follow — instant, and a no-op when the user has scrolled up.
+// Instant (not smooth): follow fires on every content growth tick, and
+// restarting a smooth animation each tick lags behind the bottom.
 function scrollToBottom() {
+  if (!stickToBottom.value) return;
   nextTick(() => {
-    if (messagesEl.value) {
-      messagesEl.value.scrollTo({
-        top: messagesEl.value.scrollHeight,
-        behavior: "smooth",
-      });
+    const el = messagesEl.value;
+    if (el && stickToBottom.value) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
     }
   });
 }
 
+// Deliberate jump — user actions (send, session switch, "jump to
+// latest") always land at the bottom and re-arm following. Smooth for
+// short hops; instant when far away (a multi-screen smooth crawl is
+// dizzying) or when repainting a whole transcript.
+function forceScrollToBottom(smooth = false) {
+  stickToBottom.value = true;
+  nextTick(() => {
+    const el = messagesEl.value;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // Smooth only for short hops in a VISIBLE document — smooth scrolling
+    // is animation-frame driven and never completes in hidden/embedded
+    // views, and a multi-screen smooth crawl is dizzying anyway.
+    const useSmooth =
+      smooth && distance < 2000 && document.visibilityState === "visible";
+    suppressUnstickUntil = performance.now() + (useSmooth ? 800 : 150);
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: useSmooth ? "smooth" : "instant",
+    });
+  });
+}
+
 watch(() => messages.value.length, scrollToBottom);
+// Reactive follow for stream-driven growth. These fire from Vue's
+// reactivity (microtasks), so they work even in hidden/background tabs
+// where ResizeObserver and rAF delivery are suspended. The RO still
+// covers layout-only growth (charts mounting, images, composer resize).
 watch(streamBuffer, scrollToBottom);
-watch(() => streamToolCalls.value.length, scrollToBottom);
+watch(streamReasoning, scrollToBottom);
+watch(streamIntent, scrollToBottom);
 
 watch(streaming, async (val) => {
   if (!val) {
@@ -5118,7 +5231,7 @@ async function send() {
     streamingId === (currentSessionId.value || "__pending__");
   streamBuffer.value = "";
   activeTools.value = [];
-  scrollToBottom();
+  forceScrollToBottom(true);
 
   abortController = new AbortController();
   // Per-stream buckets live in perSessionToolCalls / perSessionCharts keyed
@@ -7179,7 +7292,9 @@ async function send() {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  scroll-behavior: smooth;
+  /* No scroll-behavior:smooth here — scrolling behavior is controlled
+     per-call in scrollToBottom/forceScrollToBottom (instant follow while
+     streaming; smooth only for short deliberate hops). */
 }
 .messages-inner {
   padding: 1rem 2rem;
@@ -7190,6 +7305,42 @@ async function send() {
   max-width: 100%;
   min-width: 0;
   flex: 1;
+}
+
+/* Floating "jump to latest" pill — anchored to the bottom edge of the
+   messages viewport via a zero-height wrapper, so it tracks the composer
+   regardless of its height (autogrow textarea, attachment chips, cards). */
+.jump-latest-anchor {
+  position: relative;
+  height: 0;
+  z-index: 6;
+}
+.jump-latest {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  color: #1f2328;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.14);
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.jump-latest:hover {
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.2);
 }
 
 /* ── Empty state ── */
