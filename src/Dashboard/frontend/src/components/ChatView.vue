@@ -2423,27 +2423,60 @@ function onWindowFocus() {
 // • Stream already ended without showing the answer (severed while frozen →
 //   "Connection lost", or nothing rendered) → recover from the persisted
 //   transcript via the tail-match poller.
+//
+// True if an assistant message actually carries a delivered answer — text, a
+// chart, a generated deck/script, or completed tool calls. A bare "Connection
+// lost" placeholder (severed stream) does NOT count, so recovery still fires
+// for it. Used to decide whether a returning tab is still waiting on an answer
+// or already has one.
+function assistantTurnHasOutput(m) {
+  if (!m || m.role !== "assistant") return false;
+  const text = String(m.content || "");
+  if (text.includes("Connection lost")) return false;
+  return !!(
+    text.trim() ||
+    (m.charts && m.charts.length) ||
+    m.html ||
+    m.script ||
+    (m.toolCalls && m.toolCalls.length)
+  );
+}
+
 async function reconcileSessionAfterReturn(sid, reason) {
   if (!sid || sid === "__pending__") return;
   if (runningSessions.has(sid)) {
     startZombieProbe(sid);
     return;
   }
-  const last = messages.value[messages.value.length - 1];
-  const lastText =
-    last && last.role === "assistant" ? String(last.content || "") : "";
-  const missingAnswer =
-    !lastText.trim() || lastText.includes("Connection lost");
-  if (!missingAnswer) return; // answer already visible — nothing to do
+  // Only reconcile when THIS view is actually waiting on an answer: the last
+  // question the user asked has no answer yet (or the answer failed with a
+  // "Connection lost" placeholder). An empty/new conversation — or one that
+  // already ends in a real answer — has nothing to recover. Reconnecting on
+  // those was the bug: a fresh session flashed a phantom "⏳ Reconnecting…"
+  // notice (and polled for 3 min) even though no turn was ever in flight.
+  const msgs = messages.value;
+  let lastUserIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  if (lastUserIdx < 0) return; // no question in this view — nothing to reconnect
+  let answered = false;
+  for (let i = lastUserIdx + 1; i < msgs.length; i++) {
+    if (assistantTurnHasOutput(msgs[i])) {
+      answered = true;
+      break;
+    }
+  }
+  if (answered) return; // answer already visible — nothing to do
   window.__trackAppInsightsEvent?.("chat.reattach.recover", {
     sessionId: sid,
     reason: reason || "",
   });
-  const lastUser = [...messages.value].reverse().find((m) => m.role === "user");
-  await tryRecoverPersistedAnswer(
-    sid,
-    lastUser ? String(lastUser.content || "") : "",
-  );
+  const lastUser = msgs[lastUserIdx];
+  await tryRecoverPersistedAnswer(sid, String(lastUser.content || ""));
 }
 
 // ── Persisted-transcript recovery ──
@@ -2507,6 +2540,9 @@ async function fetchPersistedTail(sid, normPrompt) {
 // Returns true once recovered; false on timeout/abandon.
 async function tryRecoverPersistedAnswer(sid, promptText) {
   if (!sid || sid === "__pending__") return false;
+  // No specific in-flight turn to recover (empty/new conversation) — never show
+  // the "⏳ Reconnecting…" notice or start the 3-min poller for nothing.
+  if (!String(promptText || "").trim()) return false;
   if (reconcilingSid === sid) return false; // a poller is already on it
   const isVisible = () => currentSessionId.value === sid;
   const normPrompt = normText(promptText);
