@@ -232,7 +232,16 @@ public static class SessionEndpoints
                                         {
                                             var parts = t["__HTML_READY__:".Length..].Split(':', 3);
                                             if (parts.Length >= 2)
-                                                pendingHtml = new { fileId = parts[0], fileName = parts[1], slideCount = parts.Length > 2 ? parts[2] : "" };
+                                                pendingHtml = new
+                                                {
+                                                    fileId = parts[0],
+                                                    fileName = parts[1],
+                                                    slideCount = parts.Length > 2 ? parts[2] : "",
+                                                    // Artifacts live 30 min in-memory + on temp disk; after a
+                                                    // TTL sweep or restart the download link is dead — let the
+                                                    // UI render an \"expired\" state instead of a 404 link.
+                                                    expired = !AzureFinOps.Dashboard.AI.Tools.HtmlPresentationTools.GeneratedFiles.ContainsKey(parts[0]),
+                                                };
                                             break;
                                         }
                                     }
@@ -247,9 +256,7 @@ public static class SessionEndpoints
                                             var parts = t["__SCRIPT_READY__:".Length..].Split(':', 5);
                                             if (parts.Length >= 4)
                                             {
-                                                var content = "";
-                                                if (AzureFinOps.Dashboard.AI.Tools.ScriptTools.GeneratedFiles.TryGetValue(parts[0], out var entry))
-                                                    content = entry.Content ?? "";
+                                                var live = AzureFinOps.Dashboard.AI.Tools.ScriptTools.GeneratedFiles.TryGetValue(parts[0], out var entry);
                                                 pendingScript = new
                                                 {
                                                     fileId = parts[0],
@@ -257,7 +264,10 @@ public static class SessionEndpoints
                                                     lineCount = parts[2],
                                                     language = parts[3],
                                                     description = parts.Length > 4 ? parts[4] : "",
-                                                    content,
+                                                    content = live ? entry.Content ?? "" : "",
+                                                    // See __HTML_READY__ above — expired artifacts render a
+                                                    // \"regenerate\" hint instead of dead download/copy buttons.
+                                                    expired = !live,
                                                 };
                                             }
                                             break;

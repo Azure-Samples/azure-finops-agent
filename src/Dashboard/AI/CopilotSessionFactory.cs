@@ -566,6 +566,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         if (_telemetry.CurrentSessionId.TryGetValue(userId, out var current) && current == sessionId)
             _telemetry.CurrentSessionId.TryRemove(userId, out _);
         _telemetry.RemoveTitle(sessionId);
+        ChatEndpoints.ClearSessionContext(sessionId);
         try { await _copilotClient.DeleteSessionAsync(sessionId, ct); }
         catch (Exception ex) { _logger.LogWarning(ex, "DeleteSessionAsync failed for {SessionId}", sessionId); }
     }
@@ -632,6 +633,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     {
         await DisposeLiveAsync(sessionId);
         _telemetry.RemoveTitle(sessionId);
+        ChatEndpoints.ClearSessionContext(sessionId);
         try { await _copilotClient.DeleteSessionAsync(sessionId, ct); }
         catch (Exception ex) { _logger.LogWarning(ex, "DeleteSessionAsync failed for {SessionId}", sessionId); }
     }

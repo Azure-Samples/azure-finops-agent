@@ -46,6 +46,22 @@ public static class HttpHelper
     /// </summary>
     public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Func<int, double, string, string, int, Task>> RetryReporters = new();
 
+    /// <summary>
+    /// Resolves the calling user's id from the per-turn Activity Baggage
+    /// (<c>finops.turn.id</c> = <c>{userId}:{sessionId}</c>, stamped by ChatEndpoints
+    /// before SendAsync). Null when called outside a chat turn. Used to bind
+    /// generated artifacts (scripts, decks) to their owner so the download
+    /// endpoints can enforce per-user access.
+    /// </summary>
+    public static long? CurrentTurnUserId()
+    {
+        var turnKey = Activity.Current?.GetBaggageItem("finops.turn.id");
+        if (string.IsNullOrEmpty(turnKey)) return null;
+        var sep = turnKey.IndexOf(':');
+        var uidPart = sep > 0 ? turnKey[..sep] : turnKey;
+        return long.TryParse(uidPart, out var uid) ? uid : null;
+    }
+
     // Max retry attempts on HTTP 429. After this many failed attempts the throttled
     // response is returned to the caller so the LLM (or user) sees the throttle status.
     private const int MaxThrottleRetries = 5;
@@ -137,86 +153,86 @@ public static class HttpHelper
 
         try
         {
-        for (var attempt = 0; attempt < MaxThrottleRetries; attempt++)
-        {
-            using var req = new HttpRequestMessage(method, url);
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            req.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
-
-            if (extraHeaders is not null)
-                foreach (var (key, value) in extraHeaders)
-                    req.Headers.TryAddWithoutValidation(key, value);
-
-            if (jsonBody is not null)
-                req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
-
-            // Heartbeat: if the request itself takes >5s (slow CM backend, async report
-            // generation, etc.) emit periodic cooling_down events keyed by url so the
-            // UI ghost row stays alive instead of looking frozen. Runs concurrently
-            // with the actual request; cancelled the instant the response arrives.
-            using var hbCts = new CancellationTokenSource();
-            var heartbeat = report is null ? Task.CompletedTask : Task.Run(async () =>
+            for (var attempt = 0; attempt < MaxThrottleRetries; attempt++)
             {
+                using var req = new HttpRequestMessage(method, url);
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                req.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
+
+                if (extraHeaders is not null)
+                    foreach (var (key, value) in extraHeaders)
+                        req.Headers.TryAddWithoutValidation(key, value);
+
+                if (jsonBody is not null)
+                    req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+
+                // Heartbeat: if the request itself takes >5s (slow CM backend, async report
+                // generation, etc.) emit periodic cooling_down events keyed by url so the
+                // UI ghost row stays alive instead of looking frozen. Runs concurrently
+                // with the actual request; cancelled the instant the response arrives.
+                using var hbCts = new CancellationTokenSource();
+                var heartbeat = report is null ? Task.CompletedTask : Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(5000, hbCts.Token);
+                        while (!hbCts.IsCancellationRequested)
+                        {
+                            try { await report(0, 6, url, telemetryPrefix + " (slow)", 0); }
+                            catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE slow emit failed for {Tool}", telemetryPrefix); }
+                            await Task.Delay(5000, hbCts.Token);
+                        }
+                    }
+                    catch (OperationCanceledException) { /* expected on response */ }
+                }, hbCts.Token);
+
                 try
                 {
-                    await Task.Delay(5000, hbCts.Token);
-                    while (!hbCts.IsCancellationRequested)
-                    {
-                        try { await report(0, 6, url, telemetryPrefix + " (slow)", 0); }
-                        catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE slow emit failed for {Tool}", telemetryPrefix); }
-                        await Task.Delay(5000, hbCts.Token);
-                    }
+                    res = await Http.SendAsync(req);
                 }
-                catch (OperationCanceledException) { /* expected on response */ }
-            }, hbCts.Token);
+                finally
+                {
+                    hbCts.Cancel();
+                    try { await heartbeat; } catch { /* heartbeat already swallows */ }
+                }
 
-            try
-            {
-                res = await Http.SendAsync(req);
-            }
-            finally
-            {
-                hbCts.Cancel();
-                try { await heartbeat; } catch { /* heartbeat already swallows */ }
-            }
+                // Retry on 429 (throttle) and transient 5xx (502/503/504 — typical ARM regional
+                // failover or backend hiccups). Other non-success codes return to the caller.
+                var status = (int)res.StatusCode;
+                var isThrottle = status == 429;
+                var isTransientServer = status == 502 || status == 503 || status == 504;
+                if (!isThrottle && !isTransientServer) break;
+                if (attempt == MaxThrottleRetries - 1) break; // last attempt — return as-is to caller
 
-            // Retry on 429 (throttle) and transient 5xx (502/503/504 — typical ARM regional
-            // failover or backend hiccups). Other non-success codes return to the caller.
-            var status = (int)res.StatusCode;
-            var isThrottle = status == 429;
-            var isTransientServer = status == 502 || status == 503 || status == 504;
-            if (!isThrottle && !isTransientServer) break;
-            if (attempt == MaxThrottleRetries - 1) break; // last attempt — return as-is to caller
-
-            var waitSeconds = ResolveRetryAfterSeconds(res, attempt);
-            totalWaitSec += waitSeconds;
-            retryCount++;
-            var reason = isThrottle ? "429" : status.ToString();
-            activity?.SetTag($"{telemetryPrefix}.retry_{attempt}", $"{reason}, waiting {waitSeconds:F0}s");
-            ThrottleRetries.Add(1,
-                new KeyValuePair<string, object?>("status", reason),
-                new KeyValuePair<string, object?>("tool", telemetryPrefix));
-            // Loud log so silent throttling can never hide a 60-second wait
-            // again. Prefix matches the tool/scope tag in App Insights.
-            Logger?.LogWarning("HTTP retry {Tool} attempt={Attempt} status={Status} waitSec={Wait:F1} url={Url}",
-                telemetryPrefix, attempt + 1, reason, waitSeconds, url);
-            // Look up the SSE reporter via Activity Baggage — baggage
-            // propagates across W3C tracecontext boundaries (including the
-            // Copilot CLI subprocess JSON-RPC tool callback) where RootId
-            // does not. ChatEndpoints stamps "finops.turn.id" (userId:sessionId)
-            // on the chat activity before SendAsync.
-            if (report is not null)
-            {
-                try { await report(attempt + 1, waitSeconds, url, telemetryPrefix, status); }
-                catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE cooling_down emit failed for {Tool}", telemetryPrefix); }
+                var waitSeconds = ResolveRetryAfterSeconds(res, attempt);
+                totalWaitSec += waitSeconds;
+                retryCount++;
+                var reason = isThrottle ? "429" : status.ToString();
+                activity?.SetTag($"{telemetryPrefix}.retry_{attempt}", $"{reason}, waiting {waitSeconds:F0}s");
+                ThrottleRetries.Add(1,
+                    new KeyValuePair<string, object?>("status", reason),
+                    new KeyValuePair<string, object?>("tool", telemetryPrefix));
+                // Loud log so silent throttling can never hide a 60-second wait
+                // again. Prefix matches the tool/scope tag in App Insights.
+                Logger?.LogWarning("HTTP retry {Tool} attempt={Attempt} status={Status} waitSec={Wait:F1} url={Url}",
+                    telemetryPrefix, attempt + 1, reason, waitSeconds, url);
+                // Look up the SSE reporter via Activity Baggage — baggage
+                // propagates across W3C tracecontext boundaries (including the
+                // Copilot CLI subprocess JSON-RPC tool callback) where RootId
+                // does not. ChatEndpoints stamps "finops.turn.id" (userId:sessionId)
+                // on the chat activity before SendAsync.
+                if (report is not null)
+                {
+                    try { await report(attempt + 1, waitSeconds, url, telemetryPrefix, status); }
+                    catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE cooling_down emit failed for {Tool}", telemetryPrefix); }
+                }
+                else
+                {
+                    Logger?.LogWarning("SSE cooling_down skipped — no reporter for turn={Turn} (tool={Tool})",
+                        turnKey ?? "<none>", telemetryPrefix);
+                }
+                await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
             }
-            else
-            {
-                Logger?.LogWarning("SSE cooling_down skipped — no reporter for turn={Turn} (tool={Tool})",
-                    turnKey ?? "<none>", telemetryPrefix);
-            }
-            await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
-        }
         }
         finally
         {

@@ -17,7 +17,9 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// </summary>
 public static class HtmlPresentationTools
 {
-    internal static readonly ConcurrentDictionary<string, (string Path, DateTime Created)> GeneratedFiles = new();
+    // fileId → (path, created, owner). Owner is the per-turn userId from Activity
+    // Baggage — the download endpoint rejects other users' sessions.
+    internal static readonly ConcurrentDictionary<string, (string Path, DateTime Created, long? Owner)> GeneratedFiles = new();
 
     internal static void CleanupOldFiles() =>
         TempFileHelper.CleanupOldFiles(GeneratedFiles, v => v.Created, v => v.Path);
@@ -107,7 +109,7 @@ EXAMPLE:
         var html = BuildShell(deckTitle, slidesHtml.ToString(), chartScripts.ToString());
         File.WriteAllText(outputPath, html, new UTF8Encoding(false));
 
-        GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow);
+        GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, HttpHelper.CurrentTurnUserId());
         return Task.FromResult($"__HTML_READY__:{fileId}:{safeName}.html:{slideCount}");
     }
 

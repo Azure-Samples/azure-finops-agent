@@ -14,8 +14,10 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// </summary>
 public static class ScriptTools
 {
-    // Store generated files for download: fileId → (path, created, content)
-    internal static readonly ConcurrentDictionary<string, (string Path, DateTime Created, string Content)> GeneratedFiles = new();
+    // Store generated files for download: fileId → (path, created, content, owner).
+    // Owner is the per-turn userId from Activity Baggage — the download endpoint
+    // rejects other users' sessions (fileIds leak into logs/telemetry).
+    internal static readonly ConcurrentDictionary<string, (string Path, DateTime Created, string Content, long? Owner)> GeneratedFiles = new();
 
     internal static void CleanupOldFiles() =>
         TempFileHelper.CleanupOldFiles(GeneratedFiles, v => v.Created, v => v.Path);
@@ -63,7 +65,7 @@ Example header:
 
         File.WriteAllText(outputPath, scriptContent, Encoding.UTF8);
 
-        GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, scriptContent);
+        GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, scriptContent, HttpHelper.CurrentTurnUserId());
 
         var lineCount = scriptContent.Split('\n').Length;
 

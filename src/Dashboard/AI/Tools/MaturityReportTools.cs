@@ -96,7 +96,7 @@ Only 'capabilities' is strictly required; every other section renders when prese
         var outputPath = Path.Combine(Path.GetTempPath(), $"{fileId}_{safeName}.html");
         File.WriteAllText(outputPath, html, new UTF8Encoding(false));
 
-        HtmlPresentationTools.GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow);
+        HtmlPresentationTools.GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, HttpHelper.CurrentTurnUserId());
         activity?.SetTag("report.capabilities", capabilityCount);
 
         // slideCount slot doubles as the section/capability count shown on the card.

@@ -1018,10 +1018,19 @@
               :key="i"
               class="message-row"
               :class="
-                msg.role === 'user' ? 'message-row--user' : 'message-row--ai'
+                msg.role === 'user'
+                  ? 'message-row--user'
+                  : msg.role === 'system'
+                    ? 'message-row--system'
+                    : 'message-row--ai'
               "
             >
               <div v-if="msg.role === 'user'" class="bubble bubble--user">
+                {{ msg.content }}
+              </div>
+              <!-- System notices (resume / busy / recovery) get a distinct muted
+                   pill instead of masquerading as AI answers with an avatar. -->
+              <div v-else-if="msg.role === 'system'" class="system-notice">
                 {{ msg.content }}
               </div>
               <div v-else class="ai-row">
@@ -1079,10 +1088,17 @@
                       </div>
                     </div>
                     <a
+                      v-if="!msg.html.expired"
                       :href="'/api/download/html/' + msg.html.fileId"
                       :download="msg.html.fileName"
                       class="html-deck-card-btn"
                       >Download</a
+                    >
+                    <span
+                      v-else
+                      class="artifact-expired"
+                      title="Generated files are kept for 30 minutes — ask the agent to regenerate the deck"
+                      >Expired — ask to regenerate</span
                     >
                   </div>
                   <div v-if="msg.script" class="script-inline-block">
@@ -1114,57 +1130,87 @@
                         >
                       </div>
                       <div class="script-header-actions">
-                        <button
-                          class="script-copy-btn"
-                          @click="copyScript(msg.script.content)"
-                          :title="'Copy to clipboard'"
-                        >
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
+                        <template v-if="!msg.script.expired">
+                          <button
+                            class="script-copy-btn"
+                            :class="{
+                              'script-copy-btn--copied':
+                                copiedScriptId === msg.script.fileId,
+                            }"
+                            @click="copyScript(msg.script)"
+                            :title="
+                              copiedScriptId === msg.script.fileId
+                                ? 'Copied!'
+                                : 'Copy to clipboard'
+                            "
                           >
-                            <rect
-                              x="9"
-                              y="9"
-                              width="13"
-                              height="13"
-                              rx="2"
-                              ry="2"
-                            />
-                            <path
-                              d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                            />
-                          </svg>
-                        </button>
-                        <a
-                          :href="'/api/download/script/' + msg.script.fileId"
-                          class="script-download-btn"
-                          download
-                        >
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
+                            <svg
+                              v-if="copiedScriptId === msg.script.fileId"
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2.5"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            >
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                            <svg
+                              v-else
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            >
+                              <rect
+                                x="9"
+                                y="9"
+                                width="13"
+                                height="13"
+                                rx="2"
+                                ry="2"
+                              />
+                              <path
+                                d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                              />
+                            </svg>
+                          </button>
+                          <a
+                            :href="'/api/download/script/' + msg.script.fileId"
+                            class="script-download-btn"
+                            download
                           >
-                            <path
-                              d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
-                            />
-                            <polyline points="7 10 12 15 17 10" />
-                            <line x1="12" y1="15" x2="12" y2="3" />
-                          </svg>
-                          Download
-                        </a>
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            >
+                              <path
+                                d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
+                              />
+                              <polyline points="7 10 12 15 17 10" />
+                              <line x1="12" y1="15" x2="12" y2="3" />
+                            </svg>
+                            Download
+                          </a>
+                        </template>
+                        <span
+                          v-else
+                          class="artifact-expired"
+                          title="Generated files are kept for 30 minutes — ask the agent to regenerate the script"
+                          >Expired — ask to regenerate</span
+                        >
                       </div>
                     </div>
                     <div
@@ -1174,6 +1220,7 @@
                       {{ msg.script.description }}
                     </div>
                     <button
+                      v-if="msg.script.content"
                       class="script-toggle-btn"
                       @click="msg.script.expanded = !msg.script.expanded"
                     >
@@ -1324,10 +1371,32 @@
               <div class="script-header-actions">
                 <button
                   class="script-copy-btn"
-                  @click="copyScript(scriptReady.content)"
-                  title="Copy to clipboard"
+                  :class="{
+                    'script-copy-btn--copied':
+                      copiedScriptId === scriptReady.fileId,
+                  }"
+                  @click="copyScript(scriptReady)"
+                  :title="
+                    copiedScriptId === scriptReady.fileId
+                      ? 'Copied!'
+                      : 'Copy to clipboard'
+                  "
                 >
                   <svg
+                    v-if="copiedScriptId === scriptReady.fileId"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  <svg
+                    v-else
                     width="14"
                     height="14"
                     viewBox="0 0 24 24"
@@ -1835,7 +1904,11 @@
           </div>
           <div class="tools-sidebar-scroll sessions-scroll">
             <div v-if="sessions.length === 0" class="sessions-empty">
-              No saved conversations yet — chat to create one.
+              {{
+                azureConnected
+                  ? "No saved conversations yet — chat to create one."
+                  : "Chat freely — connect Azure to keep conversations across visits."
+              }}
             </div>
             <div
               v-for="s in sessions"
@@ -1994,6 +2067,9 @@ const scriptReady = ref(null);
 const messagesEl = ref(null);
 const inputEl = ref(null);
 const chartInstances = [];
+// ResizeObservers created per mounted chart — tracked so wipes/unmount can
+// disconnect them (they'd otherwise keep observing detached DOM forever).
+const chartResizeObservers = [];
 let intentAnimTimer = null;
 
 // ── Uploaded attachments ────────────────────────────────────────────
@@ -2633,9 +2709,13 @@ async function newSession() {
   clearing.value = true;
   messages.value = [];
   streamBuffer.value = "";
-  // User-initiated wipe — drop every session's live buckets.
-  perSessionToolCalls.clear();
-  perSessionCharts.clear();
+  // Drop only THIS view's live buckets (current session + the "__pending__"
+  // sentinel) — a session still streaming in the background needs its bucket
+  // intact so its tool list is whole when the user switches back.
+  perSessionToolCalls.delete(currentSessionId.value || "__pending__");
+  perSessionCharts.delete(currentSessionId.value || "__pending__");
+  perSessionToolCalls.delete("__pending__");
+  perSessionCharts.delete("__pending__");
   scriptReady.value = null;
   htmlReady.value = null;
   attachments.value = [];
@@ -2648,6 +2728,12 @@ async function newSession() {
     } catch {}
   });
   chartInstances.length = 0;
+  chartResizeObservers.forEach((ro) => {
+    try {
+      ro.disconnect();
+    } catch {}
+  });
+  chartResizeObservers.length = 0;
   maturityScores.crawl = null;
   maturityScores.walk = null;
   maturityScores.run = null;
@@ -2708,25 +2794,40 @@ async function reloadSessionTranscript(sessionId) {
     );
     if (res.ok) {
       const j = await res.json();
-      const restored = (j.messages || []).map((m) => ({
-        role: m.role,
-        content: m.content || "",
-        toolCalls: (m.toolCalls || []).map((tc) => ({
-          id: tc.id,
-          tool: tc.name,
-          args: tc.args || "",
-          result: tc.result || null,
-          error: tc.error || null,
-          success: tc.success !== false,
-          intent: tc.intent || "",
-          durationMs: null,
-          done: true,
-          expanded: false,
-        })),
-        charts: m.charts || [],
-        html: m.html || null,
-        script: m.script ? { ...m.script, expanded: false } : null,
-      }));
+      const restored = (j.messages || []).map((m) => {
+        // Re-derive the follow-up buttons from the persisted SuggestFollowUp
+        // tool result — live turns keep them on the committed message, so a
+        // restored transcript should too (last successful call wins).
+        let followUp = null;
+        for (const tc of m.toolCalls || []) {
+          if (tc.name === "SuggestFollowUp" && tc.result) {
+            try {
+              const fu = JSON.parse(tc.result);
+              if (fu.label && fu.prompt) followUp = fu;
+            } catch {}
+          }
+        }
+        return {
+          role: m.role,
+          content: m.content || "",
+          toolCalls: (m.toolCalls || []).map((tc) => ({
+            id: tc.id,
+            tool: tc.name,
+            args: tc.args || "",
+            result: tc.result || null,
+            error: tc.error || null,
+            success: tc.success !== false,
+            intent: tc.intent || "",
+            durationMs: null,
+            done: true,
+            expanded: false,
+          })),
+          charts: m.charts || [],
+          html: m.html || null,
+          script: m.script ? { ...m.script, expanded: false } : null,
+          followUp,
+        };
+      });
       console.log(
         "[loadMessages] /messages returned",
         restored.length,
@@ -2873,6 +2974,11 @@ async function attachToServerTurn(sessionId) {
 }
 
 async function deleteSession(sessionId) {
+  // Deleting is irreversible (server-side removal of the on-disk session) —
+  // one mis-click on the small × shouldn't silently destroy a conversation.
+  const meta = sessions.value.find((s) => s.id === sessionId);
+  const name = meta?.summary || "this conversation";
+  if (!confirm(`Delete "${name}"?\n\nThis cannot be undone.`)) return;
   try {
     await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
@@ -3133,11 +3239,9 @@ async function fetchModels() {
       if (Array.isArray(models) && models.length > 0) {
         const ids = models.map((m) => m.id || m.name || m).filter(Boolean);
         availableModels.value = ids;
-        const opusModels = ids.filter((id) => /opus/i.test(id));
-        if (opusModels.length > 0) {
-          opusModels.sort();
-          selectedModel.value = opusModels[opusModels.length - 1];
-        }
+        // The backend always chats with its configured deployment and ignores
+        // the request's model field — track the advertised id for display only.
+        if (ids.length > 0) selectedModel.value = ids[0];
       }
     }
   } catch {}
@@ -3416,6 +3520,12 @@ async function clearMessages() {
     } catch {}
   });
   chartInstances.length = 0;
+  chartResizeObservers.forEach((ro) => {
+    try {
+      ro.disconnect();
+    } catch {}
+  });
+  chartResizeObservers.length = 0;
   // Reset FinOps maturity scores in the sidebar
   maturityScores.crawl = null;
   maturityScores.walk = null;
@@ -4744,6 +4854,7 @@ function mountChart(el, chartData) {
       chartInstances.push(instance);
       const ro = new ResizeObserver(() => instance.resize());
       ro.observe(el);
+      chartResizeObservers.push(ro);
     });
   };
 
@@ -4767,6 +4878,12 @@ function mountChart(el, chartData) {
 
 onBeforeUnmount(() => {
   chartInstances.forEach((c) => c.dispose());
+  chartResizeObservers.forEach((ro) => {
+    try {
+      ro.disconnect();
+    } catch {}
+  });
+  chartResizeObservers.length = 0;
   document.removeEventListener("click", dismissPopover);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("focus", onWindowFocus);
@@ -4987,8 +5104,9 @@ function buildWowTable(headerCells, dataRows) {
 
   const headHtml = headerCells
     .map(
-      (h, c) =>
-        `<th class="${numericColumns[c] ? "wt-num" : ""}">${escapeHtml(h)}</th>`,
+      // Cells arrive pre-escaped — renderContent escapes the whole text
+      // before any transform. Re-escaping here would double-encode &.
+      (h, c) => `<th class="${numericColumns[c] ? "wt-num" : ""}">${h}</th>`,
     )
     .join("");
 
@@ -5034,7 +5152,9 @@ function parseNumeric(cell) {
 }
 
 function enhanceCell(raw) {
-  const safe = escapeHtml(raw);
+  // NOTE: `raw` is already HTML-escaped — renderContent escapes the whole
+  // text up front. Do NOT re-escape here (it would double-encode &amp;).
+  const safe = raw;
   // Status pills
   const trimmed = raw.trim();
   const lower = trimmed.toLowerCase();
@@ -5080,10 +5200,9 @@ function enhanceCell(raw) {
 
   // Delta arrows  ▲ +14%   ▼ -8%   — flat
   const upMatch = trimmed.match(/^(?:▲|↑|\+)\s*([\d.,]+\s*%?)$/);
-  if (upMatch) return `<span class="wt-up">▲ ${escapeHtml(upMatch[1])}</span>`;
+  if (upMatch) return `<span class="wt-up">▲ ${upMatch[1]}</span>`;
   const downMatch = trimmed.match(/^(?:▼|↓|-)\s*([\d.,]+\s*%?)$/);
-  if (downMatch)
-    return `<span class="wt-down">▼ ${escapeHtml(downMatch[1])}</span>`;
+  if (downMatch) return `<span class="wt-down">▼ ${downMatch[1]}</span>`;
   if (/^(—|flat|n\/a|-)$/i.test(trimmed))
     return `<span class="wt-flat">—</span>`;
 
@@ -5100,7 +5219,21 @@ function escapeHtml(s) {
 
 function renderContent(text) {
   if (!text) return "";
-  let html = text.replace(
+  // SECURITY: escape ALL HTML entities up front. Model output can carry
+  // attacker-influenced content (fetched web pages, uploaded file contents,
+  // Azure resource names/tags) — raw markup must never reach v-html. CSP
+  // blocks script execution, but injected anchors/layout would still be a
+  // phishing/defacement vector. Every transform below operates on the
+  // escaped text; downstream helpers (buildWowTable/enhanceCell) must NOT
+  // re-escape.
+  // The & escape preserves entities the model already wrote (&lt; &#65; …):
+  // entities in text nodes only ever decode to characters, never elements,
+  // so passing them through is safe and keeps display fidelity.
+  let html = String(text)
+    .replace(/&(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#x[\da-fA-F]+);)/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  html = html.replace(
     /```(\w*)\n([\s\S]*?)```/g,
     '<pre><code class="lang-$1">$2</code></pre>',
   );
@@ -5123,14 +5256,16 @@ function renderContent(text) {
   );
   // Clickable prompt chips: the model marks suggested questions with
   // [label](prompt:full question). Render as a chip; a delegated click
-  // handler sends the question. Runs AFTER table building — enhanceCell
-  // only escapes &<> so the [label](prompt:...) syntax survives into
-  // table cells and is transformed here. Deterministic — no guessing
-  // which text is clickable. Works in tables, lists, and prose.
+  // handler sends the question. Runs AFTER table building — the global
+  // escape above only touches &<> so the [label](prompt:...) syntax
+  // survives into table cells and is transformed here. Deterministic — no
+  // guessing which text is clickable. Works in tables, lists, and prose.
+  // label/q are already entity-escaped; only quotes need escaping for the
+  // attribute value (getAttribute decodes entities back to the original).
   html = html.replace(
     /\[([^\]]+)\]\(prompt:([^)]+)\)/g,
     (_, label, q) =>
-      `<button type="button" class="prompt-chip" data-prompt="${escapeHtml(q.trim()).replace(/"/g, "&quot;")}">${escapeHtml(label.trim())}</button>`,
+      `<button type="button" class="prompt-chip" data-prompt="${q.trim().replace(/"/g, "&quot;")}">${label.trim()}</button>`,
   );
   html = html.replace(/^### (.+)$/gm, "<h4>$1</h4>");
   html = html.replace(/^## (.+)$/gm, "<h3>$1</h3>");
@@ -5184,8 +5319,23 @@ function requestScript() {
   send();
 }
 
-function copyScript(content) {
-  navigator.clipboard.writeText(content).catch(() => {});
+// Transient "Copied!" feedback on the script copy buttons — keyed by fileId
+// so the checkmark shows on the exact button that was clicked.
+const copiedScriptId = ref(null);
+let copiedResetTimer = null;
+function copyScript(script) {
+  const content = typeof script === "string" ? script : script?.content || "";
+  const id = (typeof script === "object" && script?.fileId) || "inline";
+  navigator.clipboard
+    .writeText(content)
+    .then(() => {
+      copiedScriptId.value = id;
+      clearTimeout(copiedResetTimer);
+      copiedResetTimer = setTimeout(() => {
+        copiedScriptId.value = null;
+      }, 1500);
+    })
+    .catch(() => {});
 }
 
 async function send() {
@@ -5247,6 +5397,12 @@ async function send() {
   let toolCalls = perSessionToolCalls.get(streamingId);
   let charts = perSessionCharts.get(streamingId);
   let hasDeltas = false;
+  // Artifacts produced by THIS stream. Kept stream-local (not in the shared
+  // htmlReady/scriptReady refs) so a deck/script finishing in a background
+  // session can't pop into whichever conversation is currently in view —
+  // the shared refs are only mirrored while this session IS the view.
+  let streamHtml = null;
+  let streamScript = null;
 
   // === TIMING HOOKS ===
   // Captures every meaningful moment of the turn so we can build a flat
@@ -5365,7 +5521,7 @@ async function send() {
               ms: String(Math.round(performance.now() - t0)),
             });
           }
-        } else if (data.type !== "message") {
+        } else if (data.type !== "message" && data.type !== "ping") {
           recordTiming({ kind: "event", phase: data.type });
         }
 
@@ -5447,7 +5603,7 @@ async function send() {
                 {
                   id: data.id,
                   summary: data.title,
-                  modifiedTime: new Date().toISOString(),
+                  modified: new Date().toISOString(),
                 },
                 ...sessions.value,
               ];
@@ -5477,8 +5633,18 @@ async function send() {
 
           case "busy":
             // Server rejected this prompt because a turn is already running in
-            // this session. Surface the notice; the earlier turn keeps going.
+            // this session. The optimistic user bubble was never accepted —
+            // remove it, put the text back in the composer for a easy retry,
+            // and surface the notice. The earlier turn keeps going.
             if (isActiveView()) {
+              for (let li = messages.value.length - 1; li >= 0; li--) {
+                const m = messages.value[li];
+                if (m.role === "user" && m.content === prompt) {
+                  messages.value.splice(li, 1);
+                  break;
+                }
+              }
+              if (!input.value.trim()) input.value = prompt;
               messages.value.push({
                 role: "system",
                 content: `⏳ ${data.message}`,
@@ -5675,7 +5841,7 @@ async function send() {
           }
 
           case "html_ready":
-            htmlReady.value = {
+            streamHtml = {
               fileId: data.fileId,
               fileName: data.fileName,
               slideCount: data.slideCount,
@@ -5684,11 +5850,16 @@ async function send() {
                 timeStyle: "short",
               }),
             };
-            scrollToBottom();
+            // Mirror to the shared ref only for the foreground view — see
+            // streamHtml declaration for why.
+            if (isActiveView()) {
+              htmlReady.value = streamHtml;
+              scrollToBottom();
+            }
             break;
 
           case "script_ready":
-            scriptReady.value = {
+            streamScript = {
               fileId: data.fileId,
               fileName: data.fileName,
               lineCount: data.lineCount,
@@ -5697,7 +5868,10 @@ async function send() {
               content: data.content,
               expanded: false,
             };
-            scrollToBottom();
+            if (isActiveView()) {
+              scriptReady.value = streamScript;
+              scrollToBottom();
+            }
             break;
 
           case "maturity_score":
@@ -5748,13 +5922,13 @@ async function send() {
       charts: [...charts],
       followUp: streamFollowUp.value ? { ...streamFollowUp.value } : null,
     };
-    if (htmlReady.value) {
-      msgObj.html = { ...htmlReady.value };
-      htmlReady.value = null;
+    if (streamHtml) {
+      msgObj.html = { ...streamHtml };
+      if (isActiveView()) htmlReady.value = null;
     }
-    if (scriptReady.value) {
-      msgObj.script = { ...scriptReady.value };
-      scriptReady.value = null;
+    if (streamScript) {
+      msgObj.script = { ...streamScript };
+      if (isActiveView()) scriptReady.value = null;
     }
     // Only commit the assistant message into the visible message list if
     // the user is still viewing this stream's session. Otherwise the
@@ -7946,6 +8120,21 @@ async function send() {
 .message-row--ai {
   justify-content: flex-start;
 }
+.message-row--system {
+  justify-content: center;
+}
+.system-notice {
+  max-width: 72%;
+  margin: 2px 0;
+  padding: 6px 14px;
+  border-radius: 12px;
+  background: #f3f2f1;
+  border: 1px solid #e1dfdd;
+  color: #605e5c;
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: center;
+}
 .bubble--user {
   max-width: 80%;
   border-radius: 8px;
@@ -9295,6 +9484,18 @@ async function send() {
 .script-copy-btn:hover {
   background: #deecf9;
   color: #0078d4;
+}
+.script-copy-btn--copied,
+.script-copy-btn--copied:hover {
+  background: #dff6dd;
+  color: #107c10;
+}
+.artifact-expired {
+  font-size: 12px;
+  color: #605e5c;
+  font-style: italic;
+  white-space: nowrap;
+  align-self: center;
 }
 .script-download-btn {
   display: inline-flex;

@@ -30,6 +30,17 @@ public static class ChatEndpoints
     private static readonly ConcurrentDictionary<string, string> LastConnectionContext = new();
     private static readonly ConcurrentDictionary<string, string> LastUploadsContext = new();
 
+    /// <summary>Drops the per-session context-dedup entries when a session is
+    /// deleted. Without this the dictionaries grow unboundedly over the process
+    /// lifetime (one entry per session ever chatted in). Called from
+    /// <see cref="CopilotSessionFactory.DeleteUserSessionAsync"/> and the janitor's
+    /// <see cref="CopilotSessionFactory.DeleteSessionByIdAsync"/> sweep.</summary>
+    internal static void ClearSessionContext(string sessionId)
+    {
+        LastConnectionContext.TryRemove(sessionId, out _);
+        LastUploadsContext.TryRemove(sessionId, out _);
+    }
+
     /// <summary>True if a turn is currently executing for this session (used by
     /// the frontend to re-attach after a refresh instead of showing dead air).</summary>
     internal static bool IsTurnActive(string sessionId) =>
@@ -456,7 +467,12 @@ public static class ChatEndpoints
                         }
                         try
                         {
-                            await HandleSessionEventAsync(evt, ctx, toolTracker, telemetry, copilotFactory.Deployment,
+                            // All writes go through SafeEmit — event dispatch can
+                            // overlap with the cooling-down/heartbeat reporters
+                            // (parallel tool callbacks), and two concurrent writers
+                            // on one response stream interleave bytes into
+                            // malformed SSE frames.
+                            await HandleSessionEventAsync(evt, SafeEmit, toolTracker, telemetry, copilotFactory.Deployment,
                                 userId, userLogin!, activeSessionId, chatActivity, logger, done, () => cancelled = true);
                         }
                         catch
@@ -495,6 +511,29 @@ public static class ChatEndpoints
                     await ctx.Response.WriteAsync($"data: {p}\n\n");
                 }
                 await ctx.Response.Body.FlushAsync();
+
+                // SSE keepalive: long silent phases emit NO bytes for minutes —
+                // e.g. the model generating a large tool argument (an 800-line
+                // deck or script) produces nothing between the last reasoning
+                // delta and tool_start. Intermediate proxies (App Service front
+                // end ~4 min idle) drop the connection and the client's 3-min
+                // inactivity watchdog aborts a perfectly healthy turn. A ping
+                // every 20 s keeps both alive; the client ignores the event.
+                using var keepAliveCts = new CancellationTokenSource();
+                var keepAliveTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        while (!keepAliveCts.Token.IsCancellationRequested && !cancelled)
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(20), keepAliveCts.Token);
+                            if (cancelled) break;
+                            await SafeEmit("{\"type\":\"ping\"}");
+                        }
+                    }
+                    catch (OperationCanceledException) { /* turn finished */ }
+                    catch { /* stream closed — the main pipeline owns the lifecycle */ }
+                });
 
                 // Wire the retry hook so HttpHelper can push "Cooling down" pings
                 // to this SSE stream during 429 backoff. The sseLock / SafeEmit
@@ -557,6 +596,11 @@ public static class ChatEndpoints
                 }
 
                 await done.Task;
+
+                // Stop the keepalive pinger before any post-turn writes so it
+                // can never interleave with the title/timing emissions below.
+                keepAliveCts.Cancel();
+                try { await keepAliveTask; } catch { /* already swallowed */ }
 
                 // Race-fix: a previous turn's background title call may have
                 // saved a fresh title AFTER its SSE stream closed. Always re-emit
@@ -758,7 +802,7 @@ public static class ChatEndpoints
 
     private static async Task HandleSessionEventAsync(
         SessionEvent evt,
-        HttpContext ctx,
+        Func<string, Task> emit,
         ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)> toolTracker,
         AiTelemetry telemetry,
         string deployment,
@@ -813,7 +857,7 @@ public static class ChatEndpoints
         }
         else if (evt is ToolExecutionCompleteEvent toolDone)
         {
-            sseData = await HandleToolDoneAsync(toolDone, ctx, toolTracker, telemetry, userLogin, logger);
+            sseData = await HandleToolDoneAsync(toolDone, emit, toolTracker, telemetry, userLogin, logger);
         }
         else if (evt is SessionTitleChangedEvent titleEvt)
         {
@@ -834,22 +878,18 @@ public static class ChatEndpoints
         }
 
         if (sseData is not null)
-        {
-            await ctx.Response.WriteAsync($"data: {sseData}\n\n");
-            await ctx.Response.Body.FlushAsync();
-        }
+            await emit(sseData);
 
         if (evt is SessionIdleEvent || evt is SessionErrorEvent)
         {
-            await ctx.Response.WriteAsync("data: [DONE]\n\n");
-            await ctx.Response.Body.FlushAsync();
+            await emit("[DONE]");
             done.TrySetResult();
         }
     }
 
     private static async Task<string?> HandleToolDoneAsync(
         ToolExecutionCompleteEvent toolDone,
-        HttpContext ctx,
+        Func<string, Task> emit,
         ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)> toolTracker,
         AiTelemetry telemetry,
         string userLogin,
@@ -891,8 +931,8 @@ public static class ChatEndpoints
         {
             try
             {
-                await EmitAsync(ctx, sseData);
-                await EmitAsync(ctx, JsonSerializer.Serialize(new { type = "chart", options = resultText }));
+                await emit(sseData);
+                await emit(JsonSerializer.Serialize(new { type = "chart", options = resultText }));
                 return null;
             }
             catch (Exception ex) when (IsClientDisconnect(ex)) { /* SSE client gone — nothing to do */ }
@@ -908,8 +948,8 @@ public static class ChatEndpoints
                     if (trimmed.StartsWith("__CHART__:"))
                     {
                         var chartJson = trimmed["__CHART__:".Length..].Trim();
-                        await EmitAsync(ctx, sseData);
-                        await EmitAsync(ctx, JsonSerializer.Serialize(new { type = "chart", options = chartJson }));
+                        await emit(sseData);
+                        await emit(JsonSerializer.Serialize(new { type = "chart", options = chartJson }));
                         return null;
                     }
                 }
@@ -931,8 +971,8 @@ public static class ChatEndpoints
                         if (parts.Length >= 2)
                         {
                             var htmlPayload = JsonSerializer.Serialize(new { type = "html_ready", fileId = parts[0], fileName = parts[1], slideCount = parts.Length > 2 ? parts[2] : "" });
-                            await EmitAsync(ctx, sseData);
-                            await EmitAsync(ctx, htmlPayload);
+                            await emit(sseData);
+                            await emit(htmlPayload);
                             return null;
                         }
                         break;
@@ -960,8 +1000,8 @@ public static class ChatEndpoints
                             if (ScriptTools.GeneratedFiles.TryGetValue(scriptFileId, out var scriptEntry))
                                 scriptContent = scriptEntry.Content ?? "";
                             var scriptPayload = JsonSerializer.Serialize(new { type = "script_ready", fileId = parts[0], fileName = parts[1], lineCount = parts[2], language = parts[3], description = parts.Length > 4 ? parts[4] : "", content = scriptContent });
-                            await EmitAsync(ctx, sseData);
-                            await EmitAsync(ctx, scriptPayload);
+                            await emit(sseData);
+                            await emit(scriptPayload);
                             return null;
                         }
                         break;
@@ -986,8 +1026,8 @@ public static class ChatEndpoints
                         var level = rest[..colonIdx];
                         var scoresJson = rest[(colonIdx + 1)..];
                         var scorePayload = JsonSerializer.Serialize(new { type = "maturity_score", level, scores = scoresJson });
-                        await EmitAsync(ctx, sseData);
-                        await EmitAsync(ctx, scorePayload);
+                        await emit(sseData);
+                        await emit(scorePayload);
                         return null;
                     }
                 }
