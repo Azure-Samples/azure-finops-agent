@@ -31,6 +31,11 @@ if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
 var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.6-sol";
+// Optional: pin the BYOK credential to the AOAI resource's tenant. Needed for
+// local dev when the az CLI's DEFAULT account lives in a different tenant than
+// the AOAI resource (DefaultAzureCredential would mint a token for the wrong
+// tenant → "Token tenant does not match resource tenant" 400s on every turn).
+var azureOpenAITenantId = builder.Configuration["AzureOpenAI:TenantId"];
 // Default reasoning effort (low|medium|high|xhigh) for reasoning-capable
 // models. `medium` is the sweet spot for GPT-5.6 on this workload: it roughly
 // halves time-to-first-token vs `high` (the dominant first-response latency)
@@ -116,7 +121,7 @@ AzureFinOps.Dashboard.Infrastructure.HttpHelper.Logger =
     loggerFactory.CreateLogger("AzureFinOps.AI.HttpHelper");
 
 await using var copilotFactory = await CopilotSessionFactory.CreateAsync(
-    telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort, loggerFactory);
+    telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort, loggerFactory, azureOpenAITenantId);
 
 // Start the janitor now that the factory exists; tie its lifecycle to the host.
 var janitor = new UserStateJanitor(telemetry, copilotFactory, loggerFactory.CreateLogger<UserStateJanitor>());

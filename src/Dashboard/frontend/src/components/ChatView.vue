@@ -2068,7 +2068,7 @@
                 { 'job-row--paused': !j.enabled },
               ]"
               @click="openJob(j)"
-              :title="j.lastSummary || j.prompt"
+              :title="jobTooltip(j)"
             >
               <span
                 class="tools-sidebar-status-dot"
@@ -2089,59 +2089,103 @@
                     ? 'Running now'
                     : j.enabled
                       ? 'Scheduled — runs ' + formatUntil(j.nextRunUtc)
-                      : j.lastStatus || 'paused'
+                      : 'Paused'
                 "
               ></span>
               <div class="session-row-main">
                 <span class="session-row-title">{{ j.name }}</span>
                 <span class="session-row-time">
-                  <template v-if="j._nudge">
-                    <span class="job-time--nudge"
-                      >no runs yet — ▶ runs it now</span
-                    >
+                  <template v-if="j._toggleErr">
+                    <span class="job-time--dead">{{ j._toggleErr }}</span>
                   </template>
                   <template v-else-if="j.running">
                     <span class="job-time--running">running now…</span>
+                  </template>
+                  <template v-else-if="!j.enabled">
+                    <template v-if="j.lastStatus === 'expired'">
+                      {{ jobCadenceLabel(j) }} · expired
+                    </template>
+                    <template v-else-if="j.lastStatus === 'error'">
+                      <span class="job-time--dead"
+                        >failed {{ formatAgo(j.lastRunUtc) }}</span
+                      >
+                      · paused
+                    </template>
+                    <template v-else-if="j.lastStatus === 'auth_expired'">
+                      <span class="job-time--dead">reconnect Azure</span> ·
+                      paused
+                    </template>
+                    <template v-else-if="j.lastRunUtc">
+                      {{ jobCadenceLabel(j) }} · paused · ran
+                      {{ formatAgo(j.lastRunUtc) }}
+                    </template>
+                    <template v-else
+                      >{{ jobCadenceLabel(j) }} · paused</template
+                    >
                   </template>
                   <template v-else-if="j.lastStatus === 'auth_expired'">
                     {{ jobCadenceLabel(j) }} ·
                     <span class="job-time--dead">reconnect Azure</span>
                   </template>
-                  <template v-else-if="j.enabled">
-                    {{ jobCadenceLabel(j) }} · next
+                  <template v-else-if="j.lastStatus === 'error'">
+                    <span class="job-time--dead"
+                      >failed {{ formatAgo(j.lastRunUtc) }}</span
+                    >
+                    · next {{ formatUntil(j.nextRunUtc) }}
+                  </template>
+                  <template v-else-if="j.lastRunUtc">
+                    {{ jobCadenceLabel(j) }} · ran
+                    {{ formatAgo(j.lastRunUtc) }} · next
                     {{ formatUntil(j.nextRunUtc) }}
                   </template>
-                  <template v-else-if="j.lastStatus === 'expired'">
-                    {{ jobCadenceLabel(j) }} · expired
+                  <template v-else>
+                    {{ jobCadenceLabel(j) }} · first run
+                    {{ formatUntil(j.nextRunUtc) }}
                   </template>
-                  <template v-else>{{ jobCadenceLabel(j) }} · paused</template>
                 </span>
               </div>
-              <button
-                class="job-row-btn"
-                @click.stop="runJobNow(j)"
-                :disabled="j.running"
-                title="Run now"
-                aria-label="Run job now"
-              >
-                ▶
-              </button>
-              <button
-                class="job-row-btn"
-                @click.stop="toggleJob(j)"
-                :title="j.enabled ? 'Pause' : 'Resume'"
-                :aria-label="j.enabled ? 'Pause job' : 'Resume job'"
-              >
-                {{ j.enabled ? "⏸" : "⟳" }}
-              </button>
-              <button
-                class="session-row-delete"
-                @click.stop="deleteJob(j)"
-                title="Delete this job (its conversation is kept)"
-                aria-label="Delete job"
-              >
-                ×
-              </button>
+              <div class="job-actions">
+                <button
+                  class="job-row-btn"
+                  @click.stop="runJobNow(j)"
+                  :disabled="j.running"
+                  title="Run once now"
+                  aria-label="Run job now"
+                >
+                  ▶
+                </button>
+                <button
+                  class="job-row-btn"
+                  @click.stop="editJob(j)"
+                  title="Edit job"
+                  aria-label="Edit job"
+                >
+                  ✎
+                </button>
+                <button
+                  class="job-switch"
+                  :class="{ 'job-switch--on': j.enabled }"
+                  role="switch"
+                  :aria-checked="j.enabled ? 'true' : 'false'"
+                  @click.stop="toggleJob(j)"
+                  :title="
+                    j.enabled
+                      ? 'Schedule is on — click to pause'
+                      : 'Schedule is off — click to resume'
+                  "
+                  aria-label="Toggle schedule"
+                >
+                  <span class="job-switch-knob"></span>
+                </button>
+                <button
+                  class="session-row-delete"
+                  @click.stop="deleteJob(j)"
+                  title="Delete this job (its conversation is kept)"
+                  aria-label="Delete job"
+                >
+                  ×
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2191,19 +2235,27 @@
       <div
         v-if="newJobOpen"
         class="job-modal-overlay"
-        @click.self="newJobOpen = false"
-        @keydown.esc="newJobOpen = false"
+        @click.self="closeJobModal"
+        @keydown.esc="closeJobModal"
       >
         <div
           class="job-modal"
           role="dialog"
           aria-modal="true"
-          aria-label="Schedule a background job"
+          :aria-label="
+            editingJobId ? 'Edit scheduled job' : 'Schedule a background job'
+          "
         >
           <div class="job-modal-header">
             <div class="job-modal-icon">⚙</div>
             <div class="job-modal-heading">
-              <div class="job-modal-title">Schedule a background job</div>
+              <div class="job-modal-title">
+                {{
+                  editingJobId
+                    ? "Edit scheduled job"
+                    : "Schedule a background job"
+                }}
+              </div>
               <div class="job-modal-subtitle">
                 Runs in the background — even with the browser closed — using
                 only your delegated Azure permissions: the agent can never do
@@ -2213,15 +2265,17 @@
             </div>
             <button
               class="job-modal-close"
-              @click="newJobOpen = false"
+              @click="closeJobModal"
               aria-label="Close"
             >
               ×
             </button>
           </div>
           <div class="job-modal-body">
-            <div class="job-tpl-label">Start from a template</div>
-            <div class="job-tpl-grid">
+            <div v-if="!editingJobId" class="job-tpl-label">
+              Start from a template
+            </div>
+            <div v-if="!editingJobId" class="job-tpl-grid">
               <button
                 v-for="t in JOB_TEMPLATES"
                 :key="t.label"
@@ -2265,39 +2319,77 @@
               >
                 {{ f.l }}
               </button>
+            </div>
+            <div class="job-freq-custom">
+              <label class="job-freq-custom-label">
+                or run every
+                <input
+                  type="number"
+                  class="job-freq-custom-input"
+                  :min="MIN_INTERVAL"
+                  :max="MAX_INTERVAL"
+                  step="1"
+                  v-model.number="newJobInterval"
+                  @keydown.ctrl.enter.prevent="createJob"
+                  @keydown.meta.enter.prevent="createJob"
+                />
+                min
+              </label>
               <span class="job-freq-expiry">{{
                 newJobInterval < 1440
                   ? "expires after 7 days"
                   : "expires after 90 days"
               }}</span>
             </div>
+            <div v-if="!jobIntervalValid" class="job-form-error">
+              Enter a cadence between {{ MIN_INTERVAL }} and
+              {{ MAX_INTERVAL }} minutes.
+            </div>
             <label class="job-runnow">
               <input v-model="newJobRunNow" type="checkbox" />
               <span>
-                Run immediately, then repeat on the schedule
+                {{
+                  editingJobId
+                    ? "Run now after saving"
+                    : "Run immediately, then repeat on the schedule"
+                }}
                 <span class="job-runnow-hint">{{
-                  newJobRunNow
-                    ? "— first result lands in its conversation within a minute"
-                    : "— first run waits one full interval"
+                  editingJobId
+                    ? newJobRunNow
+                      ? "— triggers a run as soon as you save"
+                      : "— just updates the schedule"
+                    : newJobRunNow
+                      ? "— first result lands in its conversation within a minute"
+                      : "— first run waits one full interval"
                 }}</span>
               </span>
             </label>
             <div v-if="jobError" class="job-form-error">{{ jobError }}</div>
           </div>
           <div class="job-modal-footer">
-            <span class="job-form-hint"
-              >Max 3 active jobs · Ctrl+Enter creates</span
-            >
+            <span class="job-form-hint">{{
+              editingJobId
+                ? "Ctrl+Enter saves"
+                : "Max 3 active jobs · Ctrl+Enter creates"
+            }}</span>
             <div class="job-form-actions">
-              <button class="job-form-cancel" @click="newJobOpen = false">
+              <button class="job-form-cancel" @click="closeJobModal">
                 Cancel
               </button>
               <button
                 class="job-form-create"
-                :disabled="!newJobPrompt.trim() || jobBusy"
+                :disabled="!newJobPrompt.trim() || jobBusy || !jobIntervalValid"
                 @click="createJob"
               >
-                {{ jobBusy ? "Creating…" : "Create job" }}
+                {{
+                  jobBusy
+                    ? editingJobId
+                      ? "Saving…"
+                      : "Creating…"
+                    : editingJobId
+                      ? "Save changes"
+                      : "Create job"
+                }}
               </button>
             </div>
           </div>
@@ -2313,17 +2405,17 @@ import hljs from "highlight.js/lib/core";
 import hljsJson from "highlight.js/lib/languages/json";
 import "highlight.js/styles/github-dark.css";
 import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  reactive,
-  ref,
-  watch,
+    computed,
+    nextTick,
+    onBeforeUnmount,
+    onMounted,
+    reactive,
+    ref,
+    watch,
 } from "vue";
 import {
-  maturityCategories,
-  pricingCategory,
+    maturityCategories,
+    pricingCategory,
 } from "../data/sidebarCategories.js";
 hljs.registerLanguage("json", hljsJson);
 
@@ -3163,6 +3255,8 @@ const newJobName = ref("");
 const newJobPrompt = ref("");
 const newJobInterval = ref(1440);
 const newJobRunNow = ref(true);
+// Non-null when the modal is in EDIT mode (id of the job being edited).
+const editingJobId = ref(null);
 const jobBusy = ref(false);
 const jobError = ref("");
 // Collapsible panes — each of the three sidebar sections (Agent /
@@ -3207,14 +3301,32 @@ function toggleJobsPane() {
 }
 // Ready-made jobs — clicking one prefills the form (still fully editable).
 // Kept deliberately concrete: these are the highest-value recurring asks.
+// Capacity templates lead — constrained GPU/VM capacity is the single most
+// common customer complaint, and hunt-then-act is this feature's sweet spot.
 const JOB_TEMPLATES = [
   {
-    emoji: "🎯",
-    label: "GPU hunt & reserve",
-    name: "GPU capacity hunt & reserve",
+    emoji: "📡",
+    label: "Check capacity of X",
+    name: "Capacity check: Standard_NC40ads_H100_v5",
     interval: 15,
     prompt:
-      "Check quota and on-demand capacity for GPU VM sizes (ND H100/H200 v5 families) across all my subscriptions and regions. IDEMPOTENCY FIRST: if a capacity reservation group named 'finops-gpu-crg' already exists in any region, do nothing and report what is already reserved. Otherwise, if a size is deployable AND I have quota headroom for it: secure it immediately by creating resource group 'finops-capacity' (if missing), capacity reservation group 'finops-gpu-crg', and an on-demand capacity reservation 'finops-gpu-1' with that size and capacity 1 in that region (ARM PUT). Then state exactly what was reserved, that it bills at the full VM rate while held, and that I should pause this job and delete the reservation (you'll generate the cleanup script) when done. If my RBAC blocks the write, say so. If nothing is deployable, list the closest regions with quota headroom.",
+      "Check on-demand capacity and my quota for Standard_NC40ads_H100_v5 (replace with the VM size you're hunting) across all my subscriptions and all regions. Tell me exactly where it is deployable right now — region, subscription, quota headroom. If it's deployable nowhere, list the closest regions where only quota is missing. Read-only: do NOT create or reserve anything.",
+  },
+  {
+    emoji: "🎯",
+    label: "Reserve X when available",
+    name: "Reserve Standard_NC40ads_H100_v5 when available",
+    interval: 15,
+    prompt:
+      "Check quota and on-demand capacity for Standard_NC40ads_H100_v5 (replace with the VM size you want) across all my subscriptions and regions. IDEMPOTENCY FIRST: if a capacity reservation group named 'finops-capacity-crg' already exists in any region, do nothing and report what is already reserved. Otherwise, if the size is deployable AND I have quota headroom for it: secure it immediately by creating resource group 'finops-capacity' (if missing), capacity reservation group 'finops-capacity-crg', and an on-demand capacity reservation 'finops-reserve-1' with that size and capacity 1 in that region (ARM PUT). Then state exactly what was reserved, that it bills at the full VM rate while held, and that I should pause this job and delete the reservation (you'll generate the cleanup script) when done. If my RBAC blocks the write, say so. If nothing is deployable, list the closest regions with quota headroom.",
+  },
+  {
+    emoji: "⚡",
+    label: "1-min test",
+    name: "1-minute test",
+    interval: 1,
+    prompt:
+      "Report my current month-to-date Azure consumption in USD. One short sentence.",
   },
   {
     emoji: "📊",
@@ -3272,6 +3384,13 @@ const JOB_FREQUENCIES = [
   { v: 1440, l: "Daily" },
   { v: 10080, l: "Weekly" },
 ];
+// Custom-cadence bounds — mirror the backend (1 min floor = scheduler tick, 30 day ceiling).
+const MIN_INTERVAL = 1;
+const MAX_INTERVAL = 43200;
+const jobIntervalValid = computed(() => {
+  const n = newJobInterval.value;
+  return Number.isFinite(n) && n >= MIN_INTERVAL && n <= MAX_INTERVAL;
+});
 const jobPromptEl = ref(null);
 // Auto-grow the prompt textarea so the FULL prompt is always visible — no
 // inner scrollbar. Runs on typing, on template apply, and on modal open
@@ -3331,7 +3450,13 @@ async function loadJobs() {
 
 function openNewJob() {
   jobError.value = "";
+  editingJobId.value = null;
   selectedTemplate.value = "";
+  // Start from a clean slate — otherwise a cancelled edit would leak its
+  // name/prompt/cadence into the fresh "New job" form.
+  newJobName.value = "";
+  newJobPrompt.value = "";
+  newJobInterval.value = 1440;
   newJobRunNow.value = true;
   jobsCollapsed.value = false;
   newJobOpen.value = true;
@@ -3343,18 +3468,89 @@ function openNewJob() {
   });
 }
 
+// Close the modal and clear edit state so the next open starts clean.
+function closeJobModal() {
+  newJobOpen.value = false;
+  editingJobId.value = null;
+  jobError.value = "";
+}
+
+// Open the SAME modal prefilled to edit an existing job.
+function editJob(j) {
+  jobError.value = "";
+  editingJobId.value = j.id;
+  selectedTemplate.value = "";
+  newJobName.value = j.name || "";
+  newJobPrompt.value = j.prompt || "";
+  newJobInterval.value = j.intervalMinutes || 1440;
+  // Default OFF for edits — a normal edit shouldn't trigger a run; the user
+  // opts in when they want to run the job right after saving.
+  newJobRunNow.value = false;
+  jobsCollapsed.value = false;
+  newJobOpen.value = true;
+  nextTick(() => {
+    jobPromptEl.value?.focus();
+    autosizeJobPrompt();
+  });
+}
+
 async function createJob() {
-  if (!newJobPrompt.value.trim() || jobBusy.value) return;
+  if (!newJobPrompt.value.trim() || jobBusy.value || !jobIntervalValid.value)
+    return;
   jobBusy.value = true;
   jobError.value = "";
   try {
+    // EDIT mode — PATCH the existing job (name / prompt / cadence).
+    if (editingJobId.value) {
+      const res = await fetch(
+        `/api/jobs/${encodeURIComponent(editingJobId.value)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: newJobName.value.trim() || undefined,
+            prompt: newJobPrompt.value.trim(),
+            intervalMinutes: Math.round(newJobInterval.value),
+          }),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        jobError.value = data.error || "Failed to save changes.";
+        return;
+      }
+      const jobId = editingJobId.value;
+      const runAfterSave = newJobRunNow.value;
+      newJobOpen.value = false;
+      editingJobId.value = null;
+      newJobName.value = "";
+      newJobPrompt.value = "";
+      newJobInterval.value = 1440;
+      window.__trackAppInsightsEvent?.("jobs.edited", {
+        ranAfter: String(runAfterSave),
+      });
+      // "Run now after saving" — fire an immediate run of the just-edited job.
+      if (runAfterSave && jobId) {
+        try {
+          await fetch(`/api/jobs/${encodeURIComponent(jobId)}/run`, {
+            method: "POST",
+          });
+        } catch {}
+        // Open the run's conversation once its session exists (also refreshes
+        // the jobs list as it polls).
+        watchJobRunAndOpen(jobId);
+        return;
+      }
+      await loadJobs();
+      return;
+    }
     const res = await fetch("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: newJobName.value.trim() || undefined,
         prompt: newJobPrompt.value.trim(),
-        intervalMinutes: newJobInterval.value,
+        intervalMinutes: Math.round(newJobInterval.value),
         runImmediately: newJobRunNow.value,
       }),
     });
@@ -3377,11 +3573,28 @@ async function createJob() {
 }
 
 async function toggleJob(j) {
+  const wasPaused = !j.enabled;
   try {
-    await fetch(`/api/jobs/${encodeURIComponent(j.id)}/toggle`, {
+    const res = await fetch(`/api/jobs/${encodeURIComponent(j.id)}/toggle`, {
       method: "POST",
     });
-  } catch {}
+    // Resuming can be rejected by the active-jobs cap — surface it on the row
+    // instead of silently leaving the job paused. Nothing changed server-side,
+    // so skip the list refresh (which would wipe the transient message).
+    if (!res.ok) {
+      if (wasPaused) {
+        const data = await res.json().catch(() => ({}));
+        j._toggleErr =
+          data.error || "Couldn't resume — max active jobs reached.";
+        setTimeout(() => {
+          j._toggleErr = null;
+        }, 3200);
+      }
+      return;
+    }
+  } catch {
+    return;
+  }
   loadJobs();
 }
 
@@ -3396,10 +3609,35 @@ async function runJobNow(j) {
     });
     window.__trackAppInsightsEvent?.("jobs.runNow", { jobId: j.id });
   } catch {}
-  // The run acquires/creates the job's session within seconds — refresh both
-  // lists shortly so the row shows "running" and the conversation appears.
-  setTimeout(loadJobs, 1500);
-  setTimeout(loadSessions, 4000);
+  // Open the run's conversation as soon as its session exists, then keep the
+  // transcript fresh until the run lands — so the user can see the session
+  // instead of having to hunt for the row.
+  watchJobRunAndOpen(j.id);
+}
+
+// After a run is triggered, the job's dedicated session is created within a few
+// seconds. Poll the jobs list until it appears, open that conversation once,
+// then refresh its transcript (background runs don't stream to the chat SSE)
+// until the run finishes — so the run's answer shows up on its own. Stops if
+// the user navigates to a different conversation (never yanks them back).
+async function watchJobRunAndOpen(jobId) {
+  let opened = false;
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, i === 0 ? 700 : 1500));
+    await loadJobs();
+    const fresh = jobs.value.find((x) => x.id === jobId);
+    if (!fresh || !fresh.sessionId) continue;
+    if (!opened) {
+      await selectSession(fresh.sessionId);
+      loadSessions();
+      opened = true;
+    } else if (currentSessionId.value === fresh.sessionId) {
+      await reloadSessionTranscript(fresh.sessionId);
+    } else {
+      return; // user moved to another conversation — stop refreshing
+    }
+    if (!fresh.running) return; // run finished — transcript now has the answer
+  }
 }
 
 async function deleteJob(j) {
@@ -3424,16 +3662,15 @@ function openJob(j) {
     selectSession(j.sessionId);
     return;
   }
-  // Never ran yet — there's no conversation to open. Nudge toward ▶ instead
-  // of doing nothing silently.
-  j._nudge = true;
-  setTimeout(() => {
-    j._nudge = false;
-  }, 2600);
+  // Never ran yet — there's no conversation to open, so show the job's details
+  // in the edit sheet. A row click must always do something visible; the old
+  // inline nudge was too subtle and read as "nothing happens".
+  editJob(j);
 }
 
 function jobCadenceLabel(j) {
-  switch (j.intervalMinutes) {
+  const m = j.intervalMinutes;
+  switch (m) {
     case 15:
       return "15 min";
     case 60:
@@ -3442,9 +3679,11 @@ function jobCadenceLabel(j) {
       return "daily";
     case 10080:
       return "weekly";
-    default:
-      return `${j.intervalMinutes} min`;
   }
+  // Custom cadence — format to the largest whole unit for readability.
+  if (m % 1440 === 0) return `every ${m / 1440} d`;
+  if (m % 60 === 0) return `every ${m / 60} h`;
+  return `every ${m} min`;
 }
 
 // "in 4 min" / "in 3 h" / "now" — counterpart of formatRelativeTime for
@@ -3459,6 +3698,27 @@ function formatUntil(iso) {
   const h = Math.round(min / 60);
   if (h < 48) return `in ${h} h`;
   return `in ${Math.round(h / 24)} d`;
+}
+
+// "2m ago" for PAST timestamps — like formatRelativeTime but reads nowTick so
+// the job rows' "ran X ago" keeps ticking while the pane is open.
+function formatAgo(iso) {
+  if (!iso) return "";
+  const diff = nowTick.value - new Date(iso).getTime();
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
+// Hover tooltip for a job row: last result (or the prompt) + run count.
+function jobTooltip(j) {
+  const base = j.lastSummary || j.prompt || "";
+  return j.runCount
+    ? `${base}\n\n${j.runCount} run${j.runCount === 1 ? "" : "s"} so far`
+    : base;
 }
 
 async function newSession() {
@@ -9699,6 +9959,9 @@ async function send() {
 }
 .jobs-scroll {
   overflow-y: auto;
+  /* The jobs pane is the bottom-most pane — give the last row breathing room
+     so it isn't cramped against the sidebar's bottom edge. */
+  padding-bottom: 16px;
 }
 .jobs-header-toggle {
   cursor: pointer;
@@ -9847,10 +10110,6 @@ async function send() {
   color: #cf222e;
   font-weight: 600;
 }
-.job-time--nudge {
-  color: #9a6700;
-  font-weight: 600;
-}
 /* ── Run-immediately checkbox in the create modal ── */
 .job-runnow {
   display: flex;
@@ -9879,21 +10138,86 @@ async function send() {
   cursor: pointer;
   padding: 4px;
   border-radius: 5px;
-  opacity: 0;
-  transition:
-    opacity 0.12s ease,
-    background 0.12s ease;
-}
-.session-row:hover .job-row-btn {
-  opacity: 1;
+  transition: background 0.12s ease;
 }
 .job-row-btn:hover {
-  background: #eceef1;
+  background: #e3e6ea;
   color: #1f2328;
 }
 .job-row-btn:disabled {
   opacity: 0.35;
   cursor: default;
+}
+/* ── Job row actions — a hover OVERLAY on the right edge, not layout: the
+   buttons used to permanently reserve ~120px of a ~225px row (opacity-0 but
+   still in flow), squeezing the title + meta to a third of the row. Now the
+   text owns the full width; actions fade in over the right edge on
+   hover/focus with a gradient backdrop so covered text reads as intentional. ── */
+.job-actions {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  right: 1px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 22px;
+  border-radius: 0 6px 6px 0;
+  background: linear-gradient(
+    to right,
+    rgba(245, 246, 247, 0),
+    var(--job-row-bg, #f5f6f7) 24px
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.session-row.job-row:hover .job-actions,
+.session-row.job-row:focus-within .job-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.session-row--current.job-row {
+  --job-row-bg: #f3f2f1;
+}
+.job-actions .session-row-delete {
+  opacity: 1; /* container controls reveal — no double fade */
+}
+/* ── Schedule on/off switch — replaces the ambiguous ⏸/⟳ icon (▶ next to ⏸
+   read as contradictory transport controls; a switch reads as "schedule
+   armed: yes/no"). Always visible on a PAUSED row (it's the state
+   indicator); hover-revealed on armed rows like the other actions. ── */
+.job-switch {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  border: 1px solid #cfd3d8;
+  background: #e4e7ea;
+  padding: 0;
+  position: relative;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+.job-switch--on {
+  background: #0f6cbd;
+  border-color: #0f6cbd;
+}
+.job-switch-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s ease;
+}
+.job-switch--on .job-switch-knob {
+  transform: translateX(11px);
 }
 .job-form {
   padding: 10px 12px;
@@ -10127,6 +10451,37 @@ async function send() {
   color: #8a8d94;
   margin-left: 4px;
 }
+.job-freq-custom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+.job-freq-custom-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: #57606a;
+}
+.job-freq-custom-input {
+  width: 68px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: center;
+  padding: 5px 8px;
+  border: 1px solid #d7dade;
+  border-radius: 8px;
+  color: #24292f;
+  background: #fff;
+}
+.job-freq-custom-input:focus {
+  outline: none;
+  border-color: #0f6cbd;
+  box-shadow: 0 0 0 3px rgba(15, 108, 189, 0.12);
+}
 .job-modal-footer {
   display: flex;
   align-items: center;
@@ -10198,6 +10553,9 @@ async function send() {
 .session-row-time {
   font-size: 10.5px;
   color: #8a8886;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .session-row-delete {
   flex-shrink: 0;

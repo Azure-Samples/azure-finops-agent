@@ -322,7 +322,8 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         string azureOpenAIEndpoint,
         string azureOpenAIDeployment,
         string reasoningEffort,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        string? azureOpenAITenantId = null)
     {
         // Forward CLI telemetry (GenAI + MCP semantic conventions) to the local
         // OTel collector when one is configured. The collector translates OTLP into
@@ -369,6 +370,10 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             ExcludeVisualStudioCredential = true,
             ExcludeVisualStudioCodeCredential = true,
             ExcludeAzurePowerShellCredential = true,
+            // Pin the token tenant to the AOAI resource's tenant when configured
+            // (AzureOpenAI:TenantId) — local az CLI defaults may sit in another
+            // tenant, and AOAI rejects cross-tenant tokens.
+            TenantId = string.IsNullOrWhiteSpace(azureOpenAITenantId) ? null : azureOpenAITenantId,
         });
 
         var chartLogger = loggerFactory.CreateLogger("AzureFinOps.AI.Charts");

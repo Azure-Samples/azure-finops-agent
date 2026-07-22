@@ -115,6 +115,11 @@ dotnet user-secrets set "AzureOpenAI:Endpoint" "https://YOUR-RESOURCE.openai.azu
 # Optional — set the model deployment name (defaults to gpt-5.6-sol if omitted):
 dotnet user-secrets set "AzureOpenAI:DeploymentName" "gpt-5.6-sol"
 
+# Optional — pin the BYOK token tenant. Set this when your az CLI's DEFAULT
+# account lives in a different tenant than the Azure OpenAI resource
+# (symptom: every AI turn fails with "Token tenant does not match resource tenant"):
+dotnet user-secrets set "AzureOpenAI:TenantId" "TENANT-GUID-OF-YOUR-AOAI-RESOURCE"
+
 # Optional — enables the "Connect Azure" OAuth flow for Cost Management, Advisor, etc.:
 dotnet user-secrets set "Microsoft:ClientId"     "YOUR-ENTRA-APP-CLIENT-ID"
 dotnet user-secrets set "Microsoft:ClientSecret" "YOUR-ENTRA-APP-CLIENT-SECRET"

@@ -10,7 +10,11 @@ namespace AzureFinOps.Dashboard.Jobs;
 /// </summary>
 public static class JobEndpoints
 {
-    private static readonly int[] AllowedIntervals = { 15, 60, 1440, 10080 };
+    // Cadence bounds — presets (15/60/1440/10080) plus any custom value in
+    // between. 1 min floor = the scheduler's tick cadence (the fastest it can
+    // fire); 30 day ceiling keeps a job meaningful against its expiry horizon.
+    private const int MinIntervalMinutes = 1;
+    private const int MaxIntervalMinutes = 43200; // 30 days
     private const int MaxEnabledJobsPerUser = 3;
 
     public static void MapJobEndpoints(
@@ -50,8 +54,8 @@ public static class JobEndpoints
                 return Results.BadRequest(new { error = "prompt is required" });
             if (prompt.Length > 2000)
                 return Results.BadRequest(new { error = "prompt too long (max 2000 chars)" });
-            if (!AllowedIntervals.Contains(interval))
-                return Results.BadRequest(new { error = "intervalMinutes must be 15, 60, 1440, or 10080" });
+            if (interval < MinIntervalMinutes || interval > MaxIntervalMinutes)
+                return Results.BadRequest(new { error = $"intervalMinutes must be between {MinIntervalMinutes} and {MaxIntervalMinutes}" });
             if (store.EnabledCountForUser(userId, entraOid) >= MaxEnabledJobsPerUser)
                 return Results.BadRequest(new { error = $"Limit reached — max {MaxEnabledJobsPerUser} active jobs. Pause or delete one first." });
 
@@ -78,11 +82,63 @@ public static class JobEndpoints
             return Results.Ok(ToDto(job));
         });
 
+        app.MapPatch("/api/jobs/{id}", async (HttpContext ctx, string id) =>
+        {
+            var (job, err) = ResolveOwnedJob(ctx, store, id);
+            if (err is not null) return err;
+
+            using var body = await JsonDocument.ParseAsync(ctx.Request.Body);
+            var root = body.RootElement;
+
+            // Each field is optional — apply only what's present, validate first.
+            string? newPrompt = null, newName = null;
+            int? newInterval = null;
+            if (root.TryGetProperty("prompt", out var p))
+            {
+                newPrompt = p.GetString()?.Trim();
+                if (string.IsNullOrWhiteSpace(newPrompt))
+                    return Results.BadRequest(new { error = "prompt cannot be empty" });
+                if (newPrompt.Length > 2000)
+                    return Results.BadRequest(new { error = "prompt too long (max 2000 chars)" });
+            }
+            if (root.TryGetProperty("name", out var n))
+                newName = n.GetString()?.Trim();
+            if (root.TryGetProperty("intervalMinutes", out var i) && i.TryGetInt32(out var iv))
+            {
+                if (iv < MinIntervalMinutes || iv > MaxIntervalMinutes)
+                    return Results.BadRequest(new { error = $"intervalMinutes must be between {MinIntervalMinutes} and {MaxIntervalMinutes}" });
+                newInterval = iv;
+            }
+
+            if (newPrompt is not null) job!.Prompt = newPrompt;
+            if (newName is not null)
+                job!.Name = string.IsNullOrWhiteSpace(newName)
+                    ? Autoname(job.Prompt)
+                    : newName[..Math.Min(newName.Length, 60)];
+            if (newInterval is not null && newInterval.Value != job!.IntervalMinutes)
+            {
+                job.IntervalMinutes = newInterval.Value;
+                // New cadence horizon + reschedule the next run onto it (only if
+                // the job is armed; paused jobs keep their frozen NextRunUtc).
+                job.ExpiresUtc = DateTimeOffset.UtcNow.AddDays(newInterval.Value < 1440 ? 7 : 90);
+                if (job.Enabled)
+                    job.NextRunUtc = DateTimeOffset.UtcNow.AddMinutes(newInterval.Value);
+            }
+            store.Save();
+            logger.LogInformation("Job edited {JobId} '{Name}'", job!.Id, job.Name);
+            return Results.Ok(ToDto(job));
+        });
+
         app.MapPost("/api/jobs/{id}/toggle", (HttpContext ctx, string id) =>
         {
             var (job, err) = ResolveOwnedJob(ctx, store, id);
             if (err is not null) return err;
-            job!.Enabled = !job.Enabled;
+            // Re-enabling a paused job counts against the same active cap as
+            // creating one — otherwise pause+create×3+resume yields 4 active,
+            // contradicting the "max N active" guarantee the UI shows.
+            if (!job!.Enabled && store.EnabledCountForUser(job.UserId, job.EntraOid) >= MaxEnabledJobsPerUser)
+                return Results.BadRequest(new { error = $"Limit reached — max {MaxEnabledJobsPerUser} active jobs. Pause or delete one first." });
+            job.Enabled = !job.Enabled;
             if (job.Enabled)
             {
                 job.ConsecutiveFailures = 0;
