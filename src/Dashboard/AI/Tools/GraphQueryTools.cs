@@ -20,7 +20,7 @@ public class GraphQueryTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(QueryGraph, "QueryGraph", @"Calls Microsoft Graph API (https://graph.microsoft.com) using the signed-in user's token. Returns raw JSON.
-Method: GET only — every consented Graph scope is read-only (*.Read.All / Reports.Read.All) and write methods are blocked at the code level.
+Methods: GET, POST, PUT, PATCH. DELETE is blocked at the code level. NOTE: the standard consent tiers only grant read-only scopes (*.Read.All / Reports.Read.All), so write calls return 403 insufficient privileges unless the tenant has consented to write scopes — surface that to the user rather than retrying.
 DATA SCOPING: ALWAYS use $select to pick only needed fields, $top to limit rows, $filter to scope. Never fetch full user objects. Paginate via @odata.nextLink for large tenants.
 
 Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant areas:
@@ -36,8 +36,8 @@ Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant a
 
     private async Task<string> QueryGraph(
         [Description("API path starting with /, e.g. /v1.0/subscribedSkus")] string path,
-        [Description("HTTP method: GET only. Write methods are blocked at the code level.")] string? method = "GET",
-        [Description("Ignored — QueryGraph is GET-only and never sends a request body.")] string? body = null)
+        [Description("HTTP method: GET, POST, PUT, or PATCH (DELETE is blocked)")] string? method = "GET",
+        [Description("Optional JSON request body for POST/PUT/PATCH requests. Omit for GET.")] string? body = null)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("QueryGraph");
         activity?.SetTag("graph.method", method);
@@ -57,18 +57,11 @@ Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant a
         var (httpMethod, methodError) = HttpHelper.ResolveMethod(method, activity, "graph");
         if (methodError is not null) return methodError;
 
-        // Read-only enforcement: every consented Graph scope is read-only and the
-        // UI consent table promises \"read-only by scope definition\" — block write
-        // methods here as defense in depth instead of relying on Graph to 403 them.
-        if (httpMethod != HttpMethod.Get)
-        {
-            activity?.SetTag("graph.result", "blocked_write");
-            activity?.SetStatus(ActivityStatusCode.Error, "Non-GET blocked");
-            return "HTTP 403 Forbidden\nQueryGraph is read-only (GET only) — all consented Microsoft Graph scopes are read-only. Re-issue the request as GET.";
-        }
-
+        var hasBody = !string.IsNullOrWhiteSpace(body);
         return await HttpHelper.SendWithRetryAsync(
             $"https://graph.microsoft.com{path}",
-            token, activity, "graph");
+            token, activity, "graph",
+            method: httpMethod,
+            jsonBody: hasBody && httpMethod != HttpMethod.Get ? body : null);
     }
 }

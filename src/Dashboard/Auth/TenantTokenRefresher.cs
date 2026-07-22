@@ -39,13 +39,15 @@ public sealed class TenantTokenRefresher : BackgroundService
     /// enough that a single sweep miss can't run a token to its hard expiry.</summary>
     private static readonly TimeSpan RefreshThreshold = TimeSpan.FromMinutes(15);
 
-    private const string ScopeArm =
+    // Internal (not private): the JobScheduler hydrates tokens for background
+    // job runs through the same refresh-token exchange with these exact scopes.
+    internal const string ScopeArm =
         "openid profile email https://management.azure.com/user_impersonation offline_access";
-    private const string ScopeGraph =
+    internal const string ScopeGraph =
         "https://graph.microsoft.com/User.Read https://graph.microsoft.com/User.Read.All https://graph.microsoft.com/Organization.Read.All https://graph.microsoft.com/Group.Read.All https://graph.microsoft.com/Reports.Read.All offline_access";
-    private const string ScopeLogAnalytics =
+    internal const string ScopeLogAnalytics =
         "https://api.loganalytics.io/Data.Read offline_access";
-    private const string ScopeStorage =
+    internal const string ScopeStorage =
         "https://storage.azure.com/user_impersonation offline_access";
 
     private readonly AiTelemetry _telemetry;

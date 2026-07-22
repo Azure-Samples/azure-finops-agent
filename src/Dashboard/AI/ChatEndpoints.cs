@@ -47,6 +47,26 @@ public static class ChatEndpoints
         ActiveTurns.TryGetValue(sessionId, out var startedAt)
         && DateTimeOffset.UtcNow - startedAt <= TimeSpan.FromMinutes(15);
 
+    /// <summary>Claims the one-turn-per-session gate for a non-chat caller (the
+    /// background <see cref="Jobs.JobScheduler"/>). Shares the same dictionary as
+    /// chat turns so a scheduled run can never race a live chat turn in the same
+    /// session — in either direction. Honors the same 15-minute staleness
+    /// reclaim as the chat path.</summary>
+    internal static bool TryBeginTurn(string sessionId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (ActiveTurns.TryAdd(sessionId, now)) return true;
+        if (ActiveTurns.TryGetValue(sessionId, out var startedAt) && now - startedAt > TimeSpan.FromMinutes(15))
+        {
+            ActiveTurns[sessionId] = now; // reclaim stale/orphaned turn
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Releases a gate claimed via <see cref="TryBeginTurn"/>.</summary>
+    internal static void EndTurn(string sessionId) => ActiveTurns.TryRemove(sessionId, out _);
+
     /// <summary>
     /// Conservative trivial-prompt classifier for per-turn effort routing.
     /// Only short prompts with NO FinOps/data signal qualify — a misclassified

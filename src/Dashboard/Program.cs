@@ -145,6 +145,25 @@ app.Lifetime.ApplicationStopping.Register(() =>
     try { tokenRefresher.StopAsync(cts.Token).GetAwaiter().GetResult(); } catch { }
 });
 
+// Scheduled background jobs — user-defined prompt + cadence, executed as agent
+// turns in per-job sessions. Auth is delegated-only via the persisted refresh
+// token (see JobScheduler docs); tool surface identical to chat (no DELETE).
+var jobStore = new AzureFinOps.Dashboard.Jobs.JobStore(loggerFactory.CreateLogger("AzureFinOps.Jobs"));
+var jobScheduler = new AzureFinOps.Dashboard.Jobs.JobScheduler(
+    jobStore,
+    telemetry,
+    copilotFactory,
+    app.Services.GetRequiredService<SessionTokenStore>(),
+    app.Services.GetRequiredService<PersistentIdentity>(),
+    app.Services.GetRequiredService<IHttpClientFactory>(),
+    loggerFactory.CreateLogger<AzureFinOps.Dashboard.Jobs.JobScheduler>());
+await jobScheduler.StartAsync(CancellationToken.None);
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    try { jobScheduler.StopAsync(cts.Token).GetAwaiter().GetResult(); } catch { }
+});
+
 // ── Middleware pipeline ────────────────────────────────────────
 var forwardedHeadersOptions = new ForwardedHeadersOptions
 {
@@ -219,7 +238,23 @@ app.Use(async (ctx, next) =>
 
 app.UseSession();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// Cache policy that makes deploys atomic for browsers:
+//  • /assets/* files are content-hashed by Vite → cache forever (immutable).
+//  • index.html must NEVER be cached — a cached copy references the PREVIOUS
+//    deploy's hashed bundles, which 404 after a redeploy and leave the user a
+//    blank page until a hard refresh (observed live in Edge after the last
+//    deploy: cached index → stale /assets/index-*.js 404 → white screen).
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = spCtx =>
+    {
+        var p = spCtx.Context.Request.Path.Value ?? "";
+        if (p.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase))
+            spCtx.Context.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
+        else if (p.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || p == "/" || p == "")
+            spCtx.Context.Response.Headers.CacheControl = "no-cache";
+    }
+});
 
 // Absolute session lifetime — even if the user is active, force re-auth after 8h.
 // Limits the blast radius of a stolen session cookie.
@@ -337,6 +372,7 @@ app.MapMicrosoftAuthEndpoints(oauthOptions, entraCredentials, idTokenValidator, 
 app.MapAzureSessionEndpoints(tokenStore, telemetry, logger);
 app.MapChatEndpoints(copilotFactory, tokenStore, telemetry, logger);
 app.MapSessionEndpoints(copilotFactory, telemetry, logger);
+AzureFinOps.Dashboard.Jobs.JobEndpoints.MapJobEndpoints(app, jobStore, jobScheduler, logger);
 app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
 app.MapUploadEndpoints();
@@ -354,6 +390,13 @@ IResult ServeSlides(IWebHostEnvironment env)
 app.MapGet("/slides", ServeSlides);
 app.MapGet("/slide", ServeSlides);
 
-app.MapFallbackToFile("index.html");
+// SPA fallback (deep links like /faq/... handled elsewhere; anything unmatched
+// gets index.html). Must carry the same no-cache policy as direct index.html
+// hits — MapFallbackToFile uses its OWN StaticFileOptions, not UseStaticFiles'.
+app.MapFallbackToFile("index.html", new StaticFileOptions
+{
+    OnPrepareResponse = spCtx =>
+        spCtx.Context.Response.Headers.CacheControl = "no-cache",
+});
 
 app.Run();

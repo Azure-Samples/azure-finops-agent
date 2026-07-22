@@ -1737,10 +1737,31 @@
         }"
       >
         <!-- ── Top half: Agent ── -->
-        <div class="tools-sidebar-pane tools-sidebar-pane--agent">
+        <div
+          class="tools-sidebar-pane tools-sidebar-pane--agent"
+          :class="{ 'tools-sidebar-pane--collapsed': agentCollapsed }"
+        >
           <div class="tools-sidebar-header">
-            <div class="tools-sidebar-header-text">
-              <span class="tools-sidebar-title">Agent</span>
+            <div
+              class="tools-sidebar-header-text jobs-header-toggle"
+              role="button"
+              tabindex="0"
+              @click="togglePane('agent')"
+              @keydown.enter.prevent="togglePane('agent')"
+              @keydown.space.prevent="togglePane('agent')"
+              :title="
+                agentCollapsed
+                  ? 'Expand Agent execution'
+                  : 'Collapse Agent execution'
+              "
+            >
+              <span class="tools-sidebar-title"
+                ><span
+                  class="jobs-chevron"
+                  :class="{ 'jobs-chevron--collapsed': agentCollapsed }"
+                  >▾</span
+                >Agent execution</span
+              >
               <span class="tools-sidebar-status">
                 <span
                   class="tools-sidebar-status-dot"
@@ -1888,10 +1909,31 @@
           </div>
         </div>
         <!-- ── Bottom half: Conversations (works for anonymous + signed-in) ── -->
-        <div class="tools-sidebar-pane tools-sidebar-pane--sessions">
+        <div
+          class="tools-sidebar-pane tools-sidebar-pane--sessions"
+          :class="{ 'tools-sidebar-pane--collapsed': sessionsCollapsed }"
+        >
           <div class="tools-sidebar-header sessions-header">
-            <div class="tools-sidebar-header-text">
-              <span class="tools-sidebar-title">Conversations</span>
+            <div
+              class="tools-sidebar-header-text jobs-header-toggle"
+              role="button"
+              tabindex="0"
+              @click="togglePane('sessions')"
+              @keydown.enter.prevent="togglePane('sessions')"
+              @keydown.space.prevent="togglePane('sessions')"
+              :title="
+                sessionsCollapsed
+                  ? 'Expand Conversations'
+                  : 'Collapse Conversations'
+              "
+            >
+              <span class="tools-sidebar-title"
+                ><span
+                  class="jobs-chevron"
+                  :class="{ 'jobs-chevron--collapsed': sessionsCollapsed }"
+                  >▾</span
+                >Conversations</span
+              >
               <span class="tools-sidebar-status">
                 <span class="tools-sidebar-status-text"
                   >{{ sessions.length }} saved</span
@@ -1959,6 +2001,150 @@
             </div>
           </div>
         </div>
+        <!-- ── Scheduled jobs: prompt + cadence, runs in the background even
+             when the browser is closed. Entra-only (needs the persisted
+             refresh token). Each job gets its own conversation. ── -->
+        <div
+          class="tools-sidebar-pane tools-sidebar-pane--jobs"
+          :class="{ 'tools-sidebar-pane--collapsed': jobsCollapsed }"
+        >
+          <div class="tools-sidebar-header sessions-header">
+            <div
+              class="tools-sidebar-header-text jobs-header-toggle"
+              role="button"
+              tabindex="0"
+              @click="toggleJobsPane"
+              @keydown.enter.prevent="toggleJobsPane"
+              @keydown.space.prevent="toggleJobsPane"
+              :title="jobsCollapsed ? 'Expand jobs' : 'Collapse jobs'"
+            >
+              <span class="tools-sidebar-title"
+                ><span
+                  class="jobs-chevron"
+                  :class="{ 'jobs-chevron--collapsed': jobsCollapsed }"
+                  >▾</span
+                >Scheduled jobs</span
+              >
+              <span class="tools-sidebar-status">
+                <span class="tools-sidebar-status-text"
+                  >{{ activeJobsCount }} active</span
+                >
+                <span v-if="attentionJobsCount" class="jobs-attention"
+                  >· {{ attentionJobsCount }} failing</span
+                >
+              </span>
+            </div>
+            <button
+              class="sessions-new-btn"
+              :disabled="!azureConnected || newJobOpen"
+              @click="openNewJob"
+              :title="
+                azureConnected
+                  ? 'Schedule a recurring prompt'
+                  : 'Connect Azure to schedule background jobs'
+              "
+            >
+              + New job
+            </button>
+          </div>
+          <div class="tools-sidebar-scroll jobs-scroll">
+            <div v-if="!azureConnected" class="sessions-empty">
+              Connect Azure to run prompts on a schedule — daily cost reports,
+              capacity hunting, anomaly checks.
+            </div>
+            <div v-else-if="jobs.length === 0" class="sessions-empty">
+              No jobs yet — run FinOps checks on a schedule.
+              <button class="jobs-empty-cta" @click="openNewJob">
+                ＋ Schedule your first job
+              </button>
+            </div>
+            <div
+              v-for="j in sortedJobs"
+              :key="j.id"
+              :class="[
+                'session-row',
+                'job-row',
+                { 'session-row--current': j.sessionId === currentSessionId },
+                { 'job-row--paused': !j.enabled },
+              ]"
+              @click="openJob(j)"
+              :title="j.lastSummary || j.prompt"
+            >
+              <span
+                class="tools-sidebar-status-dot"
+                :class="{
+                  'tools-sidebar-status-dot--live': j.running,
+                  'job-dot--dead':
+                    !j.running &&
+                    (j.lastStatus === 'error' ||
+                      j.lastStatus === 'auth_expired'),
+                  'job-dot--alive':
+                    !j.running &&
+                    j.enabled &&
+                    j.lastStatus !== 'error' &&
+                    j.lastStatus !== 'auth_expired',
+                }"
+                :title="
+                  j.running
+                    ? 'Running now'
+                    : j.enabled
+                      ? 'Scheduled — runs ' + formatUntil(j.nextRunUtc)
+                      : j.lastStatus || 'paused'
+                "
+              ></span>
+              <div class="session-row-main">
+                <span class="session-row-title">{{ j.name }}</span>
+                <span class="session-row-time">
+                  <template v-if="j._nudge">
+                    <span class="job-time--nudge"
+                      >no runs yet — ▶ runs it now</span
+                    >
+                  </template>
+                  <template v-else-if="j.running">
+                    <span class="job-time--running">running now…</span>
+                  </template>
+                  <template v-else-if="j.lastStatus === 'auth_expired'">
+                    {{ jobCadenceLabel(j) }} ·
+                    <span class="job-time--dead">reconnect Azure</span>
+                  </template>
+                  <template v-else-if="j.enabled">
+                    {{ jobCadenceLabel(j) }} · next
+                    {{ formatUntil(j.nextRunUtc) }}
+                  </template>
+                  <template v-else-if="j.lastStatus === 'expired'">
+                    {{ jobCadenceLabel(j) }} · expired
+                  </template>
+                  <template v-else>{{ jobCadenceLabel(j) }} · paused</template>
+                </span>
+              </div>
+              <button
+                class="job-row-btn"
+                @click.stop="runJobNow(j)"
+                :disabled="j.running"
+                title="Run now"
+                aria-label="Run job now"
+              >
+                ▶
+              </button>
+              <button
+                class="job-row-btn"
+                @click.stop="toggleJob(j)"
+                :title="j.enabled ? 'Pause' : 'Resume'"
+                :aria-label="j.enabled ? 'Pause job' : 'Resume job'"
+              >
+                {{ j.enabled ? "⏸" : "⟳" }}
+              </button>
+              <button
+                class="session-row-delete"
+                @click.stop="deleteJob(j)"
+                title="Delete this job (its conversation is kept)"
+                aria-label="Delete job"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        </div>
       </aside>
     </div>
     <!-- end portal-body -->
@@ -1995,6 +2181,125 @@
             <pre class="tool-popover-pre tool-popover-pre--error">{{
               hoveredTool.error
             }}</pre>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- New scheduled job — centered modal sheet, above everything -->
+    <Teleport to="body">
+      <div
+        v-if="newJobOpen"
+        class="job-modal-overlay"
+        @click.self="newJobOpen = false"
+        @keydown.esc="newJobOpen = false"
+      >
+        <div
+          class="job-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Schedule a background job"
+        >
+          <div class="job-modal-header">
+            <div class="job-modal-icon">⚙</div>
+            <div class="job-modal-heading">
+              <div class="job-modal-title">Schedule a background job</div>
+              <div class="job-modal-subtitle">
+                Runs in the background — even with the browser closed — using
+                only your delegated Azure permissions: the agent can never do
+                more than your own login allows. Every run's output lands in the
+                job's conversation.
+              </div>
+            </div>
+            <button
+              class="job-modal-close"
+              @click="newJobOpen = false"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+          <div class="job-modal-body">
+            <div class="job-tpl-label">Start from a template</div>
+            <div class="job-tpl-grid">
+              <button
+                v-for="t in JOB_TEMPLATES"
+                :key="t.label"
+                class="job-tpl"
+                :class="{ 'job-tpl--selected': selectedTemplate === t.label }"
+                :title="t.prompt"
+                @click="applyTemplate(t)"
+              >
+                <span class="job-tpl-emoji">{{ t.emoji }}</span>
+                <span class="job-tpl-name">{{ t.label }}</span>
+              </button>
+            </div>
+            <div class="job-tpl-label">Name</div>
+            <input
+              v-model="newJobName"
+              class="job-form-input"
+              type="text"
+              maxlength="60"
+              placeholder="Optional — e.g. H100 capacity hunt"
+            />
+            <div class="job-tpl-label">What should the agent do every run?</div>
+            <textarea
+              ref="jobPromptEl"
+              v-model="newJobPrompt"
+              class="job-form-prompt"
+              rows="3"
+              maxlength="2000"
+              placeholder="e.g. Check ND96isr H200 v5 spot capacity and quota in all my subscriptions across all regions; if deployable, tell me exactly where."
+              @input="autosizeJobPrompt"
+              @keydown.ctrl.enter.prevent="createJob"
+              @keydown.meta.enter.prevent="createJob"
+            ></textarea>
+            <div class="job-tpl-label">How often?</div>
+            <div class="job-freq-row">
+              <button
+                v-for="f in JOB_FREQUENCIES"
+                :key="f.v"
+                class="job-freq"
+                :class="{ 'job-freq--selected': newJobInterval === f.v }"
+                @click="newJobInterval = f.v"
+              >
+                {{ f.l }}
+              </button>
+              <span class="job-freq-expiry">{{
+                newJobInterval < 1440
+                  ? "expires after 7 days"
+                  : "expires after 90 days"
+              }}</span>
+            </div>
+            <label class="job-runnow">
+              <input v-model="newJobRunNow" type="checkbox" />
+              <span>
+                Run immediately, then repeat on the schedule
+                <span class="job-runnow-hint">{{
+                  newJobRunNow
+                    ? "— first result lands in its conversation within a minute"
+                    : "— first run waits one full interval"
+                }}</span>
+              </span>
+            </label>
+            <div v-if="jobError" class="job-form-error">{{ jobError }}</div>
+          </div>
+          <div class="job-modal-footer">
+            <span class="job-form-hint"
+              >Max 3 active jobs · Ctrl+Enter creates</span
+            >
+            <div class="job-form-actions">
+              <button class="job-form-cancel" @click="newJobOpen = false">
+                Cancel
+              </button>
+              <button
+                class="job-form-create"
+                :disabled="!newJobPrompt.trim() || jobBusy"
+                @click="createJob"
+              >
+                {{ jobBusy ? "Creating…" : "Create job" }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -2406,6 +2711,10 @@ function onVisibilityChange() {
   // (rAF and ResizeObserver delivery are suspended in background tabs) —
   // pin back to the newest content if the user was following.
   scrollToBottom();
+
+  // The "come back" moment: refresh job statuses immediately so the pane shows
+  // what ran while the tab was away (fresh lastRun/nextRun/running states).
+  loadJobs();
 
   // Always reconcile on return — covers both "stream ended while away" (reload
   // the persisted answer) and "stream still running" (arm the zombie probe in
@@ -2840,6 +3149,316 @@ async function loadSessions() {
   } catch {
     /* network blip — keep prior list */
   }
+  // Piggyback: jobs status refreshes on the same cadence as the sidebar
+  // (mount + after every turn) — no dedicated poll loop needed.
+  loadJobs();
+}
+
+// ── Scheduled jobs (Entra-only) ───────────────────────────────
+// A job = prompt + cadence, executed by the backend JobScheduler inside a
+// dedicated conversation (the job row opens it like any other session).
+const jobs = ref([]);
+const newJobOpen = ref(false);
+const newJobName = ref("");
+const newJobPrompt = ref("");
+const newJobInterval = ref(1440);
+const newJobRunNow = ref(true);
+const jobBusy = ref(false);
+const jobError = ref("");
+// Collapsible panes — each of the three sidebar sections (Agent /
+// Conversations / Scheduled jobs) can be collapsed to its header so the
+// remaining pane(s) get all the vertical space (focus mode). Sticky per pane.
+function loadPaneCollapsed(key) {
+  try {
+    return localStorage.getItem(`finops.paneCollapsed.${key}`) === "1";
+  } catch {
+    return false;
+  }
+}
+const agentCollapsed = ref(loadPaneCollapsed("agent"));
+const sessionsCollapsed = ref(loadPaneCollapsed("sessions"));
+const jobsCollapsed = ref(
+  (() => {
+    try {
+      // migrate the older single-pane key if present
+      return (
+        localStorage.getItem("finops.paneCollapsed.jobs") === "1" ||
+        localStorage.getItem("finops.jobsCollapsed") === "1"
+      );
+    } catch {
+      return false;
+    }
+  })(),
+);
+function togglePane(key) {
+  const map = {
+    agent: agentCollapsed,
+    sessions: sessionsCollapsed,
+    jobs: jobsCollapsed,
+  };
+  const r = map[key];
+  r.value = !r.value;
+  try {
+    localStorage.setItem(`finops.paneCollapsed.${key}`, r.value ? "1" : "0");
+  } catch {}
+}
+function toggleJobsPane() {
+  togglePane("jobs");
+}
+// Ready-made jobs — clicking one prefills the form (still fully editable).
+// Kept deliberately concrete: these are the highest-value recurring asks.
+const JOB_TEMPLATES = [
+  {
+    emoji: "🎯",
+    label: "GPU hunt & reserve",
+    name: "GPU capacity hunt & reserve",
+    interval: 15,
+    prompt:
+      "Check quota and on-demand capacity for GPU VM sizes (ND H100/H200 v5 families) across all my subscriptions and regions. IDEMPOTENCY FIRST: if a capacity reservation group named 'finops-gpu-crg' already exists in any region, do nothing and report what is already reserved. Otherwise, if a size is deployable AND I have quota headroom for it: secure it immediately by creating resource group 'finops-capacity' (if missing), capacity reservation group 'finops-gpu-crg', and an on-demand capacity reservation 'finops-gpu-1' with that size and capacity 1 in that region (ARM PUT). Then state exactly what was reserved, that it bills at the full VM rate while held, and that I should pause this job and delete the reservation (you'll generate the cleanup script) when done. If my RBAC blocks the write, say so. If nothing is deployable, list the closest regions with quota headroom.",
+  },
+  {
+    emoji: "📊",
+    label: "Daily cost digest",
+    name: "Daily cost digest",
+    interval: 1440,
+    prompt:
+      "Summarize yesterday's Azure spend by service and subscription, compare it to the 7-day average, and call out anything unusual with likely root causes.",
+  },
+  {
+    emoji: "🚨",
+    label: "Anomaly watch",
+    name: "Cost anomaly watch",
+    interval: 60,
+    prompt:
+      "Compare today's spend rate so far against the same window over the past 7 days. Flag any service or resource group trending more than 20% above normal and identify the resources driving it.",
+  },
+  {
+    emoji: "💰",
+    label: "Budget guard",
+    name: "Budget guard",
+    interval: 1440,
+    prompt:
+      "Check every budget and the month-end forecast across all my subscriptions. Warn me if any subscription or resource group is projected to exceed its budget, with the current burn rate.",
+  },
+  {
+    emoji: "🧹",
+    label: "Idle resource sweep",
+    name: "Idle resource sweep",
+    interval: 10080,
+    prompt:
+      "Find idle and orphaned resources — unattached disks, unused public IPs, stopped-but-allocated VMs, empty App Service plans — estimate the monthly waste and generate a cleanup script for review.",
+  },
+  {
+    emoji: "💡",
+    label: "Advisor watch",
+    name: "Advisor cost watch",
+    interval: 1440,
+    prompt:
+      "Check for new Azure Advisor cost recommendations and summarize the top opportunities with estimated monthly savings, ranked by impact and effort.",
+  },
+];
+const selectedTemplate = ref("");
+function applyTemplate(t) {
+  selectedTemplate.value = t.label;
+  newJobName.value = t.name;
+  newJobPrompt.value = t.prompt;
+  newJobInterval.value = t.interval;
+  nextTick(autosizeJobPrompt);
+}
+// Cadence pills for the create-job modal.
+const JOB_FREQUENCIES = [
+  { v: 15, l: "Every 15 min" },
+  { v: 60, l: "Hourly" },
+  { v: 1440, l: "Daily" },
+  { v: 10080, l: "Weekly" },
+];
+const jobPromptEl = ref(null);
+// Auto-grow the prompt textarea so the FULL prompt is always visible — no
+// inner scrollbar. Runs on typing, on template apply, and on modal open
+// (the modal body scrolls if a very long prompt exceeds the sheet height).
+function autosizeJobPrompt() {
+  const el = jobPromptEl.value;
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = el.scrollHeight + 2 + "px";
+}
+// Display order for a long list: running first, then anything failing (needs
+// the user), then armed jobs by soonest next run, then paused/expired.
+const sortedJobs = computed(() => {
+  const rank = (j) => {
+    if (j.running) return 0;
+    if (j.lastStatus === "error" || j.lastStatus === "auth_expired") return 1;
+    if (j.enabled) return 2;
+    return 3;
+  };
+  return [...jobs.value].sort((a, b) => {
+    const r = rank(a) - rank(b);
+    if (r !== 0) return r;
+    if (rank(a) === 2)
+      return new Date(a.nextRunUtc || 0) - new Date(b.nextRunUtc || 0);
+    return new Date(b.lastRunUtc || 0) - new Date(a.lastRunUtc || 0);
+  });
+});
+const activeJobsCount = computed(
+  () => jobs.value.filter((j) => j.enabled).length,
+);
+const attentionJobsCount = computed(
+  () =>
+    jobs.value.filter(
+      (j) => j.lastStatus === "error" || j.lastStatus === "auth_expired",
+    ).length,
+);
+// Live clock for the "next in X min" countdowns — a 30 s ticker the template
+// reads through formatUntil() so countdowns stay fresh without any list churn.
+const nowTick = ref(Date.now());
+let jobsTickTimer = null;
+let jobsPollTimer = null;
+
+async function loadJobs() {
+  if (!azureConnected.value) {
+    jobs.value = [];
+    return;
+  }
+  try {
+    const res = await fetch("/api/jobs", { credentials: "same-origin" });
+    if (!res.ok) return;
+    const data = await res.json();
+    jobs.value = Array.isArray(data.jobs) ? data.jobs : [];
+  } catch {
+    /* network blip — keep prior list */
+  }
+}
+
+function openNewJob() {
+  jobError.value = "";
+  selectedTemplate.value = "";
+  newJobRunNow.value = true;
+  jobsCollapsed.value = false;
+  newJobOpen.value = true;
+  // Land the cursor in the prompt — the one field that matters — and size it
+  // to whatever content is already there (e.g. reopening with a draft).
+  nextTick(() => {
+    jobPromptEl.value?.focus();
+    autosizeJobPrompt();
+  });
+}
+
+async function createJob() {
+  if (!newJobPrompt.value.trim() || jobBusy.value) return;
+  jobBusy.value = true;
+  jobError.value = "";
+  try {
+    const res = await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: newJobName.value.trim() || undefined,
+        prompt: newJobPrompt.value.trim(),
+        intervalMinutes: newJobInterval.value,
+        runImmediately: newJobRunNow.value,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      jobError.value = data.error || "Failed to create job.";
+      return;
+    }
+    newJobOpen.value = false;
+    newJobName.value = "";
+    newJobPrompt.value = "";
+    newJobInterval.value = 1440;
+    window.__trackAppInsightsEvent?.("jobs.created", {
+      intervalMinutes: String(data.intervalMinutes || ""),
+    });
+    await loadJobs();
+  } finally {
+    jobBusy.value = false;
+  }
+}
+
+async function toggleJob(j) {
+  try {
+    await fetch(`/api/jobs/${encodeURIComponent(j.id)}/toggle`, {
+      method: "POST",
+    });
+  } catch {}
+  loadJobs();
+}
+
+async function runJobNow(j) {
+  if (j.running) return;
+  // Optimistic: pulse the row green immediately — the 1.5 s refresh confirms
+  // the real state from the server (and reverts if the run couldn't start).
+  j.running = true;
+  try {
+    await fetch(`/api/jobs/${encodeURIComponent(j.id)}/run`, {
+      method: "POST",
+    });
+    window.__trackAppInsightsEvent?.("jobs.runNow", { jobId: j.id });
+  } catch {}
+  // The run acquires/creates the job's session within seconds — refresh both
+  // lists shortly so the row shows "running" and the conversation appears.
+  setTimeout(loadJobs, 1500);
+  setTimeout(loadSessions, 4000);
+}
+
+async function deleteJob(j) {
+  // Immediate delete by design — no confirm dialog, and OPTIMISTIC: the row
+  // disappears right away. If the server call fails, the next loadJobs()
+  // refresh brings it back (rare) — far better than a × that appears dead.
+  jobs.value = jobs.value.filter((x) => x.id !== j.id);
+  try {
+    const res = await fetch(`/api/jobs/${encodeURIComponent(j.id)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok && res.status !== 404)
+      window.__trackAppInsightsEvent?.("jobs.deleteFailed", {
+        status: String(res.status),
+      });
+  } catch {}
+  loadJobs();
+}
+
+function openJob(j) {
+  if (j.sessionId) {
+    selectSession(j.sessionId);
+    return;
+  }
+  // Never ran yet — there's no conversation to open. Nudge toward ▶ instead
+  // of doing nothing silently.
+  j._nudge = true;
+  setTimeout(() => {
+    j._nudge = false;
+  }, 2600);
+}
+
+function jobCadenceLabel(j) {
+  switch (j.intervalMinutes) {
+    case 15:
+      return "15 min";
+    case 60:
+      return "hourly";
+    case 1440:
+      return "daily";
+    case 10080:
+      return "weekly";
+    default:
+      return `${j.intervalMinutes} min`;
+  }
+}
+
+// "in 4 min" / "in 3 h" / "now" — counterpart of formatRelativeTime for
+// FUTURE timestamps (next scheduled run). Reads nowTick so Vue re-renders
+// countdowns every 30 s while the pane is open.
+function formatUntil(iso) {
+  if (!iso) return "";
+  const diffMs = new Date(iso).getTime() - nowTick.value;
+  if (diffMs <= 30000) return "any moment";
+  const min = Math.round(diffMs / 60000);
+  if (min < 60) return `in ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 48) return `in ${h} h`;
+  return `in ${Math.round(h / 24)} d`;
 }
 
 async function newSession() {
@@ -3115,18 +3734,9 @@ async function attachToServerTurn(sessionId) {
 }
 
 async function deleteSession(sessionId) {
-  // Deleting is irreversible (server-side removal of the on-disk session) —
-  // one mis-click on the small × shouldn't silently destroy a conversation.
-  const meta = sessions.value.find((s) => s.id === sessionId);
-  const name = meta?.summary || "this conversation";
-  if (!confirm(`Delete "${name}"?\n\nThis cannot be undone.`)) return;
-  try {
-    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-      method: "DELETE",
-    });
-  } catch {
-    return;
-  }
+  // Immediate delete by design — no confirm dialog, and OPTIMISTIC: the row
+  // leaves the list before the server round-trip so the × always feels alive.
+  sessions.value = sessions.value.filter((s) => s.id !== sessionId);
   if (sessionId === currentSessionId.value) {
     currentSessionId.value = null;
     messages.value = [];
@@ -3142,6 +3752,15 @@ async function deleteSession(sessionId) {
   // a backgrounded stream may still be writing to it; abandon those writes.
   perSessionToolCalls.delete(sessionId);
   perSessionCharts.delete(sessionId);
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok && res.status !== 404)
+      window.__trackAppInsightsEvent?.("sessions.deleteFailed", {
+        status: String(res.status),
+      });
+  } catch {}
   await loadSessions();
 }
 
@@ -3505,6 +4124,16 @@ onMounted(async () => {
   setTimeout(() => {
     loadSessions();
   }, 500);
+  // Jobs pane liveness: tick the countdown clock every 30 s, and poll job
+  // statuses every 45 s while the tab is visible — so a job that ran in the
+  // background flips to "ran Xm ago / next in Y" without any user action.
+  jobsTickTimer = setInterval(() => {
+    nowTick.value = Date.now();
+  }, 30000);
+  jobsPollTimer = setInterval(() => {
+    if (azureConnected.value && document.visibilityState === "visible")
+      loadJobs();
+  }, 45000);
   // Restore the last conversation after a full page reload/navigation — the
   // server keeps executing turns while the page is gone, so coming back should
   // always show the conversation (and pick up an answer that finished, or poll
@@ -5025,6 +5654,8 @@ onBeforeUnmount(() => {
     } catch {}
   });
   chartResizeObservers.length = 0;
+  if (jobsTickTimer) clearInterval(jobsTickTimer);
+  if (jobsPollTimer) clearInterval(jobsPollTimer);
   document.removeEventListener("click", dismissPopover);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("focus", onWindowFocus);
@@ -5538,6 +6169,11 @@ async function send() {
   let toolCalls = perSessionToolCalls.get(streamingId);
   let charts = perSessionCharts.get(streamingId);
   let hasDeltas = false;
+  // Snapshot of the most recent tool_start narration wipe. If the turn ends
+  // and NOTHING streamed after the last tool (i.e. the "narration" we wiped
+  // was actually the final answer — e.g. answer text → late tool call → end),
+  // commit restores this so the answer can never be lost from the view.
+  let lastWipedText = "";
   // Artifacts produced by THIS stream. Kept stream-local (not in the shared
   // htmlReady/scriptReady refs) so a deck/script finishing in a background
   // session can't pop into whichever conversation is currently in view —
@@ -5798,24 +6434,40 @@ async function send() {
             break;
 
           case "tool_start":
-            // If we already streamed text BEFORE this tool call, that text was
-            // mid-turn narration ("I'm rerunning…", "I've got the estate shape…")
-            // — not the final answer. Wipe it; the real answer streams after the
-            // last tool completes.
-            if (hasDeltas) {
-              console.log(
-                "[tool_start wipe] streamBuffer length before wipe=",
-                streamBuffer.value.length,
-                "first 60=",
-                streamBuffer.value.slice(0, 60),
-              );
-              if (textAnimFrame) {
-                cancelAnimationFrame(textAnimFrame);
-                textAnimFrame = null;
+            // Text streamed BEFORE a tool call is usually mid-turn narration
+            // ("I'm rerunning…") — not the final answer — so we wipe it and let
+            // the real answer stream after the last tool completes. EXCEPT for
+            // post-answer tools: the system prompt makes the model call
+            // SuggestFollowUp (and often RenderChart/presentation tools) AFTER
+            // the final answer text has fully streamed. Wiping on those deleted
+            // the just-delivered answer — the user watched their table render
+            // and then vanish, leaving only the follow-up chip (the persisted
+            // transcript still had it, which is why reloads brought it back).
+            {
+              const postAnswerTools = new Set([
+                "SuggestFollowUp",
+                "ReportMaturityScore",
+                "PublishFAQ",
+              ]);
+              if (hasDeltas && !postAnswerTools.has(data.tool)) {
+                console.log(
+                  "[tool_start wipe] streamBuffer length before wipe=",
+                  streamBuffer.value.length,
+                  "first 60=",
+                  streamBuffer.value.slice(0, 60),
+                );
+                if (textAnimFrame) {
+                  cancelAnimationFrame(textAnimFrame);
+                  textAnimFrame = null;
+                }
+                pendingText = "";
+                // Keep the wiped text — if the turn ends with NO further deltas
+                // (the "narration" WAS the answer), commit restores it instead
+                // of losing the answer.
+                lastWipedText = streamBuffer.value;
+                streamBuffer.value = "";
+                hasDeltas = false;
               }
-              pendingText = "";
-              streamBuffer.value = "";
-              hasDeltas = false;
             }
             activeTools.value = [...activeTools.value, data.tool];
             {
@@ -6049,6 +6701,16 @@ async function send() {
 
     // Flush any remaining animated text before saving
     flushText();
+
+    // Restore a wiped answer: if the last text on screen was wiped by a late
+    // tool_start and no new deltas followed, the wiped text WAS the answer.
+    if (!streamBuffer.value.trim() && lastWipedText.trim()) {
+      console.log(
+        "[commit restore] turn ended with empty buffer; restoring wiped text len=",
+        lastWipedText.length,
+      );
+      streamBuffer.value = lastWipedText;
+    }
 
     // Clean up final message: strip thinking lines, fix missing spaces after periods
     const clean = streamBuffer.value
@@ -8869,6 +9531,7 @@ async function send() {
   align-items: center;
   justify-content: space-between;
   padding: 8px 16px;
+  flex-shrink: 0; /* headers stay pinned while the pane's scroll area shrinks */
 }
 .tools-sidebar-header-text {
   display: flex;
@@ -8927,21 +9590,65 @@ async function send() {
   padding: 4px 8px;
   scrollbar-width: thin;
 }
-/* ── Right sidebar split: Agent (top) + Conversations (bottom) ── */
+/* ── Right sidebar split: Agent (top) + Conversations + Jobs ──
+   Each pane is a 2-row grid (header / content). The LAYOUT swap is instant
+   (animating pane sizes makes sibling panes reflow every frame = jumping),
+   but the revealed content slides + fades in — transform/opacity only, so
+   it's buttery with zero layout work. Collapse hides immediately. */
 .tools-sidebar-pane {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto 1fr;
   min-height: 0;
 }
+.tools-sidebar-pane > .tools-sidebar-scroll {
+  min-height: 0;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+}
+.tools-sidebar-pane--collapsed > .tools-sidebar-scroll {
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: none; /* swap OUT with the snap; swap IN animates */
+}
+.tools-sidebar-pane--collapsed > .tools-sidebar-scroll {
+  /* the 0fr row removes the content; also remove the scroll padding so the
+     pane lands exactly on its header height, no leftover sliver */
+  padding-top: 0;
+  padding-bottom: 0;
+}
 .tools-sidebar-pane--agent {
-  flex: 1 1 50%;
+  flex: 1 1 auto;
   min-height: 120px;
 }
 .tools-sidebar-pane--sessions {
-  flex: 1 1 50%;
+  flex: 1 1 auto;
   min-height: 140px;
   border-top: 1px solid #e1dfdd;
   background: #fff;
+}
+/* Collapsed pane = just its header; the content row glides to zero and the
+   freed space flows to whichever pane(s) remain expanded — collapse two and
+   the third gets everything. */
+.tools-sidebar-pane--collapsed {
+  grid-template-rows: auto 0fr;
+  flex-grow: 0 !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+.tools-sidebar-pane--collapsed .tools-sidebar-scroll {
+  overflow: hidden;
+}
+/* Focus mode for Jobs: when both other panes are collapsed, lift the 42%
+   cap so the jobs list can use the whole sidebar. */
+.tools-sidebar:has(
+    .tools-sidebar-pane--agent.tools-sidebar-pane--collapsed
+  ):has(.tools-sidebar-pane--sessions.tools-sidebar-pane--collapsed)
+  .tools-sidebar-pane--jobs:not(.tools-sidebar-pane--collapsed) {
+  flex-grow: 1;
+  max-height: none;
 }
 .sessions-header {
   background: #fff;
@@ -8979,6 +9686,471 @@ async function send() {
   color: #8a8886;
   font-style: italic;
   text-align: center;
+}
+/* ── Scheduled jobs pane ── */
+.tools-sidebar-pane--jobs {
+  /* Sized by content up to 42% of the sidebar, but allowed to SHRINK when
+     the window is short — the pane's own scroll area takes over instead of
+     clipping. Grid rows (header/content) come from .tools-sidebar-pane. */
+  flex: 0 1 auto;
+  max-height: 42%;
+  min-height: 36px; /* never less than the header — the pane stays reachable */
+  border-top: 1px solid #e8eaed;
+}
+.jobs-scroll {
+  overflow-y: auto;
+}
+.jobs-header-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+/* One glyph that rotates (▾ → ▸) — big, with a quick simple turn. */
+.jobs-chevron {
+  display: inline-block;
+  font-size: 27px;
+  line-height: 0.6;
+  vertical-align: -4px;
+  color: #57606a;
+  margin-right: 7px;
+  transform-origin: 42% 42%;
+  transition:
+    transform 0.15s ease,
+    color 0.15s ease;
+}
+.jobs-chevron--collapsed {
+  transform: rotate(-90deg);
+}
+.jobs-header-toggle:hover .jobs-chevron {
+  color: #0f6cbd;
+}
+.jobs-attention {
+  font-size: 11px;
+  color: #cf222e;
+  font-weight: 600;
+  margin-left: 4px;
+}
+.jobs-header-toggle:focus-visible {
+  outline: 2px solid #0f6cbd;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.jobs-empty-cta {
+  display: block;
+  margin: 10px auto 2px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border: 1px solid #0f6cbd;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f6cbd;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.jobs-empty-cta:hover {
+  background: #0f6cbd;
+  color: #fff;
+}
+/* Template picker — compact 2-col grid of prefill chips inside the form. */
+.job-tpl-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #8a8d94;
+}
+.job-tpl-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.job-tpl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 5px 8px;
+  border: 1px solid #d7dade;
+  border-radius: 7px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+.job-tpl:hover {
+  border-color: #0f6cbd;
+  background: #f3f8fc;
+}
+.job-tpl--selected {
+  border-color: #0f6cbd;
+  background: #e8f1fa;
+  color: #0f6cbd;
+  font-weight: 600;
+}
+.job-tpl-emoji {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+.job-tpl-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-row--paused .session-row-title {
+  color: #9a9da4;
+}
+/* Alive: enabled + waiting for its next run — calm blue "breathing" glow so a
+   returning user instantly sees the job is armed. Distinct from the green
+   agent-pulse used while a run is actually executing. */
+.job-dot--alive {
+  background: #0078d4;
+  animation: job-breathe 2.6s ease-in-out infinite;
+}
+@keyframes job-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 120, 212, 0.45);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(0, 120, 212, 0);
+    opacity: 0.55;
+  }
+}
+/* Dead: failed or auth-expired — urgent slow red pulse that draws the eye to
+   the "reconnect Azure" hint without being frantic. */
+.job-dot--dead {
+  background: #cf222e;
+  animation: job-dead-pulse 2s ease-in-out infinite;
+}
+@keyframes job-dead-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(207, 34, 46, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(207, 34, 46, 0);
+  }
+}
+.job-time--running {
+  color: #1a7f37;
+  font-weight: 600;
+}
+.job-time--dead {
+  color: #cf222e;
+  font-weight: 600;
+}
+.job-time--nudge {
+  color: #9a6700;
+  font-weight: 600;
+}
+/* ── Run-immediately checkbox in the create modal ── */
+.job-runnow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  color: #333;
+  cursor: pointer;
+  user-select: none;
+}
+.job-runnow input {
+  margin-top: 2px;
+  accent-color: #0f6cbd;
+  cursor: pointer;
+}
+.job-runnow-hint {
+  color: #8a8d94;
+}
+.job-row-btn {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  font-size: 11px;
+  line-height: 1;
+  color: #7a7d85;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 5px;
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    background 0.12s ease;
+}
+.session-row:hover .job-row-btn {
+  opacity: 1;
+}
+.job-row-btn:hover {
+  background: #eceef1;
+  color: #1f2328;
+}
+.job-row-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.job-form {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eceef1;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.job-form-input,
+.job-form-prompt,
+.job-form-select {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 7px 9px;
+  border: 1px solid #d7dade;
+  border-radius: 7px;
+  background: #fff;
+  color: #1f2328;
+}
+.job-form-prompt {
+  resize: vertical;
+  min-height: 58px;
+}
+.job-form-input:focus,
+.job-form-prompt:focus,
+.job-form-select:focus {
+  outline: none;
+  border-color: #0f6cbd;
+}
+.job-form-actions {
+  display: flex;
+  gap: 8px;
+}
+.job-form-create {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 7px;
+  background: #0f6cbd;
+  color: #fff;
+  cursor: pointer;
+}
+.job-form-create:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.job-form-cancel {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 12px;
+  border: 1px solid #d7dade;
+  border-radius: 7px;
+  background: #fff;
+  color: #57606a;
+  cursor: pointer;
+}
+.job-form-error {
+  font-size: 12px;
+  color: #cf222e;
+}
+.job-form-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #8a8d94;
+}
+/* ── New job modal sheet ── */
+.job-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: job-overlay-in 0.15s ease;
+}
+@keyframes job-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.job-modal {
+  width: min(620px, 100%);
+  max-height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow:
+    0 24px 80px rgba(15, 23, 42, 0.35),
+    0 4px 16px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+  animation: job-modal-in 0.18s ease-out;
+}
+@keyframes job-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.job-modal-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #eceef1;
+  background: linear-gradient(180deg, #f7fafd, #fff);
+}
+.job-modal-icon {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: #e8f1fa;
+  color: #0f6cbd;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.job-modal-heading {
+  min-width: 0;
+  flex: 1;
+}
+.job-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1f2328;
+}
+.job-modal-subtitle {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #6b7280;
+  margin-top: 2px;
+}
+.job-modal-close {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  color: #8a8d94;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.job-modal-close:hover {
+  background: #eceef1;
+  color: #1f2328;
+}
+.job-modal-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+.job-modal-body > * {
+  /* children keep their natural/auto-grown height — the BODY scrolls when
+     content exceeds the sheet, instead of flex squashing the textarea */
+  flex-shrink: 0;
+}
+.job-modal .job-tpl-grid {
+  grid-template-columns: repeat(3, 1fr);
+  margin-bottom: 6px;
+}
+.job-modal .job-tpl {
+  padding: 8px 10px;
+  font-size: 12px;
+  border-radius: 9px;
+}
+.job-modal .job-tpl-label {
+  margin-top: 6px;
+}
+.job-modal .job-form-prompt {
+  /* auto-grown by autosizeJobPrompt() — never shows an inner scrollbar */
+  resize: none;
+  overflow-y: hidden;
+}
+.job-freq-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.job-freq {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border: 1px solid #d7dade;
+  border-radius: 999px;
+  background: #fff;
+  color: #57606a;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.job-freq:hover {
+  border-color: #0f6cbd;
+  color: #0f6cbd;
+}
+.job-freq--selected {
+  border-color: #0f6cbd;
+  background: #0f6cbd;
+  color: #fff;
+}
+.job-freq--selected:hover {
+  color: #fff;
+}
+.job-freq-expiry {
+  font-size: 11.5px;
+  color: #8a8d94;
+  margin-left: 4px;
+}
+.job-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-top: 1px solid #eceef1;
+  background: #fafbfc;
+}
+.job-modal .job-form-actions {
+  display: flex;
+  gap: 8px;
+}
+.job-modal .job-form-create {
+  padding: 8px 18px;
+  border-radius: 9px;
+  box-shadow: 0 2px 6px rgba(15, 108, 189, 0.3);
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.12s ease;
+}
+.job-modal .job-form-create:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(15, 108, 189, 0.35);
 }
 .session-row {
   display: flex;
