@@ -3326,7 +3326,7 @@ const JOB_TEMPLATES = [
     name: "1-minute test",
     interval: 1,
     prompt:
-      "Report my current month-to-date Azure consumption in USD. One short sentence.",
+      "Report the current UTC timestamp and my current month-to-date Azure consumption in USD. One short sentence per run.",
   },
   {
     emoji: "📊",
