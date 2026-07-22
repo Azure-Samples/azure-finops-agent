@@ -1263,7 +1263,12 @@
                       <span class="thinking-dots"><i></i><i></i><i></i></span>
                       Thinking
                     </div>
-                    <div class="reasoning-body">{{ streamReasoning }}</div>
+                    <div class="reasoning-body">
+                      <div
+                        class="reasoning-md"
+                        v-html="renderContent(streamReasoning)"
+                      ></div>
+                    </div>
                   </div>
                   <div class="message-text" v-else-if="!streamIntent">
                     <span class="thinking-dots thinking-dots--lg"
@@ -2532,41 +2537,100 @@ async function fetchPersistedTail(sid, normPrompt) {
   }
 }
 
+// Exact text of the recovery banner. Kept as a constant + marked with a
+// `_reconnect` flag on the message so we can add/remove it PRECISELY without
+// also clobbering the "busy" notice (which also starts with ⏳). Matching on
+// startsWith("⏳") used to nuke both.
+const RECONNECT_NOTICE_TEXT =
+  "⏳ Reconnecting — your last answer is still being generated and will appear here when ready.";
+
+// Ensures EXACTLY ONE reconnect banner exists in the current view, as the last
+// row. Idempotent + cheap: no-ops when it's already there, so it can be called
+// on every poll tick without churning reactivity or the scroll position.
+function setReconnectNotice() {
+  const msgs = messages.value;
+  const already =
+    msgs.length > 0 &&
+    msgs[msgs.length - 1]._reconnect &&
+    msgs.filter((m) => m._reconnect).length === 1;
+  if (already) return;
+  messages.value = [
+    ...msgs.filter((m) => !m._reconnect),
+    { role: "system", content: RECONNECT_NOTICE_TEXT, _reconnect: true },
+  ];
+}
+// Removes every reconnect banner from the current view. Never touches the
+// "busy" notice or any other system/assistant message.
+function clearReconnectNotice() {
+  if (messages.value.some((m) => m._reconnect)) {
+    messages.value = messages.value.filter((m) => !m._reconnect);
+  }
+}
+
 // Recover the answer for a lost turn from the persisted transcript. Polls the
 // tail until the assistant's answer for THIS prompt appears (instant if it
 // already landed while the tab was away), repaints, then keeps watching
 // briefly: if the persisted answer keeps growing (mid-turn narration → final
 // answer), repaint again so the UI always converges on the final state.
-// Returns true once recovered; false on timeout/abandon.
+// Returns true once recovered; false on timeout/abandon. ALWAYS leaves at most
+// one banner behind and clears it on every exit path — an orphaned/duplicated
+// "Reconnecting…" banner that never converges was the bug this guards against.
 async function tryRecoverPersistedAnswer(sid, promptText) {
   if (!sid || sid === "__pending__") return false;
   // No specific in-flight turn to recover (empty/new conversation) — never show
-  // the "⏳ Reconnecting…" notice or start the 3-min poller for nothing.
+  // the "⏳ Reconnecting…" notice or start the poller for nothing.
   if (!String(promptText || "").trim()) return false;
   if (reconcilingSid === sid) return false; // a poller is already on it
-  const isVisible = () => currentSessionId.value === sid;
   const normPrompt = normText(promptText);
-  reconcilingSid = sid;
-  let noticeShown = false;
-  const clearNotice = () => {
-    if (noticeShown && isVisible()) {
-      messages.value = messages.value.filter(
-        (m) => !(m.role === "system" && String(m.content).startsWith("⏳")),
-      );
+  // "Is this recovering turn still the one on screen?" — the gate for painting
+  // into the view. NOT a strict currentSessionId===sid check: for ANON users
+  // loadSessions() resets currentSessionId to null after every turn (it runs in
+  // send()'s finally), so strict equality would make recovery stand down
+  // instantly and SILENTLY — no banner, no answer. Treat null as "still here"
+  // but confirm the recovering prompt is still the last question displayed, so a
+  // "New chat" or a switch to another conversation correctly hands off the view.
+  const isVisible = () => {
+    const cur = currentSessionId.value;
+    if (cur && cur !== sid) return false; // switched to a different conversation
+    const msgs = messages.value;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === "user") {
+        const u = normText(msgs[i].content);
+        return (
+          u === normPrompt ||
+          u.includes(normPrompt.slice(0, 40)) ||
+          normPrompt.includes(u.slice(0, 40))
+        );
+      }
     }
+    return false; // view cleared / brand-new session — hands off
   };
+  reconcilingSid = sid;
+  let recovered = false;
+  let bannerShown = false;
   try {
-    const deadline = Date.now() + 180000; // 3 min — covers long tool chains
+    // Cover the backend's full per-turn budget (ActiveTurns staleness cap is
+    // 15 min): a "score my whole estate / all regions × all subscriptions"
+    // turn makes dozens of tool calls and persists NOTHING until the final
+    // answer, so the old 3-min deadline gave up while the CLI was still
+    // working — leaving a permanently stuck "Reconnecting…" banner. Poll
+    // interval backs off 3s→10s to keep the request count sane over 15 min.
+    const deadline = Date.now() + 900000; // 15 min
+    let pollMs = 3000;
     while (Date.now() < deadline) {
-      // The user started a NEW turn in this view — abandon recovery, the live
-      // stream owns the UI now.
-      if (streaming.value) return false;
+      // The user started a NEW live turn in this view — the stream owns the UI
+      // now; stand down and clear our banner.
+      if (streaming.value) {
+        clearReconnectNotice();
+        return false;
+      }
       const tail = await fetchPersistedTail(sid, normPrompt);
       if (tail && tail.matched && tail.answered) {
         await reloadSessionTranscript(sid);
+        recovered = true;
         window.__trackAppInsightsEvent?.("chat.stream.recovered", {
           sessionId: sid,
-          polled: String(noticeShown),
+          polled: String(bannerShown),
         });
         // Refinement: the persisted text may still be mid-turn narration. Keep
         // watching briefly; repaint whenever it grows, stop once stable.
@@ -2588,20 +2652,57 @@ async function tryRecoverPersistedAnswer(sid, promptText) {
         }
         return true;
       }
-      // Not persisted yet — the CLI is still generating in the background.
-      if (!noticeShown && isVisible()) {
+      // Still generating — show the (single, deduped) banner while the user is
+      // looking. If they've navigated away, stand down (their view is theirs).
+      if (!isVisible()) return false;
+      setReconnectNotice();
+      bannerShown = true;
+      await new Promise((r) => setTimeout(r, pollMs));
+      pollMs = Math.min(pollMs + 1000, 10000);
+    }
+    // Deadline hit without an answer landing. If the user is still on this
+    // conversation and it's genuinely still unanswered, replace the banner with
+    // an actionable retry instead of a dead "Reconnecting…" banner or silent
+    // blank. Re-sync auth + sidebar — a server restart can invalidate the
+    // session while the UI still shows "connected".
+    if (isVisible()) {
+      clearReconnectNotice();
+      const msgs = messages.value;
+      let lastUserIdx = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "user") {
+          lastUserIdx = i;
+          break;
+        }
+      }
+      let resolved = false;
+      for (let i = lastUserIdx + 1; i < msgs.length; i++) {
+        const m = msgs[i];
+        if (
+          assistantTurnHasOutput(m) ||
+          (m.role === "assistant" &&
+            String(m.content).includes("Connection lost"))
+        ) {
+          resolved = true;
+          break;
+        }
+      }
+      if (lastUserIdx >= 0 && !resolved) {
         messages.value = [
           ...messages.value,
           {
-            role: "system",
+            role: "assistant",
             content:
-              "⏳ Reconnecting — your last answer is still being generated and will appear here when ready.",
+              "**Connection lost** — the answer took longer than expected or the connection dropped. Your conversation is saved and may still finish; retry if it doesn't appear.",
+            followUp: { label: "Retry last question", prompt: promptText },
           },
         ];
-        noticeShown = true;
+        window.__trackAppInsightsEvent?.("chat.stream.recoverTimeout", {
+          sessionId: sid,
+        });
+        checkAzureStatus();
+        loadSessions();
       }
-      if (!isVisible()) return false; // user switched away — hands off their view
-      await new Promise((r) => setTimeout(r, 3000));
     }
   } catch (e) {
     window.__trackAppInsightsException?.(e, {
@@ -2610,9 +2711,13 @@ async function tryRecoverPersistedAnswer(sid, promptText) {
     });
   } finally {
     if (reconcilingSid === sid) reconcilingSid = null;
+    // Belt-and-braces: never leave an orphaned banner behind on ANY exit path
+    // (early return, recovery, timeout, throw). Only touch the view if this turn
+    // is still the one on screen — don't clear a conversation the user swapped
+    // to. (On recovery, reloadSessionTranscript already rebuilt the list.)
+    if (!recovered && isVisible()) clearReconnectNotice();
   }
-  clearNotice();
-  return false;
+  return recovered;
 }
 
 // Watches a client stream that SHOULD still be running after the tab returns
@@ -6021,26 +6126,18 @@ async function send() {
       // A severed SSE stream usually means the app restarted mid-turn (deploy,
       // scale event, crash) OR the tab was backgrounded and the browser froze /
       // dropped the fetch. In every case the CLI keeps working and persists the
-      // answer, so recover it from the server before showing an error.
-      // Drop this session from runningSessions FIRST so the transcript reload
-      // keeps (doesn't discard) the persisted trailing answer.
+      // answer (SendAsync runs with no cancellation token), so recover it from
+      // the server. Drop this session from runningSessions FIRST so the
+      // transcript reload keeps (doesn't discard) the persisted trailing answer.
       runningSessions.delete(streamingId);
-      const recovered = await tryRecoverPersistedAnswer(streamingId, prompt);
-      if (!recovered) {
-        // Nothing persisted yet — give the user an actionable one-click retry
-        // instead of a bare error. Also re-sync auth state: a restart can
-        // invalidate the server session while the UI still shows "connected".
-        const partial = streamBuffer.value
-          ? streamBuffer.value + "\n\n---\n\n"
-          : "";
-        messages.value.push({
-          role: "assistant",
-          content: `${partial}**Connection lost** — the service restarted or the network dropped mid-answer. Your conversation is saved.`,
-          followUp: { label: "Retry last question", prompt },
-        });
-        checkAzureStatus();
-        loadSessions();
-      }
+      // Fire-and-forget: the poller watches the persisted transcript for up to
+      // the backend's full 15-min turn budget and converges the view itself —
+      // either the recovered answer, or an actionable "Connection lost — Retry"
+      // if the turn never lands. NOT awaited, so send()'s finally can reset the
+      // composer immediately and a brand-new turn isn't blocked behind a long
+      // poll (a mega-turn like "score every region × subscription" persists
+      // nothing until the very end, so this can legitimately run for minutes).
+      tryRecoverPersistedAnswer(streamingId, prompt);
     }
   } finally {
     clearInterval(intentAnimTimer);
@@ -8295,7 +8392,6 @@ async function send() {
   line-height: 1.55;
   color: #8a8d94;
   font-style: italic;
-  white-space: pre-wrap;
   word-break: break-word;
   /* Rolling window: cap ~6 rows, keep the newest text pinned visible. */
   max-height: 126px;
@@ -8303,6 +8399,63 @@ async function send() {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+}
+/* Markdown inside the muted "Thinking" panel. The reasoning stream is rendered
+   through the same (HTML-escaping) renderContent as the main answer, but the
+   main-answer styles are scoped to .message-text and don't reach here, so these
+   compact + muted overrides keep headings/lists/code/tables from blowing up the
+   small rolling-window box. The v-html output is wrapped in .reasoning-md so the
+   flex container above still pins the newest lines to the bottom. */
+.reasoning-md :deep(h2),
+.reasoning-md :deep(h3),
+.reasoning-md :deep(h4) {
+  font-size: 13px;
+  font-weight: 700;
+  font-style: normal;
+  margin: 4px 0 2px;
+  color: #6b6e76;
+}
+.reasoning-md :deep(strong) {
+  font-weight: 700;
+  color: #6b6e76;
+}
+.reasoning-md :deep(ul) {
+  margin: 2px 0;
+  padding-left: 18px;
+}
+.reasoning-md :deep(li) {
+  margin: 1px 0;
+}
+.reasoning-md :deep(code) {
+  font-style: normal;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.reasoning-md :deep(pre) {
+  font-style: normal;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid #e8eaed;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 4px 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+.reasoning-md :deep(pre code) {
+  background: none;
+  padding: 0;
+}
+/* A stray table in reasoning shouldn't dominate the panel — render it compact. */
+.reasoning-md :deep(table) {
+  font-size: 11px;
+  border-collapse: collapse;
+}
+.reasoning-md :deep(.prompt-chip) {
+  font-size: 12px;
+  padding: 3px 9px;
 }
 /* Animated thinking dots — three staggered pulsing orbs. */
 .thinking-dots {
