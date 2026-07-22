@@ -27,9 +27,18 @@ No Azure tenant? Two ways to demo:
 - **Public pricing questions** — ask about Azure VM SKUs, regions, reservations, savings plans. Agent uses the public Retail Prices API (no auth).
 - **Drop a sample file** — drag any CSV/JSON/XLSX/PDF from [`demo-data/`](demo-data/) into the chat. The agent inspects the schema, runs aggregates, and answers without ever loading the raw payload into the LLM. Includes realistic cost exports, Advisor JSON, audit logs, and FinOps notes.
 
+## Scheduled jobs — your agent on a timer
+
+Save any prompt with a cadence (every 15 min / hourly / daily / weekly) and the agent keeps running it in the background — **even with your browser closed**. Every run lands in the job's own conversation, so you come back to a full history of answers, tables, and charts.
+
+- **GPU hunt & reserve** — the flagship template: checks quota + capacity for H100/H200 sizes across all your subscriptions and regions every 15 minutes, and the moment something is deployable it **secures it by creating an on-demand Capacity Reservation** (idempotent, cost-warned, cleanup via a reviewable script).
+- **One-click templates** — daily cost digest, hourly anomaly watch, budget guard, weekly idle-resource sweep, Advisor watch — or write your own prompt. Choose “run immediately, then repeat” or wait one interval.
+- **Your permissions, nothing more** — background runs re-mint tokens from your delegated Entra sign-in. No app permissions, no admin consent: a job can never do more than your own login allows, and it pauses itself with a “reconnect Azure” status if your refresh token expires.
+- **Guardrails** — max 3 active jobs per user; sub-daily jobs expire after 7 days, daily/weekly after 90; auto-pause after 5 consecutive failures. Deletes are always blocked — removals ship as scripts you review and run yourself.
+
 ## How it works
 
-Vue 3 SPA → .NET 10 minimal API → GitHub Copilot SDK → Azure read APIs (Cost Management, Resource Graph, Microsoft Graph, Log Analytics) using your delegated Entra tokens. Hosted on Azure App Service or Container Apps. OpenTelemetry to your Application Insights.
+Vue 3 SPA → .NET 10 minimal API → GitHub Copilot SDK → Azure APIs (Cost Management, ARM, Resource Graph, Microsoft Graph, Log Analytics) using your delegated Entra tokens — read + write on your behalf, **never delete**. A background scheduler runs your saved jobs on the same delegated tokens. Hosted on Azure App Service or Container Apps. OpenTelemetry to your Application Insights.
 
 ## Architecture
 
@@ -38,6 +47,7 @@ flowchart LR
     U[User] --> FE[Vue 3 SPA]
     FE --> API[.NET 10 API]
     API --> SDK[Copilot SDK]
+    API --> SCHED[Job Scheduler] --> SDK
     SDK --> AOAI[Azure OpenAI]
     SDK --> TOOLS[Azure Tools]
     TOOLS --> ARM[ARM / Cost Mgmt]
