@@ -5030,8 +5030,13 @@ function htmlCardMeta(count) {
 
 // Sidebar categories (FinOps maturity Crawl/Walk/Run/Playbook + Pricing) — see data/sidebarCategories.js
 
-function sendQuestion(q) {
+async function sendQuestion(q) {
   if (streaming.value || clearing.value || !props.user) return;
+  // A job's conversation is a server-owned run log — sidebar prompts and
+  // follow-up buttons are CHAT questions, so hop to a fresh conversation
+  // first instead of injecting the question into the job's history (which
+  // would also silently steer its future runs).
+  if (currentJob.value) await newSession();
   input.value = q;
   send();
 }
@@ -6453,8 +6458,11 @@ function renderContent(text) {
   return html;
 }
 
-function sendPrompt(text) {
+async function sendPrompt(text) {
   if (!props.user || clearing.value) return;
+  // Same rule as sendQuestion: never inject a chat question into a job's
+  // run log — start a fresh conversation for it.
+  if (currentJob.value) await newSession();
   input.value = text;
   send();
 }
@@ -10071,21 +10079,25 @@ async function send() {
   padding-bottom: 0;
 }
 .tools-sidebar-pane--agent {
-  flex: 1 1 auto;
+  /* basis 0: space is split by GROW FACTOR, never by content size — a run
+     with 80+ tool calls must scroll inside its pane, not crush the
+     Conversations/Jobs panes below it. */
+  flex: 1 1 0;
   min-height: 120px;
 }
 .tools-sidebar-pane--sessions {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 140px;
   border-top: 1px solid #e1dfdd;
   background: #fff;
 }
 /* Collapsed pane = just its header; the content row glides to zero and the
    freed space flows to whichever pane(s) remain expanded — collapse two and
-   the third gets everything. */
+   the third gets everything. (basis auto here: with the expanded panes on
+   basis 0, a collapsed pane must size to its header, not to 0.) */
 .tools-sidebar-pane--collapsed {
   grid-template-rows: auto 0fr;
-  flex-grow: 0 !important;
+  flex: 0 0 auto !important;
   min-height: 0 !important;
   max-height: none !important;
 }
