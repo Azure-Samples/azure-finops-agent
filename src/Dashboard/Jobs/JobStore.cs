@@ -62,7 +62,10 @@ public sealed class JobStore
 
     public IReadOnlyList<ScheduledJob> ForUser(long userId, string? entraOid) =>
         _jobs.Values
-            .Where(j => j.UserId == userId || (!string.IsNullOrEmpty(entraOid) && j.EntraOid == entraOid))
+            // Jobs are Entra-only — match strictly on the OID (tenant-scoped
+            // identity). No userId-hash fallback: listing must never leak
+            // another user's jobs.
+            .Where(j => !string.IsNullOrEmpty(entraOid) && j.EntraOid == entraOid)
             .OrderByDescending(j => j.CreatedUtc)
             .ToList();
 
@@ -72,7 +75,8 @@ public sealed class JobStore
     public ScheduledJob? Get(string id) => _jobs.TryGetValue(id, out var j) ? j : null;
 
     public int EnabledCountForUser(long userId, string entraOid) =>
-        _jobs.Values.Count(j => j.Enabled && (j.UserId == userId || j.EntraOid == entraOid));
+        _jobs.Values.Count(j =>
+            j.Enabled && !string.IsNullOrEmpty(entraOid) && j.EntraOid == entraOid);
 
     public void Add(ScheduledJob job)
     {
@@ -83,6 +87,24 @@ public sealed class JobStore
     public void Remove(string id)
     {
         if (_jobs.TryRemove(id, out _)) Save();
+    }
+
+    /// <summary>Detaches any job pointing at a deleted conversation. Keeps the
+    /// invariant that a job's SessionId always refers to a live session (or is
+    /// null) — otherwise opening the job shows a dead "couldn't load history"
+    /// view until the next run happens to replace the id.</summary>
+    public void DetachSession(string sessionId)
+    {
+        var changed = false;
+        foreach (var j in _jobs.Values)
+        {
+            if (j.SessionId == sessionId)
+            {
+                j.SessionId = null;
+                changed = true;
+            }
+        }
+        if (changed) Save();
     }
 
     /// <summary>Persist after mutating a job instance in place.</summary>

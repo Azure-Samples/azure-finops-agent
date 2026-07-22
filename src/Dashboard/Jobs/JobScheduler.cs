@@ -123,8 +123,23 @@ public sealed class JobScheduler : BackgroundService
         _store.Save();
 
         // 1) Hydrate delegated tokens from the persisted refresh token.
-        var record = _identity.LoadByUserId(job.UserId)
-                     ?? (string.IsNullOrEmpty(job.EntraOid) ? null : _identity.LoadByOid(job.EntraOid));
+        // OID-FIRST: the Entra OID is the tenant-scoped identity a job was
+        // created under — load exactly that record. The userId-hash lookup is
+        // only a legacy fallback, and the loaded record must AGREE with the
+        // job's OID: these jobs can perform ARM writes, so hydrating another
+        // user's tokens (however unlikely) must be structurally impossible.
+        var record = string.IsNullOrEmpty(job.EntraOid)
+            ? _identity.LoadByUserId(job.UserId)
+            : _identity.LoadByOid(job.EntraOid);
+        if (record is not null
+            && !string.IsNullOrEmpty(job.EntraOid)
+            && !string.Equals(record.Oid, job.EntraOid, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogError("Job {JobId}: identity record OID mismatch (job={JobOid}, record={RecordOid}) — refusing to run",
+                job.Id, job.EntraOid, record.Oid);
+            MarkFailure(job, "auth_expired", "Identity mismatch — reconnect Azure to resume this job.");
+            return;
+        }
         if (record is null || string.IsNullOrEmpty(record.RefreshToken))
         {
             MarkFailure(job, "auth_expired", "No stored Azure connection — reconnect Azure to resume this job.");
@@ -197,7 +212,7 @@ public sealed class JobScheduler : BackgroundService
         {
             job.SessionId = session.SessionId;
             // Label the backing conversation so it's recognizable in the sidebar.
-            _telemetry.SaveTitle(session.SessionId, $"⚙ {job.Name}");
+            _telemetry.SaveTitle(session.SessionId, $"⚙ Job · {job.Name}");
             _store.Save();
         }
 

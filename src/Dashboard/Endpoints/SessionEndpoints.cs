@@ -19,6 +19,7 @@ public static class SessionEndpoints
         this IEndpointRouteBuilder app,
         CopilotSessionFactory copilotFactory,
         AiTelemetry telemetry,
+        AzureFinOps.Dashboard.Jobs.JobStore jobStore,
         ILogger logger)
     {
         app.MapGet("/api/sessions", async (HttpContext ctx) =>
@@ -97,6 +98,10 @@ public static class SessionEndpoints
                 return Results.NotFound();
 
             await copilotFactory.DeleteUserSessionAsync(userId, sessionId, ctx.RequestAborted);
+            // If this conversation was a job's run log, detach the job so it
+            // behaves as "never ran" (next run creates a fresh session) instead
+            // of pointing at a dead transcript.
+            jobStore.DetachSession(sessionId);
             logger.LogInformation("User {UserId} deleted session {SessionId}", userId, sessionId);
             return Results.NoContent();
         });

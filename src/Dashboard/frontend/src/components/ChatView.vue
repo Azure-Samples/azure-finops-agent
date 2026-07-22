@@ -1235,6 +1235,13 @@
               </div>
             </div>
 
+            <!-- Single transient status pill — lives OUTSIDE the transcript.
+                 All recovery/poll mechanisms write ONE ref (sessionNotice), so
+                 pills can never stack, stick, or survive into the transcript. -->
+            <div v-if="sessionNotice" class="message-row message-row--system">
+              <div class="system-notice">{{ sessionNotice.text }}</div>
+            </div>
+
             <!-- Streaming indicator -->
             <div v-if="streaming" class="message-row message-row--ai">
               <div class="ai-row">
@@ -1486,9 +1493,55 @@
 
         <!-- Input bar -->
         <div class="input-area">
+          <!-- Job conversation: a RUN LOG, not a chat. Free typing would muddle
+               the run history, silently steer future runs, and race the
+               scheduler on short cadences — so the composer is replaced by
+               purpose-built actions. Editing the job's prompt is the explicit
+               way to steer it. -->
+          <div v-if="currentJob" class="job-context-bar">
+            <span class="job-context-label">
+              ⚙ {{ currentJob.name }} ·
+              {{
+                currentJob.running
+                  ? "running now…"
+                  : currentJob.enabled
+                    ? `next ${formatUntil(currentJob.nextRunUtc)}`
+                    : "paused"
+              }}
+            </span>
+            <span class="job-context-actions">
+              <button
+                class="job-context-btn"
+                :disabled="streaming"
+                @click="askJobQuick('deck')"
+                title="Build an executive HTML deck from this job's run history"
+              >
+                📊 Build deck
+              </button>
+              <button
+                class="job-context-btn"
+                :disabled="streaming"
+                @click="askJobQuick('summary')"
+                title="Summarize the trend across all runs so far"
+              >
+                ✨ Summarize runs
+              </button>
+              <button
+                class="job-context-btn"
+                @click="editJob(currentJob)"
+                title="Change what this job does each run"
+              >
+                ✎ Edit job
+              </button>
+            </span>
+            <span class="job-context-hint"
+              >this is the job's run log — it updates automatically</span
+            >
+          </div>
           <!-- (Removed) Analyze CTA above input — replaced by the Analyze button inside the input bar. -->
 
           <div
+            v-if="!currentJob"
             class="input-wrapper"
             :class="{ 'input-wrapper--disabled': false }"
           >
@@ -1936,7 +1989,7 @@
               >
               <span class="tools-sidebar-status">
                 <span class="tools-sidebar-status-text"
-                  >{{ sessions.length }} saved</span
+                  >{{ chatSessions.length }} saved</span
                 >
               </span>
             </div>
@@ -1950,7 +2003,7 @@
             </button>
           </div>
           <div class="tools-sidebar-scroll sessions-scroll">
-            <div v-if="sessions.length === 0" class="sessions-empty">
+            <div v-if="chatSessions.length === 0" class="sessions-empty">
               {{
                 azureConnected
                   ? "No saved conversations yet — chat to create one."
@@ -1958,7 +2011,7 @@
               }}
             </div>
             <div
-              v-for="s in sessions"
+              v-for="s in chatSessions"
               :key="s.id"
               :class="[
                 'session-row',
@@ -2405,17 +2458,17 @@ import hljs from "highlight.js/lib/core";
 import hljsJson from "highlight.js/lib/languages/json";
 import "highlight.js/styles/github-dark.css";
 import {
-    computed,
-    nextTick,
-    onBeforeUnmount,
-    onMounted,
-    reactive,
-    ref,
-    watch,
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
 } from "vue";
 import {
-    maturityCategories,
-    pricingCategory,
+  maturityCategories,
+  pricingCategory,
 } from "../data/sidebarCategories.js";
 hljs.registerLanguage("json", hljsJson);
 
@@ -2869,6 +2922,13 @@ async function reconcileSessionAfterReturn(sid, reason) {
     }
   }
   if (lastUserIdx < 0) return; // no question in this view — nothing to reconnect
+  // A scheduled job's conversation is driven by the SERVER (runs land in the
+  // persisted transcript; the job follow loop repaints) — the reconnect
+  // recovery would show a phantom "⏳ Reconnecting — your last answer…" pill
+  // for a turn this browser never sent.
+  if (currentJob.value?.sessionId === sid) return;
+  if (String(msgs[lastUserIdx].content || "").startsWith("[SCHEDULED JOB RUN"))
+    return;
   let answered = false;
   for (let i = lastUserIdx + 1; i < msgs.length; i++) {
     if (assistantTurnHasOutput(msgs[i])) {
@@ -2938,34 +2998,32 @@ async function fetchPersistedTail(sid, normPrompt) {
   }
 }
 
-// Exact text of the recovery banner. Kept as a constant + marked with a
-// `_reconnect` flag on the message so we can add/remove it PRECISELY without
-// also clobbering the "busy" notice (which also starts with ⏳). Matching on
-// startsWith("⏳") used to nuke both.
+// ── Single transient status pill ──
+// EVERY "working / reconnecting / scheduled run / busy" notice writes this ONE
+// ref, rendered once below the transcript. The messages[] array only ever
+// contains real conversation content — the old design spliced pills INTO the
+// transcript from five independent pollers, which stacked contradictory
+// banners and left them stuck above real messages forever.
+const sessionNotice = ref(null); // { kind, text } | null
+function setNotice(kind, text) {
+  sessionNotice.value = { kind, text };
+}
+function clearNotice(...kinds) {
+  if (!sessionNotice.value) return;
+  if (kinds.length === 0 || kinds.includes(sessionNotice.value.kind))
+    sessionNotice.value = null;
+}
+
+// Exact text of the recovery banner.
 const RECONNECT_NOTICE_TEXT =
   "⏳ Reconnecting — your last answer is still being generated and will appear here when ready.";
 
-// Ensures EXACTLY ONE reconnect banner exists in the current view, as the last
-// row. Idempotent + cheap: no-ops when it's already there, so it can be called
-// on every poll tick without churning reactivity or the scroll position.
+// Idempotent + cheap: safe to call on every poll tick.
 function setReconnectNotice() {
-  const msgs = messages.value;
-  const already =
-    msgs.length > 0 &&
-    msgs[msgs.length - 1]._reconnect &&
-    msgs.filter((m) => m._reconnect).length === 1;
-  if (already) return;
-  messages.value = [
-    ...msgs.filter((m) => !m._reconnect),
-    { role: "system", content: RECONNECT_NOTICE_TEXT, _reconnect: true },
-  ];
+  setNotice("reconnecting", RECONNECT_NOTICE_TEXT);
 }
-// Removes every reconnect banner from the current view. Never touches the
-// "busy" notice or any other system/assistant message.
 function clearReconnectNotice() {
-  if (messages.value.some((m) => m._reconnect)) {
-    messages.value = messages.value.filter((m) => !m._reconnect);
-  }
+  clearNotice("reconnecting");
 }
 
 // Recover the answer for a lost turn from the persisted transcript. Polls the
@@ -3721,6 +3779,81 @@ function jobTooltip(j) {
     : base;
 }
 
+// The job that owns the conversation currently in view (null for normal chats).
+const currentJob = computed(
+  () =>
+    jobs.value.find(
+      (j) => j.sessionId && j.sessionId === currentSessionId.value,
+    ) || null,
+);
+
+// Conversations pane shows CHATS only — a job's run log lives under its job
+// row (deleting it there as a "conversation" left the job pointing at a dead
+// session). If the job is deleted, its session stops matching and reappears
+// here, so run history is never lost.
+const chatSessions = computed(() =>
+  sessions.value.filter((s) => !jobs.value.some((j) => j.sessionId === s.id)),
+);
+
+// While a JOB conversation is in view, keep it live: scheduled runs land in
+// the persisted transcript server-side with no SSE to this browser, so
+// without this the view silently freezes while runs pile up on disk.
+// Every tick: (a) if a run is mid-flight, attachToServerTurn shows the
+// "scheduled run in progress" pill and reloads on completion; (b) if a run
+// finished BETWEEN ticks, catch up when the persisted transcript has more
+// messages than the view. Guarded against overlap; paused while streaming.
+let jobFollowTimer = null;
+let jobFollowBusy = false;
+watch(
+  () => currentJob.value?.id ?? null,
+  (jobId) => {
+    if (jobFollowTimer) {
+      clearInterval(jobFollowTimer);
+      jobFollowTimer = null;
+    }
+    if (!jobId) return;
+    jobFollowTimer = setInterval(async () => {
+      const j = currentJob.value;
+      if (!j || streaming.value || jobFollowBusy) return;
+      jobFollowBusy = true;
+      try {
+        await attachToServerTurn(j.sessionId);
+        const m = await fetch(
+          `/api/sessions/${encodeURIComponent(j.sessionId)}/messages`,
+        );
+        if (m.ok) {
+          const count = ((await m.json()).messages || []).length;
+          if (
+            count > messages.value.length &&
+            currentSessionId.value === j.sessionId &&
+            !streaming.value
+          ) {
+            await reloadSessionTranscript(j.sessionId);
+          }
+        }
+      } catch {
+        /* transient — next tick retries */
+      } finally {
+        jobFollowBusy = false;
+      }
+    }, 7000);
+  },
+);
+onBeforeUnmount(() => {
+  if (jobFollowTimer) clearInterval(jobFollowTimer);
+});
+
+// One-click asks for a job conversation — pre-written prompts against the
+// run history that lives in this thread.
+function askJobQuick(kind) {
+  if (streaming.value) return;
+  input.value =
+    kind === "deck"
+      ? "Build an executive HTML presentation from this job's run history: the trend across runs, key numbers, anomalies, and recommended actions."
+      : "Summarize the trend across all runs of this job so far: what changed, what stayed flat, and anything that needs attention. Keep it short.";
+  send();
+}
+
 async function newSession() {
   if (clearing.value) return;
   // Note: we do NOT abort an in-flight stream here. If another session is
@@ -3729,6 +3862,7 @@ async function newSession() {
   clearing.value = true;
   messages.value = [];
   streamBuffer.value = "";
+  clearNotice();
   // Drop only THIS view's live buckets (current session + the "__pending__"
   // sentinel) — a session still streaming in the background needs its bucket
   // intact so its tool list is whole when the user switches back.
@@ -3800,6 +3934,9 @@ async function reloadSessionTranscript(sessionId) {
   streamBuffer.value = "";
   streamIntent.value = "";
   streamReasoning.value = "";
+  // A fresh view starts with no transient status pill — attachToServerTurn
+  // re-sets it below if a server-side turn is genuinely still running.
+  clearNotice();
   if (intentAnimTimer) {
     clearInterval(intentAnimTimer);
     intentAnimTimer = null;
@@ -3871,14 +4008,10 @@ async function reloadSessionTranscript(sessionId) {
       ) {
         restored.pop();
       }
-      messages.value = restored.length
-        ? restored
-        : [
-            {
-              role: "system",
-              content: "Resumed conversation. Ask anything to continue.",
-            },
-          ];
+      // An empty transcript is just an empty conversation — show the normal
+      // empty state (hero + composer), not a pointless "Resumed conversation"
+      // pill that then sticks above the first real messages forever.
+      messages.value = restored;
 
       // Replay any ReportMaturityScore tool calls so the sidebar stars
       // reflect the conversation's last-known scores. Latest call per level wins.
@@ -3929,16 +4062,14 @@ async function reloadSessionTranscript(sessionId) {
         }
       }
     } else {
-      const meta = sessions.value.find((s) => s.id === sessionId);
-      messages.value = [
-        {
-          role: "system",
-          content: `Resumed conversation: ${meta?.summary || "Untitled"}.`,
-        },
-      ];
+      // Transcript fetch failed — empty view + a transient notice (NOT a
+      // message: it must never stick above real content).
+      messages.value = [];
+      setNotice("info", "Couldn't load this conversation's history.");
     }
   } catch {
-    messages.value = [{ role: "system", content: "Resumed conversation." }];
+    messages.value = [];
+    setNotice("info", "Couldn't load this conversation's history.");
   }
 
   // Land on the newest message — instantly. The messages.length watch
@@ -3964,33 +4095,42 @@ async function attachToServerTurn(sessionId) {
     if (!r.ok) return;
     const { active } = await r.json();
     if (!active || token !== serverTurnPollToken) return;
-    // Show a lightweight working notice while the server-side turn finishes.
-    messages.value = [
-      ...messages.value,
-      {
-        role: "system",
-        content:
-          "⏳ Still working on your last question — the answer will appear here when ready.",
-      },
-    ];
+    // Job conversations get job wording — "your last question" makes no sense
+    // for a background run the user never typed. The transcript strips the
+    // "[SCHEDULED JOB RUN…]" prefix, so detect via the owning job instead.
+    const isJobRun =
+      currentJob.value?.sessionId === sessionId ||
+      messages.value.some(
+        (m) =>
+          m.role === "user" &&
+          String(m.content || "").startsWith("[SCHEDULED JOB RUN"),
+      );
+    setNotice(
+      "working",
+      isJobRun
+        ? "⚙ A scheduled run is in progress — its result will appear here when it finishes."
+        : "⏳ Still working on your last question — the answer will appear here when ready.",
+    );
     while (token === serverTurnPollToken) {
       await new Promise((res) => setTimeout(res, 4000));
       const p = await fetch(
         `/api/sessions/${encodeURIComponent(sessionId)}/active`,
       );
-      if (!p.ok) return;
+      if (!p.ok) break;
       const { active: still } = await p.json();
       if (!still) {
         if (token !== serverTurnPollToken) return;
         // Turn finished — drop the notice and reload the persisted transcript.
-        messages.value = messages.value.filter(
-          (m) => !(m.role === "system" && String(m.content).startsWith("⏳")),
-        );
-        await selectSession(sessionId);
+        clearNotice("working");
+        await reloadSessionTranscript(sessionId);
         return;
       }
     }
-  } catch {}
+    // Superseded or fetch failed — never leave the pill behind.
+    if (token === serverTurnPollToken) clearNotice("working");
+  } catch {
+    if (token === serverTurnPollToken) clearNotice("working");
+  }
 }
 
 async function deleteSession(sessionId) {
@@ -6380,6 +6520,9 @@ async function send() {
   const startSessionId = currentSessionId.value;
   if (runningSessions.has(startSessionId || "__pending__")) return;
 
+  // A fresh turn supersedes any transient status pill (resume fallback,
+  // busy, working, reconnecting) — the live stream owns the view now.
+  clearNotice();
   messages.value.push({ role: "user", content: prompt });
   input.value = "";
   // Image attachments are consumed by THIS message — the backend attaches
@@ -6682,10 +6825,7 @@ async function send() {
                 }
               }
               if (!input.value.trim()) input.value = prompt;
-              messages.value.push({
-                role: "system",
-                content: `⏳ ${data.message}`,
-              });
+              setNotice("busy", `⏳ ${data.message}`);
             }
             break;
 
@@ -9648,6 +9788,57 @@ async function send() {
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
+}
+/* ── Job conversation context bar (above the composer) ── */
+.job-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border: 1px solid #e3e6ea;
+  border-radius: 8px;
+  background: #f8f9fb;
+  font-size: 12px;
+}
+.job-context-label {
+  font-weight: 600;
+  color: #3b3f46;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+.job-context-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.job-context-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid #d0d4d9;
+  border-radius: 999px;
+  background: #fff;
+  color: #3b3f46;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+.job-context-btn:hover {
+  border-color: #0f6cbd;
+  color: #0f6cbd;
+}
+.job-context-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.job-context-hint {
+  margin-left: auto;
+  color: #9a9da3;
+  font-size: 11px;
+  font-style: italic;
 }
 .input-wrapper {
   display: flex;

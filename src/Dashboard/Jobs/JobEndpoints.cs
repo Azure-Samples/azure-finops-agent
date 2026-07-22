@@ -179,7 +179,10 @@ public static class JobEndpoints
             return (null, Results.Unauthorized());
         var job = store.Get(id);
         if (job is null) return (null, Results.NotFound());
-        var owned = job.UserId == userId || (!string.IsNullOrEmpty(entraOid) && job.EntraOid == entraOid);
+        // Jobs are Entra-only, so the OID is the identity — exact match required.
+        // (No userId-hash fallback: OIDs are the tenant-scoped source of truth,
+        // and these jobs can perform ARM writes on the owner's subscriptions.)
+        var owned = !string.IsNullOrEmpty(entraOid) && job.EntraOid == entraOid;
         if (!owned) return (null, Results.NotFound()); // no ownership oracle
         return (job, null);
     }
