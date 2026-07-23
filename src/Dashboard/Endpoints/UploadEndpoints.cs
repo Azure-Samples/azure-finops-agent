@@ -14,8 +14,9 @@ public static class UploadEndpoints
 
     public static void MapUploadEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/upload", async (HttpContext ctx) =>
+        app.MapPost("/api/upload", async (HttpContext ctx, ILoggerFactory loggerFactory) =>
         {
+            var logger = loggerFactory.CreateLogger("AzureFinOps.Upload");
             var userJson = ctx.Session.GetString("user");
             if (userJson is null) return Results.Unauthorized();
             var userId = JsonSerializer.Deserialize<JsonElement>(userJson).GetProperty("id").GetInt64();
@@ -71,6 +72,11 @@ public static class UploadEndpoints
                 }
                 catch (Exception ex)
                 {
+                    // Unexpected upload-processing failure (expected validation
+                    // errors are surfaced as InvalidOperationException above). Log it
+                    // so upload reliability is trackable in Application Insights — the
+                    // caller still gets the per-file error back in the response body.
+                    logger.LogError(ex, "Upload processing failed for {FileName} ({Bytes} bytes)", file.FileName, file.Length);
                     results.Add(new { ok = false, fileName = file.FileName, error = $"{ex.GetType().Name}: {ex.Message}" });
                 }
             }

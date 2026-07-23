@@ -49,14 +49,25 @@ public static class Ipv4HttpHandler
         }
         var dnsMs = sw.ElapsedMilliseconds;
 
-        using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        attemptCts.CancelAfter(TimeSpan.FromSeconds(5));
-
         Exception? lastError = null;
         for (var i = 0; i < addresses.Length; i++)
         {
+            // Caller aborted the request (client disconnect, request timeout, or
+            // this handler's own 5-s ConnectTimeout elapsing on a prior slow
+            // address). Propagate a clean cancellation instead of looping over the
+            // remaining addresses: each of those ConnectAsync calls would fail
+            // instantly on the already-cancelled token, and — when logged with the
+            // exception object — each becomes its own AppExceptions record. One
+            // blackholed multi-address host used to emit ~10 exceptions per request,
+            // tripping the "exceptions in 15 min" alert on its own.
+            ct.ThrowIfCancellationRequested();
+
             var addr = addresses[i];
             var connectStart = sw.ElapsedMilliseconds;
+            // Per-attempt budget so one slow/blackholed address can't consume the
+            // whole allowance and force every remaining address to fail instantly.
+            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            attemptCts.CancelAfter(TimeSpan.FromSeconds(5));
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             try
             {
@@ -67,17 +78,37 @@ public static class Ipv4HttpHandler
                     host, port, addr, i + 1, addresses.Length, dnsMs, totalMs - connectStart, totalMs);
                 return new NetworkStream(socket, ownsSocket: true);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // The caller (not our per-attempt timer) cancelled — clean up and
+                // propagate the cancellation. Never logged as an exception:
+                // cancellations are expected and would only add telemetry noise.
+                socket.Dispose();
+                throw;
+            }
             catch (Exception ex)
             {
+                // Per-attempt connect timeout or a genuine socket error for THIS
+                // address. Both are expected/transient (corporate egress dropping
+                // SYNs is the whole reason this handler exists), so record a
+                // structured warning WITHOUT the exception object — passing the
+                // exception would emit an AppExceptions row per failed address and
+                // turn one flaky request into an exception-rate alert.
                 lastError = ex;
                 socket.Dispose();
-                HttpHelper.Logger?.LogWarning(ex,
-                    "IPv4 connect FAIL {Host}:{Port} via {Addr} (attempt {N}/{Total}) after {Ms}ms",
-                    host, port, addr, i + 1, addresses.Length, sw.ElapsedMilliseconds - connectStart);
+                var timedOut = attemptCts.IsCancellationRequested && !ct.IsCancellationRequested;
+                HttpHelper.Logger?.LogWarning(
+                    "IPv4 connect FAIL {Host}:{Port} via {Addr} (attempt {N}/{Total}) after {Ms}ms — {Reason}",
+                    host, port, addr, i + 1, addresses.Length, sw.ElapsedMilliseconds - connectStart,
+                    timedOut ? "connect timed out after 5s" : ex.Message);
             }
         }
 
-        HttpHelper.Logger?.LogError(lastError,
+        // Every address failed with a real connect error (not a caller cancellation).
+        // Log a structured error WITHOUT the exception object, then throw a single
+        // HttpRequestException — the caller's retry/telemetry records it once instead
+        // of us emitting one AppExceptions row per address here.
+        HttpHelper.Logger?.LogError(
             "IPv4 connect EXHAUSTED {Host}:{Port} — all {N} addresses failed after {Ms}ms",
             host, port, addresses.Length, sw.ElapsedMilliseconds);
         throw new HttpRequestException(

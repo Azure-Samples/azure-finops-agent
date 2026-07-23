@@ -178,6 +178,43 @@ forwardedHeadersOptions.KnownIPNetworks.Clear();
 forwardedHeadersOptions.KnownProxies.Clear();
 app.UseForwardedHeaders(forwardedHeadersOptions);
 
+// Global exception boundary — the safety net beneath every middleware and
+// endpoint below. Guarantees any unhandled fault is recorded ONCE with request
+// context (method, path, trace id) so it is queryable in Application Insights,
+// and hands the client a clean JSON 500 (with the trace id for support) instead
+// of a bare connection drop. Placed first so it wraps the whole pipeline.
+// Endpoints that stream their own response (the SSE chat endpoint) are safe:
+// once the response has started this only logs and never rewrites the body.
+// Development keeps the automatic developer exception page for richer local
+// debugging, so this only runs outside Development.
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler(errorApp => errorApp.Run(async ctx =>
+    {
+        var ex = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+        var traceId = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? ctx.TraceIdentifier;
+        // A client navigating away / closing the tab surfaces as a cancellation.
+        // That is expected, not a fault — log it at Information WITHOUT the
+        // exception object so it never inflates the exceptions table (or trips
+        // exception-rate alerts), mirroring Ipv4HttpHandler's transient handling.
+        var aborted = ctx.RequestAborted.IsCancellationRequested || ex is OperationCanceledException;
+
+        if (aborted)
+            logger.LogInformation("Request aborted on {Method} {Path} (client disconnect, traceId={TraceId})",
+                ctx.Request.Method, ctx.Request.Path.Value, traceId);
+        else if (ex is not null)
+            logger.LogError(ex, "Unhandled exception on {Method} {Path} (traceId={TraceId})",
+                ctx.Request.Method, ctx.Request.Path.Value, traceId);
+
+        if (!ctx.Response.HasStarted && !aborted)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            ctx.Response.ContentType = "application/json";
+            await ctx.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred.", traceId });
+        }
+    }));
+}
+
 if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 
