@@ -33,6 +33,20 @@ $rg      = $rg.Trim('"')
 Write-Host "  Building image $image in ACR $acrName (this can take 3-6 min on the first run)..." -ForegroundColor Yellow
 Push-Location $dashboardDir
 try {
+    # `az acr build` does NOT reliably honour .dockerignore — it tars the whole
+    # context regardless. On a machine that has built locally that means shipping
+    # bin/ + obj/ + node_modules/ + wwwroot/ to the registry: measured at 1.27 GB,
+    # which crawls or times out instead of the ~76 KB a clean tree produces. The
+    # Dockerfile rebuilds all of these inside the image anyway, so remove them
+    # first. Same cleanup the manual checklist in deploy.prompt.md mandates.
+    $generated = @('bin', 'obj', 'publish', 'wwwroot', 'frontend/node_modules', 'frontend/dist')
+    foreach ($g in $generated) {
+        if (Test-Path $g) {
+            Write-Host "  Pruning build context: $g" -ForegroundColor DarkGray
+            Remove-Item -Recurse -Force $g -ErrorAction SilentlyContinue
+        }
+    }
+
     az acr build `
         --registry $acrName `
         --image $image `

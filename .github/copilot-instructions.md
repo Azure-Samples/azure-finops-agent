@@ -120,6 +120,7 @@ src/Dashboard/
 - **Session idle disconnect**: `CopilotClientOptions.SessionIdleTimeoutSeconds = 1800` releases the in-memory CLI side after 30 min idle. Disk state is preserved; the next prompt rehydrates via `ResumeSessionAsync(sessionId, fresh-bearer)`.
 - The backend streams responses via **Server-Sent Events (SSE)** using session event subscriptions (`session.On()`) — deltas, tool starts/completions, chart events, session-id sync, errors.
 - The Vue frontend consumes SSE and renders streaming text (character-by-character animation), tool call status in the sidebar, intent text next to the AI avatar, ECharts visualizations inline, and a vertical-split right sidebar (Agent on top, past Conversations on bottom).
+- **Responsive three-column layout (ChatView.vue)**: both sidebars stay in-flow only above 900px. At 900px and below, the left sidebar becomes a dismissible overlay, the right tools sidebar hides, and the mobile auth bar appears. Keep these mode switches on the same breakpoint: at the old 768px threshold, a 789px viewport left only 249px for chat (290px left + 250px right), shrinking an ECharts SVG to 150px and overlapping three ordinary region labels by 30–52px. The 900px breakpoint was verified in-browser at that exact viewport: the chart SVG expanded to 730px and label overlap disappeared.
 - **Sticky auto-scroll (ChatView.vue)**: the messages pane follows new content only while the user is at/near the bottom (96px slack). Follow triggers: reactive watchers on `streamBuffer`/`streamReasoning`/`streamIntent`/`messages.length` (microtask-driven — keep working in hidden tabs) + a ResizeObserver on `.messages` and `.messages-inner` (catches charts mounting, composer autogrow, card appearance — suspended while hidden, so never rely on it alone). Scrolling up unsticks (no yank while reading); a floating "Latest"/"New activity" pill (zero-height `.jump-latest-anchor`) offers one-click return. `scrollToBottom()` = sticky + instant (smooth restarted per delta frame lags); `forceScrollToBottom(smooth?)` = deliberate jump (send, session switch, pill) that re-arms following — smooth only for <2000px hops in a `visible` document (smooth scrolling is rAF-driven and never completes in hidden/embedded views). Transcript loads (`reloadSessionTranscript`) always force-land on the newest message instantly.
 - Data should be retrieved from APIs at runtime — the agent stores dynamic FAQ entries to disk for SEO but no user data.
 - **Session management endpoints**: `GET /api/sessions` lists the user's past conversations (filtered by `Cwd`); `POST /api/sessions/new` creates a new one; `DELETE /api/sessions/{id}` removes it; `POST /api/chat/warmup` pre-creates/resumes the user's session in the background when the chat UI mounts, so the first prompt skips the ~300 ms session-creation cost (system-prompt + tool-schema upload) and hits the live-session fast path. The chat SSE endpoint accepts an optional `sessionId` to resume a specific conversation. `GET /api/sessions/{id}/messages` (transcript replay) is available to anonymous users too — IDOR-gated per-user workdir — because client-side recovery depends on it; the sidebar LIST stays Entra-only. `UserStateJanitor` background service deletes sessions older than 30 days.
@@ -354,18 +355,24 @@ Always use Playwright when portal interaction is required rather than asking the
 
 The production app is available at `https://azure-finops-agent.com` (canonical) and `https://www.azure-finops-agent.com` (redirects to bare domain).
 
-- **Domain Registrar**: Namecheap (domain registration + WHOIS privacy only)
-- **DNS Provider**: Azure DNS (zone: `azure-finops-agent.com` in `rg-finops-agent`)
+> **The domain was cut over to the new tenant on 2026-08-26.** `azure-finops-agent.com` now resolves to the **new** app (`app-finops-nlzfi5vsj55aa`, `rg-finops-prod`). The DNS **zone** still lives in the old subscription's `rg-finops-agent` and is still the authoritative one — only the record _values_ were repointed, which is what keeps rollback to a single TTL. Moving the zone itself (the registrar nameserver change) is a separate, still-pending step. See `.github/prompts/migrate-tenant.prompt.md`.
+
+- **Domain Registrar**: Namecheap (domain registration + WHOIS privacy only). **Not needed to move traffic** — only for the nameserver change in Phase B.
+- **DNS Provider**: Azure DNS (authoritative zone: `azure-finops-agent.com` in `rg-finops-agent`, old subscription)
   - Migrated from Namecheap BasicDNS to Azure DNS for better corporate proxy trust scoring (shared `registrar-servers.com` nameservers are low-trust)
-- **Azure DNS Nameservers**: `ns1-04.azure-dns.com`, `ns2-04.azure-dns.net`, `ns3-04.azure-dns.org`, `ns4-04.azure-dns.info`
-- **DNS Records** (managed in Azure DNS zone):
-  - `A` `@` → `52.228.84.33` (App Service IP)
-  - `CNAME` `www` → `finops-agent-container.azurewebsites.net`
-  - `TXT` `asuid` → Azure domain verification token
+  - A second, fully-staged zone exists in `rg-finops-prod` (nameservers `ns*-02.azure-dns.*`) ready for Phase B. It is **not** authoritative until the registrar is updated.
+- **Azure DNS Nameservers** (live): `ns1-04.azure-dns.com`, `ns2-04.azure-dns.net`, `ns3-04.azure-dns.org`, `ns4-04.azure-dns.info`
+- **DNS Records** (managed in the authoritative Azure DNS zone):
+  - `A` `@` → `51.12.31.3`, `51.12.74.3` (TTL 300) — App Service answers on **several** inbound VIPs and `ssl create` validates the _full_ set, so never publish just one
+  - `CNAME` `www` → `app-finops-nlzfi5vsj55aa.azurewebsites.net` (TTL 300)
+  - `TXT` `asuid` / `asuid.www` → holds **both** the old and new apps' `customDomainVerificationId` (TXT record-sets take multiple values), which is what let both apps bind the hostname at once and keeps rollback instant
   - `TXT` `_dmarc` → `v=DMARC1; p=none; rua=mailto:<YOUR_DMARC_CONTACT_EMAIL>` (domain reputation)
+- **Rollback** (one TTL, no registrar): set `A` `@` back to `52.228.84.33` and `CNAME` `www` back to `finops-agent-container.azurewebsites.net`. The old app is still running and still holds valid certificates.
 - **Security Headers** (in `Program.cs`): HSTS (1 year, preload), X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, Content-Security-Policy, HTTPS redirection
-- **SSL**: Azure Managed Certificates (auto-renewed) bound via SNI for both `www` and root domain
-- **Microsoft Entra ID callbacks**: `https://azure-finops-agent.com/auth/microsoft/callback`, `https://www.azure-finops-agent.com/auth/microsoft/callback`, `http://localhost:5000/auth/microsoft/callback`, `https://finops-agent-container.azurewebsites.net/auth/microsoft/callback`
+- **SSL**: Azure Managed Certificates (auto-renewed, GeoTrust/DigiCert) bound via SNI for both `www` and root domain on the new app.
+  - **Ordering trap**: App Service will not issue a managed certificate until public DNS _already_ points at the app — but HSTS makes any certificate gap a hard failure (not a dismissible warning) for returning visitors. The cutover therefore pre-issued a Let's Encrypt cert via a **DNS-01** challenge (which needs only zone control, not traffic), bound it, flipped DNS, then replaced it with managed certificates. Keep that order for any future move.
+  - The new zone's **CAA** record only allows DigiCert/GeoTrust, so a Let's Encrypt cert can never renew once Phase B completes — managed certificates must be in place before the nameserver change.
+- **Microsoft Entra ID callbacks**: `https://azure-finops-agent.com/auth/microsoft/callback`, `https://www.azure-finops-agent.com/auth/microsoft/callback`, `http://localhost:5000/auth/microsoft/callback`, `https://app-finops-nlzfi5vsj55aa.azurewebsites.net/auth/microsoft/callback` (each also has an `/auth/microsoft/adminconsent/callback` variant)
 
 ## Self-Maintenance
 

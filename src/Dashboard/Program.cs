@@ -45,6 +45,13 @@ var azureOpenAITenantId = builder.Configuration["AzureOpenAI:TenantId"];
 // (measured 8+ min per LLM round-trip in production — opt-in only).
 var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "medium";
 var appInsightsCs = builder.Configuration["ApplicationInsights:ConnectionString"];
+// Canonical public hostname (bare, no scheme/www) for the owner deployment, e.g.
+// "azure-finops-agent.com". The app is reachable on its *.azurewebsites.net host
+// too, which serves byte-identical HTML with a self-referencing canonical — so
+// without this both hosts get indexed and split ranking. When set, every host
+// except this one is marked noindex. Unset (customer deployments, localhost)
+// disables the check rather than guessing at a canonical host.
+var canonicalSiteHost = (Environment.GetEnvironmentVariable("PUBLIC_SITE_HOST") ?? "").Trim();
 
 // ── Services ───────────────────────────────────────────────────
 builder.Services.AddDataProtection()
@@ -224,11 +231,20 @@ app.Use(async (ctx, next) =>
 {
     var headers = ctx.Response.Headers;
     if (!app.Environment.IsDevelopment())
-        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload";
+        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
     headers["X-Content-Type-Options"] = "nosniff";
     headers["X-Frame-Options"] = "DENY";
     headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
     headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()";
+    // Keep search engines on the canonical host only. `www.` is treated as
+    // canonical-equivalent because the middleware below 301s it to the bare host.
+    if (canonicalSiteHost.Length > 0)
+    {
+        var reqHost = ctx.Request.Host.Host;
+        if (reqHost.StartsWith("www.", StringComparison.OrdinalIgnoreCase)) reqHost = reqHost[4..];
+        if (!reqHost.Equals(canonicalSiteHost, StringComparison.OrdinalIgnoreCase))
+            headers["X-Robots-Tag"] = "noindex, nofollow";
+    }
     // The standalone /slides deck has inline <script> + Google Fonts. Relax CSP for that one route.
     var path = ctx.Request.Path.Value ?? "";
     if (path.Equals("/slides", StringComparison.OrdinalIgnoreCase) ||

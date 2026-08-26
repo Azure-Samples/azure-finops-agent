@@ -37,6 +37,18 @@
     },
     "entraTenantId": {
       "value": "${AZURE_ENTRA_TENANT_ID=common}"
+    },
+    "customDomainName": {
+      "value": "${AZURE_CUSTOM_DOMAIN=}"
+    },
+    "dmarcReportEmail": {
+      "value": "${DMARC_REPORT_EMAIL=}"
+    },
+    "enableDeleteLocks": {
+      "value": "${ENABLE_DELETE_LOCKS=false}"
+    },
+    "appServiceInboundIp": {
+      "value": "${APP_SERVICE_INBOUND_IP=}"
     }
   }
 }

@@ -73,6 +73,11 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2026-03-01' = if
   parent: newAccount
   name: 'proj-finops-${resourceToken}'
   location: aoaiLocation
+  // A Cognitive Services account serializes control-plane operations, but ARM
+  // creates sibling children in parallel — so without this the project races the
+  // model deployment and the whole `azd up` fails with "RequestConflict: Another
+  // operation is in progress on the resource". Ordering them is the only fix.
+  dependsOn: [modelDeployment]
   identity: {
     type: 'SystemAssigned'
   }

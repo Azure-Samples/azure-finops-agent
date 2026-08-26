@@ -15,8 +15,18 @@ param entraAppId string
 @secure()
 param entraClientSecret string
 param entraTenantId string
+param customDomainName string
+param dmarcReportEmail string
+param enableDeleteLocks bool
+param appServiceInboundIp string
 
 var containerImageName = 'finops-agent:latest'
+// Prefer the custom domain for the synthetic probe when there is one — that is
+// the hostname real users hit, and probing it also exercises DNS and the
+// custom-domain certificate, which the *.azurewebsites.net host would not.
+var publicUrl = empty(customDomainName)
+  ? 'https://${appservice.outputs.hostname}'
+  : 'https://${customDomainName}'
 
 module monitoring 'modules/monitoring.bicep' = {
   name: 'monitoring'
@@ -65,6 +75,30 @@ module appservice 'modules/appservice.bicep' = {
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId
+    publicSiteHost: customDomainName
+  }
+}
+
+module dns 'modules/dns.bicep' = if (!empty(customDomainName)) {
+  name: 'dns'
+  params: {
+    domainName: customDomainName
+    tags: tags
+    appServiceInboundIp: appServiceInboundIp
+    appServiceDefaultHostname: appservice.outputs.hostname
+    customDomainVerificationId: appservice.outputs.customDomainVerificationId
+    dmarcReportEmail: dmarcReportEmail
+    enableDeleteLock: enableDeleteLocks
+  }
+}
+
+module availability 'modules/availability.bicep' = {
+  name: 'availability'
+  params: {
+    location: location
+    tags: tags
+    appInsightsId: monitoring.outputs.appInsightsId
+    testUrl: '${publicUrl}/api/version'
   }
 }
 
@@ -91,3 +125,7 @@ output aoaiDeploymentName string = aoai.outputs.deploymentName
 output aiProjectName string = aoai.outputs.projectName
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output logAnalyticsWorkspaceId string = monitoring.outputs.logAnalyticsWorkspaceId
+output customDomainName string = customDomainName
+// Empty unless a custom domain was requested. Assign these four at the
+// registrar to delegate the domain to Azure DNS.
+output dnsNameServers array = empty(customDomainName) ? [] : dns!.outputs.nameServers

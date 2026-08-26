@@ -18,24 +18,43 @@ $envValues = azd env get-values -o json 2>$null | ConvertFrom-Json -AsHashtable
 $objectId = $envValues['AZURE_ENTRA_OBJECT_ID']
 $webHost  = $envValues['WEB_APP_HOSTNAME']
 $webUrl   = $envValues['WEB_APP_URL']
+$customDomain = $envValues['AZURE_CUSTOM_DOMAIN']
 
 if (-not $objectId -or -not $webHost) {
     Write-Host "  AZURE_ENTRA_OBJECT_ID or WEB_APP_HOSTNAME missing from azd env — skipping redirect-URI patch." -ForegroundColor Yellow
 } else {
     $objectId = $objectId.Trim('"')
     $webHost  = $webHost.Trim('"')
+    if ($customDomain) { $customDomain = $customDomain.Trim('"') }
 
     $desired = @(
         'http://localhost:5000/auth/microsoft/callback',
-        "https://$webHost/auth/microsoft/callback"
+        'http://localhost:5000/auth/microsoft/adminconsent/callback',
+        "https://$webHost/auth/microsoft/callback",
+        "https://$webHost/auth/microsoft/adminconsent/callback"
     )
+    if ($customDomain) {
+        $desired += @(
+            "https://$customDomain/auth/microsoft/callback",
+            "https://$customDomain/auth/microsoft/adminconsent/callback",
+            "https://www.$customDomain/auth/microsoft/callback",
+            "https://www.$customDomain/auth/microsoft/adminconsent/callback"
+        )
+    }
 
     Write-Host "  Patching Entra app redirect URIs for hostname: $webHost" -ForegroundColor Yellow
     $existingJson = az ad app show --id $objectId --query 'web.redirectUris' -o json 2>$null
-    # @() forces an array — ConvertFrom-Json unwraps a single-element list to a
-    # bare string, which would make `$existing + $desired` do string concatenation.
-    $existing = if ($existingJson) { @($existingJson | ConvertFrom-Json) } else { @() }
-    $merged = @($existing + $desired | Select-Object -Unique)
+    # `az ... -o json` comes back as an ARRAY OF LINES in PowerShell, and piping
+    # that straight into ConvertFrom-Json yields a bare string rather than a list
+    # — so `$existing + $desired` silently did STRING CONCATENATION and produced
+    # one mangled "…callbackhttp://…" URI that Entra rejected outright. Join the
+    # lines first, then hard-cast to string[] so `+` is always array append.
+    $existing = @()
+    if ($existingJson) {
+        $parsed = ($existingJson | Out-String) | ConvertFrom-Json
+        if ($null -ne $parsed) { $existing = [string[]]@($parsed) }
+    }
+    $merged = @([string[]]($existing + $desired) | Select-Object -Unique)
 
     az ad app update --id $objectId --web-redirect-uris @merged --output none
     if ($LASTEXITCODE -eq 0) {

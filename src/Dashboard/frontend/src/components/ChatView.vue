@@ -11604,7 +11604,7 @@ async function send() {
 }
 
 /* ── Responsive ── */
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .sidebar {
     position: fixed;
     top: 48px;
@@ -11678,7 +11678,7 @@ async function send() {
     font-size: clamp(1.8rem, 12vw, 2.6rem);
   }
 }
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .mobile-auth-bar {
     display: flex !important;
   }

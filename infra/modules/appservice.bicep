@@ -13,6 +13,9 @@ param entraAppId string
 param entraClientSecret string
 param entraTenantId string
 
+@description('Canonical public hostname (bare, no scheme), e.g. contoso.com. Marks every other host — including the default *.azurewebsites.net — as noindex so search engines do not split ranking across duplicates. Empty disables the check.')
+param publicSiteHost string = ''
+
 var planTier = startsWith(appServicePlanSku, 'B') ? 'Basic' : (startsWith(appServicePlanSku, 'S') ? 'Standard' : 'PremiumV3')
 
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
@@ -82,6 +85,7 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'ApplicationInsights__ConnectionString', value: appInsightsConnectionString }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
         { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }
+        { name: 'PUBLIC_SITE_HOST', value: publicSiteHost }
       ]
     }
   }
@@ -90,3 +94,8 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
 output name string = webApp.name
 output hostname string = webApp.properties.defaultHostName
 output principalId string = webApp.identity.principalId
+// Consumed by modules/dns.bicep to build the asuid ownership TXT record for a
+// custom domain. The inbound VIP for the apex A record is NOT available here —
+// it is absent from SiteProperties — so it is passed into the DNS module as a
+// parameter instead.
+output customDomainVerificationId string = webApp.properties.customDomainVerificationId

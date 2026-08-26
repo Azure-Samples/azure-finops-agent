@@ -104,6 +104,18 @@ param entraClientSecret string = ''
 @description('Entra tenant ID for OAuth — `common` for multi-tenant. Leave default unless restricting to a single tenant.')
 param entraTenantId string = 'common'
 
+@description('Optional custom domain to serve the app on, e.g. contoso.com. When set, an Azure DNS zone is created with the apex/www/asuid/CAA/SPF/DMARC records already in place, and the app marks every other hostname noindex. You must then delegate the domain to the returned nameservers at your registrar and bind the hostnames — see .github/prompts/migrate-tenant.prompt.md. Empty skips all DNS.')
+param customDomainName string = ''
+
+@description('Mailbox for DMARC aggregate reports and CAA violation reports on the custom domain. Ignored when customDomainName is empty.')
+param dmarcReportEmail string = ''
+
+@description('Apply CanNotDelete locks to the DNS zone. Leave false for evaluation deployments so `azd down` tears the environment down cleanly; set true for a long-lived production domain where an accidental delete would mean a registrar change and DNS re-propagation.')
+param enableDeleteLocks bool = false
+
+@description('Comma-separated App Service inbound VIPs for the custom domain apex A record. Only knowable after the web app exists, so leave empty on the first `azd up` — the zone is created without an apex record and the runbook adds them. Ignored when customDomainName is empty.')
+param appServiceInboundIp string = ''
+
 var tags = {
   'azd-env-name': environmentName
   application: 'azure-finops-agent'
@@ -136,6 +148,10 @@ module resources 'main-resources.bicep' = {
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId
+    customDomainName: customDomainName
+    dmarcReportEmail: dmarcReportEmail
+    enableDeleteLocks: enableDeleteLocks
+    appServiceInboundIp: appServiceInboundIp
   }
 }
 
@@ -162,3 +178,6 @@ output AZURE_AI_PROJECT_NAME string = resources.outputs.aiProjectName
 
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = resources.outputs.appInsightsConnectionString
 output AZURE_LOG_ANALYTICS_WORKSPACE_ID string = resources.outputs.logAnalyticsWorkspaceId
+
+output AZURE_CUSTOM_DOMAIN string = resources.outputs.customDomainName
+output AZURE_DNS_NAME_SERVERS array = resources.outputs.dnsNameServers
