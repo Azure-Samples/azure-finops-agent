@@ -3036,8 +3036,8 @@ function clearReconnectNotice() {
 // replay and the recovery guard alike, so a turn can never be described three
 // different ways depending on which path noticed it.
 const STOPPED_MARKER_TEXT =
-  "⏹ Stopped — no answer was generated for this message.";
-const NO_ANSWER_MARKER_TEXT = "⏹ No answer was generated for this message.";
+  "You stopped this response before it finished.";
+const NO_ANSWER_MARKER_TEXT = "No answer was generated for this message.";
 
 // ── Stopped-turn registry ──
 // A turn the user explicitly stopped is aborted server-side, so no answer will
@@ -3069,10 +3069,18 @@ function isTurnStopped(sid, prompt) {
   return loadStoppedTurns().has(stoppedTurnKey(sid, prompt));
 }
 
+// Keeps the wording honest across a reload: a turn the user stopped should keep
+// saying so, not silently downgrade to the generic "no answer" phrasing.
+function markerForTurn(sid, userMsg) {
+  const prompt = userMsg && userMsg.role === "user" ? userMsg.content : "";
+  return prompt && isTurnStopped(sid, prompt)
+    ? STOPPED_MARKER_TEXT
+    : NO_ANSWER_MARKER_TEXT;
+}
+
 // True when the transcript already ends in an explicit "no answer" marker, i.e.
 // the last question on screen has been resolved as "this will never be answered".
-function transcriptEndsWithNoAnswerMarker() {
-  const last = messages.value[messages.value.length - 1];
+function transcriptEndsWithNoAnswerMarker() {  const last = messages.value[messages.value.length - 1];
   return (
     !!last &&
     last.role === "system" &&
@@ -4112,7 +4120,7 @@ async function reloadSessionTranscript(sessionId) {
         ) {
           restored[i] = {
             role: "system",
-            content: NO_ANSWER_MARKER_TEXT,
+            content: markerForTurn(sessionId, restored[i - 1]),
           };
         }
       }
@@ -4125,7 +4133,7 @@ async function reloadSessionTranscript(sessionId) {
         if (restored[i].role === "user" && restored[i + 1].role === "user") {
           restored.splice(i + 1, 0, {
             role: "system",
-            content: NO_ANSWER_MARKER_TEXT,
+            content: markerForTurn(sessionId, restored[i]),
           });
         }
       }
