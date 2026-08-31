@@ -3090,10 +3090,19 @@ function transcriptEndsWithNoAnswerMarker() {  const last = messages.value[messa
 }
 
 // Appends the stopped marker unless it is already the last thing on screen.
-function ensureStoppedMarker() {
+function ensureStoppedMarker(promptText) {
   const msgs = messages.value;
   const last = msgs[msgs.length - 1];
   if (last && last.role === "system" && last.content === STOPPED_MARKER_TEXT)
+    return;
+  // Only annotate the turn it actually belongs to. Without this a reloaded or
+  // empty view whose id still matched the registry got a lone marker with no
+  // question above it.
+  if (
+    !last ||
+    last.role !== "user" ||
+    normText(last.content) !== normText(promptText || "")
+  )
     return;
   msgs.push({ role: "system", content: STOPPED_MARKER_TEXT });
 }
@@ -3127,7 +3136,7 @@ async function tryRecoverPersistedAnswer(sid, promptText) {
   // where the in-memory marker above is gone.
   if (isTurnStopped(sid, promptText)) {
     clearReconnectNotice();
-    ensureStoppedMarker();
+    ensureStoppedMarker(promptText);
     return false;
   }
   if (reconcilingSid === sid) return false; // a poller is already on it
