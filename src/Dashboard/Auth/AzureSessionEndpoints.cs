@@ -14,6 +14,7 @@ public static class AzureSessionEndpoints
         this IEndpointRouteBuilder app,
         SessionTokenStore tokenStore,
         AiTelemetry telemetry,
+        PersistentIdentity persistentIdentity,
         ILogger logger)
     {
         app.MapGet("/auth/azure/status", async (HttpContext ctx, IHttpClientFactory httpFactory) =>
@@ -135,6 +136,30 @@ public static class AzureSessionEndpoints
                 "Azure Monitor", "Resource Health", "Subscriptions"
             };
 
+            string? scopeOwnerOid = null;
+            string? scopeTenantId = null;
+            if (azureUser is JsonElement azureIdentity && azureIdentity.ValueKind == JsonValueKind.Object)
+            {
+                if (azureIdentity.TryGetProperty("objectId", out var oid)) scopeOwnerOid = oid.GetString();
+                if (azureIdentity.TryGetProperty("tenantId", out var tid)) scopeTenantId = tid.GetString();
+            }
+
+            // Cache a bounded copy for the next chat turn. The frontend already
+            // pays for these discovery calls while hydrating connection status;
+            // exposing the result to the agent avoids another GET /subscriptions
+            // and enables one cross-subscription cost tool call. Keep the cache
+            // bounded so very large estates do not bloat every model prompt.
+            ctx.Session.SetString("azure_scope_context", JsonSerializer.Serialize(new
+            {
+                ownerObjectId = scopeOwnerOid,
+                ownerTenantId = scopeTenantId,
+                subscriptionCount = subscriptions.Count,
+                subscriptions = subscriptions.Take(500),
+                subscriptionsTruncated = subscriptions.Count > 500,
+                managementGroups = managementGroups.Take(50),
+                managementGroupsTruncated = managementGroups.Count > 50
+            }));
+
             return Results.Json(new
             {
                 connected = true,
@@ -199,13 +224,24 @@ public static class AzureSessionEndpoints
         {
             ClearTokensForUser(ctx, telemetry, logger, fullClear: false);
             ClearSessionTokenKeys(ctx, includeForceConsent: false);
+            // Keep the encrypted identity file, but remove the browser pointer
+            // to it. Otherwise the hydration middleware restores azure_user +
+            // refresh token on the very next request and "Disconnect" is a
+            // no-op from the user's perspective.
+            persistentIdentity.Clear(ctx, oid: null);
             return Results.Ok(new { ok = true });
         });
 
         app.MapPost("/auth/azure/revoke", (HttpContext ctx) =>
         {
+            var oid = ResolveAzureOid(ctx);
             ClearTokensForUser(ctx, telemetry, logger, fullClear: true);
             ClearSessionTokenKeys(ctx, includeForceConsent: true);
+            // Revoke means no silent restoration: remove both the cookie and
+            // encrypted refresh-token record. Entra grants themselves remain
+            // user-manageable at myapps.microsoft.com; force_consent ensures
+            // the next explicit connection displays a fresh consent screen.
+            persistentIdentity.Clear(ctx, oid);
             return Results.Ok(new { ok = true });
         });
     }
@@ -271,9 +307,25 @@ public static class AzureSessionEndpoints
         ctx.Session.Remove("graph_token_unavailable_until");
         ctx.Session.Remove("loganalytics_token_unavailable_until");
         ctx.Session.Remove("storage_token_unavailable_until");
+        ctx.Session.Remove("azure_scope_context");
         if (!includeForceConsent)
             ctx.Session.Remove("auth_tenant");
         else
             ctx.Session.SetString("force_consent", "1");
+    }
+
+    private static string? ResolveAzureOid(HttpContext ctx)
+    {
+        var json = ctx.Session.GetString("azure_user");
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var user = JsonSerializer.Deserialize<JsonElement>(json);
+            return user.TryGetProperty("objectId", out var oid) ? oid.GetString() : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

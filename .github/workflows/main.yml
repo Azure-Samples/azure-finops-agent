@@ -13,11 +13,12 @@ permissions:
   contents: read
 
 env:
-  ACR_NAME: crfinopsagent
-  ACR_LOGIN: crfinopsagent.azurecr.io
-  IMAGE: crfinopsagent.azurecr.io/finops-agent
-  WEBAPP_NAME: finops-agent-container
-  RESOURCE_GROUP: rg-finops-agent
+  ACR_NAME: ${{ vars.PROD_ACR_NAME }}
+  ACR_LOGIN: ${{ vars.PROD_ACR_LOGIN_SERVER }}
+  IMAGE: ${{ vars.PROD_CONTAINER_IMAGE }}
+  WEBAPP_NAME: ${{ vars.PROD_WEBAPP_NAME }}
+  RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+  VERIFY_URL: ${{ vars.PROD_VERIFY_URL }}
 
 # Cancel in-flight prod deploys when a newer commit lands.
 concurrency:
@@ -36,9 +37,19 @@ jobs:
       - name: Azure Login (OIDC)
         uses: azure/login@v3
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_PROD_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_PROD_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_PROD_SUBSCRIPTION_ID }}
+
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          for name in ACR_NAME ACR_LOGIN IMAGE WEBAPP_NAME RESOURCE_GROUP VERIFY_URL; do
+            if [ -z "${!name}" ]; then
+              echo "Missing GitHub repository variable for production: $name" >&2
+              exit 1
+            fi
+          done
 
       - name: Login to ACR
         run: az acr login --name ${{ env.ACR_NAME }}
@@ -47,10 +58,7 @@ jobs:
         id: meta
         run: |
           echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-          # Offset so we keep numbering continuous after switching from
-          # `git rev-list --count HEAD` (which had reached 252) to run_number
-          # (which restarted at 1 when the workflow file was renamed).
-          echo "build=$(( ${{ github.run_number }} + 247 ))" >> $GITHUB_OUTPUT
+          echo "build=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -75,20 +83,41 @@ jobs:
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-main,mode=max,image-manifest=true,oci-mediatypes=true
 
       - name: Configure App Service settings
+        env:
+          AOAI_ENDPOINT: ${{ secrets.AZURE_PROD_OPENAI_ENDPOINT }}
         run: |
+          if [ -z "$AOAI_ENDPOINT" ]; then
+            echo "Missing GitHub secret for production: AZURE_PROD_OPENAI_ENDPOINT" >&2
+            exit 1
+          fi
           az webapp config appsettings set \
             --name ${{ env.WEBAPP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --settings AzureOpenAI__Endpoint="${{ secrets.AZURE_OPENAI_ENDPOINT }}"
+            --settings AzureOpenAI__Endpoint="$AOAI_ENDPOINT" \
+            --output none
 
-      # Production currently runs against :latest, so we bounce the app to
-      # force the new image to be pulled. (Keeping this for prod safety;
-      # the test slot doesn't need it because it pins to test-<sha>.)
-      - name: Restart App Service
-        run: az webapp restart --name ${{ env.WEBAPP_NAME }} --resource-group ${{ env.RESOURCE_GROUP }}
+      - name: Point App Service at immutable image
+        run: |
+          az webapp config container set \
+            --name ${{ env.WEBAPP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --container-image-name ${{ env.IMAGE }}:${{ steps.meta.outputs.sha }} \
+            --container-registry-url https://${{ env.ACR_LOGIN }} \
+            --output none
 
       - name: Verify deployment
         run: |
-          curl --retry 10 --retry-delay 5 --retry-connrefused -sf \
-            https://azure-finops-agent.com/api/version | head -c 200
-          echo ""
+          for attempt in $(seq 1 24); do
+            payload=$(curl --connect-timeout 10 --max-time 20 -sf "${VERIFY_URL%/}/api/version" || true)
+            sha=$(jq -r '.sha // empty' <<<"$payload")
+            build=$(jq -r '.build // empty' <<<"$payload")
+            branch=$(jq -r '.branch // empty' <<<"$payload")
+            if [[ "$sha" == "${{ steps.meta.outputs.sha }}" && "$build" == "${{ steps.meta.outputs.build }}" && "$branch" == "main" ]]; then
+              echo "Verified production build $build ($sha) on main."
+              exit 0
+            fi
+            echo "Waiting for expected production build (attempt $attempt/24)..."
+            sleep 5
+          done
+          echo "Expected production SHA/build/branch did not become active." >&2
+          exit 1

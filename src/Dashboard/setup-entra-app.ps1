@@ -58,7 +58,8 @@ function Write-Status {
     param([string]$Message, [string]$ForegroundColor = 'Gray')
     if ($OutputJson) {
         [Console]::Error.WriteLine($Message)
-    } else {
+    }
+    else {
         Write-Host $Message -ForegroundColor $ForegroundColor
     }
 }
@@ -100,9 +101,6 @@ foreach ($u in $redirectUris) {
 
 # ── 3. Create the app registration ──
 Write-Status "`n[3/6] Creating app registration '$AppName'..." 'Yellow'
-
-# Build the redirect URIs JSON for the web platform
-$redirectUrisJson = ($redirectUris | ForEach-Object { "`"$_`"" }) -join ","
 
 $appJson = az ad app create `
     --display-name $AppName `
@@ -240,16 +238,12 @@ Write-Host "`n$('=' * 60)" -ForegroundColor Cyan
 Write-Host "  ADD THESE VALUES TO YOUR CONFIGURATION" -ForegroundColor Cyan
 Write-Host "$('=' * 60)" -ForegroundColor Cyan
 
-Write-Host "`n  For appsettings.Local.json (local dev):" -ForegroundColor Yellow
+Write-Host "`n  For local development (.NET User Secrets):" -ForegroundColor Yellow
 Write-Host @"
 
-  {
-    "Microsoft": {
-      "ClientId": "$clientId",
-      "ClientSecret": "$secret",
-      "TenantId": "common"
-    }
-  }
+    dotnet user-secrets set "Microsoft:ClientId" "$clientId"
+    dotnet user-secrets set "Microsoft:ClientSecret" "$secret"
+    dotnet user-secrets set "Microsoft:TenantId" "common"
 
 "@ -ForegroundColor White
 
@@ -271,10 +265,10 @@ if ($ProductionUrl) {
 }
 
 Write-Host "  Security notes:" -ForegroundColor Yellow
-Write-Host "  - This agent is READ-ONLY — it cannot modify Azure resources" -ForegroundColor Gray
+Write-Host "  - The agent can apply approved non-delete PUT/PATCH changes under the user's RBAC" -ForegroundColor Gray
 Write-Host "  - All Graph/Log Analytics permissions are read-only by scope definition" -ForegroundColor Gray
 Write-Host "  - ARM uses user_impersonation (only delegated scope available)" -ForegroundColor Gray
-Write-Host "  - Read-only is enforced at the code level via POST path allowlist" -ForegroundColor Gray
+Write-Host "  - Azure DELETE and mutating action POST operations are blocked in code" -ForegroundColor Gray
 Write-Host "  - For defense-in-depth, assign users Reader or Cost Management Reader RBAC" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  IMPORTANT: Store the ClientSecret securely — it will NOT be shown again." -ForegroundColor Red

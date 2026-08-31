@@ -62,9 +62,11 @@ public static class HttpHelper
         return long.TryParse(uidPart, out var uid) ? uid : null;
     }
 
-    // Max retry attempts on HTTP 429. After this many failed attempts the throttled
-    // response is returned to the caller so the LLM (or user) sees the throttle status.
+    // Max retry attempts on HTTP 429. Interactive Cost Management query/forecast
+    // calls use a lower limit below because five exponential waits can pin one chat
+    // turn for >30s even when the tenant throttle never clears.
     private const int MaxThrottleRetries = 5;
+    private const int MaxInteractiveCostAttempts = 2;
 
     // Cap on a single wait between retries (seconds). Honors Retry-After up to this ceiling
     // so a misbehaving service can't pin us indefinitely. Cost Management commonly returns
@@ -86,6 +88,10 @@ public static class HttpHelper
         || url.Contains("/Microsoft.Billing/", StringComparison.OrdinalIgnoreCase)
         || url.Contains("/Microsoft.CostManagementExports/", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsInteractiveCostQueryUrl(string url) =>
+        url.Contains("/Microsoft.CostManagement/query", StringComparison.OrdinalIgnoreCase)
+        || url.Contains("/Microsoft.CostManagement/forecast", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Sends an HTTP request with silent retry on 429 (up to 5 attempts). On each 429 we honor,
     /// in priority order: Cost Management's <c>x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after</c>,
@@ -102,7 +108,9 @@ public static class HttpHelper
         string? jsonBody = null,
         bool includeTimestamp = false,
         Dictionary<string, string>? extraHeaders = null,
-        int? maxResponseChars = null)
+        int? maxResponseChars = null,
+        bool bypassCostManagementGate = false,
+        int? maxAttemptsOverride = null)
     {
         method ??= HttpMethod.Get;
 
@@ -115,13 +123,22 @@ public static class HttpHelper
         // in-flight heartbeats, and retry backoffs alike. Returns no-op when absent.
         var turnKey = Activity.Current?.GetBaggageItem("finops.turn.id");
         RetryReporters.TryGetValue(turnKey ?? "", out var report);
+        // Never fall back from an exact turn key to a user-level match. A
+        // scheduled job and an interactive chat can run concurrently for one
+        // user; user-level routing can inject a job's retry details into the
+        // wrong conversation. Missing baggage means no SSE status event.
 
         // Gate Cost Management / Consumption / Billing calls behind a small global
         // semaphore (2 concurrent). Without this, the LLM (esp. via BulkAzureRequest
         // parallelism=20) fan-fires parallel /query calls that all collide on the
         // per-tenant throttle. While queued we emit cooling_down so the UI shows
-        // "waiting in queue" instead of a frozen tool row.
-        var isCostMgmt = IsCostManagementUrl(url);
+        // "waiting in queue" instead of a frozen tool row. The opt-out is ONLY
+        // valid for read-only metadata GETs issued by bounded aggregate tools;
+        // it can never bypass query/forecast serialization or method security.
+        var safeMetadataBypass = bypassCostManagementGate
+            && method == HttpMethod.Get
+            && !IsInteractiveCostQueryUrl(url);
+        var isCostMgmt = IsCostManagementUrl(url) && !safeMetadataBypass;
         var heldGate = false;
         if (isCostMgmt)
         {
@@ -153,7 +170,13 @@ public static class HttpHelper
 
         try
         {
-            for (var attempt = 0; attempt < MaxThrottleRetries; attempt++)
+            var maxAttempts = Math.Clamp(
+                maxAttemptsOverride ?? (IsInteractiveCostQueryUrl(url)
+                    ? MaxInteractiveCostAttempts
+                    : MaxThrottleRetries),
+                1,
+                MaxThrottleRetries);
+            for (var attempt = 0; attempt < maxAttempts; attempt++)
             {
                 using var req = new HttpRequestMessage(method, url);
                 req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -202,7 +225,7 @@ public static class HttpHelper
                 var isThrottle = status == 429;
                 var isTransientServer = status == 502 || status == 503 || status == 504;
                 if (!isThrottle && !isTransientServer) break;
-                if (attempt == MaxThrottleRetries - 1) break; // last attempt — return as-is to caller
+                if (attempt == maxAttempts - 1) break; // last attempt — return as-is to caller
 
                 var waitSeconds = ResolveRetryAfterSeconds(res, attempt);
                 totalWaitSec += waitSeconds;

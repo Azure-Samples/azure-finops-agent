@@ -67,7 +67,7 @@ Use for 'find waste', 'orphaned resources', 'quick cost wins'. After calling, su
             ("idle_load_balancers",
              $"Resources | where type =~ 'microsoft.network/loadbalancers' | extend backendCount = array_length(properties.backendAddressPools) | where backendCount == 0 | project id, name, location, resourceGroup, sku=tostring(sku.name) | top {topPerPattern} by name"),
             ("old_snapshots",
-             $"Resources | where type =~ 'microsoft.compute/snapshots' | extend created = todatetime(properties.timeCreated) | where created < ago(30d) | project id, name, location, resourceGroup, sizeGB=toint(properties.diskSizeGB), createdUtc=tostring(created) | order by created asc | top {topPerPattern} by created asc"),
+             $"Resources | where type =~ 'microsoft.compute/snapshots' | extend created = todatetime(properties.timeCreated) | where created < ago(30d) | order by created asc | project id, name, location, resourceGroup, sizeGB=toint(properties.diskSizeGB), createdUtc=tostring(created) | take {topPerPattern}"),
             ("empty_resource_groups",
              $"ResourceContainers | where type =~ 'microsoft.resources/subscriptions/resourcegroups' | join kind=leftouter (Resources | summarize count() by resourceGroup, subscriptionId) on resourceGroup, subscriptionId | where isnull(count_) or count_ == 0 | project id, name, location, subscriptionId | top {topPerPattern} by name"),
         };

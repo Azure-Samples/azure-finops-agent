@@ -1,22 +1,30 @@
 using System.ComponentModel;
 using System.Text.Json;
+using AzureFinOps.Dashboard.Auth;
 using Microsoft.Extensions.AI;
 
 namespace AzureFinOps.Dashboard.AI.Tools;
 
-public static class ScoreTools
+public sealed class ScoreTools
 {
-    private static readonly string ScoreDir = Path.Combine(
-        Environment.GetEnvironmentVariable("HOME") ?? Path.GetTempPath(), "finops-agent-scores");
-    private static readonly string ScoreFile = Path.Combine(ScoreDir, "score-history.json");
+    private const int MaxHistoryEntries = 100;
+    private static readonly string CopilotHome =
+        Environment.GetEnvironmentVariable("COPILOT_HOME")
+        ?? Path.Combine(Path.GetTempPath(), "copilot");
     private static readonly Lock _fileLock = new();
+    private static int _legacyHistoryChecked;
 
-    static ScoreTools()
+    private readonly UserTokens _tokens;
+
+    public ScoreTools(UserTokens tokens)
     {
-        Directory.CreateDirectory(ScoreDir);
+        _tokens = tokens;
+        DeleteLegacySharedHistory();
     }
 
-    public static IEnumerable<AIFunction> Create()
+    private string ScoreFile => Path.Combine(CopilotHome, "scores", $"{_tokens.UserId}.json");
+
+    public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(ReportMaturityScore);
         yield return AIFunctionFactory.Create(GetScoreHistory);
@@ -54,11 +62,19 @@ RUN — Scale & Accountability (id slug — label — what to check):
   6. aicost — 'AI / GPU & emerging cost' — Azure OpenAI/Foundry spend, GPU VM/AKS spend, PTU vs PAYG mix; flag uncommitted GPU/AI spend. Carbon optional.
 
 Return scores array: id=slug, label=exact name above, score=0-5, detail=one-line reason WITH numbers (and per-subscription spread when relevant).")]
-    private static string ReportMaturityScore(
+    private string ReportMaturityScore(
         [Description("Level: 'crawl', 'walk', 'run', or 'playbook'")] string level,
         [Description(@"JSON array of score objects, e.g.: [{""id"":""tagging"",""label"":""Tagging"",""score"":3,""detail"":""45% of resources tagged""}]")] string scores)
     {
-        // Persist score to history file for trend analysis
+        SaveScore(level, scores);
+        return $"__MATURITY_SCORE__:{level}:{scores}";
+    }
+
+    /// <summary>Persists a score produced by a consolidated evidence tool.
+    /// Keeps the on-disk format identical to <see cref="ReportMaturityScore"/>
+    /// without requiring another LLM/tool round trip.</summary>
+    internal void SaveScore(string level, string scores)
+    {
         try
         {
             var entry = new ScoreHistoryEntry
@@ -72,16 +88,17 @@ Return scores array: id=slug, label=exact name above, score=0-5, detail=one-line
             {
                 var history = LoadHistory();
                 history.Add(entry);
+                if (history.Count > MaxHistoryEntries)
+                    history = history[^MaxHistoryEntries..];
+                Directory.CreateDirectory(Path.GetDirectoryName(ScoreFile)!);
                 File.WriteAllText(ScoreFile, JsonSerializer.Serialize(history));
             }
         }
         catch { /* non-critical — don't break scoring if persistence fails */ }
-
-        return $"__MATURITY_SCORE__:{level}:{scores}";
     }
 
     [Description(@"Retrieve historical FinOps maturity scores for trend analysis (current vs previous, improvement/regression over time). Use when user asks about score trends, progress, or historical comparison.")]
-    private static string GetScoreHistory(
+    private string GetScoreHistory(
         [Description("Optional: filter by level ('crawl', 'walk', 'run', 'playbook'). Omit to get all levels.")] string? level = null)
     {
         List<ScoreHistoryEntry> history;
@@ -99,7 +116,7 @@ Return scores array: id=slug, label=exact name above, score=0-5, detail=one-line
         return JsonSerializer.Serialize(history);
     }
 
-    private static List<ScoreHistoryEntry> LoadHistory()
+    private List<ScoreHistoryEntry> LoadHistory()
     {
         try
         {
@@ -111,6 +128,23 @@ Return scores array: id=slug, label=exact name above, score=0-5, detail=one-line
         }
         catch { }
         return [];
+    }
+
+    private static void DeleteLegacySharedHistory()
+    {
+        if (Interlocked.Exchange(ref _legacyHistoryChecked, 1) != 0) return;
+
+        try
+        {
+            var legacyRoot = Environment.GetEnvironmentVariable("HOME") ?? Path.GetTempPath();
+            var legacyFile = Path.Combine(legacyRoot, "finops-agent-scores", "score-history.json");
+            if (File.Exists(legacyFile)) File.Delete(legacyFile);
+        }
+        catch
+        {
+            // The legacy file is never read. A failed cleanup cannot expose it
+            // through this tool, so score reporting should remain available.
+        }
     }
 
     private class ScoreHistoryEntry

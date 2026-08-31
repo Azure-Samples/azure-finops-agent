@@ -7,13 +7,13 @@ description: "Exhaustive Playwright regression of the Azure FinOps Agent — eve
 
 Drive the **whole application** with the VS Code integrated browser tools, measure response times, and fix what is broken. Read `/memories/repo/finops-agent-debugging.md` first — it is the running catalog of past bugs and test gotchas.
 
-Default target is **production** (`https://azure-finops-agent.com`). If I say "local", follow `debug-local.prompt.md` first.
+Default target is **local**; follow `debug-local.prompt.md` first. Test a deployed URL only when the user explicitly supplies or confirms it. Resolve deployment and telemetry coordinates from external configuration—never from literals in this prompt.
 
 **Ground rules**
 
 - Never report a scenario as passing on a measurement you know is unreliable. Re-measure with an assertion that cannot be faked by a timing artifact.
 - If you were wrong earlier in the run, say so plainly and correct the record.
-- Fix what you find, rebuild, redeploy if needed, then **re-run the affected scenario** — a fix is not done until it is re-tested.
+- Fix what you find, rebuild, and **re-run the affected scenario** locally. Deploy only when the user separately and explicitly requests it.
 - Never touch credential fields. For anything needing sign-in, hand back to me.
 
 ## 0. Preflight — do not skip
@@ -33,31 +33,50 @@ Default target is **production** (`https://azure-finops-agent.com`). If I say "l
 
 All confirmed on this app. The naive approach costs a cycle every time.
 
-| Symptom | Cause | Do this instead |
-| --- | --- | --- |
-| `locator.click` times out "waiting for element to be stable" | infinite CSS animations | `page.evaluate(() => [...document.querySelectorAll('button')].find(b => /Label/.test(b.textContent)).click())` |
-| `type_in_page` / `fill` fails "element is not visible" | `textarea.input-field` has `offsetWidth 0` | native setter + events (below) |
-| Clicking "the last enabled button" sends a canned prompt | that is the **Script** button | select Stop by **`.action-btn--stop`** only |
-| `page.context().clearCookies()` → "Method not found" | unsupported in integrated browser | expire per-name via `document.cookie` |
-| `Illegal invocation` wrapping fetch | unbound native | `const of = window.fetch.bind(window)` |
-| ResizeObserver / rAF / smooth scroll never fire | integrated browser reports `document.hidden === true` always | rely on reactive watchers; gate smooth scroll on `visibilityState` |
-| Turn "completes" in 3s | you sent while warmup was in flight | wait for `composer enabled && !stopBtn` before every send |
-| `Execution context was destroyed` | a navigation (often my sign-in) landed mid-evaluate | re-open the page, re-install instrumentation, resume |
-| Page id "not found" | the page was closed | `open_browser_page` again; instrumentation does NOT survive |
+| Symptom                                                      | Cause                                                        | Do this instead                                                                                                |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `locator.click` times out "waiting for element to be stable" | infinite CSS animations                                      | `page.evaluate(() => [...document.querySelectorAll('button')].find(b => /Label/.test(b.textContent)).click())` |
+| `type_in_page` / `fill` fails "element is not visible"       | `textarea.input-field` has `offsetWidth 0`                   | native setter + events (below)                                                                                 |
+| Clicking "the last enabled button" sends a canned prompt     | that is the **Script** button                                | select Stop by **`.action-btn--stop`** only                                                                    |
+| `page.context().clearCookies()` → "Method not found"         | unsupported in integrated browser                            | expire per-name via `document.cookie`                                                                          |
+| `Illegal invocation` wrapping fetch                          | unbound native                                               | `const of = window.fetch.bind(window)`                                                                         |
+| ResizeObserver / rAF / smooth scroll never fire              | integrated browser reports `document.hidden === true` always | rely on reactive watchers; gate smooth scroll on `visibilityState`                                             |
+| Turn "completes" in 3s                                       | you sent while warmup was in flight                          | wait for `composer enabled && !stopBtn` before every send                                                      |
+| `Execution context was destroyed`                            | a navigation (often my sign-in) landed mid-evaluate          | re-open the page, re-install instrumentation, resume                                                           |
+| Page id "not found"                                          | the page was closed                                          | `open_browser_page` again; instrumentation does NOT survive                                                    |
 
 Canonical helpers — reuse verbatim:
 
 ```js
-const el = () => document.querySelector('textarea.input-field');
-const stopBtn = () => document.querySelector('.action-btn--stop');
-const txt = () => document.querySelector('.messages')?.innerText || '';
-const wait = async (fn, ms) => { const t = Date.now(); while (Date.now() - t < ms) { if (fn()) return true; await new Promise(r => setTimeout(r, 200)); } return false; };
+const el = () => document.querySelector("textarea.input-field");
+const stopBtn = () => document.querySelector(".action-btn--stop");
+const txt = () => document.querySelector(".messages")?.innerText || "";
+const wait = async (fn, ms) => {
+  const t = Date.now();
+  while (Date.now() - t < ms) {
+    if (fn()) return true;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return false;
+};
 const send = async (p) => {
-  await wait(() => el() && !el().disabled && !stopBtn(), 90000);   // never send into a busy composer
+  await wait(() => el() && !el().disabled && !stopBtn(), 90000); // never send into a busy composer
   const e = el();
-  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(e, p);
-  e.dispatchEvent(new Event('input', { bubbles: true }));          // syncs Vue v-model
-  e.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+  Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    "value",
+  ).set.call(e, p);
+  e.dispatchEvent(new Event("input", { bubbles: true })); // syncs Vue v-model
+  e.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
   return wait(() => !!stopBtn(), 40000);
 };
 ```
@@ -70,16 +89,39 @@ Rendered text lags the stream by the typing animation, and `.messages` innerText
 const of = window.fetch.bind(window);
 window.__ev = [];
 window.fetch = async (...a) => {
-  const url = typeof a[0] === 'string' ? a[0] : a[0]?.url;
+  const url = typeof a[0] === "string" ? a[0] : a[0]?.url;
   const r = await of(...a);
-  if (url?.includes('/api/chat') && !url.includes('warmup') && r.body) {
+  if (url?.includes("/api/chat") && !url.includes("warmup") && r.body) {
     const [x, y] = r.body.tee();
-    (async () => { const rd = y.getReader(), d = new TextDecoder(); let buf = '';
-      while (1) { const { done, value } = await rd.read(); if (done) break; buf += d.decode(value, { stream: true }); let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) { const line = buf.slice(0, i).replace(/^data:\s*/, ''); buf = buf.slice(i + 2);
-          if (!line) continue; if (line === '[DONE]') { window.__ev.push({ t: Date.now(), type: 'DONE' }); continue; }
-          try { const j = JSON.parse(line); window.__ev.push({ t: Date.now(), type: j.type, tool: j.tool }); } catch {} } } })();
-    return new Response(x, { status: r.status, statusText: r.statusText, headers: r.headers });
+    (async () => {
+      const rd = y.getReader(),
+        d = new TextDecoder();
+      let buf = "";
+      while (1) {
+        const { done, value } = await rd.read();
+        if (done) break;
+        buf += d.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const line = buf.slice(0, i).replace(/^data:\s*/, "");
+          buf = buf.slice(i + 2);
+          if (!line) continue;
+          if (line === "[DONE]") {
+            window.__ev.push({ t: Date.now(), type: "DONE" });
+            continue;
+          }
+          try {
+            const j = JSON.parse(line);
+            window.__ev.push({ t: Date.now(), type: j.type, tool: j.tool });
+          } catch {}
+        }
+      }
+    })();
+    return new Response(x, {
+      status: r.status,
+      statusText: r.statusText,
+      headers: r.headers,
+    });
   }
   return r;
 };
@@ -94,16 +136,17 @@ Per turn record: **time to first `delta`** (true TTFT), time to `[DONE]`, ordere
 
 Assert against these. Anything over budget must be explained by its tool sequence, not hand-waved.
 
-| Class | Example | Budget (TTFT) |
-| --- | --- | --- |
-| Trivial | `hi`, `thanks` | ≤ 3s, **0 tools** |
-| Single-fact public | one SKU in one region | ≤ 8s |
-| Multi-region compare | 3 regions | ≤ 20s, **exactly 1** `GetAzureRetailPricing` |
-| Tenant query | MTD spend | ≤ 25s |
-| Deck / script generation | — | ≤ 60s |
-| Maturity score | Crawl | ≤ 120s |
+| Class                    | Example               | Budget (TTFT)                                |
+| ------------------------ | --------------------- | -------------------------------------------- |
+| Trivial                  | `hi`, `thanks`        | ≤ 3s, **0 tools**                            |
+| Single-fact public       | one SKU in one region | ≤ 8s                                         |
+| Multi-region compare     | 3 regions             | ≤ 20s, **exactly 1** `GetAzureRetailPricing` |
+| Tenant query             | MTD spend             | ≤ 25s                                        |
+| Deck / script generation | —                     | ≤ 60s                                        |
+| Maturity score           | Crawl                 | ≤ 120s                                       |
 
-Cross-check the run against production truth:
+When testing an explicitly confirmed deployed target, discover its workspace dynamically and cross-check the run against telemetry:
+
 ```
 AppRequests | where TimeGenerated > ago(2h) and Name has "/api/chat"
 | summarize n=count(), p50=percentile(DurationMs,50), p95=percentile(DurationMs,95), maxMs=max(DurationMs)
@@ -132,20 +175,20 @@ Install `page.on('console'|'pageerror'|'requestfailed')` capture first. Assert *
 
 ## 5. Session, stop and recovery — historically the most fragile area
 
-| Scenario | Expected |
-| --- | --- |
-| Stop mid-turn | marker **"You stopped this response before it finished."**, no `■`/`⏹` glyph, key in `sessionStorage.finops_stopped_turns` |
-| Stop → tab return (`visibilitychange` + `focus` ×6) | **NO** "Reconnecting" notice; marker survives |
-| Stop → reload | same wording; **not** downgraded to "No answer was generated" |
-| Stop → send immediately | answers normally; no `busy`, no "finished without an answer" |
-| Marker placement | a marker must NEVER appear with no question above it |
-| First turn, fresh anonymous user | answer **commits** — broke before via `isActiveView()`; run **3×** |
-| Reload mid-transcript | transcript restored; no "Connection lost" |
-| New chat mid-stream | in-flight turn must NOT paint into the new view |
-| Switch session mid-stream | background turn keeps running, dot pulses, returning shows the full answer |
-| Two turns, same session | second rejected with `busy`, composer restored |
-| `POST /api/chat/stop` | `{stopped:true}`; next prompt answers in ~1s |
-| `POST /api/chat/reset` | clears context without killing the conversation |
+| Scenario                                            | Expected                                                                                                                   |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Stop mid-turn                                       | marker **"You stopped this response before it finished."**, no `■`/`⏹` glyph, key in `sessionStorage.finops_stopped_turns` |
+| Stop → tab return (`visibilitychange` + `focus` ×6) | **NO** "Reconnecting" notice; marker survives                                                                              |
+| Stop → reload                                       | same wording; **not** downgraded to "No answer was generated"                                                              |
+| Stop → send immediately                             | answers normally; no `busy`, no "finished without an answer"                                                               |
+| Marker placement                                    | a marker must NEVER appear with no question above it                                                                       |
+| First turn, fresh anonymous user                    | answer **commits** — broke before via `isActiveView()`; run **3×**                                                         |
+| Reload mid-transcript                               | transcript restored; no "Connection lost"                                                                                  |
+| New chat mid-stream                                 | in-flight turn must NOT paint into the new view                                                                            |
+| Switch session mid-stream                           | background turn keeps running, dot pulses, returning shows the full answer                                                 |
+| Two turns, same session                             | second rejected with `busy`, composer restored                                                                             |
+| `POST /api/chat/stop`                               | `{stopped:true}`; next prompt answers in ~1s                                                                               |
+| `POST /api/chat/reset`                              | clears context without killing the conversation                                                                            |
 
 ## 6. Entra surfaces — ask me to sign in
 

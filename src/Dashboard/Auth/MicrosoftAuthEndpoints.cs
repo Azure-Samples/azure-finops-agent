@@ -34,6 +34,57 @@ public static class MicrosoftAuthEndpoints
         if (!existing.Contains(tier, StringComparison.OrdinalIgnoreCase))
             ctx.Session.SetString("graph_tier", string.IsNullOrEmpty(existing) ? tier : $"{existing},{tier}");
     }
+
+    private static string? CurrentAzureOid(HttpContext ctx)
+    {
+        var json = ctx.Session.GetString("azure_user");
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var user = JsonSerializer.Deserialize<JsonElement>(json);
+            return user.TryGetProperty("objectId", out var oid) ? oid.GetString() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void ClearAuthChain(HttpContext ctx)
+    {
+        ctx.Session.Remove("auth_chain");
+        ctx.Session.Remove("auth_chain_oid");
+        ctx.Session.Remove("auth_silent");
+    }
+
+    private static void ClearTierToken(HttpContext ctx, string tier)
+    {
+        var prefix = tier switch
+        {
+            "licenses" or "chargeback" => "graph",
+            "loganalytics" => "loganalytics",
+            "storage" => "storage",
+            _ => "azure"
+        };
+        ctx.Session.Remove($"{prefix}_token");
+        ctx.Session.Remove($"{prefix}_token_expiry");
+        RemoveConsentTier(ctx, tier);
+    }
+
+    /// <summary>Undoes <see cref="AppendConsentTier"/> for a hop that failed after
+    /// the token landed. Leaving it recorded would make `tier=all` skip that tier
+    /// forever and poison the account-switch rebuild.</summary>
+    private static void RemoveConsentTier(HttpContext ctx, string tier)
+    {
+        var existing = ctx.Session.GetString("graph_tier");
+        if (string.IsNullOrEmpty(existing)) return;
+        var remaining = existing
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(t => !t.Equals(tier, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (remaining.Length == 0) ctx.Session.Remove("graph_tier");
+        else ctx.Session.SetString("graph_tier", string.Join(",", remaining));
+    }
     public static void MapMicrosoftAuthEndpoints(
         this IEndpointRouteBuilder app,
         MicrosoftOAuthOptions options,
@@ -111,6 +162,10 @@ public static class MicrosoftAuthEndpoints
             if (!options.IsConfigured)
                 return Results.Problem("Microsoft OAuth is not configured");
 
+            var continuingChain = ctx.Request.Query["chain"].ToString() == "1"
+                && !string.IsNullOrWhiteSpace(ctx.Session.GetString("auth_chain"));
+            if (!continuingChain) ClearAuthChain(ctx);
+
             var state = CryptoRandomHex(16);
             ctx.Session.SetString("ms_oauth_state", state);
 
@@ -129,11 +184,39 @@ public static class MicrosoftAuthEndpoints
             // known set so we never construct an /authorize URL with attacker-supplied scopes.
             var tier = MicrosoftOAuthOptions.NormalizeTier(ctx.Request.Query["tier"].ToString());
 
+            // User-scoped "grant all remaining" flow. Entra cannot combine
+            // delegated scopes from Graph, Log Analytics, Storage, and ARM in
+            // one authorization request, so walk each not-yet-consented
+            // resource tier in sequence. Every hop uses prompt=consent and its
+            // own narrowly scoped screen; no tenant-admin grant is involved.
+            if (tier == "all")
+            {
+                var consented = (ctx.Session.GetString("graph_tier") ?? "")
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var remaining = MicrosoftOAuthOptions.AddOnTiers
+                    .Where(t => !consented.Contains(t))
+                    .ToArray();
+                if (remaining.Length == 0)
+                {
+                    ClearAuthChain(ctx);
+                    return Results.Redirect("/");
+                }
+                tier = remaining[0];
+                if (remaining.Length > 1)
+                    ctx.Session.SetString("auth_chain", string.Join(",", remaining.Skip(1)));
+                else
+                    ctx.Session.Remove("auth_chain");
+                ctx.Session.SetString("auth_chain_oid", CurrentAzureOid(ctx) ?? "");
+                ctx.Session.Remove("auth_silent");
+            }
+
             // Post-admin-consent silent chain: walk every remaining add-on tier
             if (ctx.Request.Query["postadmin"].ToString() == "1")
             {
                 var chain = new List<string> { "chargeback", "loganalytics", "storage" };
                 ctx.Session.SetString("auth_chain", string.Join(",", chain));
+                ctx.Session.SetString("auth_chain_oid", CurrentAzureOid(ctx) ?? "");
                 ctx.Session.SetString("auth_silent", "1");
             }
 
@@ -258,12 +341,19 @@ public static class MicrosoftAuthEndpoints
                 {
                     var errorDesc = ctx.Request.Query["error_description"].ToString();
                     logger.LogWarning("Microsoft OAuth error: {Error} — {Description}", error, errorDesc);
+                    ctx.Session.Remove("ms_oauth_state");
+                    ctx.Session.Remove("pkce_verifier");
+                    ctx.Session.Remove("oidc_nonce");
+                    ClearAuthChain(ctx);
                     return Results.Redirect("/?azure_error=" + Uri.EscapeDataString(error));
                 }
 
                 if (state != ctx.Session.GetString("ms_oauth_state"))
                 {
                     logger.LogWarning("Microsoft OAuth state mismatch — possible CSRF attempt");
+                    ctx.Session.Remove("pkce_verifier");
+                    ctx.Session.Remove("oidc_nonce");
+                    ClearAuthChain(ctx);
                     return Results.StatusCode(403);
                 }
 
@@ -304,7 +394,9 @@ public static class MicrosoftAuthEndpoints
 
                 if (!tokenRes.IsSuccessStatusCode)
                 {
-                    logger.LogError("Microsoft token exchange failed: status={Status} body={Body}", (int)tokenRes.StatusCode, tokenBody);
+                    logger.LogError("Microsoft token exchange failed: status={Status}", (int)tokenRes.StatusCode);
+                    ctx.Session.Remove("oidc_nonce");
+                    ClearAuthChain(ctx);
                     return Results.Redirect("/?azure_error=token_exchange_failed");
                 }
 
@@ -313,6 +405,8 @@ public static class MicrosoftAuthEndpoints
                 if (!tokenJson.TryGetProperty("access_token", out var atProp))
                 {
                     logger.LogError("No access_token in Microsoft response");
+                    ctx.Session.Remove("oidc_nonce");
+                    ClearAuthChain(ctx);
                     return Results.Redirect("/?azure_error=no_access_token");
                 }
 
@@ -347,10 +441,17 @@ public static class MicrosoftAuthEndpoints
                     ctx.Session.SetString("azure_token_expiry", DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60).ToString("o"));
                 }
 
-                if (refreshToken is not null)
-                    ctx.Session.SetString("azure_refresh_token", refreshToken);
+                if (!tokenJson.TryGetProperty("id_token", out var idTokenProp)
+                    || idTokenProp.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(idTokenProp.GetString()))
+                {
+                    ClearTierToken(ctx, authTier);
+                    ClearAuthChain(ctx);
+                    ctx.Session.Remove("oidc_nonce");
+                    logger.LogWarning("No id_token in Microsoft response — aborting login");
+                    return Results.Redirect("/?azure_error=no_id_token");
+                }
 
-                if (tokenJson.TryGetProperty("id_token", out var idTokenProp))
                 {
                     var idToken = idTokenProp.GetString()!;
                     var expectedNonce = ctx.Session.GetString("oidc_nonce") ?? "";
@@ -358,9 +459,14 @@ public static class MicrosoftAuthEndpoints
                     var validated = await idTokenValidator.ValidateAsync(idToken, expectedNonce);
                     if (validated is null)
                     {
+                        ClearTierToken(ctx, authTier);
                         logger.LogWarning("id_token failed validation — aborting login");
+                        ClearAuthChain(ctx);
                         return Results.Redirect("/?azure_error=id_token_invalid");
                     }
+
+                    if (refreshToken is not null)
+                        ctx.Session.SetString("azure_refresh_token", refreshToken);
 
                     // Capture the PREVIOUS Entra identity (if any) before overwriting
                     // azure_user — needed below to detect an account switch on this
@@ -387,6 +493,7 @@ public static class MicrosoftAuthEndpoints
                         ["name"] = validated.Name,
                         ["email"] = validated.Email ?? validated.PreferredUsername,
                     };
+                    ctx.Session.Remove("azure_scope_context");
                     ctx.Session.SetString("azure_user", JsonSerializer.Serialize(azureUser));
 
                     // Promote the random anonymous userId to a deterministic OID-derived id,
@@ -459,8 +566,14 @@ public static class MicrosoftAuthEndpoints
                             // the same browser session. On an Entra→Entra ACCOUNT SWITCH this
                             // migration must NOT run — it would hand account A's tokens,
                             // tools, and active conversation to account B.
-                            if (telemetry.UserTokens.TryRemove(oldUserId.Value, out var t)) telemetry.UserTokens[newUserId] = t;
-                            if (telemetry.UserTools.TryRemove(oldUserId.Value, out var tools)) telemetry.UserTools[newUserId] = tools;
+                            // Tool closures capture the token bag, whose UserId also
+                            // determines per-user persistence paths (scores, ledger,
+                            // uploads). Never re-key those closures to another user:
+                            // drop them and let the next request create a fresh bag
+                            // for the stable Entra-derived id.
+                            if (telemetry.UserTokens.TryRemove(oldUserId.Value, out var oldTokens))
+                                oldTokens.RefreshLock.Dispose();
+                            telemetry.UserTools.TryRemove(oldUserId.Value, out _);
                             if (telemetry.CurrentSessionId.TryRemove(oldUserId.Value, out var sid)) telemetry.CurrentSessionId[newUserId] = sid;
                             // LiveSessions has init-only UserId; not migrated. Any in-flight CLI
                             // session under the anon id will be cleaned up by the idle-timeout
@@ -511,6 +624,27 @@ public static class MicrosoftAuthEndpoints
                                     persistentIdentity.Clear(ctx, null);
                             }
                         }
+
+                        var chainOwner = ctx.Session.GetString("auth_chain_oid");
+                        if (chainOwner is not null
+                            && !string.Equals(chainOwner, oid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            // The account selected on an intermediate consent
+                            // screen changed. Rebuild the remaining sequence from
+                            // the tiers actually recorded for the new identity;
+                            // never carry account A's omissions into account B.
+                            var consentedForNewAccount = (ctx.Session.GetString("graph_tier") ?? "")
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                            var remainingForNewAccount = MicrosoftOAuthOptions.AddOnTiers
+                                .Where(t => !consentedForNewAccount.Contains(t))
+                                .ToArray();
+                            if (remainingForNewAccount.Length > 0)
+                                ctx.Session.SetString("auth_chain", string.Join(",", remainingForNewAccount));
+                            else
+                                ctx.Session.Remove("auth_chain");
+                            ctx.Session.SetString("auth_chain_oid", oid);
+                        }
                     }
                 }
 
@@ -527,25 +661,26 @@ public static class MicrosoftAuthEndpoints
                         ctx.Session.SetString("auth_chain", rest);
                         // Defensive: only chain to known tiers. Anything unexpected
                         // means session tampering — drop the chain and finish normally.
-                        if (!MicrosoftOAuthOptions.ValidTiers.Contains(next))
+                        if (!MicrosoftOAuthOptions.AddOnTiers.Contains(next, StringComparer.OrdinalIgnoreCase))
                         {
                             logger.LogWarning("Dropped auth_chain entry with invalid tier: {Tier}", next);
                             ctx.Session.Remove("auth_chain");
                         }
                         else
                         {
-                            return Results.Redirect($"/auth/microsoft?tier={Uri.EscapeDataString(next)}");
+                            return Results.Redirect($"/auth/microsoft?tier={Uri.EscapeDataString(next)}&chain=1");
                         }
                     }
                     ctx.Session.Remove("auth_chain");
                 }
 
-                ctx.Session.Remove("auth_silent");
+                ClearAuthChain(ctx);
 
                 return Results.Redirect("/");
             }
             catch (Exception ex)
             {
+                ClearAuthChain(ctx);
                 logger.LogError(ex, "Microsoft OAuth callback failed");
                 return Results.Redirect("/?azure_error=callback_failed");
             }

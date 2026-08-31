@@ -1,9 +1,9 @@
 name: Deploy feature branch to test slot
 
 # Any push to a branch other than `main` builds a fresh image and deploys it
-# to the `test` deployment slot of the finops-agent-container web app at
-# https://finops-agent-container-test.azurewebsites.net so we can preview
-# feature branches before merging.
+# to the deployment slot configured by `TEST_*` repository variables,
+# so maintainers can preview feature branches before merging. Forks supply
+# their own variables and secrets; no deployment coordinates live in source.
 
 on:
   push:
@@ -18,16 +18,17 @@ permissions:
   contents: read
 
 env:
-  ACR_NAME: crfinopsagent
-  ACR_LOGIN: crfinopsagent.azurecr.io
-  IMAGE: crfinopsagent.azurecr.io/finops-agent
-  WEBAPP_NAME: finops-agent-container
-  SLOT_NAME: test
-  RESOURCE_GROUP: rg-finops-agent
+  ACR_NAME: ${{ vars.TEST_ACR_NAME }}
+  ACR_LOGIN: ${{ vars.TEST_ACR_LOGIN_SERVER }}
+  IMAGE: ${{ vars.TEST_CONTAINER_IMAGE }}
+  WEBAPP_NAME: ${{ vars.TEST_WEBAPP_NAME }}
+  SLOT_NAME: ${{ vars.TEST_SLOT_NAME }}
+  RESOURCE_GROUP: ${{ vars.TEST_RESOURCE_GROUP }}
+  VERIFY_URL: ${{ vars.TEST_VERIFY_URL }}
 
-# Cancel any in-flight deploy for the same branch — only the latest commit matters.
+# Only one deploy at a time: every branch targets the same configured test slot.
 concurrency:
-  group: test-slot-${{ github.ref }}
+  group: test-slot-deploy
   cancel-in-progress: true
 
 jobs:
@@ -49,6 +50,16 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          for name in ACR_NAME ACR_LOGIN IMAGE WEBAPP_NAME SLOT_NAME RESOURCE_GROUP VERIFY_URL; do
+            if [ -z "${!name}" ]; then
+              echo "Missing GitHub repository variable for test: $name" >&2
+              exit 1
+            fi
+          done
+
       - name: Login to ACR
         run: az acr login --name ${{ env.ACR_NAME }}
 
@@ -60,10 +71,7 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "tag_branch=$TAG_BRANCH" >> $GITHUB_OUTPUT
           echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-          # Offset so we keep numbering continuous after switching from
-          # `git rev-list --count HEAD` (which had reached 252) to run_number
-          # (which restarted at 1 when the workflow file was renamed).
-          echo "build=$(( ${{ github.run_number }} + 247 ))" >> $GITHUB_OUTPUT
+          echo "build=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -100,22 +108,40 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --slot ${{ env.SLOT_NAME }} \
             --container-image-name ${{ env.IMAGE }}:test-${{ steps.meta.outputs.sha }} \
-            --container-registry-url https://${{ env.ACR_LOGIN }}
+            --container-registry-url https://${{ env.ACR_LOGIN }} \
+            --output none
 
       - name: Configure App Service settings (test slot)
+        env:
+          AOAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
         run: |
+          if [ -z "$AOAI_ENDPOINT" ]; then
+            echo "Missing GitHub secret for test: AZURE_OPENAI_ENDPOINT" >&2
+            exit 1
+          fi
           az webapp config appsettings set \
             --name ${{ env.WEBAPP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --slot ${{ env.SLOT_NAME }} \
-            --settings AzureOpenAI__Endpoint="${{ secrets.AZURE_OPENAI_ENDPOINT }}"
+            --settings AzureOpenAI__Endpoint="$AOAI_ENDPOINT" \
+            --output none
 
       - name: Verify deployment
         run: |
-          curl --retry 10 --retry-delay 5 --retry-connrefused -sf \
-            https://finops-agent-container-test.azurewebsites.net/api/version \
-            | head -c 300
-          echo ""
+          for attempt in $(seq 1 24); do
+            payload=$(curl --connect-timeout 10 --max-time 20 -sf "${VERIFY_URL%/}/api/version" || true)
+            sha=$(jq -r '.sha // empty' <<<"$payload")
+            build=$(jq -r '.build // empty' <<<"$payload")
+            branch=$(jq -r '.branch // empty' <<<"$payload")
+            if [[ "$sha" == "${{ steps.meta.outputs.sha }}" && "$build" == "${{ steps.meta.outputs.build }}" && "$branch" == "${{ steps.meta.outputs.branch }}" ]]; then
+              echo "Verified test build $build ($sha) on $branch."
+              exit 0
+            fi
+            echo "Waiting for expected test build (attempt $attempt/24)..."
+            sleep 5
+          done
+          echo "Expected test SHA/build/branch did not become active." >&2
+          exit 1
 
       - name: Summary
         run: |
@@ -126,5 +152,5 @@ jobs:
             echo "- **Build:** \`${{ steps.meta.outputs.build }}\`"
             echo "- **SHA:** \`${{ steps.meta.outputs.sha }}\`"
             echo "- **Image:** \`${{ env.IMAGE }}:test-${{ steps.meta.outputs.sha }}\`"
-            echo "- **URL:** https://finops-agent-container-test.azurewebsites.net"
+            echo "- **URL:** ${VERIFY_URL}"
           } >> $GITHUB_STEP_SUMMARY

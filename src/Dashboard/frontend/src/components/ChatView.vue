@@ -1,11 +1,11 @@
 <template>
-  <div class="chat-view">
+  <div class="chat-view" :class="{ 'chat-view--hidden': documentIsHidden }">
     <!-- Azure Portal-style top bar -->
     <header class="portal-header">
       <div class="portal-header-left">
         <button
           class="portal-burger"
-          @click="sidebarOpen = !sidebarOpen"
+          @click="toggleSidebar"
           title="Toggle menu"
         >
           <svg
@@ -113,7 +113,13 @@
     <!-- Main content area -->
     <div class="portal-body">
       <!-- Left sidebar -->
-      <aside class="sidebar" :class="{ 'sidebar--collapsed': !sidebarOpen }">
+      <aside
+        class="sidebar"
+        :class="{
+          'sidebar--collapsed': !sidebarOpen,
+          'sidebar--mobile-open': mobileSidebarOpen,
+        }"
+      >
         <div class="sidebar-scroll">
           <!-- Maturity score cards (Crawl / Walk / Run) — whole card is clickable -->
           <template v-if="azureConnected">
@@ -287,7 +293,7 @@
                       v-for="q in grp.prompts"
                       :key="q.label"
                       class="sidebar-question"
-                      :disabled="streaming"
+                      :disabled="streaming || clearing"
                       :title="q.prompt"
                       @click="sendQuestion(q.prompt)"
                     >
@@ -340,7 +346,7 @@
                 v-for="q in pricingPromptsForUser"
                 :key="q.label"
                 class="sidebar-question"
-                :disabled="streaming"
+                :disabled="streaming || clearing"
                 :title="q.prompt"
                 @click="sendQuestion(q.prompt)"
               >
@@ -597,11 +603,8 @@
                 </button>
               </div>
             </div>
-            <!-- Incremental consent: one row per scope, all delegated, separate Entra ID consent each -->
-            <!-- HIDDEN — single-button Connect Azure only.
-                 Re-enable by removing v-if="false" to bring back License Optimization,
-                 Cost Allocation, Log Analytics, Cost Exports add-on tiers. -->
-            <div v-if="false" class="addons-section">
+            <!-- Incremental consent: one row per scope, all delegated, separate Entra ID consent each. -->
+            <div class="addons-section">
               <button
                 class="addons-heading"
                 type="button"
@@ -913,18 +916,17 @@
                       )
                     "
                     class="scope-grant-all"
-                    @click="startAuth('azure', '/auth/microsoft/adminconsent')"
-                    title="Tenant admins (Global Admin / Privileged Role Admin): one click consents all 4 scopes for every user in your tenant. Non-admins will see a 'You need admin approval' message — use the individual scope buttons above instead."
+                    @click="startAuth('azure', '/auth/microsoft?tier=all')"
+                    title="Walk through each remaining delegated add-on scope with a separate Microsoft consent screen. Grants apply only to your signed-in user."
                   >
                     <span class="scope-grant-all-icon">🛡</span>
                     <span class="scope-grant-all-body">
                       <span class="scope-grant-all-title"
-                        >Grant for whole tenant
-                        <span class="scope-grant-all-tag">admin</span></span
+                        >Grant all remaining add-ons</span
                       >
                       <span class="scope-grant-all-desc"
-                        >Requires Global Admin · 1 click consents all 4 scopes
-                        for every user.</span
+                        >Separate user-scoped consent screens · no tenant-wide
+                        grant.</span
                       >
                     </span>
                   </button>
@@ -1512,7 +1514,7 @@
             <span class="job-context-actions">
               <button
                 class="job-context-btn"
-                :disabled="streaming"
+                :disabled="streaming || clearing"
                 @click="askJobQuick('deck')"
                 title="Build an executive HTML deck from this job's run history"
               >
@@ -1520,7 +1522,7 @@
               </button>
               <button
                 class="job-context-btn"
-                :disabled="streaming"
+                :disabled="streaming || clearing"
                 @click="askJobQuick('summary')"
                 title="Summarize the trend across all runs so far"
               >
@@ -1626,7 +1628,7 @@
                 />
                 <button
                   class="input-action-btn"
-                  :disabled="streaming"
+                  :disabled="streaming || clearing"
                   @click="openFilePicker"
                   title="Attach file (CSV, JSON, TXT, XLSX, PDF, Parquet, PNG/JPG screenshots — or paste an image)"
                 >
@@ -1672,7 +1674,7 @@
                 <button
                   v-if="attachments.length > 0"
                   class="input-action-btn"
-                  :disabled="streaming"
+                  :disabled="streaming || clearing"
                   @click="requestAnalyze()"
                   title="Find biggest cost waste and recommend actions"
                 >
@@ -2484,6 +2486,10 @@ const input = ref("");
 // glance which conversation is still working. Sentinel "__pending__" is used
 // while a brand-new session is waiting for the backend to assign its id.
 const runningSessions = reactive(new Set());
+// Non-reactive lifecycle state for each active stream. UI reactivity comes
+// from runningSessions; this map isolates abort/stop/recovery state so a Stop
+// in one conversation can never abort a different background conversation.
+const activeStreams = new Map();
 // Bumped only when the user deliberately changes what they are looking at
 // (New chat / picking another conversation). A turn compares this against the
 // value it captured at send time to decide whether its answer still belongs on
@@ -2530,6 +2536,7 @@ const chartInstances = [];
 // ResizeObservers created per mounted chart — tracked so wipes/unmount can
 // disconnect them (they'd otherwise keep observing detached DOM forever).
 const chartResizeObservers = [];
+let chartSizePollTimer = null;
 let intentAnimTimer = null;
 
 // ── Uploaded attachments ────────────────────────────────────────────
@@ -2648,7 +2655,7 @@ async function uploadFiles(files) {
   }
 }
 
-function removeAttachment(att) {
+async function removeAttachment(att) {
   // Drop from the client list immediately, and tell the server to remove it
   // from the per-user listing so the next chat turn no longer surfaces this
   // fileId in the [UPLOADED FILES…] context block. The temp file is kept
@@ -2661,9 +2668,11 @@ function removeAttachment(att) {
     } catch {}
   }
   if (att.fileId) {
-    fetch(`/api/uploads/${encodeURIComponent(att.fileId)}`, {
-      method: "DELETE",
-    }).catch(() => {});
+    try {
+      await fetch(`/api/uploads/${encodeURIComponent(att.fileId)}`, {
+        method: "DELETE",
+      });
+    } catch {}
   }
 }
 
@@ -2836,6 +2845,7 @@ function flushText() {
 // "no bytes for N ms ⇒ dead" heuristic produces false positives that kill
 // healthy answers. We only reconcile once the client stream has actually ended.
 function onVisibilityChange() {
+  documentIsHidden.value = document.hidden;
   if (document.hidden) {
     flushText();
     const sid = currentSessionId.value;
@@ -3035,8 +3045,7 @@ function clearReconnectNotice() {
 // One wording for each terminal state, used by the live stream, the transcript
 // replay and the recovery guard alike, so a turn can never be described three
 // different ways depending on which path noticed it.
-const STOPPED_MARKER_TEXT =
-  "You stopped this response before it finished.";
+const STOPPED_MARKER_TEXT = "You stopped this response before it finished.";
 const NO_ANSWER_MARKER_TEXT = "No answer was generated for this message.";
 
 // ── Stopped-turn registry ──
@@ -3046,8 +3055,17 @@ const NO_ANSWER_MARKER_TEXT = "No answer was generated for this message.";
 // tryRecoverPersistedAnswer, which consults this registry. Survives reload via
 // sessionStorage because the reload path is exactly where it matters.
 const STOPPED_TURNS_KEY = "finops_stopped_turns";
-function stoppedTurnKey(sid, prompt) {
-  return sid + "|" + normText(prompt).slice(0, 200);
+function promptOccurrence(list, prompt, throughIndex = list.length - 1) {
+  const normalized = normText(prompt);
+  let occurrence = 0;
+  for (let i = 0; i <= throughIndex && i < list.length; i++) {
+    if (list[i]?.role === "user" && normText(list[i].content) === normalized)
+      occurrence++;
+  }
+  return Math.max(occurrence, 1);
+}
+function stoppedTurnKey(sid, prompt, occurrence) {
+  return sid + "|" + normText(prompt).slice(0, 200) + "|" + occurrence;
 }
 function loadStoppedTurns() {
   try {
@@ -3060,27 +3078,37 @@ function loadStoppedTurns() {
 }
 function markTurnStopped(sid, prompt) {
   if (!sid || sid === "__pending__") return;
-  const keys = [...loadStoppedTurns(), stoppedTurnKey(sid, prompt)].slice(-20);
+  const occurrence = promptOccurrence(messages.value, prompt);
+  const keys = [
+    ...loadStoppedTurns(),
+    stoppedTurnKey(sid, prompt, occurrence),
+  ].slice(-20);
   try {
     sessionStorage.setItem(STOPPED_TURNS_KEY, JSON.stringify(keys));
   } catch {}
 }
-function isTurnStopped(sid, prompt) {
-  return loadStoppedTurns().has(stoppedTurnKey(sid, prompt));
+function isTurnStopped(sid, prompt, list = messages.value, throughIndex) {
+  const occurrence = promptOccurrence(
+    list,
+    prompt,
+    throughIndex ?? list.length - 1,
+  );
+  return loadStoppedTurns().has(stoppedTurnKey(sid, prompt, occurrence));
 }
 
 // Keeps the wording honest across a reload: a turn the user stopped should keep
 // saying so, not silently downgrade to the generic "no answer" phrasing.
-function markerForTurn(sid, userMsg) {
+function markerForTurn(sid, userMsg, list = messages.value, userIndex) {
   const prompt = userMsg && userMsg.role === "user" ? userMsg.content : "";
-  return prompt && isTurnStopped(sid, prompt)
+  return prompt && isTurnStopped(sid, prompt, list, userIndex)
     ? STOPPED_MARKER_TEXT
     : NO_ANSWER_MARKER_TEXT;
 }
 
 // True when the transcript already ends in an explicit "no answer" marker, i.e.
 // the last question on screen has been resolved as "this will never be answered".
-function transcriptEndsWithNoAnswerMarker() {  const last = messages.value[messages.value.length - 1];
+function transcriptEndsWithNoAnswerMarker() {
+  const last = messages.value[messages.value.length - 1];
   return (
     !!last &&
     last.role === "system" &&
@@ -3289,24 +3317,31 @@ async function tryRecoverPersistedAnswer(sid, promptText) {
 // its answer isn't persisted until generation completes — at which point a
 // healthy stream finishes within a tick anyway.
 function startZombieProbe(sid) {
-  const token = ++zombieProbeToken;
+  const state = activeStreams.get(sid);
+  if (!state) return;
+  const token = ++state.probeVersion;
   let confirmed = false;
   const tick = async () => {
-    if (token !== zombieProbeToken) return; // superseded
+    if (activeStreams.get(sid) !== state || token !== state.probeVersion)
+      return;
     if (!runningSessions.has(sid)) return; // stream ended naturally — done
-    const turn = inFlightTurn;
-    const normPrompt = turn && turn.sid === sid ? normText(turn.prompt) : "";
+    const normPrompt = normText(state.prompt);
     const tail = await fetchPersistedTail(sid, normPrompt);
-    if (token !== zombieProbeToken || !runningSessions.has(sid)) return;
+    if (
+      activeStreams.get(sid) !== state ||
+      token !== state.probeVersion ||
+      !runningSessions.has(sid)
+    )
+      return;
     if (tail && tail.matched && tail.answered) {
       if (confirmed) {
         // Answer on disk, stream still hanging one tick later → zombie.
         window.__trackAppInsightsEvent?.("chat.stream.zombieRecover", {
           sessionId: sid,
         });
-        reconcileAbort = true;
+        state.reconcileAbort = true;
         try {
-          abortController?.abort();
+          state.controller.abort();
         } catch {}
         return;
       }
@@ -3343,9 +3378,15 @@ function toggleSection(key) {
 const buildSha = ref("");
 const buildNumber = ref("0");
 const buildBranch = ref("");
-const sidebarOpen = ref(
-  typeof window !== "undefined" ? window.innerWidth > 768 : true,
-);
+const sidebarOpen = ref(true);
+const mobileSidebarOpen = ref(false);
+function toggleSidebar() {
+  if (typeof window !== "undefined" && window.innerWidth <= 900) {
+    mobileSidebarOpen.value = !mobileSidebarOpen.value;
+  } else {
+    sidebarOpen.value = !sidebarOpen.value;
+  }
+}
 const plusMenuOpen = ref(false);
 const availableModels = ref(["gpt-5.6-sol"]);
 const selectedModel = ref("gpt-5.6-sol");
@@ -3526,12 +3567,32 @@ const JOB_TEMPLATES = [
     prompt:
       "Check for new Azure Advisor cost recommendations and summarize the top opportunities with estimated monthly savings, ranked by impact and effort.",
   },
+  {
+    emoji: "↻",
+    label: "Retry last question",
+    name: "Retry last question",
+    interval: 60,
+    retryLast: true,
+    prompt:
+      "Retry the latest user question from this conversation using fresh live data, and report what changed since the previous run.",
+  },
 ];
 const selectedTemplate = ref("");
 function applyTemplate(t) {
   selectedTemplate.value = t.label;
-  newJobName.value = t.name;
-  newJobPrompt.value = t.prompt;
+  if (t.retryLast) {
+    const lastQuestion = [...messages.value]
+      .reverse()
+      .find((m) => m.role === "user" && String(m.content || "").trim());
+    const question = String(lastQuestion?.content || "").trim();
+    newJobName.value = question ? `Retry: ${question}`.slice(0, 60) : t.name;
+    newJobPrompt.value = question
+      ? `Retry this question using fresh live data, and report what changed since the previous run: ${question}`
+      : t.prompt;
+  } else {
+    newJobName.value = t.name;
+    newJobPrompt.value = t.prompt;
+  }
   newJobInterval.value = t.interval;
   nextTick(autosizeJobPrompt);
 }
@@ -3717,6 +3778,8 @@ async function createJob() {
       jobError.value = data.error || "Failed to create job.";
       return;
     }
+    const jobId = data.id;
+    const runImmediately = newJobRunNow.value;
     newJobOpen.value = false;
     newJobName.value = "";
     newJobPrompt.value = "";
@@ -3725,6 +3788,12 @@ async function createJob() {
       intervalMinutes: String(data.intervalMinutes || ""),
     });
     await loadJobs();
+    if (runImmediately && jobId) {
+      // Match the explicit ▶ and edit+run-now paths: creation already started
+      // the background run server-side, so follow its session as soon as the
+      // scheduler assigns one and refresh until the first answer lands.
+      watchJobRunAndOpen(jobId);
+    }
   } finally {
     jobBusy.value = false;
   }
@@ -3780,13 +3849,20 @@ async function runJobNow(j) {
 // the user navigates to a different conversation (never yanks them back).
 async function watchJobRunAndOpen(jobId) {
   let opened = false;
+  const initiatingEpoch = viewEpoch;
+  const initiatingSessionId = currentSessionId.value;
   for (let i = 0; i < 10; i++) {
     await new Promise((r) => setTimeout(r, i === 0 ? 700 : 1500));
     await loadJobs();
     const fresh = jobs.value.find((x) => x.id === jobId);
     if (!fresh || !fresh.sessionId) continue;
     if (!opened) {
-      await selectSession(fresh.sessionId);
+      if (
+        viewEpoch !== initiatingEpoch ||
+        currentSessionId.value !== initiatingSessionId
+      )
+        return;
+      if (!(await selectSession(fresh.sessionId))) return;
       loadSessions();
       opened = true;
     } else if (currentSessionId.value === fresh.sessionId) {
@@ -3955,7 +4031,8 @@ function askJobQuick(kind) {
 }
 
 async function newSession() {
-  if (clearing.value) return;
+  if (clearing.value) return null;
+  const previousSessionId = currentSessionId.value;
   viewEpoch++;
   // Note: we do NOT abort an in-flight stream here. If another session is
   // running in the background, let it keep running — the SSE handlers will
@@ -3993,31 +4070,47 @@ async function newSession() {
   maturityScores.walk = null;
   maturityScores.run = null;
   maturityScores.playbook = null;
+  let createdSessionId = null;
   try {
     const res = await fetch("/api/sessions/new", { method: "POST" });
     if (res.ok) {
       const j = await res.json();
-      currentSessionId.value = j.sessionId || null;
+      createdSessionId = j.sessionId || null;
+      currentSessionId.value = createdSessionId;
+    } else {
+      setNotice("error", "Couldn't start a new conversation.");
     }
-  } catch {}
+  } catch {
+    setNotice("error", "Couldn't start a new conversation.");
+  }
+  if (!createdSessionId && previousSessionId) {
+    currentSessionId.value = previousSessionId;
+    await reloadSessionTranscript(previousSessionId);
+  }
   await loadSessions();
   clearing.value = false;
+  return createdSessionId;
 }
 
 async function selectSession(sessionId) {
-  if (!sessionId || sessionId === currentSessionId.value) return;
+  if (!sessionId || sessionId === currentSessionId.value) return true;
   viewEpoch++;
   // Allow switching even if another session is streaming in the background;
   // the in-flight SSE handlers will detect the navigation and skip UI writes.
   try {
-    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/select`, {
-      method: "POST",
-    });
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/select`,
+      {
+        method: "POST",
+      },
+    );
+    if (!response.ok) return false;
   } catch {
-    return;
+    return false;
   }
   currentSessionId.value = sessionId;
   await reloadSessionTranscript(sessionId);
+  return true;
 }
 
 // Fetch the persisted transcript for a session and replay it into the view
@@ -4063,6 +4156,12 @@ async function reloadSessionTranscript(sessionId) {
             try {
               const fu = JSON.parse(tc.result);
               if (fu.label && fu.prompt) followUp = fu;
+            } catch {}
+          } else if (tc.name === "GetCrawlMaturityEvidence" && tc.result) {
+            try {
+              const crawl = JSON.parse(tc.result);
+              if (crawl.followUp?.label && crawl.followUp?.prompt)
+                followUp = crawl.followUp;
             } catch {}
           }
         }
@@ -4125,11 +4224,14 @@ async function reloadSessionTranscript(sessionId) {
           !(m.charts || []).length &&
           !m.html &&
           !m.script &&
-          !(m.toolCalls || []).length
+          (!(m.toolCalls || []).length ||
+            markerForTurn(sessionId, restored[i - 1], restored, i - 1) ===
+              STOPPED_MARKER_TEXT)
         ) {
           restored[i] = {
+            ...m,
             role: "system",
-            content: markerForTurn(sessionId, restored[i - 1]),
+            content: markerForTurn(sessionId, restored[i - 1], restored, i - 1),
           };
         }
       }
@@ -4142,7 +4244,7 @@ async function reloadSessionTranscript(sessionId) {
         if (restored[i].role === "user" && restored[i + 1].role === "user") {
           restored.splice(i + 1, 0, {
             role: "system",
-            content: markerForTurn(sessionId, restored[i]),
+            content: markerForTurn(sessionId, restored[i], restored, i),
           });
         }
       }
@@ -4156,6 +4258,14 @@ async function reloadSessionTranscript(sessionId) {
       maturityScores.playbook = null;
       for (const m of restored) {
         for (const tc of m.toolCalls || []) {
+          if (tc.tool === "GetCrawlMaturityEvidence" && tc.result) {
+            try {
+              const crawl = JSON.parse(tc.result);
+              if (Array.isArray(crawl.scores))
+                maturityScores.crawl = crawl.scores;
+            } catch {}
+            continue;
+          }
           if (tc.tool !== "ReportMaturityScore") continue;
           let level = null;
           let scoresJson = null;
@@ -4498,28 +4608,15 @@ watch(azureConnected, async (connected, wasConnected) => {
   collapsedSections.pb_walk = true;
   collapsedSections.pb_run = true;
   collapsedSections.pb_playbook = true;
-  // Auto-clear chat when Azure connects — removes stale "Connect Azure first" messages
-  // and resets the Copilot session so the LLM knows the user is now connected
-  if (!wasConnected) await clearMessages();
+  // Only reset after an ACTUAL OAuth return. On every ordinary page reload the
+  // reactive value also hydrates false→true; treating that as a new connection
+  // called /api/chat/reset, created an orphan empty session, and replaced the
+  // tab's persisted active conversation before restore could run.
+  const returnedFromAuth =
+    !wasConnected && sessionStorage.getItem("authLoading") === "azure";
+  if (returnedFromAuth) await clearMessages();
   // Hydrate the Conversations sidebar with this user's saved sessions.
   await loadSessions();
-});
-
-// Reset Copilot session when addon tiers are enabled so LLM picks up new tokens
-watch(graphEnabled, async (enabled, was) => {
-  if (enabled && !was) {
-    await clearMessages();
-  }
-});
-watch(logAnalyticsEnabled, async (enabled, was) => {
-  if (enabled && !was) {
-    await clearMessages();
-  }
-});
-watch(storageEnabled, async (enabled, was) => {
-  if (enabled && !was) {
-    await clearMessages();
-  }
 });
 
 function dismissPopover() {
@@ -4577,10 +4674,7 @@ watch(
       azureManagementGroups.value = [];
       azureApis.value = [];
       input.value = "";
-      if (abortController) {
-        abortController.abort();
-        abortController = null;
-      }
+      abortClientStreams("discard");
     }
   },
 );
@@ -4589,6 +4683,8 @@ onMounted(async () => {
   document.addEventListener("click", dismissPopover);
   document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("focus", onWindowFocus);
+  window.addEventListener("resize", resizeMountedCharts);
+  chartSizePollTimer = window.setInterval(pollMountedChartSizes, 1000);
   // Sticky-scroll wiring: manual scrolls toggle following; ResizeObservers
   // keep the view pinned through ANY height change — content growth
   // (thinking panel, streamed text, charts) via .messages-inner, and
@@ -4676,25 +4772,27 @@ onMounted(async () => {
   // Entra users additionally get currentSessionId from /api/sessions.
   setTimeout(async () => {
     try {
-      let sid = currentSessionId.value;
-      if (!sid) {
+      // The active conversation is tab-scoped. Prefer the id persisted in this
+      // tab over the process-global server current id (another tab may have
+      // selected a different conversation). Validate it before adopting it.
+      let sid = null;
+      try {
+        sid = sessionStorage.getItem("finops_last_session") || null;
+      } catch {}
+      sid ||= currentSessionId.value;
+      if (!sid) return;
+      const r = await fetch(
+        `/api/sessions/${encodeURIComponent(sid)}/messages`,
+      );
+      if (!r.ok) {
         try {
-          sid = sessionStorage.getItem("finops_last_session") || null;
+          sessionStorage.removeItem("finops_last_session");
         } catch {}
-        if (!sid) return;
-        const r = await fetch(
-          `/api/sessions/${encodeURIComponent(sid)}/messages`,
-        );
-        if (!r.ok) {
-          try {
-            sessionStorage.removeItem("finops_last_session");
-          } catch {}
-          return;
-        }
-        const msgs = (await r.json()).messages || [];
-        if (!msgs.length) return;
-        currentSessionId.value = sid;
+        return;
       }
+      const msgs = (await r.json()).messages || [];
+      if (!msgs.length) return;
+      currentSessionId.value = sid;
       if (messages.value.length === 0 && !streaming.value) {
         await reloadSessionTranscript(sid);
         window.__trackAppInsightsEvent?.("chat.session.restored", {
@@ -4765,7 +4863,6 @@ onMounted(async () => {
   }
 });
 
-let abortController = null;
 // Background-tab recovery state. Browsers freeze/minimize background tabs, which
 // suspends the in-flight SSE fetch. The backend never aborts the turn on client
 // disconnect — it keeps generating and persists the answer to disk (see
@@ -4775,10 +4872,23 @@ let abortController = null;
 // (time-to-first-token, long tool calls), so any "no bytes for N ms" rule would
 // kill good answers.
 let hiddenDuringStream = false; // a turn was in flight when we lost foreground
+const documentIsHidden = ref(
+  typeof document !== "undefined" && document.hidden,
+);
 let reconcilingSid = null; // session id currently being reconciled (dedupe)
-let reconcileAbort = false; // true when WE aborted a dead stream to force recovery
-let inFlightTurn = null; // { sid, prompt } while a send() is running
-let zombieProbeToken = 0; // cancels stale zombie probes
+
+function abortClientStreams(reason = "discard") {
+  const seen = new Set();
+  for (const state of activeStreams.values()) {
+    if (seen.has(state)) continue;
+    seen.add(state);
+    state.abortReason = reason;
+    state.probeVersion++;
+    try {
+      state.controller.abort();
+    } catch {}
+  }
+}
 
 // Persist the active conversation id across full page reloads (same browser
 // session). Entra users can re-find conversations via the sidebar, but for
@@ -4793,11 +4903,9 @@ watch(currentSessionId, (id) => {
 async function clearMessages() {
   // Prevent concurrent send() while resetting
   clearing.value = true;
-  // Abort any in-flight request first
-  if (abortController) {
-    abortController.abort();
-    abortController = null;
-  }
+  // Abort every client reader first. The server intentionally keeps discarded
+  // turns running unless the user pressed the explicit Stop control.
+  abortClientStreams("discard");
   messages.value = [];
   streamBuffer.value = "";
   perSessionToolCalls.clear();
@@ -4849,24 +4957,36 @@ async function clearMessages() {
   clearing.value = false;
 }
 
+function requestServerStop(state) {
+  if (!state || state.stopRequest || !state.sid || state.sid === "__pending__")
+    return;
+  state.abortReason = "stop";
+  state.stopRequest = fetch("/api/chat/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: state.sid }),
+    keepalive: true,
+  })
+    .then(async (r) => (r.ok ? await r.json() : null))
+    .catch(() => null);
+  state.controller.abort();
+}
+
 function stopGeneration() {
   // Aborting only the client fetch leaves the turn running server-side AND the
   // one-turn-per-session gate held, so the next prompts bounce back as "busy" and
   // read as empty answers. Tell the server to abort the turn too. keepalive so it
   // still goes out if the page is being unloaded.
-  const sid = currentSessionId.value;
-  if (sid && sid !== "__pending__") {
-    fetch("/api/chat/stop", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: sid }),
-      keepalive: true,
-    }).catch(() => {});
-  }
-  if (abortController) {
-    abortController.abort();
-    abortController = null;
-  }
+  const sid = currentSessionId.value || "__pending__";
+  // loadSessions() nulls currentSessionId for anonymous users, so a direct miss
+  // is normal; with exactly one stream in flight it is unambiguously the one
+  // the Stop button is attached to.
+  const state =
+    activeStreams.get(sid) ??
+    (activeStreams.size === 1 ? [...activeStreams.values()][0] : null);
+  if (!state) return;
+  state.stopRequested = true;
+  requestServerStop(state);
 }
 
 const reversedToolCalls = computed(() => [...allToolCalls.value].reverse());
@@ -5180,11 +5300,12 @@ function htmlCardMeta(count) {
 
 async function sendQuestion(q) {
   if (streaming.value || clearing.value || !props.user) return;
+  mobileSidebarOpen.value = false;
   // A job's conversation is a server-owned run log — sidebar prompts and
   // follow-up buttons are CHAT questions, so hop to a fresh conversation
   // first instead of injecting the question into the job's history (which
   // would also silently steer its future runs).
-  if (currentJob.value) await newSession();
+  if (currentJob.value && !(await newSession())) return;
   input.value = q;
   send();
 }
@@ -5290,21 +5411,31 @@ async function ensureWorldMap() {
   if (worldMapLoaded) return;
   if (worldMapLoading) return worldMapLoading;
   worldMapLoading = fetch(
-    "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json",
+    "https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/json/world.json",
   )
-    .then((r) => r.json())
-    .then((topoData) => {
-      // Convert TopoJSON to GeoJSON for ECharts
-      const countries = topojsonFeature(topoData, topoData.objects.countries);
-      echarts.registerMap("world", countries);
+    .then((r) => {
+      if (!r.ok) throw new Error(`World GeoJSON returned HTTP ${r.status}`);
+      return r.json();
+    })
+    .then((geoJson) => {
+      echarts.registerMap("world", geoJson);
       worldMapLoaded = true;
     })
     .catch(() => {
-      // Fallback: try ECharts built-in world map URL
-      return fetch("https://cdn.jsdelivr.net/npm/echarts@5/map/json/world.json")
-        .then((r) => r.json())
-        .then((geoJson) => {
-          echarts.registerMap("world", geoJson);
+      // Fallback: convert world-atlas TopoJSON if the canonical map is blocked.
+      return fetch(
+        "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json",
+      )
+        .then((r) => {
+          if (!r.ok) throw new Error(`World atlas returned HTTP ${r.status}`);
+          return r.json();
+        })
+        .then((topoData) => {
+          const countries = topojsonFeature(
+            topoData,
+            topoData.objects.countries,
+          );
+          echarts.registerMap("world", countries);
           worldMapLoaded = true;
         });
     });
@@ -5373,6 +5504,7 @@ function buildEChartsOption(raw) {
         typeof parsed.options === "string"
           ? JSON.parse(parsed.options)
           : parsed.options;
+      sanitizeAdvancedChartOptions(opts);
       // Normalize country names in map series so they match the GeoJSON feature names
       normalizeMapSeriesData(opts);
       // Force white/light map styling to match page background
@@ -5444,7 +5576,7 @@ function buildEChartsOption(raw) {
       },
       tooltip: {
         trigger: "item",
-        formatter: "{a} <br/>{b} : {c} ({d}%)",
+        formatter: "{a}\n{b} : {c} ({d}%)",
       },
       legend: {
         bottom: 10,
@@ -5680,6 +5812,46 @@ function buildEChartsOption(raw) {
   };
 }
 
+function sanitizeAdvancedChartOptions(value, isTooltip = false, depth = 0) {
+  if (!value || typeof value !== "object" || depth > 30) return;
+  if (Array.isArray(value)) {
+    for (const item of value)
+      sanitizeAdvancedChartOptions(item, isTooltip, depth + 1);
+    return;
+  }
+
+  const blocked = new Set(["extraCssText", "appendTo", "appendToBody"]);
+  for (const key of Object.keys(value)) {
+    const childIsTooltip = key === "tooltip";
+    // Mirrors the server rule: a string `link` is a clickable URL and `target`
+    // only navigates one; sankey/graph `links[].target` is a node name.
+    const isDomLink = key === "link" && typeof value[key] === "string";
+    const isLinkTarget = key === "target" && "link" in value;
+    if (
+      blocked.has(key) ||
+      isDomLink ||
+      isLinkTarget ||
+      (isTooltip && key === "formatter")
+    ) {
+      delete value[key];
+      continue;
+    }
+    if (
+      typeof value[key] === "string" &&
+      (/^image:\/\//i.test(value[key]) || /javascript:/i.test(value[key]))
+    ) {
+      delete value[key];
+      continue;
+    }
+    sanitizeAdvancedChartOptions(value[key], childIsTooltip, depth + 1);
+  }
+
+  if (isTooltip) {
+    value.renderMode = "richText";
+    value.confine = true;
+  }
+}
+
 function needsMapRegistration(opts) {
   if (!opts) return false;
   if (worldMapLoaded) return false;
@@ -5717,8 +5889,51 @@ function applyMapDefaults(opts) {
       g.itemStyle = { ...lightArea, ...(g.itemStyle || {}) };
     }
   }
+  if (opts.visualMap && opts.series) {
+    const series = Array.isArray(opts.series) ? opts.series : [opts.series];
+    if (
+      series.some(
+        (s) => s.type === "effectScatter" && s.coordinateSystem === "geo",
+      )
+    ) {
+      const visualMaps = Array.isArray(opts.visualMap)
+        ? opts.visualMap
+        : [opts.visualMap];
+      for (const visualMap of visualMaps) {
+        if (visualMap.dimension === undefined) visualMap.dimension = 2;
+      }
+    }
+  }
   if (!opts.backgroundColor) {
     opts.backgroundColor = "transparent";
+  }
+}
+
+function applyResponsiveChartLayout(opts, width) {
+  if (!opts || width >= 420 || !opts.xAxis) return;
+  const axes = Array.isArray(opts.xAxis) ? opts.xAxis : [opts.xAxis];
+  let wrappedCategory = false;
+  for (const axis of axes) {
+    if (axis.type !== "category") continue;
+    wrappedCategory = true;
+    axis.axisLabel = {
+      ...(axis.axisLabel || {}),
+      interval: 0,
+      fontSize: 9,
+      lineHeight: 11,
+      formatter: (value) => {
+        const text = String(value ?? "");
+        if (/\s/.test(text)) return text.trim().split(/\s+/).join("\n");
+        return text.length > 14 ? text.slice(0, 12) + "…" : text;
+      },
+    };
+    axis.nameGap = Math.max(Number(axis.nameGap) || 0, 58);
+  }
+  if (wrappedCategory) {
+    const grids = Array.isArray(opts.grid) ? opts.grid : [opts.grid || {}];
+    for (const grid of grids)
+      grid.bottom = Math.max(Number(grid.bottom) || 0, 78);
+    opts.grid = Array.isArray(opts.grid) ? grids : grids[0];
   }
 }
 
@@ -5829,6 +6044,14 @@ function applyWowTheme(opts) {
   if (opts.tooltip) {
     const tts = Array.isArray(opts.tooltip) ? opts.tooltip : [opts.tooltip];
     for (const tt of tts) {
+      // Model/tool-controlled labels must never enter an HTML tooltip. Rich
+      // text is rendered by ECharts on its canvas/SVG surface and cannot
+      // inject DOM, links, or CSS overlays.
+      tt.renderMode = "richText";
+      tt.confine = true;
+      delete tt.extraCssText;
+      delete tt.appendTo;
+      delete tt.appendToBody;
       tt.backgroundColor = tt.backgroundColor || tooltipBg;
       tt.borderColor = tt.borderColor || "rgba(0,120,212,0.35)";
       tt.borderWidth = tt.borderWidth ?? 1;
@@ -5838,9 +6061,6 @@ function applyWowTheme(opts) {
         fontSize: 12,
         ...(tt.textStyle || {}),
       };
-      tt.extraCssText =
-        tt.extraCssText ||
-        "backdrop-filter:blur(8px);box-shadow:0 8px 28px rgba(0,32,80,0.18);border-radius:8px;";
       // Add axis pointer crosshair on cartesian charts
       if (tt.trigger === "axis" && !tt.axisPointer) {
         tt.axisPointer = {
@@ -6145,6 +6365,10 @@ function mountChart(el, chartData) {
 
   const doMount = () => {
     nextTick(() => {
+      if (!el.isConnected) {
+        el._echarts_mounted = false;
+        return;
+      }
       const isMap =
         option._needsMap ||
         !!option.geo ||
@@ -6155,11 +6379,53 @@ function mountChart(el, chartData) {
       if (isMap) {
         el.style.height = "520px";
       }
+      if (el.clientWidth < 2 || el.clientHeight < 2) {
+        // ECharts geo creates an inverse layout matrix during setOption. A
+        // zero-size first layout makes that matrix singular and throws inside
+        // `geo.resize`. Wait for the element's real box instead.
+        const sizeObserver = new ResizeObserver(() => {
+          if (el.clientWidth >= 2 && el.clientHeight >= 2) {
+            sizeObserver.disconnect();
+            el._echarts_mounted = false;
+            mountChart(el, chartData);
+          }
+        });
+        sizeObserver.observe(el);
+        chartResizeObservers.push(sizeObserver);
+        return;
+      }
       const instance = echarts.init(el, null, {
         renderer: isMap ? "canvas" : "svg",
       });
+      applyResponsiveChartLayout(option, el.clientWidth);
       applyWowTheme(option);
+      if (document.hidden) {
+        option.animation = false;
+        option.animationDuration = 0;
+        option.animationDurationUpdate = 0;
+        for (const series of option.series || []) {
+          series.animation = false;
+          series.animationDuration = 0;
+          series.animationDurationUpdate = 0;
+          delete series.animationDelay;
+          delete series.animationDelayUpdate;
+        }
+      }
       instance.setOption(option);
+      // Keep the renderer surface fluid even where ResizeObserver and browser
+      // resize events are suspended. ECharts still performs a true resize when
+      // either signal is available; percentage sizing prevents stale overflow
+      // in hidden/integrated views between those signals.
+      const rendererRoot = el.firstElementChild;
+      if (rendererRoot instanceof HTMLElement) {
+        rendererRoot.style.width = "100%";
+        rendererRoot.style.height = "100%";
+        const surface = rendererRoot.querySelector("svg, canvas");
+        if (surface instanceof HTMLElement || surface instanceof SVGElement) {
+          surface.style.width = "100%";
+          surface.style.height = "100%";
+        }
+      }
       // Log chart rendering to App Insights
       const seriesTypes = (option.series || []).map((s) => s.type).join(",");
       const dataPointCount = (option.series || []).reduce(
@@ -6175,8 +6441,15 @@ function mountChart(el, chartData) {
         },
       );
       chartInstances.push(instance);
-      const ro = new ResizeObserver(() => instance.resize());
+      instance.__finopsSize = `${el.clientWidth}x${el.clientHeight}`;
+      instance.__finopsChartData = chartData;
+      const ro = new ResizeObserver(() =>
+        instance.resize(
+          document.hidden ? { animation: { duration: 0 } } : undefined,
+        ),
+      );
       ro.observe(el);
+      instance.__finopsResizeObserver = ro;
       chartResizeObservers.push(ro);
     });
   };
@@ -6199,6 +6472,73 @@ function mountChart(el, chartData) {
   }
 }
 
+function resizeMountedCharts() {
+  // ResizeObserver and requestAnimationFrame are suspended in hidden tabs
+  // (including VS Code's integrated browser). Viewport changes still dispatch
+  // window.resize. Resize once now and again after flex/media-query layout has
+  // settled; microtasks keep running in hidden documents while rAF does not.
+  const resize = () => {
+    for (const instance of chartInstances) {
+      try {
+        instance.resize(
+          document.hidden ? { animation: { duration: 0 } } : undefined,
+        );
+      } catch {}
+    }
+  };
+  resize();
+  queueMicrotask(() => queueMicrotask(resize));
+}
+
+function pollMountedChartSizes() {
+  // Final fallback for environments that report document.hidden forever and
+  // suppress BOTH window.resize and ResizeObserver (VS Code integrated browser
+  // viewport changes do this). Poll only once per second and resize only when
+  // the measured box changed; visible browsers normally never enter the body.
+  for (const instance of [...chartInstances]) {
+    try {
+      const el = instance.getDom?.();
+      if (!el?.isConnected || el.clientWidth < 2 || el.clientHeight < 2)
+        continue;
+      const size = `${el.clientWidth}x${el.clientHeight}`;
+      if (instance.__finopsSize === size) continue;
+      if (document.hidden) {
+        // ECharts 6 can update only the SVG/canvas viewport while leaving grid
+        // paths and text transforms in the old coordinate system when rAF is
+        // suspended. Dispose/remount forces a complete synchronous layout.
+        const chartData = instance.__finopsChartData;
+        instance.__finopsResizeObserver?.disconnect();
+        const roIndex = chartResizeObservers.indexOf(
+          instance.__finopsResizeObserver,
+        );
+        if (roIndex >= 0) chartResizeObservers.splice(roIndex, 1);
+        const chartIndex = chartInstances.indexOf(instance);
+        if (chartIndex >= 0) chartInstances.splice(chartIndex, 1);
+        instance.dispose();
+        el._echarts_mounted = false;
+        mountChart(el, chartData);
+        continue;
+      }
+      instance.__finopsSize = size;
+      instance.resize({
+        width: el.clientWidth,
+        height: el.clientHeight,
+        animation: document.hidden ? { duration: 0 } : undefined,
+      });
+      const rendererRoot = el.firstElementChild;
+      if (rendererRoot instanceof HTMLElement) {
+        rendererRoot.style.width = "100%";
+        rendererRoot.style.height = "100%";
+        const surface = rendererRoot.querySelector("svg, canvas");
+        if (surface instanceof HTMLElement || surface instanceof SVGElement) {
+          surface.style.width = "100%";
+          surface.style.height = "100%";
+        }
+      }
+    } catch {}
+  }
+}
+
 onBeforeUnmount(() => {
   chartInstances.forEach((c) => c.dispose());
   chartResizeObservers.forEach((ro) => {
@@ -6209,9 +6549,11 @@ onBeforeUnmount(() => {
   chartResizeObservers.length = 0;
   if (jobsTickTimer) clearInterval(jobsTickTimer);
   if (jobsPollTimer) clearInterval(jobsPollTimer);
+  if (chartSizePollTimer) clearInterval(chartSizePollTimer);
   document.removeEventListener("click", dismissPopover);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("focus", onWindowFocus);
+  window.removeEventListener("resize", resizeMountedCharts);
   messagesEl.value?.removeEventListener("scroll", onMessagesScroll);
   messagesResizeObserver?.disconnect();
   messagesResizeObserver = null;
@@ -6610,7 +6952,7 @@ async function sendPrompt(text) {
   if (!props.user || clearing.value) return;
   // Same rule as sendQuestion: never inject a chat question into a job's
   // run log — start a fresh conversation for it.
-  if (currentJob.value) await newSession();
+  if (currentJob.value && !(await newSession())) return;
   input.value = text;
   send();
 }
@@ -6704,10 +7046,6 @@ async function send() {
   // entry to drop from runningSessions when we finish.
   let streamingId = startSessionId || "__pending__";
   runningSessions.add(streamingId);
-  // Register the in-flight turn for the zombie probe + recovery paths, and
-  // invalidate any probe watching a previous turn.
-  inFlightTurn = { sid: streamingId, prompt };
-  zombieProbeToken++;
   // "Is this turn's answer still what the user is looking at?" Deliberately
   // NOT a currentSessionId match: loadSessions() runs in send()'s finally and
   // nulls currentSessionId for ANONYMOUS users, so a real streamingId stopped
@@ -6716,6 +7054,17 @@ async function send() {
   // explicit navigation — New chat or picking another conversation — should
   // stand the view down, and both bump viewEpoch.
   const startEpoch = viewEpoch;
+  const streamState = {
+    sid: streamingId,
+    prompt,
+    controller: new AbortController(),
+    abortReason: null,
+    stopRequest: null,
+    stopRequested: false,
+    reconcileAbort: false,
+    probeVersion: 0,
+  };
+  activeStreams.set(streamingId, streamState);
   const isActiveView = () => {
     if (viewEpoch !== startEpoch) return false;
     const cur = currentSessionId.value;
@@ -6725,7 +7074,7 @@ async function send() {
   activeTools.value = [];
   forceScrollToBottom(true);
 
-  abortController = new AbortController();
+  const streamAbortController = streamState.controller;
   // Per-stream buckets live in perSessionToolCalls / perSessionCharts keyed
   // by streamingId. Writing through the map (instead of a closure-local
   // array) means the right-rail UI — driven by the streamToolCalls /
@@ -6739,6 +7088,7 @@ async function send() {
   let toolCalls = perSessionToolCalls.get(streamingId);
   let charts = perSessionCharts.get(streamingId);
   let hasDeltas = false;
+  let wasBusy = false;
   // Snapshot of the most recent tool_start narration wipe. If the turn ends
   // and NOTHING streamed after the last tool (i.e. the "narration" we wiped
   // was actually the final answer — e.g. answer text → late tool call → end),
@@ -6750,6 +7100,7 @@ async function send() {
   // the shared refs are only mirrored while this session IS the view.
   let streamHtml = null;
   let streamScript = null;
+  let streamFollowUpForTurn = null;
 
   // === TIMING HOOKS ===
   // Captures every meaningful moment of the turn so we can build a flat
@@ -6761,6 +7112,55 @@ async function send() {
   const t0 = performance.now();
   const timings = [];
   let watchdogFired = false;
+  let lastServerByteAt = Date.now();
+  let completionProbeCancelled = false;
+  let completionProbeTimer = null;
+  let completionProbeStarted = false;
+  // App Service can finish a request while Chromium leaves response.body.read()
+  // stranded without EOF or AbortError. After 10 s without bytes, ask the
+  // authoritative server turn gate. If
+  // the gate is closed and the answer is on disk, abort this zombie reader with
+  // the reconcile flag; the normal persisted-transcript path repaints it. This
+  // is server-state driven — a healthy long reasoning/tool phase remains active
+  // and is never aborted.
+  const scheduleCompletionProbe = (delay = 5000) => {
+    if (!completionProbeCancelled)
+      completionProbeTimer = window.setTimeout(probeServerCompletion, delay);
+  };
+  const probeServerCompletion = async () => {
+    if (completionProbeCancelled || !runningSessions.has(streamingId)) return;
+    if (Date.now() - lastServerByteAt < 10000) {
+      scheduleCompletionProbe();
+      return;
+    }
+    if (!streamingId || streamingId === "__pending__") {
+      scheduleCompletionProbe();
+      return;
+    }
+    try {
+      const activeRes = await fetch(
+        `/api/sessions/${encodeURIComponent(streamingId)}/active`,
+      );
+      if (activeRes.ok) {
+        const { active } = await activeRes.json();
+        if (!active) {
+          const tail = await fetchPersistedTail(streamingId, normText(prompt));
+          if (tail?.matched && tail.answered) {
+            window.__trackAppInsightsEvent?.("chat.stream.completedOffStream", {
+              sessionId: streamingId,
+            });
+            streamState.reconcileAbort = true;
+            streamAbortController.abort();
+            return;
+          }
+        }
+      }
+    } catch {
+      // Best effort only. The existing watchdog/recovery path remains the
+      // fallback if this lightweight completion probe cannot reach the server.
+    }
+    scheduleCompletionProbe();
+  };
   const recordTiming = (entry) => {
     timings.push({ t_ms: Math.round(performance.now() - t0), ...entry });
   };
@@ -6785,7 +7185,7 @@ async function send() {
         model: selectedModel.value,
         sessionId: currentSessionId.value || undefined,
       }),
-      signal: abortController.signal,
+      signal: streamAbortController.signal,
     });
 
     const reader = res.body.getReader();
@@ -6804,7 +7204,7 @@ async function send() {
       watchdogTimer = setTimeout(() => {
         watchdogFired = true;
         try {
-          abortController?.abort();
+          streamAbortController.abort();
         } catch {}
       }, WATCHDOG_MS);
     };
@@ -6813,6 +7213,7 @@ async function send() {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      lastServerByteAt = Date.now();
       armWatchdog();
 
       buf += decoder.decode(value, { stream: true });
@@ -6892,7 +7293,8 @@ async function send() {
           data.type === "chart" ||
           data.type === "html_ready" ||
           data.type === "script_ready" ||
-          data.type === "maturity_score";
+          data.type === "maturity_score" ||
+          data.type === "follow_up";
         if (!routingEvent && !sessionScopedEvent && !isActiveView()) continue;
 
         switch (data.type) {
@@ -6903,6 +7305,7 @@ async function send() {
             // pulsing dot follows the right row.
             if (data.id) {
               if (streamingId !== data.id) {
+                const priorStreamingId = streamingId;
                 runningSessions.delete(streamingId);
                 // Migrate any tool/chart events that arrived under the
                 // "__pending__" sentinel into the real session bucket so
@@ -6918,8 +7321,10 @@ async function send() {
                 perSessionToolCalls.delete(streamingId);
                 perSessionCharts.delete(streamingId);
                 streamingId = data.id;
+                activeStreams.delete(priorStreamingId);
+                streamState.sid = data.id;
+                activeStreams.set(streamingId, streamState);
                 runningSessions.add(streamingId);
-                if (inFlightTurn) inFlightTurn.sid = data.id;
                 ensureBuckets(streamingId);
                 toolCalls = perSessionToolCalls.get(streamingId);
                 charts = perSessionCharts.get(streamingId);
@@ -6932,6 +7337,15 @@ async function send() {
               ) {
                 currentSessionId.value = data.id;
               }
+              // Before this event, /active could legitimately be false and an
+              // older identical prompt could match the persisted tail. Start
+              // the completion probe only after the backend has claimed the
+              // durable turn gate and announced its session.
+              if (!completionProbeStarted) {
+                completionProbeStarted = true;
+                scheduleCompletionProbe(10000);
+              }
+              if (streamState.stopRequested) requestServerStop(streamState);
             }
             break;
 
@@ -6984,6 +7398,7 @@ async function send() {
             // remove it, put the text back in the composer for a easy retry,
             // and surface the notice. The earlier turn keeps going.
             if (isActiveView()) {
+              wasBusy = true;
               for (let li = messages.value.length - 1; li >= 0; li--) {
                 const m = messages.value[li];
                 if (m.role === "user" && m.content === prompt) {
@@ -7122,7 +7537,10 @@ async function send() {
             ) {
               try {
                 const fu = JSON.parse(data.result);
-                if (fu.label && fu.prompt) streamFollowUp.value = fu;
+                if (fu.label && fu.prompt) {
+                  streamFollowUpForTurn = fu;
+                  if (isActiveView()) streamFollowUp.value = fu;
+                }
               } catch {}
             }
             break;
@@ -7249,10 +7667,17 @@ async function send() {
                     ? JSON.parse(data.scores)
                     : data.scores;
                 if (Array.isArray(scores)) {
-                  maturityScores[level] = scores;
+                  if (isActiveView()) maturityScores[level] = scores;
                 }
               }
             } catch {}
+            break;
+
+          case "follow_up":
+            if (data.followUp?.label && data.followUp?.prompt) {
+              streamFollowUpForTurn = data.followUp;
+              if (isActiveView()) streamFollowUp.value = data.followUp;
+            }
             break;
 
           case "error":
@@ -7279,10 +7704,12 @@ async function send() {
       streamBuffer.value = lastWipedText;
     }
 
-    // Clean up final message: strip thinking lines, fix missing spaces after periods
+    // Clean up final message: strip transient thinking lines only. Do not try
+    // to "repair" punctuation: replacing every `.<uppercase>` corrupts valid
+    // Azure identifiers (for example MDE.Linux), versions, and hostnames, and
+    // can split an otherwise valid markdown table into raw pipe text.
     const clean = streamBuffer.value
       .replace(/\n*\*[A-Z][^*]{3,60}\.{3}\*\n*/g, "\n")
-      .replace(/\.([A-Z])/g, ".\n\n$1")
       .replace(/^\n+/, "")
       .trim();
     const msgObj = {
@@ -7290,7 +7717,7 @@ async function send() {
       content: clean,
       toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
       charts: [...charts],
-      followUp: streamFollowUp.value ? { ...streamFollowUp.value } : null,
+      followUp: streamFollowUpForTurn ? { ...streamFollowUpForTurn } : null,
     };
     if (streamHtml) {
       msgObj.html = { ...streamHtml };
@@ -7306,8 +7733,28 @@ async function send() {
     // /messages reload when they navigate back.
     const hasRenderableAnswer =
       clean.length > 0 || charts.length > 0 || !!streamHtml || !!streamScript;
+    let recoveredEmptyTerminal = false;
+    if (
+      !hasRenderableAnswer &&
+      isActiveView() &&
+      streamingId &&
+      streamingId !== "__pending__"
+    ) {
+      // Some browser/proxy failures deliver EOF but omit the final message
+      // frames. The backend persists the authoritative transcript before the
+      // request completes, so check it once before claiming nothing returned.
+      const tail = await fetchPersistedTail(streamingId, normText(prompt));
+      if (tail?.matched && tail.answered) {
+        runningSessions.delete(streamingId);
+        await reloadSessionTranscript(streamingId);
+        recoveredEmptyTerminal = true;
+        window.__trackAppInsightsEvent?.("chat.stream.emptyRecovered", {
+          sessionId: streamingId,
+        });
+      }
+    }
     if (isActiveView()) {
-      if (!hasRenderableAnswer) {
+      if (!hasRenderableAnswer && !recoveredEmptyTerminal && !wasBusy) {
         // Turn ended with nothing to render. Pushing the empty bubble here is
         // what makes it look like the app swallowed the question — the single
         // most-reported symptom. Say it plainly instead so the user can retry.
@@ -7315,7 +7762,7 @@ async function send() {
           "empty",
           "⚠️ That turn finished without an answer — nothing was returned. Please try again.",
         );
-      } else {
+      } else if (hasRenderableAnswer) {
         console.log(
           "[push assistant] live-stream commit. content length=",
           clean.length,
@@ -7334,44 +7781,73 @@ async function send() {
       toolCount: String(toolCalls.length),
       committedToView: String(isActiveView()),
       hadDeltas: String(hasDeltas),
-      renderable: String(hasRenderableAnswer),
+      renderable: String(hasRenderableAnswer || recoveredEmptyTerminal),
     });
   } catch (err) {
     // Was this abort OUR zombie-recovery (frozen background tab) rather than
     // the user pressing Stop? If so, fall through to the recovery path.
-    const wasReconcileAbort = reconcileAbort;
-    reconcileAbort = false;
-    if (err.name === "AbortError" && !watchdogFired && !wasReconcileAbort) {
-      // User pressed Stop (or the view was reset). Keep any partial text.
-      window.__trackAppInsightsEvent?.("chat.stream.stopped", {
-        sessionId: streamingId,
-        elapsedMs: String(Math.round(performance.now() - t0)),
-        partialLen: String(streamBuffer.value.length),
-      });
-      // Remember the intent: the server aborted this turn, so no answer will ever
-      // persist. On a later reload the restore path must not poll for one.
-      // streamingId can still be "__pending__" when a brand-new conversation is
-      // stopped before the server announces its id, so prefer the resolved one.
-      markTurnStopped(currentSessionId.value || streamingId, prompt);
-      if (isActiveView()) {
-        if (streamBuffer.value) {
-          messages.value.push({
-            role: "assistant",
-            content: streamBuffer.value + "\n\n*(generation stopped)*",
-            toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
-            charts: [...charts],
-          });
-        } else {
-          // Stopped before any text arrived — the common case (every Stop in
-          // telemetry had partialLen 0). Without a marker the question is left
-          // with no reply at all, which looks identical to the app silently
-          // dropping it.
-          messages.value.push({
-            role: "system",
-            content: STOPPED_MARKER_TEXT,
-          });
+    const wasReconcileAbort = streamState.reconcileAbort;
+    streamState.reconcileAbort = false;
+    const abortReason = streamState.abortReason;
+    const pendingStopRequest = streamState.stopRequest;
+    if (
+      err.name === "AbortError" &&
+      abortReason === "stop" &&
+      !watchdogFired &&
+      !wasReconcileAbort
+    ) {
+      // Wait for AbortAsync to settle, then let the persisted transcript win a
+      // completion race. A user can press Stop after the server has already
+      // committed the final answer but before a stranded SSE reader sees EOF;
+      // replacing that real answer with a stopped marker is dishonest.
+      const stopResult = await pendingStopRequest;
+      const resolvedSid = streamState.sid || streamingId;
+      const tail =
+        stopResult?.alreadyCompleted &&
+        resolvedSid &&
+        resolvedSid !== "__pending__"
+          ? await fetchPersistedTail(resolvedSid, normText(prompt))
+          : null;
+      if (tail?.matched && tail.answered && isActiveView()) {
+        runningSessions.delete(streamingId);
+        await reloadSessionTranscript(resolvedSid);
+        window.__trackAppInsightsEvent?.("chat.stream.stopRaceRecovered", {
+          sessionId: resolvedSid,
+        });
+      } else if (stopResult?.stopped === true) {
+        // The server confirmed SDK completion after AbortAsync. Keep any partial
+        // text and remember the terminal intent across reloads.
+        window.__trackAppInsightsEvent?.("chat.stream.stopped", {
+          sessionId: streamingId,
+          elapsedMs: String(Math.round(performance.now() - t0)),
+          partialLen: String(streamBuffer.value.length),
+        });
+        markTurnStopped(resolvedSid, prompt);
+        if (isActiveView()) {
+          if (streamBuffer.value) {
+            messages.value.push({
+              role: "assistant",
+              content: streamBuffer.value + "\n\n*(generation stopped)*",
+              toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
+              charts: [...charts],
+            });
+          } else {
+            messages.value.push({
+              role: "system",
+              content: STOPPED_MARKER_TEXT,
+            });
+          }
         }
+      } else {
+        // A failed/pending Stop is not a stopped turn. The server may still be
+        // generating or may already have persisted a final answer, so converge
+        // through the normal authoritative transcript recovery path.
+        runningSessions.delete(streamingId);
+        tryRecoverPersistedAnswer(resolvedSid, prompt);
       }
+    } else if (err.name === "AbortError" && abortReason === "discard") {
+      // Clear/logout intentionally discarded this stream. Do not mark it as
+      // stopped and do not recover it into the freshly reset view.
     } else if (isActiveView()) {
       window.__trackAppInsightsEvent?.("chat.stream.severed", {
         sessionId: streamingId,
@@ -7398,10 +7874,15 @@ async function send() {
       tryRecoverPersistedAnswer(streamingId, prompt);
     }
   } finally {
+    completionProbeCancelled = true;
+    if (completionProbeTimer) clearTimeout(completionProbeTimer);
     clearInterval(intentAnimTimer);
     intentAnimTimer = null;
     runningSessions.delete(streamingId);
-    if (inFlightTurn && inFlightTurn.sid === streamingId) inFlightTurn = null;
+    streamState.probeVersion++;
+    for (const [sid, state] of activeStreams) {
+      if (state === streamState) activeStreams.delete(sid);
+    }
 
     // === TIMING DUMP ===
     // Stash on window for easy copy-paste; print a flat table to the
@@ -7444,7 +7925,6 @@ async function send() {
       streamReasoning.value = "";
       scriptReady.value = null;
       htmlReady.value = null;
-      abortController = null;
       nextTick(() => inputEl.value?.focus());
     }
     // Refresh the Conversations sidebar so the new/updated summary shows up.
@@ -7761,6 +8241,9 @@ async function send() {
   opacity: 0;
   border-right: none;
   overflow: hidden;
+}
+.chat-view--hidden .sidebar {
+  transition: none;
 }
 .sidebar-scroll {
   flex: 1;
@@ -10173,6 +10656,9 @@ async function send() {
 .tools-sidebar--open {
   width: 250px;
 }
+.chat-view--hidden .tools-sidebar {
+  transition: none;
+}
 .tools-sidebar-header {
   display: flex;
   align-items: center;
@@ -11803,12 +12289,24 @@ async function send() {
     z-index: 150;
     background: #fff;
     box-shadow: 2px 0 12px rgba(0, 0, 0, 0.18);
-    transform: translateX(0);
+    opacity: 1;
+    border-right: 1px solid #e1dfdd;
+    transform: translateX(-100%);
     transition: transform 0.2s ease;
   }
   .sidebar--collapsed {
+    width: 80vw;
+    max-width: 320px;
+    opacity: 1;
     transform: translateX(-100%);
     box-shadow: none;
+  }
+  .sidebar--mobile-open {
+    transform: translateX(0);
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.18);
+  }
+  .chat-view--hidden .sidebar {
+    transition: none;
   }
   .tools-sidebar {
     display: none;

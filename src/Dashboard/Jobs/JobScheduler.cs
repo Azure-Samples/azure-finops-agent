@@ -217,7 +217,7 @@ public sealed class JobScheduler : BackgroundService
         }
 
         // 3) One turn per session — never race a live chat turn.
-        if (!ChatEndpoints.TryBeginTurn(session.SessionId))
+        if (!ChatEndpoints.TryBeginTurn(session.SessionId, job.UserId, session))
         {
             job.LastStatus = "busy";
             job.NextRunUtc = DateTimeOffset.UtcNow.AddMinutes(2); // retry shortly

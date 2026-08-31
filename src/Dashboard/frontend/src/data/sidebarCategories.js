@@ -65,7 +65,7 @@ const publicPricingPrompts = [
   {
     label: "Azure OpenAI token pricing",
     prompt:
-      "Compare Azure OpenAI pricing for GPT-4o vs GPT-4o-mini vs GPT-4.1 per 1M input and output tokens.",
+      "Compare Azure OpenAI pricing for GPT-4o vs GPT-4o-mini vs GPT-4.1 per 1M input and output tokens. Use one batched lookup and quote Standard Global, not Batch, Data Zone, Regional, or cached-input minima.",
   },
   {
     label: "Azure Firewall cost tiers",
@@ -673,4 +673,3 @@ const maturityCategories = [
 ];
 
 export { maturityCategories };
-

@@ -24,8 +24,11 @@ public sealed class MicrosoftOAuthOptions
     public static readonly IReadOnlySet<string> ValidTiers =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "base", "licenses", "chargeback", "loganalytics", "storage"
+            "base", "licenses", "chargeback", "loganalytics", "storage", "all"
         };
+
+    public static readonly string[] AddOnTiers =
+        ["licenses", "chargeback", "loganalytics", "storage"];
 
     private static readonly Regex GuidRegex =
         new(@"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",

@@ -179,8 +179,9 @@ public static class SessionEndpoints
             {
                 if (evt is GitHub.Copilot.UserMessageEvent um)
                 {
-                    FlushAssistant();
                     var raw = um.Data?.Content ?? "";
+                    if (IsInjectedUserContext(raw, um.Data?.Source)) continue;
+                    FlushAssistant();
                     var clean = StripContextPrefix(raw);
                     if (string.IsNullOrWhiteSpace(clean)) continue;
                     messages.Add(new { role = "user", content = clean });
@@ -292,10 +293,38 @@ public static class SessionEndpoints
 
     private static string StripContextPrefix(string raw)
     {
+        return StripLeadingBracketBlocks(raw);
+    }
+
+    private static bool IsInjectedUserContext(string raw, string? source)
+    {
+        if (!string.IsNullOrWhiteSpace(source) &&
+            (source.StartsWith("skill-", StringComparison.OrdinalIgnoreCase) ||
+             source.StartsWith("tool-", StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        var s = raw.TrimStart();
+        return s.StartsWith("<skill-context", StringComparison.OrdinalIgnoreCase) ||
+               s.StartsWith("<tool-context", StringComparison.OrdinalIgnoreCase) ||
+               s.StartsWith("<agent-context", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string StripLeadingBracketBlocks(string? raw)
+    {
         var s = raw?.Trim() ?? "";
         while (s.StartsWith('['))
         {
-            var close = s.IndexOf(']');
+            var depth = 0;
+            var close = -1;
+            for (var i = 0; i < s.Length; i++)
+            {
+                if (s[i] == '[') depth++;
+                else if (s[i] == ']' && --depth == 0)
+                {
+                    close = i;
+                    break;
+                }
+            }
             if (close < 0) return ""; // truncated context block — no user content follows
             s = s[(close + 1)..].TrimStart();
         }
@@ -344,22 +373,10 @@ public static class SessionEndpoints
     internal static string CleanSummary(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return "Untitled conversation";
-        var s = raw.Trim();
-        // Strip every leading [..] block (CONTEXT, UPLOADED FILES, etc.).
-        while (s.StartsWith('['))
-        {
-            var close = s.IndexOf(']');
-            if (close < 0)
-            {
-                // The SDK truncates long first prompts when deriving a summary,
-                // which can cut a [CONTEXT: ...] block before its closing bracket.
-                // Nothing after the '[' is user content — discard it entirely
-                // instead of surfacing prompt scaffolding in the sidebar.
-                s = "";
-                break;
-            }
-            s = s[(close + 1)..].TrimStart();
-        }
+        // Balance nested schema arrays (for example columns=[A, B]) instead of
+        // stopping at the first ']'. The latter leaked the remainder of the
+        // [UPLOADED FILES] block into transcript rows and conversation titles.
+        var s = StripLeadingBracketBlocks(raw);
         // Take the first non-empty line so multi-line prompts surface cleanly.
         var firstLine = s.Split('\n', 2, StringSplitOptions.RemoveEmptyEntries)
                          .FirstOrDefault()?.Trim();

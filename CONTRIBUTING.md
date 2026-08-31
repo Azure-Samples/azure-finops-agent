@@ -18,13 +18,13 @@ This project has adopted the [Microsoft Open Source Code of Conduct](https://ope
 
 New branches must use one of two prefixes (kept simple on purpose):
 
-| Prefix | Use |
-|---|---|
+| Prefix                 | Use                                      |
+| ---------------------- | ---------------------------------------- |
 | `feature/<short-desc>` | new functionality, refactor, docs, chore |
-| `bug/<short-desc>` | bug fix or hotfix |
+| `bug/<short-desc>`     | bug fix or hotfix                        |
 
-Pushing to any non-`main` branch deploys it to the test slot at
-<https://finops-agent-container-test.azurewebsites.net> via `feature.yml`.
+When maintainer CI is configured, pushing a non-`main` branch deploys it to the
+test slot selected by the `TEST_*` GitHub Actions variables in `feature.yml`.
 The branch name is shown in the top-right badge of the running app.
 
 ## Development Setup
@@ -48,7 +48,7 @@ cd src/Dashboard
 
 # Build the Vue frontend to wwwroot/
 cd frontend
-npm install
+npm ci
 npm run build
 
 # Start the .NET backend (must set Development environment)
@@ -63,10 +63,10 @@ dotnet run --urls "http://localhost:5000"
 
 ### Secrets
 
-Local dev secrets are managed via [`dotnet user-secrets`](https://learn.microsoft.com/aspnet/core/security/app-secrets) — they live outside the repo and cannot be committed by accident. See [README → Running Locally](README.md#running-locally) for the full list of keys.
+Local dev secrets are managed via [`dotnet user-secrets`](https://learn.microsoft.com/aspnet/core/security/app-secrets) — they live outside the repo and cannot be committed by accident. See [README → Run locally](README.md#run-locally) for the full list of keys.
 
 - `appsettings.json` — base config with empty placeholders (committed)
-- `appsettings.Production.json` — production secrets (gitignored, App Service only)
+- App Service settings and managed identity — production configuration outside Git
 
 ### Project Structure
 
@@ -86,7 +86,7 @@ src/Dashboard/
 ### Code Conventions
 
 - **Backend**: Clean C# following Microsoft coding conventions, .NET 10 APIs, Vue 3 Composition API with `<script setup>`
-- **Tools**: Return raw API JSON (let the LLM interpret it), use `string` parameters, keep tools simple. **All tools are read-only** — write operations are blocked at the HTTP client level.
+- **Tools**: Return compact API JSON, use `string` parameters, and keep tools simple. Approved non-delete `PUT`/`PATCH` changes are bounded by the signed-in user's RBAC; Azure `DELETE` and mutating action `POST` operations are blocked in code.
 - **Frontend**: Modern JavaScript, ECharts for visualization, SSE for streaming
 
 See the [README](README.md) for full architecture details.

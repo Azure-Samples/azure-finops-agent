@@ -15,6 +15,8 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 public static class RetailPricingTools
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private sealed record BatchRow(int Score, string MeterKey, string Key, string Line);
+    private sealed record RetailPage(int Status, string StatusText, string Body);
 
     public static IEnumerable<AIFunction> Create()
     {
@@ -65,6 +67,279 @@ Common queries:
 - GPT model per-token: serviceName='Foundry Models' + productNameContains='GPT' (returns ALL variants — then pick the exact skuName: no 'Batch', ends 'Gl', 'Inp'/'Opt'/'cd Inp' — for Global Standard; do NOT min across rows)
 - Llama / Phi / Mistral: serviceName='Foundry Models' + productNameContains='Llama' (or 'Phi', 'Mistral')
 - Spot vs on-demand: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + meterName contains 'Spot'");
+
+        yield return AIFunctionFactory.Create(GetAzureRetailPricingBatch, "GetAzureRetailPricingBatch",
+            @"PUBLIC (no auth): Runs 2-8 independent Azure Retail Prices lookups IN PARALLEL inside ONE tool call. Use this whenever a comparison or estimate needs more than one distinct service/SKU filter. Do NOT call GetAzureRetailPricing repeatedly, and do NOT use bash/powershell/rg/grep to parse or combine pricing rows.
+
+queriesJson is a JSON array. Each object supports: label (required for readable output), serviceName (required), armRegionName, armSkuName, priceType, meterNameContains, productNameContains, skuNameContains, currencyCode, rank, top.
+
+Example — several VM SKUs in one model round-trip:
+[{""label"":""D4s_v5"",""serviceName"":""Virtual Machines"",""armRegionName"":""eastus"",""armSkuName"":""Standard_D4s_v5"",""top"":20},{""label"":""D8s_v5"",""serviceName"":""Virtual Machines"",""armRegionName"":""eastus"",""armSkuName"":""Standard_D8s_v5"",""top"":20}]
+
+Example — named Foundry models (go straight to this batch; NEVER run a broad GPT query first):
+[{""label"":""GPT-4o"",""serviceName"":""Foundry Models"",""productNameContains"":""Azure OpenAI"",""skuNameContains"":""4o"",""priceType"":""Consumption"",""top"":50},{""label"":""GPT-4o-mini"",""serviceName"":""Foundry Models"",""productNameContains"":""Azure OpenAI"",""skuNameContains"":""4o-mini"",""priceType"":""Consumption"",""top"":50},{""label"":""GPT-4.1"",""serviceName"":""Foundry Models"",""productNameContains"":""Azure OpenAI"",""skuNameContains"":""4.1"",""priceType"":""Consumption"",""top"":50}]
+For each, the tool returns the latest Standard Global text input/output rows, excluding Batch, cached, Data Zone, Regional, fine-tuning, audio and priority-processing variants, with prices normalized to USD per 1M tokens. Treat that summary as authoritative and do not verify it with another source.
+
+Known-good database filters (East US example):
+- SQL GP Gen5 compute: serviceName='SQL Database', armSkuName='SQLDB_GP_Compute_Gen5_8', productNameContains='Single/Elastic Pool General Purpose - Compute Gen5', meterNameContains='vCore'. Choose the ordinary `vCore` row, not `Zone Redundancy vCore`.
+- SQL GP storage: serviceName='SQL Database', productNameContains='Single/Elastic Pool General Purpose - Storage', skuNameContains='General Purpose', meterNameContains='Data Stored'. Choose the non-Free paid row.
+- Cosmos provisioned throughput: serviceName='Azure Cosmos DB', productNameContains='Azure Cosmos DB', skuNameContains='RUs', meterNameContains='100 RU/s'.
+- Cosmos storage: serviceName='Azure Cosmos DB', productNameContains='Azure Cosmos DB', skuNameContains='RUs', meterNameContains='Data Stored'.
+- PostgreSQL Flexible 8-vCore: serviceName='Azure Database for PostgreSQL', armSkuName='Standard_D8ds_v5'. Storage: productNameContains='Flex Server Storage', meterNameContains='Storage Data Stored'.
+
+For one SKU across several regions, use ONE GetAzureRetailPricing call with comma-separated armRegionName instead. For storage tiers sharing one service/region, use ONE broad GetAzureRetailPricing call (for example meterNameContains='LRS'). Never re-query a batch result in the same turn unless that specific query returned no usable row.");
+    }
+
+    private static async Task<string> GetAzureRetailPricingBatch(
+        [Description("JSON array of 2-8 pricing query objects. Each object: label, serviceName, and optional armRegionName, armSkuName, priceType, meterNameContains, productNameContains, skuNameContains, currencyCode, rank, top.")] string queriesJson)
+    {
+        using var doc = JsonDocument.Parse(queriesJson);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("queriesJson must be a JSON array.", nameof(queriesJson));
+
+        static string? Str(JsonElement item, string name) =>
+            item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        static int Int(JsonElement item, string name, int fallback) =>
+            item.TryGetProperty(name, out var value) && value.TryGetInt32(out var parsed)
+                ? parsed
+                : fallback;
+
+        var queries = doc.RootElement.EnumerateArray().Take(9).Select((item, index) => new
+        {
+            Label = Str(item, "label") ?? $"Query {index + 1}",
+            ServiceName = Str(item, "serviceName") ?? "",
+            Region = Str(item, "armRegionName"),
+            Sku = Str(item, "armSkuName"),
+            PriceType = Str(item, "priceType"),
+            Meter = Str(item, "meterNameContains"),
+            Product = Str(item, "productNameContains"),
+            SkuName = Str(item, "skuNameContains"),
+            Currency = Str(item, "currencyCode"),
+            Rank = Str(item, "rank"),
+            Top = Math.Clamp(Int(item, "top", 25), 1, 50),
+        }).ToList();
+
+        if (queries.Count is < 2 or > 8)
+            throw new ArgumentException("queriesJson must contain between 2 and 8 query objects.", nameof(queriesJson));
+        if (queries.Any(q => string.IsNullOrWhiteSpace(q.ServiceName)))
+            throw new ArgumentException("Every batch query requires serviceName.", nameof(queriesJson));
+
+        var results = await Task.WhenAll(queries.Select(async q => new
+        {
+            q.Label,
+            Result = await GetAzureRetailPricing(q.ServiceName, q.Region, q.Sku, q.PriceType,
+                q.Meter, q.Product, q.SkuName, q.Currency, q.Rank, q.Top),
+        }));
+
+        var output = new StringBuilder();
+        output.AppendLine($"BATCH RETAIL PRICING RESULTS — {results.Length} queries completed in parallel.");
+        output.AppendLine("AUTHORITATIVE RETAIL API RESULT. Use it directly; do not re-query, invoke shell/search, or fetch a pricing web page when every section has rows.");
+        foreach (var result in results)
+        {
+            output.AppendLine().Append("=== ").Append(result.Label).AppendLine(" ===");
+            output.AppendLine(CompactBatchResult(result.Label, result.Result));
+        }
+        return output.ToString();
+    }
+
+    // Batch responses must stay below the Copilot CLI's inline-result limit.
+    // Otherwise it writes the payload to a temp file and the model spends one
+    // full round-trip per `view` call reading chunks — measured at 3 extra calls
+    // and ~37 seconds for the 3-tier starter. Keep the decision-relevant fields
+    // from the raw API rows, relevance-rank them by the caller's label, and also
+    // retain the best row for each meter type so mixed compute/storage queries
+    // do not lose a lower-scoring but necessary component.
+    private static string CompactBatchResult(string label, string result)
+    {
+        var jsonStart = result.IndexOf("{\"BillingCurrency\"", StringComparison.Ordinal);
+        if (jsonStart < 0)
+            return result.Length <= 8_000 ? result : result[..8_000] + "\n[TRUNCATED]";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(result[jsonStart..]);
+            if (!doc.RootElement.TryGetProperty("Items", out var items) || items.ValueKind != JsonValueKind.Array)
+                return result.Length <= 8_000 ? result : result[..8_000] + "\n[TRUNCATED]";
+
+            if (result.Contains("serviceName eq 'Foundry Models'", StringComparison.Ordinal))
+            {
+                var billingCurrency = doc.RootElement.TryGetProperty("BillingCurrency", out var currencyElement)
+                    ? currencyElement.GetString() ?? "currency unknown"
+                    : "currency unknown";
+                var paginationComplete = !result.Contains("paginationComplete=False", StringComparison.OrdinalIgnoreCase);
+                var foundrySummary = BuildFoundryStandardGlobalSummary(label, items, billingCurrency, paginationComplete);
+                if (!string.IsNullOrEmpty(foundrySummary)) return foundrySummary;
+            }
+
+            static string Str(JsonElement item, string name) =>
+                item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                    ? value.GetString() ?? ""
+                    : "";
+            static string Clean(string value) => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+
+            var tokens = label
+                .Split(new[] { ' ', '-', '_', '/', '(', ')', '×' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(t => t.Trim().ToLowerInvariant())
+                .Where(t => t.Length >= 3 || t.All(char.IsDigit))
+                .Distinct()
+                .ToArray();
+
+            var rows = items.EnumerateArray().Select(item =>
+            {
+                var region = Str(item, "armRegionName");
+                var armSku = Str(item, "armSkuName");
+                var product = Str(item, "productName");
+                var sku = Str(item, "skuName");
+                var meter = Str(item, "meterName");
+                var unit = Str(item, "unitOfMeasure");
+                var type = Str(item, "type");
+                var term = Str(item, "reservationTerm");
+                var searchable = string.Join(' ', region, armSku, product, sku, meter, unit, type, term).ToLowerInvariant();
+                var score = tokens.Count(searchable.Contains);
+                var price = item.TryGetProperty("retailPrice", out var p) && p.TryGetDouble(out var parsed)
+                    ? parsed.ToString(CultureInfo.InvariantCulture)
+                    : "";
+                var savings = item.TryGetProperty("savingsPlan", out var sp) && sp.ValueKind == JsonValueKind.Array
+                    ? string.Join(',', sp.EnumerateArray().Select(plan =>
+                    {
+                        var planPrice = plan.TryGetProperty("retailPrice", out var pp) && pp.TryGetDouble(out var pv)
+                            ? pv.ToString(CultureInfo.InvariantCulture)
+                            : "";
+                        return $"{Str(plan, "term")}:{planPrice}";
+                    }))
+                    : "";
+                return new BatchRow(
+                    score,
+                    meter,
+                    string.Join('|', price, region, armSku, product, sku, meter, unit, type, term, savings),
+                    string.Join('\t', price, Clean(region), Clean(armSku), Clean(product), Clean(sku),
+                        Clean(meter), Clean(unit), Clean(type), Clean(term), Clean(savings)));
+            }).ToList();
+
+            var ordered = rows.OrderByDescending(r => r.Score).ThenBy(r => r.MeterKey).ThenBy(r => r.Key).ToList();
+            var selected = new List<BatchRow>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            void Add(BatchRow row)
+            {
+                if (seen.Add(row.Key)) selected.Add(row);
+            }
+            foreach (var row in ordered.Take(12)) Add(row);
+            foreach (var row in ordered.GroupBy(r => r.MeterKey).Select(g => g.First())) Add(row);
+
+            var queryLine = result.Split('\n').FirstOrDefault(line => line.StartsWith("Query: ", StringComparison.Ordinal));
+            var output = new StringBuilder();
+            if (queryLine is not null) output.AppendLine(queryLine);
+            output.AppendLine($"API rows: {rows.Count}; showing {Math.Min(selected.Count, 24)} relevance-ranked, meter-diverse rows.");
+            output.AppendLine("retailPrice\tarmRegionName\tarmSkuName\tproductName\tskuName\tmeterName\tunitOfMeasure\ttype\treservationTerm\tsavingsPlan(term:price)");
+            foreach (var row in selected.Take(24)) output.AppendLine(row.Line);
+            return output.ToString();
+        }
+        catch (JsonException)
+        {
+            return result.Length <= 8_000 ? result : result[..8_000] + "\n[TRUNCATED — narrow filters]";
+        }
+    }
+
+    private static string BuildFoundryStandardGlobalSummary(
+        string label,
+        JsonElement items,
+        string currency,
+        bool paginationComplete)
+    {
+        static string Str(JsonElement item, string name) =>
+            item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString() ?? ""
+                : "";
+
+        var normalizedLabel = label.ToLowerInvariant().Replace('-', ' ');
+        var candidates = new List<(string Direction, int VersionRank, DateTimeOffset Effective, string Sku, string Meter, double PerMillion, string Unit)>();
+        foreach (var item in items.EnumerateArray())
+        {
+            var sku = Str(item, "skuName");
+            var normalized = sku.ToLowerInvariant().Replace('-', ' ');
+            if (!Str(item, "type").Equals("Consumption", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var modelMatches = normalizedLabel.Contains("4o mini", StringComparison.Ordinal)
+                ? normalized.Contains("4o mini", StringComparison.Ordinal)
+                : normalizedLabel.Contains("4o", StringComparison.Ordinal)
+                    ? normalized.Contains("4o", StringComparison.Ordinal) && !normalized.Contains("mini", StringComparison.Ordinal)
+                    : normalizedLabel.Contains("4.1", StringComparison.Ordinal)
+                        ? normalized.Contains("4.1", StringComparison.Ordinal) &&
+                          !normalized.Contains("mini", StringComparison.Ordinal) &&
+                          !normalized.Contains("nano", StringComparison.Ordinal)
+                        : normalized.Contains(normalizedLabel, StringComparison.Ordinal);
+            if (!modelMatches) continue;
+            if (normalized.Contains("batch", StringComparison.Ordinal) ||
+                normalized.Contains("cached", StringComparison.Ordinal) ||
+                normalized.Contains("cchd", StringComparison.Ordinal) ||
+                normalized.Contains("cd inp", StringComparison.Ordinal) ||
+                normalized.Contains("data zone", StringComparison.Ordinal) ||
+                normalized.Contains(" regnl", StringComparison.Ordinal) ||
+                normalized.Contains(" regional", StringComparison.Ordinal) ||
+                normalized.Contains(" ft ", StringComparison.Ordinal) ||
+                normalized.Contains(" dev ", StringComparison.Ordinal) ||
+                normalized.Contains("training", StringComparison.Ordinal) ||
+                normalized.Contains("hosting", StringComparison.Ordinal) ||
+                normalized.Contains("audio", StringComparison.Ordinal) ||
+                normalized.Contains(" aud ", StringComparison.Ordinal) ||
+                normalized.Contains("transcribe", StringComparison.Ordinal) ||
+                normalized.Contains(" tts ", StringComparison.Ordinal) ||
+                normalized.Contains(" tcrb ", StringComparison.Ordinal) ||
+                normalized.Contains(" pp ", StringComparison.Ordinal))
+                continue;
+            if (!(normalized.EndsWith(" gl", StringComparison.Ordinal) ||
+                  normalized.EndsWith(" glbl", StringComparison.Ordinal) ||
+                  normalized.EndsWith(" global", StringComparison.Ordinal)))
+                continue;
+
+            var direction = normalized.Contains(" outp ", StringComparison.Ordinal) ||
+                            normalized.Contains(" output ", StringComparison.Ordinal) ||
+                            normalized.Contains(" opt ", StringComparison.Ordinal)
+                ? "output"
+                : normalized.Contains(" inp ", StringComparison.Ordinal) || normalized.Contains(" input ", StringComparison.Ordinal)
+                    ? "input"
+                    : "";
+            if (direction.Length == 0 ||
+                !item.TryGetProperty("retailPrice", out var priceElement) ||
+                !priceElement.TryGetDouble(out var price))
+                continue;
+
+            var unit = Str(item, "unitOfMeasure");
+            var perMillion = unit.Equals("1K", StringComparison.OrdinalIgnoreCase) ? price * 1000 : price;
+            var versionRank = normalizedLabel.Contains("4o mini", StringComparison.Ordinal)
+                ? normalized.Contains("0718", StringComparison.Ordinal) ? 100 : 0
+                : normalizedLabel.Contains("4o", StringComparison.Ordinal)
+                    ? normalized.Contains("1120", StringComparison.Ordinal) ? 100
+                        : normalized.Contains("0806", StringComparison.Ordinal) ? 90
+                        : normalized.Contains("0513", StringComparison.Ordinal) ? 80
+                        : 0
+                    : 0;
+            _ = DateTimeOffset.TryParse(Str(item, "effectiveStartDate"), CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal, out var effective);
+            candidates.Add((direction, versionRank, effective, sku, Str(item, "meterName"), perMillion, unit));
+        }
+
+        var selected = candidates
+            .GroupBy(row => row.Direction, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(row => row.VersionRank).ThenByDescending(row => row.Effective).First())
+            .OrderBy(row => row.Direction)
+            .ToList();
+        if (selected.Count < 2) return "";
+
+        var output = new StringBuilder();
+        output.AppendLine(paginationComplete
+            ? "FOUNDRY STANDARD GLOBAL TEXT PRICING — AUTHORITATIVE, COMPLETE; DO NOT VERIFY ELSEWHERE."
+            : "FOUNDRY STANDARD GLOBAL TEXT PRICING — PARTIAL; RETAIL API PAGINATION DID NOT COMPLETE.");
+        output.Append("model\tdirection\t").Append(currency)
+            .AppendLine(" per 1M tokens\tskuName\tmeterName\teffectiveStartDate");
+        foreach (var row in selected)
+            output.Append(label).Append('\t').Append(row.Direction).Append('\t')
+                .Append(row.PerMillion.ToString("0.########", CultureInfo.InvariantCulture)).Append('\t')
+                .Append(row.Sku).Append('\t').Append(row.Meter).Append('\t')
+                .AppendLine(row.Effective.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        return output.ToString();
     }
 
     private static async Task<string> GetAzureRetailPricing(
@@ -74,6 +349,7 @@ Common queries:
         [Description("Price type: 'Consumption' (PAYG), 'Reservation' (1y/3y RI), 'DevTestConsumption'. Empty = all.")] string? priceType = null,
         [Description("Substring match on meterName, e.g. 'Spot' or 'LRS'. Empty = no meter filter.")] string? meterNameContains = null,
         [Description("Substring match on productName, e.g. 'GPT' / 'Llama' / 'Phi' for Foundry Models, or 'Premium SSD' for storage. Foundry productName is a family bucket — use 'GPT' not 'gpt-4'. Empty = no product filter.")] string? productNameContains = null,
+        [Description("Substring match on skuName, e.g. '8 vCore', 'RUs', 'GPT-4o Inp Gl'. Use with productNameContains when the product is a broad family. Empty = no SKU-name filter.")] string? skuNameContains = null,
         [Description("Currency code (default 'USD'). Supported: USD, EUR, GBP, JPY, NOK, etc.")] string? currencyCode = null,
         [Description("Set to 'cheapest' to PREPEND a price-sorted summary of the matching rows (one line per row, lowest retailPrice first). Use this for any 'cheapest/lowest/top N regions' question so a SINGLE call answers it — do NOT call this tool once per region and do NOT sort the rows yourself.")] string? rank = null,
         [Description("Max results (default 50, max 100). Lower = faster.")] int top = 50)
@@ -89,18 +365,19 @@ Common queries:
         // Multi-region in ONE call: a 3-region comparison used to cost 3 sequential
         // model round-trips (~2.5s each) to fetch data the API returns in ~230ms.
         var regionCount = 0;
+        var requestedRegions = new List<string>();
         if (!string.IsNullOrWhiteSpace(armRegionName))
         {
-            var regions = armRegionName
+            requestedRegions = armRegionName
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(r => r.ToLowerInvariant())
                 .Distinct()
                 .ToList();
-            regionCount = regions.Count;
-            if (regions.Count == 1)
-                filters.Add($"armRegionName eq '{Esc(regions[0])}'");
-            else if (regions.Count > 1)
-                filters.Add("(" + string.Join(" or ", regions.Select(r => $"armRegionName eq '{Esc(r)}'")) + ")");
+            regionCount = requestedRegions.Count;
+            if (requestedRegions.Count == 1)
+                filters.Add($"armRegionName eq '{Esc(requestedRegions[0])}'");
+            else if (requestedRegions.Count > 1)
+                filters.Add("(" + string.Join(" or ", requestedRegions.Select(r => $"armRegionName eq '{Esc(r)}'")) + ")");
         }
         // Rows are shared across the requested regions, so the default cap could
         // truncate a region away entirely and silently skew the comparison.
@@ -110,6 +387,7 @@ Common queries:
         if (!string.IsNullOrWhiteSpace(priceType)) filters.Add($"priceType eq '{Esc(priceType.Trim())}'");
         if (!string.IsNullOrWhiteSpace(meterNameContains)) filters.Add($"contains(meterName, '{Esc(meterNameContains.Trim())}')");
         if (!string.IsNullOrWhiteSpace(productNameContains)) filters.Add($"contains(productName, '{Esc(productNameContains.Trim())}')");
+        if (!string.IsNullOrWhiteSpace(skuNameContains)) filters.Add($"contains(skuName, '{Esc(skuNameContains.Trim())}')");
 
         var filter = string.Join(" and ", filters);
         var url = $"https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview" +
@@ -123,43 +401,111 @@ Common queries:
         activity?.SetTag("pricing.sku", armSkuName ?? "any");
         activity?.SetTag("pricing.top", top);
 
-        // Lightweight retry on 429 / transient — prices.azure.com is public but rate-limits
-        // when an agent fans out 5+ pricing lookups in one turn (Persistence ladder pattern).
-        HttpResponseMessage res = null!;
-        string body = "";
-        const int MaxAttempts = 4;
-        for (var attempt = 0; attempt < MaxAttempts; attempt++)
+        var firstPage = await FetchRetailPage(url, activity);
+        var body = firstPage.Body;
+        var pageCount = 1;
+        var paginationComplete = true;
+        var paginate = firstPage.Status is >= 200 and < 300
+            && (string.Equals(rank?.Trim(), "cheapest", StringComparison.OrdinalIgnoreCase)
+                || regionCount > 1
+                || !string.IsNullOrWhiteSpace(armSkuName)
+                || isFoundry);
+        var allItems = new List<JsonElement>();
+        string? billingCurrency = null;
+        string? nextLink = null;
+
+        if (paginate)
         {
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
-            res = await Http.SendAsync(req);
-            body = await res.Content.ReadAsStringAsync();
-
-            if ((int)res.StatusCode != 429 && (int)res.StatusCode < 500) break;
-            if (attempt == MaxAttempts - 1) break;
-
-            var retryAfter = res.Headers.RetryAfter?.Delta?.TotalSeconds
-                          ?? Math.Min(Math.Pow(2, attempt + 1) + Random.Shared.NextDouble(), 30);
-            var waitSeconds = Math.Max(1, retryAfter);
-            activity?.SetTag($"pricing.retry_{attempt}", $"{(int)res.StatusCode}, waiting {waitSeconds:F0}s");
-            // Surface the cool-down to the chat UI via the same baggage-keyed SSE channel HttpHelper uses.
-            var turnKey = System.Diagnostics.Activity.Current?.GetBaggageItem("finops.turn.id");
-            if (turnKey is not null && HttpHelper.RetryReporters.TryGetValue(turnKey, out var report))
+            const int maxPages = 20;
+            const int maxItems = 5000;
+            var page = firstPage;
+            for (var pageIndex = 0; pageIndex < maxPages; pageIndex++)
             {
-                try { await report(attempt + 1, waitSeconds, url, "pricing", (int)res.StatusCode); }
-                catch (Exception emitEx)
+                try
                 {
-                    HttpHelper.Logger?.LogWarning(emitEx,
-                        "SSE cooling_down emit failed for pricing attempt={Attempt}", attempt + 1);
+                    using var pageDoc = JsonDocument.Parse(page.Body);
+                    billingCurrency ??= pageDoc.RootElement.TryGetProperty("BillingCurrency", out var currencyElement)
+                        ? currencyElement.GetString()
+                        : null;
+                    if (!pageDoc.RootElement.TryGetProperty("Items", out var items)
+                        || items.ValueKind != JsonValueKind.Array)
+                        break;
+                    allItems.AddRange(items.EnumerateArray().Select(item => item.Clone()));
+                    nextLink = pageDoc.RootElement.TryGetProperty("NextPageLink", out var nextElement)
+                        ? nextElement.GetString()
+                        : null;
+                }
+                catch (JsonException)
+                {
+                    paginationComplete = false;
+                    break;
+                }
+
+                if (allItems.Count > maxItems)
+                {
+                    allItems = allItems.Take(maxItems).ToList();
+                    paginationComplete = false;
+                    break;
+                }
+                if (string.IsNullOrWhiteSpace(nextLink)) break;
+                if (pageIndex == maxPages - 1)
+                {
+                    paginationComplete = false;
+                    break;
+                }
+                if (!Uri.TryCreate(nextLink, UriKind.Absolute, out var nextUri)
+                    || nextUri.Scheme != Uri.UriSchemeHttps
+                    || !nextUri.Host.Equals("prices.azure.com", StringComparison.OrdinalIgnoreCase))
+                {
+                    paginationComplete = false;
+                    break;
+                }
+
+                page = await FetchRetailPage(nextUri.AbsoluteUri, activity);
+                pageCount++;
+                if (page.Status is < 200 or >= 300)
+                {
+                    paginationComplete = false;
+                    break;
                 }
             }
-            await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
+
+            body = JsonSerializer.Serialize(new
+            {
+                BillingCurrency = billingCurrency ?? currencyCode,
+                Items = allItems,
+                NextPageLink = paginationComplete ? null : nextLink
+            });
         }
 
-        activity?.SetTag("pricing.status_code", (int)res.StatusCode);
+        activity?.SetTag("pricing.status_code", firstPage.Status);
         activity?.SetTag("pricing.response_length", body.Length);
+        activity?.SetTag("pricing.pages", pageCount);
+        activity?.SetTag("pricing.pagination_complete", paginationComplete);
 
-        var header = $"HTTP {(int)res.StatusCode} {res.StatusCode}\nQuery: {filter} (top={top}, currency={currencyCode})\nUTC: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}\n";
+        var foundRegions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var bodyRowCount = 0;
+        try
+        {
+            using var coverageDoc = JsonDocument.Parse(body);
+            if (coverageDoc.RootElement.TryGetProperty("Items", out var coverageItems)
+                && coverageItems.ValueKind == JsonValueKind.Array)
+            {
+                bodyRowCount = coverageItems.GetArrayLength();
+                foreach (var item in coverageItems.EnumerateArray())
+                    if (item.TryGetProperty("armRegionName", out var regionElement)
+                        && !string.IsNullOrWhiteSpace(regionElement.GetString()))
+                        foundRegions.Add(regionElement.GetString()!);
+            }
+        }
+        catch (JsonException) { }
+        var missingRegions = requestedRegions.Where(region => !foundRegions.Contains(region)).ToArray();
+
+        var header = $"HTTP {firstPage.Status} {firstPage.StatusText}\nQuery: {filter} (top={top}, currency={currencyCode})\nUTC: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}\nPages: {pageCount}; paginationComplete={paginationComplete}; rows={bodyRowCount}\n";
+        if (requestedRegions.Count > 0)
+            header += missingRegions.Length == 0
+                ? $"Region coverage: {requestedRegions.Count}/{requestedRegions.Count}.\n"
+                : $"Region coverage incomplete: missing {string.Join(", ", missingRegions)}.\n";
 
         // Foundry pricing is the one place an agent reliably mis-reads the raw rows: the response
         // mixes Standard/Batch, Global/DataZone/Regional, and cached/non-cached SKUs (all at
@@ -174,18 +520,68 @@ Common queries:
                 + "at different prices. Match the EXACT variant asked for (default Standard+Global) and "
                 + "state which one you quote. NEVER report the minimum retailPrice across rows.\n";
 
-        if (body.Length > 200_000)
-            return header + body[..200_000] + $"\n\n[TRUNCATED — {body.Length / 1024}KB total. Add more filters (armRegionName, armSkuName, priceType) to narrow results.]";
-        return header + BuildCheapestSummary(rank, body) + body;
+        var cheapestSummary = BuildCheapestSummary(rank, serviceName, armSkuName, body, paginationComplete, missingRegions);
+        if (!string.IsNullOrEmpty(cheapestSummary))
+            return header + cheapestSummary;
+        if (body.Length > 8_000)
+        {
+            var compactLabel = string.Join(' ', new[] { armSkuName, skuNameContains, productNameContains, meterNameContains, serviceName }
+                .Where(value => !string.IsNullOrWhiteSpace(value)));
+            return header + CompactBatchResult(compactLabel, header + body);
+        }
+        return header + body;
+    }
+
+    private static async Task<RetailPage> FetchRetailPage(string url, System.Diagnostics.Activity? activity)
+    {
+        const int maxAttempts = 4;
+        HttpResponseMessage response = null!;
+        string body = "";
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
+            response = await Http.SendAsync(request);
+            body = await response.Content.ReadAsStringAsync();
+
+            if ((int)response.StatusCode != 429 && (int)response.StatusCode < 500) break;
+            if (attempt == maxAttempts - 1) break;
+
+            var retryAfter = response.Headers.RetryAfter?.Delta?.TotalSeconds
+                          ?? Math.Min(Math.Pow(2, attempt + 1) + Random.Shared.NextDouble(), 30);
+            var waitSeconds = Math.Max(1, retryAfter);
+            activity?.SetTag($"pricing.retry_{attempt}", $"{(int)response.StatusCode}, waiting {waitSeconds:F0}s");
+            var turnKey = System.Diagnostics.Activity.Current?.GetBaggageItem("finops.turn.id");
+            if (turnKey is not null && HttpHelper.RetryReporters.TryGetValue(turnKey, out var report))
+            {
+                try { await report(attempt + 1, waitSeconds, url, "pricing", (int)response.StatusCode); }
+                catch (Exception emitEx)
+                {
+                    HttpHelper.Logger?.LogWarning(emitEx,
+                        "SSE cooling_down emit failed for pricing attempt={Attempt}", attempt + 1);
+                }
+            }
+            await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
+        }
+
+        return new RetailPage((int)response.StatusCode, response.StatusCode.ToString(), body);
     }
 
     // "Cheapest N regions" is the single most common pricing question and the
     // slowest: unsorted rows forced the model to either shell out to sort them
     // (~19s of a 37s turn) or issue one API call per region (11 calls, 126s).
-    // A pre-sorted digest in front of the untouched JSON removes both. Parsing
-    // is best-effort on purpose — any surprise in the payload falls through to
-    // the raw-JSON contract rather than failing the call.
-    private static string BuildCheapestSummary(string? rank, string body)
+    // A compact, pre-sorted digest removes both. For VM surveys, select the
+    // ordinary commercial Linux PAYG meter (not Windows, Spot, Low Priority,
+    // US Gov/DoD or China), then deduplicate by region. Returning the full page
+    // alongside the summary defeated the optimization because the CLI moved it
+    // to a temp file and the model started shell-parsing it anyway.
+    private static string BuildCheapestSummary(
+        string? rank,
+        string serviceName,
+        string? armSkuName,
+        string body,
+        bool paginationComplete,
+        IReadOnlyCollection<string> missingRegions)
     {
         if (!string.Equals(rank?.Trim(), "cheapest", StringComparison.OrdinalIgnoreCase))
             return "";
@@ -196,7 +592,7 @@ Common queries:
                 items.ValueKind != JsonValueKind.Array)
                 return "";
 
-            var rows = new List<(double Price, string Line)>();
+            var rows = new List<(double Price, string Region, string ArmSku, string Product, string Sku, string Meter, string PriceType)>();
             foreach (var it in items.EnumerateArray())
             {
                 if (!it.TryGetProperty("retailPrice", out var p) ||
@@ -204,17 +600,50 @@ Common queries:
                 string Str(string name) =>
                     it.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
                         ? v.GetString() ?? "" : "";
-                rows.Add((price,
-                    $"{price.ToString(CultureInfo.InvariantCulture)}\t{Str("armRegionName")}\t{Str("armSkuName")}\t{Str("meterName")}\t{Str("priceType")}"));
+                rows.Add((price, Str("armRegionName"), Str("armSkuName"), Str("productName"),
+                    Str("skuName"), Str("meterName"), Str("type")));
             }
             if (rows.Count == 0) return "";
 
+            IEnumerable<(double Price, string Region, string ArmSku, string Product, string Sku, string Meter, string PriceType)> ranked = rows;
+            // Pay-as-you-go only, for every service: Reservation and DevTest rows
+            // carry a lower unit price and would otherwise win "cheapest".
+            ranked = ranked.Where(r =>
+                !string.IsNullOrWhiteSpace(r.Region) &&
+                r.PriceType.Equals("Consumption", StringComparison.OrdinalIgnoreCase) &&
+                (string.IsNullOrWhiteSpace(armSkuName) ||
+                 r.ArmSku.Equals(armSkuName.Trim(), StringComparison.OrdinalIgnoreCase)));
+            if (serviceName.Trim().Equals("Virtual Machines", StringComparison.OrdinalIgnoreCase))
+            {
+                ranked = ranked.Where(r =>
+                    !r.Region.StartsWith("usgov", StringComparison.OrdinalIgnoreCase) &&
+                    !r.Region.StartsWith("usdod", StringComparison.OrdinalIgnoreCase) &&
+                    !r.Region.StartsWith("china", StringComparison.OrdinalIgnoreCase) &&
+                    !r.Product.Contains("Windows", StringComparison.OrdinalIgnoreCase) &&
+                    !r.Meter.Contains("Spot", StringComparison.OrdinalIgnoreCase) &&
+                    !r.Meter.Contains("Low Priority", StringComparison.OrdinalIgnoreCase));
+            }
+
+            var byRegion = ranked
+                .GroupBy(r => r.Region, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderBy(r => r.Price).First())
+                .OrderBy(r => r.Price)
+                .ToList();
+            if (byRegion.Count == 0) return "";
+
             var sb = new StringBuilder();
-            sb.Append("CHEAPEST-FIRST SUMMARY (already sorted — read straight off this, do not re-sort or re-query):\n");
-            sb.Append("retailPrice\tarmRegionName\tarmSkuName\tmeterName\tpriceType\n");
-            foreach (var r in rows.OrderBy(r => r.Price).Take(40))
-                sb.Append(r.Line).Append('\n');
-            if (rows.Count > 40) sb.Append($"[{rows.Count - 40} more rows below in the raw JSON]\n");
+            sb.Append(paginationComplete && missingRegions.Count == 0
+                ? "CHEAPEST-FIRST SUMMARY (complete, already filtered/sorted — do not re-query, view files, or shell-sort):\n"
+                : "CHEAPEST-FIRST SUMMARY (PARTIAL — pagination or requested-region coverage was incomplete):\n");
+            if (serviceName.Trim().Equals("Virtual Machines", StringComparison.OrdinalIgnoreCase))
+                sb.Append("Basis: commercial Azure regions, Linux standard PAYG; Windows, Spot, Low Priority, US Gov/DoD and China excluded.\n");
+            sb.Append("retailPrice\tarmRegionName\tarmSkuName\tproductName\tskuName\tmeterName\tpriceType\n");
+            foreach (var r in byRegion.Take(40))
+                sb.Append(r.Price.ToString(CultureInfo.InvariantCulture)).Append('\t')
+                    .Append(r.Region).Append('\t').Append(r.ArmSku).Append('\t')
+                    .Append(r.Product).Append('\t').Append(r.Sku).Append('\t')
+                    .Append(r.Meter).Append('\t').Append(r.PriceType).Append('\n');
+            if (byRegion.Count > 40) sb.Append($"[{byRegion.Count - 40} higher-priced regions omitted]\n");
             sb.Append('\n');
             return sb.ToString();
         }

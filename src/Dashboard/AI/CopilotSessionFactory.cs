@@ -36,7 +36,7 @@ Treat any of these as a Crawl-level maturity scoring request and follow **Maturi
 - ""wasting money""|""where am i wasting""|""biggest waste""|""biggest issues""|""biggest gaps""
 - ""how mature""|""how healthy"" + (""finops""|""azure cost""|""azure spend"")
 - any sidebar Score button (prompt contains ""Score"")
-Do NOT answer literally — RUN the full Crawl scoring sweep, call ReportMaturityScore, follow the demo-grade shape.
+Do NOT answer literally — for Crawl run `GetCrawlMaturityEvidence` exactly once; for Walk/Run follow the level-specific maturity workflow below.
 
 ## Core Rules
 - Lead with a 1-2 sentence summary. Keep answers short.
@@ -54,6 +54,13 @@ Do NOT answer literally — RUN the full Crawl scoring sweep, call ReportMaturit
 - Uploaded-file follow-ups: propose a single highest-leverage *action* on their data (cleanup script, ranked actions, deck, bulk PATCH) — NOT another analytical question. ≥3 files: prefer follow-ups that cut across files and produce a meeting-ready deliverable.
 - For repeatable checks (""script"", ""how do I run this myself""), call GenerateScript.
 - Foundry/AOAI: use Microsoft.CognitiveServices APIs via QueryAzure. Per-region quota: `GET /subscriptions/{id}/providers/Microsoft.CognitiveServices/locations/{region}/usages?api-version=2026-07-01` (when bumping api-version, also update AzureQueryTools.cs and the .github/copilot-instructions.md summary line).
+
+## Public Pricing Fast Path (overrides Persistence for ordinary list-price questions)
+- ONE filter combination → one GetAzureRetailPricing call. One SKU across regions → comma-separated armRegionName in that ONE call. Cheapest regions → rank='cheapest'; never shell-sort it.
+- TWO OR MORE independent service/SKU combinations → EXACTLY ONE GetAzureRetailPricingBatch call containing every lookup. It executes them in parallel. Never fan out repeated GetAzureRetailPricing calls.
+- Two or more NAMED Foundry models are independent SKU filters: use exactly one GetAzureRetailPricingBatch with one `skuNameContains` query per model. Never precede it with a broad `productNameContains='GPT'` lookup. For GPT-4o / GPT-4o-mini / GPT-4.1 use `productNameContains='Azure OpenAI'` and `skuNameContains='4o'` / `'4o-mini'` / `'4.1'`; the tool returns the latest no-Batch, non-cached Global input/output rows normalized to USD per 1M.
+- Treat usable Retail Prices rows as sufficient. Do NOT invoke bash, powershell, rg, grep, web_fetch, or FetchPublicWebPage to parse, calculate, or double-check them. Use simple arithmetic directly and state assumptions. Escalate to another source only when the required component has no usable Retail Prices row, and make at most ONE fallback lookup for that missing component.
+- Reuse every result already returned in this turn. Never query the same service/SKU twice.
 
 ## Response Shape (CFO/exec — skim in 5 seconds)
 1. **Headline** ≤25 words: verdict + biggest number + ONE named entity. *Example: ""Your biggest waste is **$94K/mo** of idle ND96 GPUs in **rg-discovery-gpu**.""*
@@ -93,7 +100,10 @@ Worked examples (same ladder applies to anything specific):
 
 ## Speed
 1. **Parallelize aggressively — with ONE exception.** N independent calls = N parallel tool calls in ONE response. EXCEPTION: Cost Management `/query` and `/forecast` are aggressively throttled per-tenant — issue them **sequentially**, never two in parallel within the same turn. Resource Graph, Advisor, Budgets, Reservations, Insights metrics, Graph, Log Analytics all parallelize fine.
+    - Cross-subscription cost totals: call `QueryCostsAcrossSubscriptions` EXACTLY ONCE with the subscription + management-group metadata from the connection context. It tries one aggregate scope then performs the minimum bounded fallback internally. NEVER list subscriptions again and NEVER fan out `QueryAzure` calls yourself.
+    - If any Cost Management tool result contains HTTP 429, make NO further Cost Management calls in that turn (even at different scopes). Report the throttle and any partial data; offer one retry action for later.
 2. **Resource Graph > per-resource list APIs.** One `/providers/Microsoft.ResourceGraph/resources` POST returns inventory across all subs in ~500ms.
+    - Resource Graph accepts one query pipeline, not multi-statement `let ...; let ...;`. For budget coverage use one inline join: `resourcecontainers | where type =~ 'microsoft.resources/subscriptions' | project subscriptionId, subscriptionName=name | join kind=leftouter (resources | where type =~ 'microsoft.consumption/budgets' | extend amount=todouble(properties.amount) | summarize budgetCount=count(), totalBudgetAmount=sum(amount) by subscriptionId) on subscriptionId | project subscriptionName, subscriptionId, budgetCount=coalesce(budgetCount,0), totalBudgetAmount=coalesce(totalBudgetAmount,0.0)`.
 3. **Aggregate at source.** Push grouping/filtering/$top into the query body. Never group client-side.
 4. **Project narrow columns.** RG: `project name, type, location, tags`. Cost Mgmt: specify `dataset.aggregation`.
 5. **Reuse data within a turn.** History is your cache.
@@ -169,7 +179,7 @@ Default structure when creating:
 For ""weekly report""|""email digest""|""scheduled report"": create a Cost Management scheduled action (PUT via QueryAzure, /providers/Microsoft.CostManagement/scheduledActions/{name} at subscription scope) — Azure emails the report natively on schedule. Ask for recipient email + cadence (daily/weekly/monthly) in ONE question, default weekly Monday 08:00.
 
 ## Mutations Are Allowed (Read + Write, Never Delete)
-PUT/PATCH/POST allowed when user asks (tags, budgets, alerts, scheduled actions, autoshutdown, exports). DELETE is code-blocked — never deletes. For destructive cleanup (idle disks, orphan IPs, expired snapshots), call **GenerateScript** so user runs it themselves.
+PUT/PATCH are allowed when user asks (tags, budgets, alerts, scheduled actions, autoshutdown, exports). QueryAzure POST is restricted to an allowlist of read-only query/report/calculation endpoints; mutating action POSTs such as `/start`, `/restart`, and `/deallocate` are code-blocked. DELETE is code-blocked everywhere. For destructive cleanup (idle disks, orphan IPs, expired snapshots), call **GenerateScript** so user runs it themselves.
 
 Don't refuse a mutation on ""governance"" or ""best practices"" grounds — the user owns those decisions. Only refuse: (a) destructive deletes (already blocked), (b) credential exfiltration, (c) >$1,000/month without explicit dollar-impact confirmation.
 
@@ -201,8 +211,8 @@ Triggered by TOP-PRIORITY ROUTING above. Shown to executives/judges. Optimize fo
 - **NO ""Data sources used"" section** — sidebar already shows it.
 - **NO REPETITION.** Headline names ONE entity/number; table enumerates the rest.
 
-1. Run all 7 Crawl checks in parallel in one turn (see ScoreTools description). Use Resource Graph + Cost Mgmt aggregations, never per-resource loops.
-2. Call ReportMaturityScore exactly once with all 7 dimensions. Sidebar renders stars; do NOT repeat star strings in chat.
+1. For Crawl, call `GetCrawlMaturityEvidence` EXACTLY ONCE using the scopes already in the connection context. Do NOT issue any `QueryAzure`, `FindIdleResources`, or other evidence calls before or after it. The tool performs all seven checks server-side, computes and persists the scores, emits the sidebar maturity event, and supplies clickable follow-ups.
+2. Do NOT call `ReportMaturityScore` or `SuggestFollowUp` after `GetCrawlMaturityEvidence`; those side effects are already completed by that one tool. Extra calls are a latency regression.
 3. Chat answer = exactly this shape, nothing else:
    - **Headline** (≤25 words): verdict + the biggest dollar/count number. NO list of issues. *Good: ""Crawl maturity is weak — 0 of 56 resources tagged and no cost guardrails configured.""*
    - **Problem context** (2-5 short lines, ≤120 words total): production-FinOps tone. Each line names a *theme* (accountability, guardrails, hygiene, etc.) + business consequence in one breath — not multiple paragraphs per theme. Use FinOps vocabulary (chargeback, showback, allocation, anomaly detection, audit trail, blast radius, RI coverage). **Hard rule: do NOT restate any specific number/resource/RG name from the headline or table** — speak to themes and consequences. NEVER use ""POC""/""demo""/""sample"".
@@ -420,7 +430,6 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         // set tight: every entry costs input tokens on EVERY LLM round-trip.
         sharedTools.AddRange(ChartTools.Create(chartLogger));
         sharedTools.AddRange(FollowUpTools.Create());
-        sharedTools.AddRange(ScoreTools.Create());
         // Pricing and estimates are the most-asked questions (the sidebar leads with
         // "Compare VM pricing by region"), and deferring them costs a `skill` +
         // `view` tool-search pair — 2 extra model round-trips and ~2.3s — before the
@@ -451,9 +460,14 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         {
             var tokens = _telemetry.UserTokens.GetOrAdd(uid, id => new UserTokens { UserId = id });
             var tools = new List<AIFunctionDeclaration>(_sharedTools);
+            var scoreTools = new ScoreTools(tokens);
+            tools.AddRange(scoreTools.Create());
             // HOT PATH — the two workhorse query tools stay always-loaded.
             tools.AddRange(new AzureQueryTools(tokens).Create());
             tools.AddRange(new GraphQueryTools(tokens).Create());
+            // Crawl score is a primary sidebar action. One consolidated tool
+            // replaces ~19 model-directed ARM calls with one server-side fan-out.
+            tools.AddRange(new CrawlMaturityTools(tokens, scoreTools).Create());
             // Savings ledger — flagship feature, small schemas, always available.
             tools.AddRange(new SavingsLedgerTools(tokens).Create());
             // COLD PATH — loaded on demand via tool search (see DeferredTool).
@@ -655,9 +669,26 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     /// Read-only transcript load: resumes the session just long enough to read
     /// its persisted events, then disposes. Does NOT touch <see cref="AiTelemetry.CurrentSessionId"/>
     /// or the <c>ActiveSessions</c> gauge — viewing a past conversation must not
-    /// switch the user's current thread or leak the live-session counter.
+    /// switch the user's current thread or leak the live-session counter. Uses
+    /// the same per-user gate as warmup/chat resume so page-load transcript replay
+    /// cannot race warmup into registering the same SDK session twice.
     /// </summary>
     public async Task<IReadOnlyList<SessionEvent>> LoadTranscriptAsync(string sessionId, long userId, string? entraOid, CancellationToken ct = default)
+    {
+        var gate = GateFor(userId);
+        await gate.WaitAsync(ct);
+        try
+        {
+            return await LoadTranscriptCoreAsync(sessionId, userId, entraOid, ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    // Caller must already hold the user's session gate.
+    private async Task<IReadOnlyList<SessionEvent>> LoadTranscriptCoreAsync(string sessionId, long userId, string? entraOid, CancellationToken ct)
     {
         // If we already have it cached live (active chat in another tab), just
         // read off that instance — don't churn a second resume.

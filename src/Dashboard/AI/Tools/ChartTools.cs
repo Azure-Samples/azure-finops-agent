@@ -47,6 +47,7 @@ Multi-series (grouped bar/line) — one extra key per series:
                 [Description(@"Full ECharts option object as JSON string. World maps: series type 'map' with map:'world'. Use Natural Earth country names ('United States of America' not 'USA', 'Czechia' not 'Czech Republic'). Frontend auto-registers world map GeoJSON.")] string options
             ) =>
             {
+                ValidateAdvancedOptions(options);
                 _logger?.LogInformation("RenderAdvancedChart called: optionsLen={OptionsLen}", options?.Length ?? 0);
                 _logger?.LogInformation("RenderAdvancedChart options: {Options}", options?.Length > 4000 ? options[..4000] + "...(truncated)" : options);
                 return JsonSerializer.Serialize(new { raw = true, options });
@@ -54,7 +55,7 @@ Multi-series (grouped bar/line) — one extra key per series:
             "RenderAdvancedChart",
             @"Renders any ECharts visualization from raw options JSON. Use for world maps, heatmaps, treemaps, radar, gauge, or anything needing full ECharts config.
 
-CRITICAL: options is parsed with JSON.parse() — NO JavaScript functions (formatter, etc.); they're silently dropped. Use only static values.
+CRITICAL: use static JSON values only. DOM/CSS/link-bearing options (`extraCssText`, tooltip formatter HTML, links, append targets, remote image symbols) are rejected, and the frontend forces rich-text/canvas tooltips.
 
 WORLD MAP — effectScatter on geo (e.g. Azure region pricing):
 - Series: type:'effectScatter', coordinateSystem:'geo'.
@@ -67,5 +68,61 @@ WORLD MAP — effectScatter on geo (e.g. Azure region pricing):
 - Azure region [lon, lat] coordinates: src/Dashboard/AI/Tools/Resources/world-map-coordinates.json (auto-loaded). Approximate fallbacks: eastus≈[-79,37], westeurope≈[5,52], swedencentral≈[18,59], japaneast≈[140,36], australiaeast≈[151,-34].
 - Non-pricing maps: uniform blue #0078D4 dots, symbolSize:10, no visualMap.");
 
+    }
+
+    private static void ValidateAdvancedOptions(string options)
+    {
+        if (string.IsNullOrWhiteSpace(options))
+            throw new ArgumentException("Advanced chart options are required.", nameof(options));
+        if (options.Length > 100_000)
+            throw new ArgumentException("Advanced chart options exceed the 100 KB limit.", nameof(options));
+
+        using var document = JsonDocument.Parse(options);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Advanced chart options must be a JSON object.", nameof(options));
+        ValidateNode(document.RootElement, false, 0);
+    }
+
+    private static void ValidateNode(JsonElement node, bool isTooltip, int depth)
+    {
+        if (depth > 30)
+            throw new ArgumentException("Advanced chart options exceed the maximum nesting depth.");
+
+        if (node.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in node.EnumerateObject())
+            {
+                var name = property.Name;
+                if (name.Equals("extraCssText", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("appendTo", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("appendToBody", StringComparison.OrdinalIgnoreCase)
+                    // A string `link` is a clickable URL; `axisPointer.link` is an
+                    // array of axis bindings and stays allowed. `target` is only a
+                    // navigation target next to such a link — in sankey/graph
+                    // `links[].target` is a node name and must keep working.
+                    || (name.Equals("link", StringComparison.OrdinalIgnoreCase)
+                        && property.Value.ValueKind == JsonValueKind.String)
+                    || (name.Equals("target", StringComparison.OrdinalIgnoreCase)
+                        && node.TryGetProperty("link", out _))
+                    || (isTooltip && name.Equals("formatter", StringComparison.OrdinalIgnoreCase)))
+                    throw new ArgumentException($"Advanced chart option '{name}' is not allowed.");
+
+                ValidateNode(
+                    property.Value,
+                    name.Equals("tooltip", StringComparison.OrdinalIgnoreCase),
+                    depth + 1);
+            }
+        }
+        else if (node.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in node.EnumerateArray()) ValidateNode(item, isTooltip, depth + 1);
+        }
+        else if (node.ValueKind == JsonValueKind.String)
+        {
+            var value = node.GetString() ?? "";
+            if (value.Contains("javascript:", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("image://", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Advanced chart options cannot contain executable or remote-image URLs.");
+        }
     }
 }

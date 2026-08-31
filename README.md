@@ -2,186 +2,127 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/Azure-Samples/azure-finops-agent?label=release&color=0078D4)](https://github.com/Azure-Samples/azure-finops-agent/releases/latest)
-[![Live demo](https://img.shields.io/badge/demo-azure--finops--agent.com-0078D4?logo=microsoftazure&logoColor=white)](https://azure-finops-agent.com)
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com)
-[![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org)
-[![Open issues](https://img.shields.io/github/issues/Azure-Samples/azure-finops-agent)](https://github.com/Azure-Samples/azure-finops-agent/issues)
-[![Last commit](https://img.shields.io/github/last-commit/Azure-Samples/azure-finops-agent)](https://github.com/Azure-Samples/azure-finops-agent/commits/main)
+[![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org)
 
-**Replace a multi-week FinOps assessment with a single conversation.**
+**Turn Azure cost, governance, and optimization work into a conversation.**
 
-Quantified savings, a FinOps maturity score, a CFO-ready deck, and ready-to-run remediation scripts — in minutes.
+Azure FinOps Agent analyzes live Azure data, scores FinOps maturity, finds savings, creates charts and executive decks, and generates reviewable remediation scripts. It can read and apply approved non-destructive changes with the signed-in user's delegated permissions; it never deletes Azure resources.
 
-The agent fixes the issue for you, or hands you the az&nbsp;cli script. Read &amp; write on your behalf, never delete. Your tenant. Your tokens. Your control.
-
-## [Try it live →](https://azure-finops-agent.com) &nbsp;&nbsp;&nbsp; [📊 Pitch deck →](https://azure-finops-agent.com/slides)
+[Try the hosted demo](https://azure-finops-agent.com) · [View the presentation](https://azure-finops-agent.com/slides)
 
 ![Azure FinOps Agent](src/Dashboard/frontend/public/og-image.png)
 
-![Azure FinOps Agent screenshot](docs/assets/screenshot-portal.png)
+## Capabilities
 
-## Try it without signing in
-
-No Azure tenant? Two ways to demo:
-
-- **Public pricing questions** — ask about Azure VM SKUs, regions, reservations, savings plans. Agent uses the public Retail Prices API (no auth).
-- **Drop a sample file** — drag any CSV/JSON/XLSX/PDF from [`demo-data/`](demo-data/) into the chat. The agent inspects the schema, runs aggregates, and answers without ever loading the raw payload into the LLM. Includes realistic cost exports, Advisor JSON, audit logs, and FinOps notes.
-
-## Scheduled jobs — your agent on a timer
-
-Save any prompt with a cadence (every 15 min / hourly / daily / weekly) and the agent keeps running it in the background — **even with your browser closed**. Every run lands in the job's own conversation, so you come back to a full history of answers, tables, and charts.
-
-- **GPU hunt & reserve** — the flagship template: checks quota + capacity for H100/H200 sizes across all your subscriptions and regions every 15 minutes, and the moment something is deployable it **secures it by creating an on-demand Capacity Reservation** (idempotent, cost-warned, cleanup via a reviewable script).
-- **One-click templates** — daily cost digest, hourly anomaly watch, budget guard, weekly idle-resource sweep, Advisor watch — or write your own prompt. Choose “run immediately, then repeat” or wait one interval.
-- **Your permissions, nothing more** — background runs re-mint tokens from your delegated Entra sign-in. No app permissions, no admin consent: a job can never do more than your own login allows, and it pauses itself with a “reconnect Azure” status if your refresh token expires.
-- **Guardrails** — max 3 active jobs per user; sub-daily jobs expire after 7 days, daily/weekly after 90; auto-pause after 5 consecutive failures. Deletes are always blocked — removals ship as scripts you review and run yourself.
-
-## How it works
-
-Vue 3 SPA → .NET 10 minimal API → GitHub Copilot SDK → Azure APIs (Cost Management, ARM, Resource Graph, Microsoft Graph, Log Analytics) using your delegated Entra tokens — read + write on your behalf, **never delete**. A background scheduler runs your saved jobs on the same delegated tokens. Hosted on Azure App Service or Container Apps. OpenTelemetry to your Application Insights.
+- Live cost, budget, Advisor, Resource Graph, reservation, and savings-plan analysis
+- Crawl / Walk / Run FinOps maturity scoring with evidence
+- Microsoft Graph, Log Analytics, and Cost Export integrations through incremental consent
+- Public Azure pricing and service-health questions without signing in
+- CSV, TSV, JSON, XLSX, PDF, Parquet, and image analysis
+- Scheduled background jobs with durable run history
+- Charts, HTML presentations, and reviewable Azure CLI or PowerShell scripts
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    U[User] --> FE[Vue 3 SPA]
-    FE --> API[.NET 10 API]
-    API --> SDK[Copilot SDK]
-    API --> SCHED[Job Scheduler] --> SDK
-    SDK --> AOAI[Azure OpenAI]
-    SDK --> TOOLS[Azure Tools]
-    TOOLS --> ARM[ARM / Cost Mgmt]
-    TOOLS --> GRAPH[Microsoft Graph]
-    TOOLS --> LA[Log Analytics]
-    U -. OAuth .-> ENTRA[Entra ID]
-    ENTRA --> API
+    User --> UI[Vue 3 SPA]
+    UI --> API[.NET 10 API]
+    API --> SDK[GitHub Copilot SDK]
+    API --> Jobs[Job Scheduler]
+    Jobs --> SDK
+    SDK --> Model[Azure OpenAI]
+    SDK --> Tools[Azure tools]
+    Tools --> ARM[ARM / Cost Management]
+    Tools --> Graph[Microsoft Graph]
+    Tools --> Logs[Log Analytics]
+    Entra[Microsoft Entra ID] --> API
 ```
 
-## Deploy to Azure (`azd up`)
+The app runs as a Linux container on Azure App Service. Azure Developer CLI provisions Azure Container Registry, Azure OpenAI, monitoring, managed identities, RBAC, App Service, and the optional Entra application.
 
-One command provisions and deploys everything into your own subscription:
+## Deploy to your Azure subscription
+
+### Prerequisites
+
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
+- [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
+- An Azure subscription where you can create resources and role assignments
+- Permission to create an Entra app registration, or an existing app registration to reuse
+
+### Deploy
 
 ```powershell
-az login --tenant <id>                          # sign into the target tenant
-az account set --subscription <id>
-azd auth login                    # sign into azd (same tenant)
-azd up                            # provision + build image + deploy
+az login --tenant <tenant-id>
+az account set --subscription <subscription-id>
+azd auth login
+azd up
 ```
 
-What `azd up` does:
+`azd up` prompts for an environment and region, provisions the stack, builds the image in ACR, and prints the application URL. To reuse existing resources or change defaults, use `azd env set`; see [Azure deployment permissions](docs/azd-up-permissions.md) and [azure.yaml](azure.yaml).
 
-1. Creates a resource group, Log Analytics + Application Insights, Azure Container Registry (Basic, admin disabled), Azure AI Foundry (`AIServices`) account + `gpt-5.6-sol` model deployment, Linux App Service Plan, and the containerised Web App with system-assigned managed identity.
-2. Grants the Web App's MI `AcrPull` on the registry and `Cognitive Services OpenAI User` on the Foundry account (BYOK via managed identity — no API keys).
-3. Creates a multi-tenant Microsoft Entra ID app registration with the 5 incremental-consent permission tiers (ARM, Microsoft Graph, Log Analytics, Azure Storage) — see [setup-entra-app.ps1](src/Dashboard/setup-entra-app.ps1).
-4. Builds the Docker image server-side via `az acr build` (no local Docker daemon required) and restarts the Web App.
+Remove the deployment with:
 
-Override defaults via `azd env set` before running `azd up`:
+```powershell
+azd down --purge
+```
 
-| Variable                                           | Default                      | Notes                                                                                                                                                |
-| -------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AZURE_LOCATION`                                   | _(prompted)_                 | Region for the resource group and most resources. Restricted to the 29 regions where the full stack (incl. gpt-5.6-sol Global Standard) is available |
-| `AZURE_OPENAI_LOCATION`                            | `swedencentral`              | AOAI region. Restricted to the 29 regions offering gpt-5.6-sol Global Standard                                                                       |
-| `APP_SERVICE_PLAN_SKU`                             | `B1`                         | Use `P0V3` for production-grade (~$77/mo vs ~$13/mo)                                                                                                 |
-| `AZURE_OPENAI_MODEL_NAME` / `_VERSION`             | `gpt-5.6-sol` / `2026-07-09` | **Reasoning model required** — the agent sets `ReasoningEffort=xhigh` in code. gpt-4o / gpt-4 will not work.                                         |
-| `AZURE_OPENAI_DEPLOYMENT_NAME`                     | `gpt-5.6-sol`                | Surfaced as `AzureOpenAI__DeploymentName` to the app                                                                                                 |
-| `EXISTING_AOAI_RESOURCE_ID`                        | _(empty)_                    | Full resource ID to reuse an existing AOAI account instead of creating one                                                                           |
-| `AZURE_ENTRA_APP_ID` / `AZURE_ENTRA_CLIENT_SECRET` | _(empty)_                    | Reuse an existing Entra app instead of creating one                                                                                                  |
+## Try without Azure access
 
-Tear down with `azd down --purge` (purge is required because Cognitive Services soft-deletes by default). A `postdown` hook then deletes the Entra app registration that `azd up` created — only when azd created it; a bring-your-own `AZURE_ENTRA_APP_ID` is left untouched — so no orphaned app or secret is left behind.
+- Ask a public pricing or Azure service-health question.
+- Upload a sample from [demo-data](demo-data/README.md).
 
-### Required permissions
-
-`azd up` needs rights on the Azure subscription **and** the Microsoft Entra tenant. The easiest combination is **Owner** on the subscription plus the ability to **create app registrations** in the tenant. For the least-privilege breakdown (Contributor + User Access Administrator, Application Administrator role, resource providers, quota), see [docs/azd-up-permissions.md](docs/azd-up-permissions.md).
-
-## Running Locally
+## Run locally
 
 ### Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Node.js 22+](https://nodejs.org/)
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) — authenticated via `az login`
-- An Azure OpenAI resource with a deployed model (e.g., `gpt-5.6-sol`)
+- Azure CLI authenticated to the tenant containing your Azure OpenAI resource
 
-### One-time secret setup
-
-Secrets are stored via [.NET User Secrets](https://learn.microsoft.com/aspnet/core/security/app-secrets) — **outside the repo**, in your OS user profile. They cannot be accidentally committed.
+### Configure
 
 ```powershell
 cd src/Dashboard
-
-# Required — the app throws InvalidOperationException on startup if this is missing:
-dotnet user-secrets set "AzureOpenAI:Endpoint" "https://YOUR-RESOURCE.openai.azure.com/"
-
-# Optional — set the model deployment name (defaults to gpt-5.6-sol if omitted):
-dotnet user-secrets set "AzureOpenAI:DeploymentName" "gpt-5.6-sol"
-
-# Optional — pin the BYOK token tenant. Set this when your az CLI's DEFAULT
-# account lives in a different tenant than the Azure OpenAI resource
-# (symptom: every AI turn fails with "Token tenant does not match resource tenant"):
-dotnet user-secrets set "AzureOpenAI:TenantId" "TENANT-GUID-OF-YOUR-AOAI-RESOURCE"
-
-# Optional — enables the "Connect Azure" OAuth flow for Cost Management, Advisor, etc.:
-dotnet user-secrets set "Microsoft:ClientId"     "YOUR-ENTRA-APP-CLIENT-ID"
-dotnet user-secrets set "Microsoft:ClientSecret" "YOUR-ENTRA-APP-CLIENT-SECRET"
-dotnet user-secrets set "Microsoft:TenantId"     "common"
-
-# Optional — enables Application Insights telemetry:
-dotnet user-secrets set "ApplicationInsights:ConnectionString" "InstrumentationKey=...;IngestionEndpoint=https://...;"
+dotnet user-secrets set "AzureOpenAI:Endpoint" "https://<your-resource>.openai.azure.com/"
+dotnet user-secrets set "AzureOpenAI:DeploymentName" "<your-deployment>"
 ```
 
-> **`AzureOpenAI:Endpoint` is the only fail-fast key** — the app will not start without it.  
-> All other keys degrade gracefully (Azure connect is disabled, telemetry is skipped, etc.).
+Optional settings:
 
-Run `dotnet user-secrets list` (from `src/Dashboard`) to verify what's stored.
+- `AzureOpenAI:TenantId` when the model resource is in a different tenant from the Azure CLI default
+- `Microsoft:ClientId`, `Microsoft:ClientSecret`, and `Microsoft:TenantId` to enable Azure sign-in locally
+- `ApplicationInsights:ConnectionString` for telemetry
 
-### Build the frontend
+### Build and run
 
 ```powershell
 cd src/Dashboard/frontend
-npm install
-npm run build    # outputs to src/Dashboard/wwwroot/
-```
+npm ci
+npm run build
 
-### Run the backend
-
-```powershell
-cd src/Dashboard
+cd ..
 $env:ASPNETCORE_ENVIRONMENT = "Development"
-dotnet run --project Dashboard.csproj --urls "http://localhost:5000"
+dotnet run --urls http://localhost:5000
 ```
 
-Open **http://localhost:5000**.
+Open [http://localhost:5000](http://localhost:5000).
 
-> If `AzureOpenAI:Endpoint` is not set, the app **intentionally crashes** with an `InvalidOperationException` telling you exactly which `dotnet user-secrets set` command to run. This is the fail-fast safety net.
+## Security
 
-### Where do my secrets live?
+- OAuth uses PKCE, nonce validation, incremental delegated consent, and explicit resource scopes.
+- The user's Azure RBAC and consented scopes remain the effective authorization boundary.
+- Azure `DELETE` and mutating action `POST` operations are blocked in code.
+- Generated downloads and session transcripts are ownership-checked.
+- Production secrets belong in managed identities, App Service settings, or GitHub Actions secrets—not in source control.
 
-User Secrets are stored **outside the repo** — they can never be accidentally committed:
+See [SECURITY.md](SECURITY.md) for reporting vulnerabilities and [docs/session-management.md](docs/session-management.md) for session behavior.
 
-- **Windows:** `%APPDATA%\Microsoft\UserSecrets\1190b8a4-6595-436b-9479-b9951bd00f16\secrets.json`
-- **macOS / Linux:** `~/.microsoft/usersecrets/1190b8a4-6595-436b-9479-b9951bd00f16/secrets.json`
+## Contributing
 
-### Production
-
-In production (Azure App Service), the same configuration keys are sourced from environment variables / App Service application settings via the standard `IConfiguration` environment-variable provider — e.g., `AzureOpenAI__Endpoint`, `Microsoft__ClientId`. Environment variables always take precedence over User Secrets; User Secrets only loads when `ASPNETCORE_ENVIRONMENT=Development`.
-
-## Deployment secrets
-
-The deploy workflow (`deploy.yml`) injects secrets into App Service as application settings at deploy time. Add them under **Settings → Secrets and variables → Actions → New repository secret** in the GitHub UI.
-
-| GitHub Secret name      | App Service setting     | Purpose                                        |
-| ----------------------- | ----------------------- | ---------------------------------------------- |
-| `AZURE_OPENAI_ENDPOINT` | `AzureOpenAI__Endpoint` | Azure OpenAI resource URL — **required**       |
-| `AZURE_CLIENT_ID`       | _(OIDC login)_          | Managed identity / service principal client ID |
-| `AZURE_TENANT_ID`       | _(OIDC login)_          | Azure AD tenant ID                             |
-| `AZURE_SUBSCRIPTION_ID` | _(OIDC login)_          | Target subscription ID                         |
-
-> **Convention:** App Service application settings use `__` (double underscore) to map to .NET `IConfiguration` hierarchy — `AzureOpenAI__Endpoint` maps to `AzureOpenAI:Endpoint`. Follow the same pattern for any future secrets (e.g., `Microsoft__ClientId` → `Microsoft:ClientId`).
->
-> To add a new secret: (1) create it in the GitHub UI, (2) add `KEY="${{ secrets.SECRET_NAME }}"` to the `--settings` list in the `Configure App Service settings` step of `deploy.yml`.
-
-> **Tip for local dev:** Besides `dotnet user-secrets`, you can also export `AzureOpenAI__Endpoint` as a shell environment variable (`$env:AzureOpenAI__Endpoint = "..."` in PowerShell) — environment variables are picked up by `IConfiguration` automatically and take precedence over User Secrets.
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SUPPORT.md](SUPPORT.md), and the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-[MIT](LICENSE) · See [CONTRIBUTING.md](CONTRIBUTING.md) · [Code of Conduct](https://opensource.microsoft.com/codeofconduct/)
+[MIT](LICENSE)
