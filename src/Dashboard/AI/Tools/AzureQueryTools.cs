@@ -151,7 +151,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
                    "  /providers/Microsoft.Management/managementGroups/{mgId}\n" +
                    "  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}\n" +
                    "  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}/billingProfiles/{profileId}\n" +
-                   "Example: POST /subscriptions/abc-123/providers/Microsoft.CostManagement/query?api-version=2025-03-01";
+                   "Example: POST /subscriptions/abc-123/providers/Microsoft.CostManagement/query?api-version=2026-08-01";
         }
         return null;
     }

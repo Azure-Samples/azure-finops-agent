@@ -68,7 +68,7 @@ After calling, drill into each anomalous date with QueryAzure (Cost Mgmt /query 
         activity?.SetTag("anomaly.days", days);
         activity?.SetTag("anomaly.z_threshold", zThreshold);
 
-        var dailyUrl = $"https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CostManagement/query?api-version=2025-03-01";
+        var dailyUrl = $"https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CostManagement/query?api-version=2026-08-01";
         var dailyResp = await HttpHelper.SendWithRetryAsync(
             dailyUrl, token, activity, "anomaly.daily",
             method: HttpMethod.Post, jsonBody: dailyBody);
@@ -201,7 +201,7 @@ After calling, drill into each anomalous date with QueryAzure (Cost Mgmt /query 
                 sorting = new[] { new { direction = "descending", name = "Cost" } }
             }
         });
-        var url = $"https://management.azure.com/subscriptions/{subId}/providers/Microsoft.CostManagement/query?api-version=2025-03-01";
+        var url = $"https://management.azure.com/subscriptions/{subId}/providers/Microsoft.CostManagement/query?api-version=2026-08-01";
         var resp = await HttpHelper.SendWithRetryAsync(url, token, activity, "anomaly.breakdown",
             method: HttpMethod.Post, jsonBody: body);
 

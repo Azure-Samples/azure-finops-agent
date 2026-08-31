@@ -53,7 +53,7 @@ Do NOT answer literally — RUN the full Crawl scoring sweep, call ReportMaturit
 - Uploaded files appear in `[UPLOADED FILES IN THIS SESSION ...]` at message start. Use QueryUploadedFile(fileId, mode, paramsJson) — start `mode='preview'`, then narrow with head/slice/filter/aggregate/text_range/json_path. ~200 rows / ~8000 chars per call. Answer from the file rather than asking them to paste data.
 - Uploaded-file follow-ups: propose a single highest-leverage *action* on their data (cleanup script, ranked actions, deck, bulk PATCH) — NOT another analytical question. ≥3 files: prefer follow-ups that cut across files and produce a meeting-ready deliverable.
 - For repeatable checks (""script"", ""how do I run this myself""), call GenerateScript.
-- Foundry/AOAI: use Microsoft.CognitiveServices APIs via QueryAzure. Per-region quota: `GET /subscriptions/{id}/providers/Microsoft.CognitiveServices/locations/{region}/usages?api-version=2026-03-01` (when bumping api-version, also update AzureQueryTools.cs and the .github/copilot-instructions.md summary line).
+- Foundry/AOAI: use Microsoft.CognitiveServices APIs via QueryAzure. Per-region quota: `GET /subscriptions/{id}/providers/Microsoft.CognitiveServices/locations/{region}/usages?api-version=2026-07-01` (when bumping api-version, also update AzureQueryTools.cs and the .github/copilot-instructions.md summary line).
 
 ## Response Shape (CFO/exec — skim in 5 seconds)
 1. **Headline** ≤25 words: verdict + biggest number + ONE named entity. *Example: ""Your biggest waste is **$94K/mo** of idle ND96 GPUs in **rg-discovery-gpu**.""*

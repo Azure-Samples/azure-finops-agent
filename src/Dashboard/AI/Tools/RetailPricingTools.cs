@@ -1,4 +1,7 @@
 using System.ComponentModel;
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 
 using AzureFinOps.Dashboard.Infrastructure;
@@ -72,6 +75,7 @@ Common queries:
         [Description("Substring match on meterName, e.g. 'Spot' or 'LRS'. Empty = no meter filter.")] string? meterNameContains = null,
         [Description("Substring match on productName, e.g. 'GPT' / 'Llama' / 'Phi' for Foundry Models, or 'Premium SSD' for storage. Foundry productName is a family bucket — use 'GPT' not 'gpt-4'. Empty = no product filter.")] string? productNameContains = null,
         [Description("Currency code (default 'USD'). Supported: USD, EUR, GBP, JPY, NOK, etc.")] string? currencyCode = null,
+        [Description("Set to 'cheapest' to PREPEND a price-sorted summary of the matching rows (one line per row, lowest retailPrice first). Use this for any 'cheapest/lowest/top N regions' question so a SINGLE call answers it — do NOT call this tool once per region and do NOT sort the rows yourself.")] string? rank = null,
         [Description("Max results (default 50, max 100). Lower = faster.")] int top = 50)
     {
         if (string.IsNullOrWhiteSpace(serviceName))
@@ -172,7 +176,52 @@ Common queries:
 
         if (body.Length > 200_000)
             return header + body[..200_000] + $"\n\n[TRUNCATED — {body.Length / 1024}KB total. Add more filters (armRegionName, armSkuName, priceType) to narrow results.]";
-        return header + body;
+        return header + BuildCheapestSummary(rank, body) + body;
+    }
+
+    // "Cheapest N regions" is the single most common pricing question and the
+    // slowest: unsorted rows forced the model to either shell out to sort them
+    // (~19s of a 37s turn) or issue one API call per region (11 calls, 126s).
+    // A pre-sorted digest in front of the untouched JSON removes both. Parsing
+    // is best-effort on purpose — any surprise in the payload falls through to
+    // the raw-JSON contract rather than failing the call.
+    private static string BuildCheapestSummary(string? rank, string body)
+    {
+        if (!string.Equals(rank?.Trim(), "cheapest", StringComparison.OrdinalIgnoreCase))
+            return "";
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("Items", out var items) ||
+                items.ValueKind != JsonValueKind.Array)
+                return "";
+
+            var rows = new List<(double Price, string Line)>();
+            foreach (var it in items.EnumerateArray())
+            {
+                if (!it.TryGetProperty("retailPrice", out var p) ||
+                    !p.TryGetDouble(out var price)) continue;
+                string Str(string name) =>
+                    it.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                        ? v.GetString() ?? "" : "";
+                rows.Add((price,
+                    $"{price.ToString(CultureInfo.InvariantCulture)}\t{Str("armRegionName")}\t{Str("armSkuName")}\t{Str("meterName")}\t{Str("priceType")}"));
+            }
+            if (rows.Count == 0) return "";
+
+            var sb = new StringBuilder();
+            sb.Append("CHEAPEST-FIRST SUMMARY (already sorted — read straight off this, do not re-sort or re-query):\n");
+            sb.Append("retailPrice\tarmRegionName\tarmSkuName\tmeterName\tpriceType\n");
+            foreach (var r in rows.OrderBy(r => r.Price).Take(40))
+                sb.Append(r.Line).Append('\n');
+            if (rows.Count > 40) sb.Append($"[{rows.Count - 40} more rows below in the raw JSON]\n");
+            sb.Append('\n');
+            return sb.ToString();
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            return "";
+        }
     }
 
     // OData single-quote escape: ' → ''
