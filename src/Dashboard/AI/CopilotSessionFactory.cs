@@ -307,6 +307,16 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     // 8-minute Tool:task span inside a 12.7-minute chat turn). FinOps work
     // never needs a sub-agent — the model has direct tools for everything —
     // so exclude it from every session.
+    //
+    // Do NOT add the shell tools (bash / powershell / rg) here. They look like
+    // pure latency — the model uses them as a scratchpad and each call is a full
+    // model round-trip — but they are load-bearing for data-heavy answers.
+    // Measured on "10 cheapest regions for a D4s_v5": 37s with the shells
+    // available, 56s with `bash` excluded (the model just switched to
+    // powershell), and 126s with all three excluded, because it then had to sort
+    // ~100 pricing rows in-context. Sorting in a shell is much cheaper than
+    // reasoning over the rows. The fix for that query is to make the pricing
+    // tool return pre-sorted data, not to take the shells away.
     private static readonly string[] ExcludedBuiltInTools = { "task" };
 
     private CopilotSessionFactory(
