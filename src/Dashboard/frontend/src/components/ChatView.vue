@@ -2484,6 +2484,11 @@ const input = ref("");
 // glance which conversation is still working. Sentinel "__pending__" is used
 // while a brand-new session is waiting for the backend to assign its id.
 const runningSessions = reactive(new Set());
+// Bumped only when the user deliberately changes what they are looking at
+// (New chat / picking another conversation). A turn compares this against the
+// value it captured at send time to decide whether its answer still belongs on
+// screen — see isActiveView() in send().
+let viewEpoch = 0;
 // `streaming` is derived: true iff the currently-viewed session has an
 // in-flight stream. This lets the user navigate to a different session
 // while another keeps running in the background — the input box is only
@@ -3934,6 +3939,7 @@ function askJobQuick(kind) {
 
 async function newSession() {
   if (clearing.value) return;
+  viewEpoch++;
   // Note: we do NOT abort an in-flight stream here. If another session is
   // running in the background, let it keep running — the SSE handlers will
   // detect that the user has navigated away and stop writing to the UI.
@@ -3983,6 +3989,7 @@ async function newSession() {
 
 async function selectSession(sessionId) {
   if (!sessionId || sessionId === currentSessionId.value) return;
+  viewEpoch++;
   // Allow switching even if another session is streaming in the background;
   // the in-flight SSE handlers will detect the navigation and skip UI writes.
   try {
@@ -6684,8 +6691,19 @@ async function send() {
   // invalidate any probe watching a previous turn.
   inFlightTurn = { sid: streamingId, prompt };
   zombieProbeToken++;
-  const isActiveView = () =>
-    streamingId === (currentSessionId.value || "__pending__");
+  // "Is this turn's answer still what the user is looking at?" Deliberately
+  // NOT a currentSessionId match: loadSessions() runs in send()'s finally and
+  // nulls currentSessionId for ANONYMOUS users, so a real streamingId stopped
+  // matching mid-turn and the finished answer was dropped without a trace
+  // (production telemetry: 8 of 60 turns committed answerLen=0). Only an
+  // explicit navigation — New chat or picking another conversation — should
+  // stand the view down, and both bump viewEpoch.
+  const startEpoch = viewEpoch;
+  const isActiveView = () => {
+    if (viewEpoch !== startEpoch) return false;
+    const cur = currentSessionId.value;
+    return cur === null || cur === streamingId;
+  };
   streamBuffer.value = "";
   activeTools.value = [];
   forceScrollToBottom(true);

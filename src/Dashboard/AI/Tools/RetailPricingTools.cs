@@ -66,7 +66,7 @@ Common queries:
 
     private static async Task<string> GetAzureRetailPricing(
         [Description("Service name, e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Foundry Models'. REQUIRED.")] string serviceName,
-        [Description("ARM region (lowercase, no spaces), e.g. 'eastus', 'westeurope'. Empty = all regions.")] string? armRegionName = null,
+        [Description("ARM region (lowercase, no spaces), e.g. 'eastus', 'westeurope'. Pass a COMMA-SEPARATED LIST to compare regions in ONE call, e.g. 'eastus,westeurope,swedencentral' — always do this instead of calling the tool once per region. Empty = all regions.")] string? armRegionName = null,
         [Description("ARM SKU name, e.g. 'Standard_D4s_v5'. Empty = all SKUs.")] string? armSkuName = null,
         [Description("Price type: 'Consumption' (PAYG), 'Reservation' (1y/3y RI), 'DevTestConsumption'. Empty = all.")] string? priceType = null,
         [Description("Substring match on meterName, e.g. 'Spot' or 'LRS'. Empty = no meter filter.")] string? meterNameContains = null,
@@ -82,7 +82,26 @@ Common queries:
         var isFoundry = serviceName.Trim().Equals("Foundry Models", StringComparison.OrdinalIgnoreCase);
 
         var filters = new List<string> { $"serviceName eq '{Esc(serviceName)}'" };
-        if (!string.IsNullOrWhiteSpace(armRegionName)) filters.Add($"armRegionName eq '{Esc(armRegionName.Trim().ToLowerInvariant())}'");
+        // Multi-region in ONE call: a 3-region comparison used to cost 3 sequential
+        // model round-trips (~2.5s each) to fetch data the API returns in ~230ms.
+        var regionCount = 0;
+        if (!string.IsNullOrWhiteSpace(armRegionName))
+        {
+            var regions = armRegionName
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(r => r.ToLowerInvariant())
+                .Distinct()
+                .ToList();
+            regionCount = regions.Count;
+            if (regions.Count == 1)
+                filters.Add($"armRegionName eq '{Esc(regions[0])}'");
+            else if (regions.Count > 1)
+                filters.Add("(" + string.Join(" or ", regions.Select(r => $"armRegionName eq '{Esc(r)}'")) + ")");
+        }
+        // Rows are shared across the requested regions, so the default cap could
+        // truncate a region away entirely and silently skew the comparison.
+        if (regionCount > 1)
+            top = Math.Clamp(Math.Max(top, 25 * regionCount), 1, 100);
         if (!string.IsNullOrWhiteSpace(armSkuName)) filters.Add($"armSkuName eq '{Esc(armSkuName.Trim())}'");
         if (!string.IsNullOrWhiteSpace(priceType)) filters.Add($"priceType eq '{Esc(priceType.Trim())}'");
         if (!string.IsNullOrWhiteSpace(meterNameContains)) filters.Add($"contains(meterName, '{Esc(meterNameContains.Trim())}')");

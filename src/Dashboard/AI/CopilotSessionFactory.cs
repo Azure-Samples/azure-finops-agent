@@ -411,14 +411,19 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         sharedTools.AddRange(ChartTools.Create(chartLogger));
         sharedTools.AddRange(FollowUpTools.Create());
         sharedTools.AddRange(ScoreTools.Create());
+        // Pricing and estimates are the most-asked questions (the sidebar leads with
+        // "Compare VM pricing by region"), and deferring them costs a `skill` +
+        // `view` tool-search pair — 2 extra model round-trips and ~2.3s — before the
+        // real call. Measured: a stable prefix is 99.9% cache-hit (6084/6093 tokens),
+        // so carrying these schemas every turn is far cheaper than the round-trips.
+        sharedTools.AddRange(RetailPricingTools.Create());
+        sharedTools.AddRange(CostEstimateTools.Create());
         // COLD PATH — defer=Auto: the CLI loads these on demand via tool search.
         // Cuts ~15-20K input tokens of tool schemas per round-trip (measured:
         // fresh "hi" carried 26K input tokens with everything always-on).
         sharedTools.AddRange(DeferredTool.WrapAll(HealthTools.Create()));
         sharedTools.AddRange(DeferredTool.WrapAll(HtmlPresentationTools.Create()));
         sharedTools.AddRange(DeferredTool.WrapAll(ScriptTools.Create()));
-        sharedTools.AddRange(DeferredTool.WrapAll(RetailPricingTools.Create()));
-        sharedTools.AddRange(DeferredTool.WrapAll(CostEstimateTools.Create()));
         sharedTools.AddRange(DeferredTool.WrapAll(MaturityReportTools.Create()));
         sharedTools.AddRange(DeferredTool.WrapAll(WebFetchTools.Create()));
 
