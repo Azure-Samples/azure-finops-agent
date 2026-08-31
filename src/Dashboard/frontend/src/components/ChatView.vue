@@ -4715,6 +4715,19 @@ async function clearMessages() {
 }
 
 function stopGeneration() {
+  // Aborting only the client fetch leaves the turn running server-side AND the
+  // one-turn-per-session gate held, so the next prompts bounce back as "busy" and
+  // read as empty answers. Tell the server to abort the turn too. keepalive so it
+  // still goes out if the page is being unloaded.
+  const sid = currentSessionId.value;
+  if (sid && sid !== "__pending__") {
+    fetch("/api/chat/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: sid }),
+      keepalive: true,
+    }).catch(() => {});
+  }
   if (abortController) {
     abortController.abort();
     abortController = null;
@@ -7145,16 +7158,28 @@ async function send() {
     // the user is still viewing this stream's session. Otherwise the
     // server has already persisted it and the user will see it via the
     // /messages reload when they navigate back.
+    const hasRenderableAnswer =
+      clean.length > 0 || charts.length > 0 || !!streamHtml || !!streamScript;
     if (isActiveView()) {
-      console.log(
-        "[push assistant] live-stream commit. content length=",
-        clean.length,
-        "first 80=",
-        clean.slice(0, 80),
-        "messages.length now=",
-        messages.value.length + 1,
-      );
-      messages.value.push(msgObj);
+      if (!hasRenderableAnswer) {
+        // Turn ended with nothing to render. Pushing the empty bubble here is
+        // what makes it look like the app swallowed the question — the single
+        // most-reported symptom. Say it plainly instead so the user can retry.
+        setNotice(
+          "empty",
+          "⚠️ That turn finished without an answer — nothing was returned. Please try again.",
+        );
+      } else {
+        console.log(
+          "[push assistant] live-stream commit. content length=",
+          clean.length,
+          "first 80=",
+          clean.slice(0, 80),
+          "messages.length now=",
+          messages.value.length + 1,
+        );
+        messages.value.push(msgObj);
+      }
     }
     window.__trackAppInsightsEvent?.("chat.stream.done", {
       sessionId: streamingId,
@@ -7163,6 +7188,7 @@ async function send() {
       toolCount: String(toolCalls.length),
       committedToView: String(isActiveView()),
       hadDeltas: String(hasDeltas),
+      renderable: String(hasRenderableAnswer),
     });
   } catch (err) {
     // Was this abort OUR zombie-recovery (frozen background tab) rather than
@@ -7176,13 +7202,24 @@ async function send() {
         elapsedMs: String(Math.round(performance.now() - t0)),
         partialLen: String(streamBuffer.value.length),
       });
-      if (streamBuffer.value && isActiveView()) {
-        messages.value.push({
-          role: "assistant",
-          content: streamBuffer.value + "\n\n*(generation stopped)*",
-          toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
-          charts: [...charts],
-        });
+      if (isActiveView()) {
+        if (streamBuffer.value) {
+          messages.value.push({
+            role: "assistant",
+            content: streamBuffer.value + "\n\n*(generation stopped)*",
+            toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
+            charts: [...charts],
+          });
+        } else {
+          // Stopped before any text arrived — the common case (every Stop in
+          // telemetry had partialLen 0). Without a marker the question is left
+          // with no reply at all, which looks identical to the app silently
+          // dropping it.
+          messages.value.push({
+            role: "system",
+            content: "⏹ Stopped — no answer was generated for this message.",
+          });
+        }
       }
     } else if (isActiveView()) {
       window.__trackAppInsightsEvent?.("chat.stream.severed", {

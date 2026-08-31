@@ -818,6 +818,77 @@ public static class ChatEndpoints
             ctx.Response.StatusCode = 202;
             return ctx.Response.WriteAsJsonAsync(new { warming = true });
         });
+
+        // Explicit user Stop. A bare browser disconnect is deliberately NOT a stop
+        // (see the RequestAborted comment in /api/chat) — the turn keeps running so
+        // an away user still gets their answer. But a real Stop press must abort the
+        // CLI turn: the one-turn-per-session gate is only released once the turn
+        // ends, so without this the user stays locked out for as long as the model
+        // keeps generating and every follow-up prompt bounces as "busy" — which
+        // reads as the app silently swallowing messages.
+        app.MapPost("/api/chat/stop", async (HttpContext ctx) =>
+        {
+            var userJson = ctx.Session.GetString("user");
+            if (userJson is null) { ctx.Response.StatusCode = 401; return; }
+
+            var user = JsonSerializer.Deserialize<JsonElement>(userJson);
+            var userId = user.GetProperty("id").GetInt64();
+
+            string? entraOid = null;
+            var azureUserJson = ctx.Session.GetString("azure_user");
+            if (azureUserJson is not null)
+            {
+                try
+                {
+                    var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("objectId", out var oidProp))
+                        entraOid = oidProp.GetString();
+                }
+                catch { /* ignore malformed session blob */ }
+            }
+
+            string? sessionId = null;
+            try
+            {
+                var body = await JsonSerializer.DeserializeAsync<JsonElement>(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+                if (body.TryGetProperty("sessionId", out var sid)) sessionId = sid.GetString();
+            }
+            catch { /* malformed body handled by the null check below */ }
+
+            if (string.IsNullOrWhiteSpace(sessionId)) { ctx.Response.StatusCode = 400; return; }
+
+            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted))
+            {
+                ctx.Response.StatusCode = 404;
+                return;
+            }
+
+            // Only free the gate once the turn is provably dead (or was never live).
+            // Releasing it after a failed abort would let a new turn interleave with
+            // one still generating into the same CLI session — the exact race the
+            // gate exists to prevent.
+            var released = true;
+            if (telemetry.LiveSessions.TryGetValue(sessionId, out var live))
+            {
+                try
+                {
+                    using var abortCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await live.Session.AbortAsync(abortCts.Token);
+                }
+                catch (Exception ex)
+                {
+                    // Expected condition, not a fault: log without the exception
+                    // object so it lands in AppTraces rather than AppExceptions.
+                    released = false;
+                    logger.LogInformation(
+                        "Abort failed for session {SessionId}; leaving turn gate held: {Reason}",
+                        sessionId, ex.Message);
+                }
+            }
+
+            if (released) EndTurn(sessionId);
+            await ctx.Response.WriteAsJsonAsync(new { stopped = released });
+        });
     }
 
     private static async Task HandleSessionEventAsync(

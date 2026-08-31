@@ -150,6 +150,19 @@ public sealed class PersistentIdentity
             if (rec is not null) _userIdToOid[rec.UserId] = rec.Oid;
             return rec;
         }
+        catch (CryptographicException ex)
+        {
+            // Same expected condition the cookie path above already swallows: the
+            // key rotated out of the ring (90-day default) or the record predates
+            // this deployment. Drop the cookie so the next request short-circuits
+            // instead of re-reading a permanently unreadable file, and log WITHOUT
+            // the exception object — passing it emits one AppExceptions row per
+            // request per user, which on a rotation trips the >10-in-15-min alert.
+            ctx.Response.Cookies.Delete(IdentityCookieName);
+            _logger.LogInformation(
+                "Identity record unreadable, re-auth required: {Reason}", ex.Message);
+            return null;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to load identity from {Path}", path);
@@ -241,6 +254,12 @@ public sealed class PersistentIdentity
             existing.UpdatedUtc = DateTimeOffset.UtcNow;
             AtomicWrite(path, _protector.Protect(JsonSerializer.Serialize(existing)));
             _userIdToOid[existing.UserId] = existing.Oid;
+        }
+        catch (CryptographicException ex)
+        {
+            _logger.LogInformation(
+                "Identity record for oid={Oid} unreadable (key rotated); skipping update: {Reason}",
+                oid, ex.Message);
         }
         catch (Exception ex)
         {
