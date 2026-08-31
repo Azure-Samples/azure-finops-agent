@@ -68,6 +68,15 @@ public static class ChatEndpoints
     internal static void EndTurn(string sessionId) => ActiveTurns.TryRemove(sessionId, out _);
 
     /// <summary>
+    /// Prepended to trivial turns so a greeting costs one model round-trip
+    /// instead of model → tool → model.
+    /// </summary>
+    private const string TrivialTurnDirective =
+        "[Turn style: this is a greeting or small talk. Reply in ONE short sentence, "
+        + "optionally naming a couple of things you can help with inline. Do NOT call any tools. "
+        + "Do NOT emit tables, headings, bullet lists or charts.]";
+
+    /// <summary>
     /// Conservative trivial-prompt classifier for per-turn effort routing.
     /// Only short prompts with NO FinOps/data signal qualify — a misclassified
     /// deep question would get shallow reasoning, so bias heavily toward false.
@@ -402,6 +411,14 @@ public static class ChatEndpoints
                     contextBits.Add(uploadsContext);
                     LastUploadsContext[activeSessionId] = uploadsContext;
                 }
+                // A greeting does not need the agent machinery. Measured on prod:
+                // "hello" spent 6.25s to first token because the model made an
+                // extra round-trip to call SuggestFollowUp and rendered a markdown
+                // capability table, while the same deployment called directly
+                // answers in ~1s. Steering trivial turns to a direct one-line reply
+                // removes the tool round-trip and the table.
+                if (trivialTurn)
+                    contextBits.Add(TrivialTurnDirective);
                 if (contextBits.Count > 0)
                     prompt = string.Join("\n", contextBits) + "\n" + prompt;
 
