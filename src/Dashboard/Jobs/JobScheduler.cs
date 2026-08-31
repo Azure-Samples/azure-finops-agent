@@ -229,6 +229,19 @@ public sealed class JobScheduler : BackgroundService
         try
         {
             var (ok, summary) = await RunTurnAsync(job, session, ct);
+            // A deploy, restart or scale-in cancels the host token mid-run. That is
+            // the platform interrupting us, not the job failing — counting it would
+            // spend one of the five strikes that auto-pause the schedule, so a few
+            // deploys in a row could silently disable a perfectly healthy job.
+            // Observed in production: run #63 landed as status=error 30ms after
+            // "Application is shutting down", with its token refresh already 200 OK.
+            if (!ok && ct.IsCancellationRequested)
+            {
+                _logger.LogInformation(
+                    "Job {JobId} '{Name}' interrupted by shutdown mid-run; not counted as a failure, retrying next tick",
+                    job.Id, job.Name);
+                return;
+            }
             job.LastRunUtc = DateTimeOffset.UtcNow;
             job.RunCount++;
             if (ok)
