@@ -3026,6 +3026,65 @@ function clearReconnectNotice() {
   clearNotice("reconnecting");
 }
 
+// ── Terminal turn markers ──
+// One wording for each terminal state, used by the live stream, the transcript
+// replay and the recovery guard alike, so a turn can never be described three
+// different ways depending on which path noticed it.
+const STOPPED_MARKER_TEXT =
+  "⏹ Stopped — no answer was generated for this message.";
+const NO_ANSWER_MARKER_TEXT = "⏹ No answer was generated for this message.";
+
+// ── Stopped-turn registry ──
+// A turn the user explicitly stopped is aborted server-side, so no answer will
+// ever persist for it. Recovery has three entry points (tab return, page reload,
+// severed stream); rather than teach each one the rule, they all funnel through
+// tryRecoverPersistedAnswer, which consults this registry. Survives reload via
+// sessionStorage because the reload path is exactly where it matters.
+const STOPPED_TURNS_KEY = "finops_stopped_turns";
+function stoppedTurnKey(sid, prompt) {
+  return sid + "|" + normText(prompt).slice(0, 200);
+}
+function loadStoppedTurns() {
+  try {
+    return new Set(
+      JSON.parse(sessionStorage.getItem(STOPPED_TURNS_KEY) || "[]"),
+    );
+  } catch {
+    return new Set();
+  }
+}
+function markTurnStopped(sid, prompt) {
+  if (!sid || sid === "__pending__") return;
+  const keys = [...loadStoppedTurns(), stoppedTurnKey(sid, prompt)].slice(-20);
+  try {
+    sessionStorage.setItem(STOPPED_TURNS_KEY, JSON.stringify(keys));
+  } catch {}
+}
+function isTurnStopped(sid, prompt) {
+  return loadStoppedTurns().has(stoppedTurnKey(sid, prompt));
+}
+
+// True when the transcript already ends in an explicit "no answer" marker, i.e.
+// the last question on screen has been resolved as "this will never be answered".
+function transcriptEndsWithNoAnswerMarker() {
+  const last = messages.value[messages.value.length - 1];
+  return (
+    !!last &&
+    last.role === "system" &&
+    (last.content === STOPPED_MARKER_TEXT ||
+      last.content === NO_ANSWER_MARKER_TEXT)
+  );
+}
+
+// Appends the stopped marker unless it is already the last thing on screen.
+function ensureStoppedMarker() {
+  const msgs = messages.value;
+  const last = msgs[msgs.length - 1];
+  if (last && last.role === "system" && last.content === STOPPED_MARKER_TEXT)
+    return;
+  msgs.push({ role: "system", content: STOPPED_MARKER_TEXT });
+}
+
 // Recover the answer for a lost turn from the persisted transcript. Polls the
 // tail until the assistant's answer for THIS prompt appears (instant if it
 // already landed while the tab was away), repaints, then keeps watching
@@ -3039,6 +3098,25 @@ async function tryRecoverPersistedAnswer(sid, promptText) {
   // No specific in-flight turn to recover (empty/new conversation) — never show
   // the "⏳ Reconnecting…" notice or start the poller for nothing.
   if (!String(promptText || "").trim()) return false;
+  // Strongest form of the "nothing to recover" rule, and the one that does not
+  // depend on knowing the session id: the transcript already ENDS in an explicit
+  // "no answer" marker, so there is no answer coming for it. This covers the
+  // first-turn stop, where the server had not yet announced the session id when
+  // the user hit Stop, so the registry below could never have recorded it.
+  if (transcriptEndsWithNoAnswerMarker()) {
+    clearReconnectNotice();
+    return false;
+  }
+  // Single choke point for the "user stopped it" rule — every recovery entry
+  // point lands here. Without this the poller advertises "still being generated"
+  // for the full 15-minute budget and then falsely reports "Connection lost",
+  // for a turn the server already aborted on purpose. Survives a page reload,
+  // where the in-memory marker above is gone.
+  if (isTurnStopped(sid, promptText)) {
+    clearReconnectNotice();
+    ensureStoppedMarker();
+    return false;
+  }
   if (reconcilingSid === sid) return false; // a poller is already on it
   const normPrompt = normText(promptText);
   // "Is this recovering turn still the one on screen?" — the gate for painting
@@ -4011,6 +4089,39 @@ async function reloadSessionTranscript(sessionId) {
       // An empty transcript is just an empty conversation — show the normal
       // empty state (hero + composer), not a pointless "Resumed conversation"
       // pill that then sticks above the first real messages forever.
+      // A persisted assistant turn with nothing renderable (stopped or failed
+      // before producing text) otherwise replays as a bare avatar bubble, which
+      // reads as the app having swallowed the question. Runs after the pop above
+      // so a live streaming turn is never affected.
+      for (let i = 0; i < restored.length; i++) {
+        const m = restored[i];
+        if (
+          m.role === "assistant" &&
+          !(m.content || "").trim() &&
+          !(m.charts || []).length &&
+          !m.html &&
+          !m.script &&
+          !(m.toolCalls || []).length
+        ) {
+          restored[i] = {
+            role: "system",
+            content: NO_ANSWER_MARKER_TEXT,
+          };
+        }
+      }
+      // A user turn with no assistant reply after it (aborted, or lost to a
+      // restart) otherwise renders as a question the app silently ignored. Walk
+      // backwards so each splice can't shift indices we haven't visited. Only
+      // interior turns — the trailing one is owned by the recovery path, which
+      // may still be legitimately waiting on an answer.
+      for (let i = restored.length - 2; i >= 0; i--) {
+        if (restored[i].role === "user" && restored[i + 1].role === "user") {
+          restored.splice(i + 1, 0, {
+            role: "system",
+            content: NO_ANSWER_MARKER_TEXT,
+          });
+        }
+      }
       messages.value = restored;
 
       // Replay any ReportMaturityScore tool calls so the sidebar stars
@@ -7202,6 +7313,11 @@ async function send() {
         elapsedMs: String(Math.round(performance.now() - t0)),
         partialLen: String(streamBuffer.value.length),
       });
+      // Remember the intent: the server aborted this turn, so no answer will ever
+      // persist. On a later reload the restore path must not poll for one.
+      // streamingId can still be "__pending__" when a brand-new conversation is
+      // stopped before the server announces its id, so prefer the resolved one.
+      markTurnStopped(currentSessionId.value || streamingId, prompt);
       if (isActiveView()) {
         if (streamBuffer.value) {
           messages.value.push({
@@ -7217,7 +7333,7 @@ async function send() {
           // dropping it.
           messages.value.push({
             role: "system",
-            content: "⏹ Stopped — no answer was generated for this message.",
+            content: STOPPED_MARKER_TEXT,
           });
         }
       }

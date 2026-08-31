@@ -237,6 +237,19 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     private readonly ILogger _logger;
 
     private readonly SemaphoreSlim _bearerTokenLock = new(1, 1);
+
+    // One session setup at a time per user. /api/chat/warmup (fired when the chat
+    // UI mounts) and the user's first prompt otherwise race: both miss
+    // CurrentSessionId, both fall through to CreateNewAsync, and the user ends up
+    // with TWO sessions — one immediately orphaned. The loser then tries to resume
+    // the winner's id and the SDK throws "Session '…' is already tracked by this
+    // client", which this class handles by creating yet another session. Observed
+    // locally as e2a28805 → f42137a7 → 5d571145 for a single "hi". Serialising
+    // setup per user collapses that back to exactly one session.
+    private readonly ConcurrentDictionary<long, SemaphoreSlim> _userSessionGates = new();
+
+    private SemaphoreSlim GateFor(long userId) =>
+        _userSessionGates.GetOrAdd(userId, static _ => new SemaphoreSlim(1, 1));
     private string? _cachedBearerToken;
     private DateTimeOffset _bearerTokenExpiry = DateTimeOffset.MinValue;
 
@@ -364,12 +377,27 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         // PowerShell credentials exhibit the same pattern. Keep AzureCli (the
         // canonical local-dev path), Environment (CI/explicit config), and
         // ManagedIdentity/WorkloadIdentity (production) in the chain.
+        //
+        // ManagedIdentity is excluded OFF-Azure on purpose. Azure.Identity wraps
+        // MSAL's `managed_identity_all_sources_unavailable` in a FATAL
+        // AuthenticationFailedException (isCredentialUnavailable: false), so
+        // DefaultAzureCredential ABORTS the chain at ManagedIdentity and never
+        // reaches AzureCliCredential. On a dev box (no IMDS at 169.254.169.254)
+        // that turned every chat into "ManagedIdentityCredential authentication
+        // failed", even with a perfectly good `az login`. Probing IMDS also costs
+        // 6 retries against an unreachable address before it gives up.
+        var runningInAzure =
+            Environment.GetEnvironmentVariable("IDENTITY_ENDPOINT") is not null ||
+            Environment.GetEnvironmentVariable("MSI_ENDPOINT") is not null ||
+            Environment.GetEnvironmentVariable("WEBSITE_INSTANCE_ID") is not null;
+
         var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
         {
             ExcludeInteractiveBrowserCredential = true,
             ExcludeVisualStudioCredential = true,
             ExcludeVisualStudioCodeCredential = true,
             ExcludeAzurePowerShellCredential = true,
+            ExcludeManagedIdentityCredential = !runningInAzure,
             // Pin the token tenant to the AOAI resource's tenant when configured
             // (AzureOpenAI:TenantId) — local az CLI defaults may sit in another
             // tenant, and AOAI rejects cross-tenant tokens.
@@ -427,12 +455,26 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
 
     public async Task<CopilotSession> GetCurrentOrCreateAsync(long userId, string userLogin, string? entraOid)
     {
+        var gate = GateFor(userId);
+        await gate.WaitAsync();
+        try
+        {
+            return await GetCurrentOrCreateCoreAsync(userId, userLogin, entraOid);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<CopilotSession> GetCurrentOrCreateCoreAsync(long userId, string userLogin, string? entraOid)
+    {
         // Fast path: user already has a current session id mapped.
         if (_telemetry.CurrentSessionId.TryGetValue(userId, out var currentId))
         {
             try
             {
-                return await GetOrResumeAsync(userId, currentId, userLogin, entraOid);
+                return await GetOrResumeCoreAsync(userId, currentId, userLogin, entraOid);
             }
             catch (Exception ex)
             {
@@ -456,7 +498,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
                 if (mostRecent is not null)
                 {
                     _telemetry.CurrentSessionId[userId] = mostRecent.SessionId;
-                    return await GetOrResumeAsync(userId, mostRecent.SessionId, userLogin, entraOid);
+                    return await GetOrResumeCoreAsync(userId, mostRecent.SessionId, userLogin, entraOid);
                 }
             }
             catch (Exception ex)
@@ -497,6 +539,21 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
     /// history) and re-keys the live cache.
     /// </summary>
     public async Task<CopilotSession> GetOrResumeAsync(long userId, string sessionId, string userLogin, string? entraOid)
+    {
+        var gate = GateFor(userId);
+        await gate.WaitAsync();
+        try
+        {
+            return await GetOrResumeCoreAsync(userId, sessionId, userLogin, entraOid);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    // Caller must already hold the user's session gate.
+    private async Task<CopilotSession> GetOrResumeCoreAsync(long userId, string sessionId, string userLogin, string? entraOid)
     {
         if (_telemetry.LiveSessions.TryGetValue(sessionId, out var live))
         {
