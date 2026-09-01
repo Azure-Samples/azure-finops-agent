@@ -66,6 +66,7 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 ## Tool patterns
 
 - Tools fetch data and return compact raw API JSON unless a bounded projection is explicitly required for performance.
+- XLSX `workbook` inspection returns every sheet's shape, columns, and bounded numeric summaries in one call; reuse it instead of making a second aggregate call when the requested metric is already present.
 - Prefer string parameters; SDK coercion of numeric arguments can be unreliable.
 - Reuse one `CosmosClient`/HTTP client/session where applicable; do not create clients per request.
 - Tools generally do not catch API exceptions internally. Handle failures at system boundaries and let telemetry capture dependency failures.
@@ -97,6 +98,9 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - Two or more independent combinations: one `GetAzureRetailPricingBatch` call.
 - One SKU across regions uses one comma-separated region request.
 - Reuse returned rows; do not invoke shell tools to reparse usable pricing results.
+- The tool holds no per-SKU domain knowledge. Every response carries a `FACETS` block of live distinct field values, and rows are grouped by `meterName`, cheapest-first within each meter.
+- Meter, product and SKU names are not derivable from the ARM SKU (`Standard_ND96asr_v4` meters as `ND96asr_A100_v4`). When such a filter matches zero rows the tool drops it, re-queries on the structural filter alone, and says so — it must never return an empty table.
+- `priceType='Consumption'` includes Spot and Low Priority. Comparisons stay within one `meterName`, and answers default to the ordinary on-demand meter unless another variant was requested.
 - Foundry model comparisons must use the intended deployment tier/zone and must not silently choose Batch, cached, or Data Zone rows when Standard Global was requested.
 
 ### Charts and generated files

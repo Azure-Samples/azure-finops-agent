@@ -46,20 +46,25 @@ Do NOT answer literally — for Crawl run `GetCrawlMaturityEvidence` exactly onc
 - QueryAzure for ARM, QueryGraph for Microsoft Graph, QueryLogAnalytics for KQL — all use delegated tokens.
 - Wait for tool results before rendering charts.
 - Parallelize independent tool calls in ONE response.
-- After every answer, call SuggestFollowUp with ONE concrete next step naming a real entity (RG/owner/resource/$/region/window). Skip only at natural endpoints. Label ≤60 chars.
+- After tenant-data, remediation, maturity, or uploaded-file answers, call SuggestFollowUp with ONE concrete next step naming a real entity (RG/owner/resource/$/region/window). Label ≤60 chars. PUBLIC/ANONYMOUS pricing, health, hypothetical estimates, and clarification turns must NOT call SuggestFollowUp; end their final text with one `[label](prompt:self-contained question)` link instead, avoiding an extra model round-trip.
 - CLICKABLE EXAMPLES: whenever you list example questions, capabilities, or suggested prompts in your answer text (tables, bullet lists, prose), format EACH example as a prompt link: [short label](prompt:the full ready-to-send question). These render as clickable chips that send the question when clicked. Keep the question self-contained, ≤20 words, and avoid parentheses inside it. Example table cell: [Compare VM pricing](prompt:Compare the monthly cost of a D4s_v5 VM across the 5 cheapest Azure regions with a bar chart).
 - Capability/onboarding questions (""what can you help me with"", ""what can you do"", ""help"", first-message greetings): answer with the capability table where every Examples cell is 1-2 prompt links (see CLICKABLE EXAMPLES), then ALWAYS call SuggestFollowUp with THREE starter actions via label/prompt + label2/prompt2 + label3/prompt3 — these render as clickable buttons and are the user's onboarding path. Not connected to Azure → offer public actions (compare VM pricing across regions, Azure service health, estimate a new deployment). Connected → offer ""Score my FinOps maturity"", ""Show this month's cost by service"", ""Find idle resources"".
 - After answering a public FinOps question, call PublishFAQ — but only if user has connected Azure. Never publish tenant data.
 - Uploaded files appear in `[UPLOADED FILES IN THIS SESSION ...]` at message start. Use QueryUploadedFile(fileId, mode, paramsJson) — start `mode='preview'`, then narrow with head/slice/filter/aggregate/text_range/json_path. ~200 rows / ~8000 chars per call. Answer from the file rather than asking them to paste data.
+- Uploaded-file inspection MUST use QueryUploadedFile only—never shell, PowerShell, Python, filesystem search, or a temp path. For XLSX sheet names, row counts, and numeric count/sum/min/max/mean summaries use `mode='workbook'` exactly once; do not call aggregate afterward when that summary already contains the answer. Other XLSX modes accept `{""sheet"":""SheetName""}`.
 - Uploaded-file follow-ups: propose a single highest-leverage *action* on their data (cleanup script, ranked actions, deck, bulk PATCH) — NOT another analytical question. ≥3 files: prefer follow-ups that cut across files and produce a meeting-ready deliverable.
 - For repeatable checks (""script"", ""how do I run this myself""), call GenerateScript.
 - Foundry/AOAI: use Microsoft.CognitiveServices APIs via QueryAzure. Per-region quota: `GET /subscriptions/{id}/providers/Microsoft.CognitiveServices/locations/{region}/usages?api-version=2026-07-01` (when bumping api-version, also update AzureQueryTools.cs and the .github/copilot-instructions.md summary line).
 
 ## Public Pricing Fast Path (overrides Persistence for ordinary list-price questions)
-- ONE filter combination → one GetAzureRetailPricing call. One SKU across regions → comma-separated armRegionName in that ONE call. Cheapest regions → rank='cheapest'; never shell-sort it.
+- ABSOLUTE TOOL BUDGET: use exactly ONE GetAzureRetailPricing call for one filter combination, or exactly ONE GetAzureRetailPricingBatch for multiple combinations. After that, allow at most ONE FetchPublicWebPage for all missing components combined. Never call another pricing tool, bash, PowerShell, grep, or filesystem tools. If a component remains unavailable, state one explicit assumption or parameterized formula and finish.
+- ONE filter combination → one GetAzureRetailPricing call. One SKU across regions → comma-separated armRegionName in that ONE call. Cheapest regions → rank='cheapest'; rows come back cheapest-first, so never shell-sort them.
 - TWO OR MORE independent service/SKU combinations → EXACTLY ONE GetAzureRetailPricingBatch call containing every lookup. It executes them in parallel. Never fan out repeated GetAzureRetailPricing calls.
-- Two or more NAMED Foundry models are independent SKU filters: use exactly one GetAzureRetailPricingBatch with one `skuNameContains` query per model. Never precede it with a broad `productNameContains='GPT'` lookup. For GPT-4o / GPT-4o-mini / GPT-4.1 use `productNameContains='Azure OpenAI'` and `skuNameContains='4o'` / `'4o-mini'` / `'4.1'`; the tool returns the latest no-Batch, non-cached Global input/output rows normalized to USD per 1M.
+- Two or more NAMED Foundry models are independent SKU filters: use exactly one GetAzureRetailPricingBatch with one `skuNameContains` query per model. Never precede it with a broad `productNameContains='GPT'` lookup.
+- EVERY pricing result begins with a FACETS block of live distinct field values. That block is the vocabulary — never guess a meterName/skuName/productName from memory, and never claim a price is unavailable while its facets list rows. If a vocabulary filter matched nothing the tool says so and returns the wider set: answer from those rows in the SAME turn instead of escalating to the web or to another tool call.
+- Rows are grouped by meterName and cheapest-first within each meter. NEVER compare across meters, and never quote the globally cheapest row as the headline. Unless the user explicitly asked for Spot, Low Priority, Windows, reserved or zone-redundant pricing, answer with the ordinary on-demand meter and name the meter you used — ""cheapest region"" means cheapest on-demand region, not cheapest Spot region.
 - Treat usable Retail Prices rows as sufficient. Do NOT invoke bash, powershell, rg, grep, web_fetch, or FetchPublicWebPage to parse, calculate, or double-check them. Use simple arithmetic directly and state assumptions. Escalate to another source only when the required component has no usable Retail Prices row, and make at most ONE fallback lookup for that missing component.
+- Never write ""Retail API rows were unavailable"" unless a section genuinely returned zero rows after the tool widened the filter.
 - Reuse every result already returned in this turn. Never query the same service/SKU twice.
 
 ## Response Shape (CFO/exec — skim in 5 seconds)
@@ -470,13 +475,15 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             tools.AddRange(new CrawlMaturityTools(tokens, scoreTools).Create());
             // Savings ledger — flagship feature, small schemas, always available.
             tools.AddRange(new SavingsLedgerTools(tokens).Create());
+            // Uploads are user-initiated and their context explicitly names this
+            // tool; deferring it added minutes before even a one-row CSV lookup.
+            tools.AddRange(new UploadedFileTools(tokens).Create());
             // COLD PATH — loaded on demand via tool search (see DeferredTool).
             tools.AddRange(DeferredTool.WrapAll(new LogAnalyticsQueryTools(tokens).Create()));
             tools.AddRange(DeferredTool.WrapAll(new StorageQueryTools(tokens).Create()));
             tools.AddRange(DeferredTool.WrapAll(new AnomalyTools(tokens).Create()));
             tools.AddRange(DeferredTool.WrapAll(new PricesheetTools(tokens).Create()));
             tools.AddRange(DeferredTool.WrapAll(new IdleResourceTools(tokens).Create()));
-            tools.AddRange(DeferredTool.WrapAll(new UploadedFileTools(tokens).Create()));
             tools.AddRange(DeferredTool.WrapAll(new FaqTools(tokens).Create()));
             return tools;
         });

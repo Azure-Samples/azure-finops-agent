@@ -15,61 +15,52 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 public static class RetailPricingTools
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
-    private sealed record BatchRow(int Score, string MeterKey, string Key, string Line);
     private sealed record RetailPage(int Status, string StatusText, string Body);
+
+    private const int MaxProjectedRows = 40;
+    private const int MaxFacetValues = 25;
+
+    private static int RowCount(RetailPage page)
+    {
+        if (page.Status is < 200 or >= 300) return -1;
+        try
+        {
+            using var doc = JsonDocument.Parse(page.Body);
+            return doc.RootElement.TryGetProperty("Items", out var items) && items.ValueKind == JsonValueKind.Array
+                ? items.GetArrayLength()
+                : -1;
+        }
+        catch (JsonException) { return -1; }
+    }
 
     public static IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GetAzureRetailPricing, "GetAzureRetailPricing",
-            @"PUBLIC (no auth): Queries the Azure Retail Prices API for current pay-as-you-go, reservation, and savings plan pricing. Use this BEFORE QueryAzure when comparing SKUs, regions, or estimating cost for a workload that hasn't been deployed yet.
+            @"PUBLIC (no auth): Azure Retail Prices API — pay-as-you-go, reservation and savings-plan rates for any Azure service. Use this BEFORE QueryAzure when comparing SKUs or regions, or costing a workload that is not deployed yet.
 
-CRITICAL FILTERING (always provide as much as possible to keep results small):
-- serviceName: e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Azure App Service', 'Foundry Models' (covers ALL AOAI + open-model inference — the legacy 'Azure OpenAI' serviceName returns 0 rows)
-- armRegionName: e.g. 'eastus', 'westeurope', 'northeurope' (lowercase, no spaces)
-- armSkuName: e.g. 'Standard_D4s_v5', 'Standard_E16ads_v5'
-- priceType: 'Consumption' (PAYG), 'Reservation' (1y/3y RI), 'DevTestConsumption'
-- meterName: e.g. 'D4s v5' for VMs, or 'Hot LRS Data Stored' for storage
+STRUCTURAL FILTERS (safe to supply from what the user named):
+- serviceName (REQUIRED): e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Load Balancer', 'Foundry Models' (covers ALL Azure OpenAI + open-model inference; the legacy 'Azure OpenAI' serviceName returns 0 rows).
+- armRegionName: lowercase, no spaces, e.g. 'eastus'. COMMA-SEPARATE to compare many regions in ONE call. Some services are priced globally rather than per region, so a region filter can legitimately match nothing.
+- armSkuName: the ARM SKU, e.g. 'Standard_D4s_v5'.
+- priceType: 'Consumption' (pay-as-you-go — note this ALSO includes Spot and Low Priority rows), 'Reservation', 'DevTestConsumption'.
+- rank='cheapest': paginate fully so a cheapest-across-regions answer is complete.
 
-Returns up to $top items (default 50, max 100). Note: the API sometimes ignores $top and returns a full page (~1000 rows) — always filter aggressively. For broad surveys, aggregate client-side; never call without filters.
+VOCABULARY FILTERS (meterNameContains / productNameContains / skuNameContains) — DO NOT GUESS THESE. Meter and SKU names are not derivable from the ARM SKU: 'Standard_ND96asr_v4' meters as 'ND96asr_A100_v4'. If your guess matches nothing, the tool automatically drops it, returns the structural result set instead, and tells you it did.
 
-FOUNDRY MODELS (serviceName='Foundry Models') — productName is a FAMILY bucket; the specific model, I/O direction, residency zone, and deployment type all live INSIDE skuName/meterName:
-- productName values: 'Azure OpenAI GPT5', 'Azure OpenAI Reasoning', 'Azure OpenAI Embedding', 'Azure OpenAI Media', 'Azure OpenAI', 'Azure OpenAI PP FT GPT4s' (fine-tune), 'Azure OpenAI OSS Models', 'Azure Phi Models', 'Azure Llama Models', 'Azure Mistral Models', 'Azure Grok Models', 'Azure Deepseek Models', 'Azure Fireworks Models', 'Azure BFL Flux Models', 'Azure Kimi', 'Cohere Models', 'Qwen models', 'MAI Models', 'Azure AI Foundry Provisioned Throughput Reservation', 'Managed Compute'.
-- Use productNameContains='GPT' / 'Llama' / 'Phi' / 'OpenAI' to scope. Do NOT pass model strings like 'gpt-4' to productNameContains — they won't match.
+EVERY RESPONSE STARTS WITH A `FACETS` BLOCK giving the live distinct values of each field. That is the authoritative vocabulary — read it, then filter with those exact strings. It reflects the API right now, so prefer it over anything you remember.
 
-DECODE skuName TOKEN-BY-TOKEN BEFORE QUOTING ANY PRICE (this is where wrong prices come from — every token changes the price):
-- Direction: 'Inp'/'Input' = input · 'Outp'/'Opt'/'Output' = output · 'cd Inp' = CACHED input (only applies to cache hits, far cheaper than normal input).
-- Zone: ends in 'Gl' (or 'glbl') = Global · 'Dz' (or 'dtstr') = Data Zone · 'regnl' = Regional. Different zones are different products at different prices.
-- Deployment: contains 'Batch' = Batch API (async, ~50% off, NOT real-time). NO 'Batch' token = Standard (real-time) — this is the default/headline.
-- Context tier (some reasoning families): 'ShortCo' = short-context · 'LongCo' = long-context · 'PP' = priority processing. Each is a separate price.
+READING THE ROWS: they arrive grouped by meterName, cheapest-first within each meter. Spot, Low Priority, Windows, Reservation, cached-input and regional/zonal variants are all present and are distinguishable via meterName / skuName / type. NEVER compare across different meterName values, and never let the globally cheapest row become the headline.
 
-HOW TO PICK THE RIGHT ROW (the #1 mistake is reporting a cheaper variant as the headline price):
-- HEADLINE pay-as-you-go = Standard + Global: skuName has NO 'Batch', ends in 'Gl', and for input uses 'Inp' (NOT 'cd Inp'). Example (a nano SKU): 'X nano Inp Gl' = input, 'X nano cd Inp Gl' = cached input, 'X nano Opt Gl' = output.
-- prices.azure.com repeats the SAME price across every armRegionName (the value is flat per zone) AND returns every Batch / Data Zone / Regional / cached variant in the same response. So the result set legitimately contains many rows at DIFFERENT prices for one model.
-- NEVER take the minimum retailPrice across rows. The lowest row is almost always Batch + cached — not the real price. Instead, match the EXACT skuName for the variant asked about (default Standard + Global) and report THAT row's retailPrice.
+DEFAULT INTERPRETATION: unless the user explicitly asked for Spot, Low Priority, Windows, reserved or zone-redundant pricing, answer with the ordinary on-demand meter — the meterName carrying no such qualifier — and name the meter you used. A 'cheapest region' question means cheapest on-demand region, not cheapest Spot region.
 
-MANDATORY — ALWAYS STATE THE BASIS OF EVERY PRICE YOU QUOTE. Never give a bare number. Every price MUST be labelled with the full context it is based on:
-  • Deployment type — Standard (real-time) or Batch (async, ~50% off)
-  • Zone — Global / Data Zone / Regional
-  • Direction — input / cached input / output
-  • Context tier (some reasoning families) — ShortContext / LongContext / Priority Processing, when present
-  • Region — the armRegionName (or 'flat across all regions' if it does not vary)
-  • Currency + unit — e.g. USD per 1M tokens
-  Template: '<model>, <Deployment> <Zone>[ , <tier>], <region> — input $X, cached input $Y, output $Z per 1M tokens (<currency>)'.
-  Example: 'a nano model, Global Standard, flat across all regions — input $0.20, cached input $0.02, output $1.25 per 1M tokens (USD)'.
-  In a comparison table, add explicit columns/labels for Deployment, Zone, and Region so the basis is visible per row. Mention Batch / Data Zone / Regional / cached only as clearly-labelled separate options, NEVER as the headline. If you cannot determine the deployment/zone/region for a row, say so rather than guessing.
+UNIT SEMANTICS: retailPrice is the price for ONE `unitOfMeasure` of the WHOLE SKU in armSkuName/skuName. Never multiply it by a core/vCore/GPU/node count that is already part of that SKU name — e.g. armSkuName 'SQLDB_GP_Compute_Gen5_4' / skuName '4 vCore' at 1 Hour is the total hourly price for all 4 vCores, not per vCore. Multiply only by quantity the user asked for (number of instances) and by hours.
 
-MONTHLY / VOLUME COST ESTIMATES — DO NOT DO THE MATH YOURSELF: after you have the per-1M rates, for ANY 'monthly cost', 'cost for N conversations/requests', or model-vs-model total comparison you MUST call EstimateTokenCost with those rates and one shared set of token assumptions, then report ITS numbers verbatim. Hand-computing token costs in prose produces summary tables that disagree with the step-by-step — always delegate the arithmetic to EstimateTokenCost.
-
-Common queries:
-- Compare regions: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + priceType='Consumption'
-- RI vs PAYG: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + armRegionName='eastus' (returns both)
-- Storage tier costs: serviceName='Storage' + armRegionName='eastus' + meterName contains 'LRS'
-- GPT model per-token: serviceName='Foundry Models' + productNameContains='GPT' (returns ALL variants — then pick the exact skuName: no 'Batch', ends 'Gl', 'Inp'/'Opt'/'cd Inp' — for Global Standard; do NOT min across rows)
-- Llama / Phi / Mistral: serviceName='Foundry Models' + productNameContains='Llama' (or 'Phi', 'Mistral')
-- Spot vs on-demand: serviceName='Virtual Machines' + armSkuName='Standard_D4s_v5' + meterName contains 'Spot'");
+MONTHLY / VOLUME TOTALS: call EstimateTokenCost with the per-1M rates instead of doing token arithmetic in prose.");
 
         yield return AIFunctionFactory.Create(GetAzureRetailPricingBatch, "GetAzureRetailPricingBatch",
             @"PUBLIC (no auth): Runs 2-8 independent Azure Retail Prices lookups IN PARALLEL inside ONE tool call. Use this whenever a comparison or estimate needs more than one distinct service/SKU filter. Do NOT call GetAzureRetailPricing repeatedly, and do NOT use bash/powershell/rg/grep to parse or combine pricing rows.
+
+    The tool returns a FACETS block per section with the live distinct field values. If a section's vocabulary filter matched nothing, it is dropped automatically and the wider result set is returned instead — read that section's facets and re-filter from them rather than fetching a pricing web page.
 
 queriesJson is a JSON array. Each object supports: label (required for readable output), serviceName (required), armRegionName, armSkuName, priceType, meterNameContains, productNameContains, skuNameContains, currencyCode, rank, top.
 
@@ -78,7 +69,7 @@ Example — several VM SKUs in one model round-trip:
 
 Example — named Foundry models (go straight to this batch; NEVER run a broad GPT query first):
 [{""label"":""GPT-4o"",""serviceName"":""Foundry Models"",""productNameContains"":""Azure OpenAI"",""skuNameContains"":""4o"",""priceType"":""Consumption"",""top"":50},{""label"":""GPT-4o-mini"",""serviceName"":""Foundry Models"",""productNameContains"":""Azure OpenAI"",""skuNameContains"":""4o-mini"",""priceType"":""Consumption"",""top"":50},{""label"":""GPT-4.1"",""serviceName"":""Foundry Models"",""productNameContains"":""Azure OpenAI"",""skuNameContains"":""4.1"",""priceType"":""Consumption"",""top"":50}]
-For each, the tool returns the latest Standard Global text input/output rows, excluding Batch, cached, Data Zone, Regional, fine-tuning, audio and priority-processing variants, with prices normalized to USD per 1M tokens. Treat that summary as authoritative and do not verify it with another source.
+Foundry sections mix deployment types and residency zones in one result set, so read the skuName facet and quote the variant asked for — real-time Standard Global unless stated otherwise — rather than the cheapest row.
 
 Known-good database filters (East US example):
 - SQL GP Gen5 compute: serviceName='SQL Database', armSkuName='SQLDB_GP_Compute_Gen5_8', productNameContains='Single/Elastic Pool General Purpose - Compute Gen5', meterNameContains='vCore'. Choose the ordinary `vCore` row, not `Zone Redundancy vCore`.
@@ -139,19 +130,14 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         foreach (var result in results)
         {
             output.AppendLine().Append("=== ").Append(result.Label).AppendLine(" ===");
-            output.AppendLine(CompactBatchResult(result.Label, result.Result));
+            output.AppendLine(CompactBatchResult(result.Result));
         }
         return output.ToString();
     }
 
-    // Batch responses must stay below the Copilot CLI's inline-result limit.
-    // Otherwise it writes the payload to a temp file and the model spends one
-    // full round-trip per `view` call reading chunks — measured at 3 extra calls
-    // and ~37 seconds for the 3-tier starter. Keep the decision-relevant fields
-    // from the raw API rows, relevance-rank them by the caller's label, and also
-    // retain the best row for each meter type so mixed compute/storage queries
-    // do not lose a lower-scoring but necessary component.
-    private static string CompactBatchResult(string label, string result)
+    // Cap the payload so the CLI keeps the result inline: past its limit it spills
+    // to a temp file and the model spends a `view` round-trip per chunk.
+    private static string CompactBatchResult(string result)
     {
         var jsonStart = result.IndexOf("{\"BillingCurrency\"", StringComparison.Ordinal);
         if (jsonStart < 0)
@@ -163,44 +149,17 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             if (!doc.RootElement.TryGetProperty("Items", out var items) || items.ValueKind != JsonValueKind.Array)
                 return result.Length <= 8_000 ? result : result[..8_000] + "\n[TRUNCATED]";
 
-            if (result.Contains("serviceName eq 'Foundry Models'", StringComparison.Ordinal))
-            {
-                var billingCurrency = doc.RootElement.TryGetProperty("BillingCurrency", out var currencyElement)
-                    ? currencyElement.GetString() ?? "currency unknown"
-                    : "currency unknown";
-                var paginationComplete = !result.Contains("paginationComplete=False", StringComparison.OrdinalIgnoreCase);
-                var foundrySummary = BuildFoundryStandardGlobalSummary(label, items, billingCurrency, paginationComplete);
-                if (!string.IsNullOrEmpty(foundrySummary)) return foundrySummary;
-            }
-
             static string Str(JsonElement item, string name) =>
                 item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
                     ? value.GetString() ?? ""
                     : "";
             static string Clean(string value) => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
 
-            var tokens = label
-                .Split(new[] { ' ', '-', '_', '/', '(', ')', '×' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(t => t.Trim().ToLowerInvariant())
-                .Where(t => t.Length >= 3 || t.All(char.IsDigit))
-                .Distinct()
-                .ToArray();
-
             var rows = items.EnumerateArray().Select(item =>
             {
-                var region = Str(item, "armRegionName");
-                var armSku = Str(item, "armSkuName");
-                var product = Str(item, "productName");
-                var sku = Str(item, "skuName");
-                var meter = Str(item, "meterName");
-                var unit = Str(item, "unitOfMeasure");
-                var type = Str(item, "type");
-                var term = Str(item, "reservationTerm");
-                var searchable = string.Join(' ', region, armSku, product, sku, meter, unit, type, term).ToLowerInvariant();
-                var score = tokens.Count(searchable.Contains);
                 var price = item.TryGetProperty("retailPrice", out var p) && p.TryGetDouble(out var parsed)
-                    ? parsed.ToString(CultureInfo.InvariantCulture)
-                    : "";
+                    ? parsed
+                    : double.MaxValue;
                 var savings = item.TryGetProperty("savingsPlan", out var sp) && sp.ValueKind == JsonValueKind.Array
                     ? string.Join(',', sp.EnumerateArray().Select(plan =>
                     {
@@ -210,30 +169,52 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                         return $"{Str(plan, "term")}:{planPrice}";
                     }))
                     : "";
-                return new BatchRow(
-                    score,
-                    meter,
-                    string.Join('|', price, region, armSku, product, sku, meter, unit, type, term, savings),
-                    string.Join('\t', price, Clean(region), Clean(armSku), Clean(product), Clean(sku),
-                        Clean(meter), Clean(unit), Clean(type), Clean(term), Clean(savings)));
-            }).ToList();
+                var line = string.Join('\t',
+                    price == double.MaxValue ? "" : price.ToString(CultureInfo.InvariantCulture),
+                    Clean(Str(item, "armRegionName")), Clean(Str(item, "armSkuName")),
+                    Clean(Str(item, "productName")), Clean(Str(item, "skuName")),
+                    Clean(Str(item, "meterName")), Clean(Str(item, "unitOfMeasure")),
+                    Clean(Str(item, "type")), Clean(Str(item, "reservationTerm")), Clean(savings));
+                return (Price: price, Meter: Clean(Str(item, "meterName")), Line: line);
+            })
+            .GroupBy(row => row.Line, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToList();
 
-            var ordered = rows.OrderByDescending(r => r.Score).ThenBy(r => r.MeterKey).ThenBy(r => r.Key).ToList();
-            var selected = new List<BatchRow>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            void Add(BatchRow row)
+            // Round-robin across meterName groups. A flat cheapest-first cut buries
+            // the ordinary on-demand meter under every Spot/Low-Priority row and the
+            // model then quotes Spot as the headline price.
+            var byMeter = rows
+                .GroupBy(row => row.Meter, StringComparer.Ordinal)
+                .Select(group => group.OrderBy(row => row.Price).ToList())
+                .OrderBy(group => group[0].Price)
+                .ToList();
+            var selected = new List<(double Price, string Meter, string Line)>();
+            for (var depth = 0; selected.Count < MaxProjectedRows; depth++)
             {
-                if (seen.Add(row.Key)) selected.Add(row);
+                var added = false;
+                foreach (var group in byMeter)
+                {
+                    if (depth >= group.Count) continue;
+                    selected.Add(group[depth]);
+                    added = true;
+                    if (selected.Count >= MaxProjectedRows) break;
+                }
+                if (!added) break;
             }
-            foreach (var row in ordered.Take(12)) Add(row);
-            foreach (var row in ordered.GroupBy(r => r.MeterKey).Select(g => g.First())) Add(row);
 
             var queryLine = result.Split('\n').FirstOrDefault(line => line.StartsWith("Query: ", StringComparison.Ordinal));
             var output = new StringBuilder();
             if (queryLine is not null) output.AppendLine(queryLine);
-            output.AppendLine($"API rows: {rows.Count}; showing {Math.Min(selected.Count, 24)} relevance-ranked, meter-diverse rows.");
+            output.Append(BuildFacets(items));
+            if (byMeter.Count > 1)
+                output.AppendLine($"These rows span {byMeter.Count} different meterName values. Compare like-for-like WITHIN one meterName; do not mix meters in one comparison.");
+            output.AppendLine(rows.Count <= selected.Count
+                ? $"{rows.Count} distinct row(s), cheapest first within each meter."
+                : $"{rows.Count} distinct rows; showing {selected.Count} spread across meters, cheapest first within each. Narrow using the facet values above.");
             output.AppendLine("retailPrice\tarmRegionName\tarmSkuName\tproductName\tskuName\tmeterName\tunitOfMeasure\ttype\treservationTerm\tsavingsPlan(term:price)");
-            foreach (var row in selected.Take(24)) output.AppendLine(row.Line);
+            foreach (var row in selected.OrderBy(r => r.Meter, StringComparer.Ordinal).ThenBy(r => r.Price))
+                output.AppendLine(row.Line);
             return output.ToString();
         }
         catch (JsonException)
@@ -242,103 +223,37 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         }
     }
 
-    private static string BuildFoundryStandardGlobalSummary(
-        string label,
-        JsonElement items,
-        string currency,
-        bool paginationComplete)
+    // The model cannot guess vocabulary like `ND96asr_A100_v4` from the SKU name
+    // `Standard_ND96asr_v4`, so every response ships the live distinct values.
+    // Measured at ~281 chars for a 382-row payload — 0.12% overhead.
+    private static string BuildFacets(JsonElement items)
     {
-        static string Str(JsonElement item, string name) =>
-            item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-                ? value.GetString() ?? ""
-                : "";
-
-        var normalizedLabel = label.ToLowerInvariant().Replace('-', ' ');
-        var candidates = new List<(string Direction, int VersionRank, DateTimeOffset Effective, string Sku, string Meter, double PerMillion, string Unit)>();
+        var values = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         foreach (var item in items.EnumerateArray())
         {
-            var sku = Str(item, "skuName");
-            var normalized = sku.ToLowerInvariant().Replace('-', ' ');
-            if (!Str(item, "type").Equals("Consumption", StringComparison.OrdinalIgnoreCase))
-                continue;
-            var modelMatches = normalizedLabel.Contains("4o mini", StringComparison.Ordinal)
-                ? normalized.Contains("4o mini", StringComparison.Ordinal)
-                : normalizedLabel.Contains("4o", StringComparison.Ordinal)
-                    ? normalized.Contains("4o", StringComparison.Ordinal) && !normalized.Contains("mini", StringComparison.Ordinal)
-                    : normalizedLabel.Contains("4.1", StringComparison.Ordinal)
-                        ? normalized.Contains("4.1", StringComparison.Ordinal) &&
-                          !normalized.Contains("mini", StringComparison.Ordinal) &&
-                          !normalized.Contains("nano", StringComparison.Ordinal)
-                        : normalized.Contains(normalizedLabel, StringComparison.Ordinal);
-            if (!modelMatches) continue;
-            if (normalized.Contains("batch", StringComparison.Ordinal) ||
-                normalized.Contains("cached", StringComparison.Ordinal) ||
-                normalized.Contains("cchd", StringComparison.Ordinal) ||
-                normalized.Contains("cd inp", StringComparison.Ordinal) ||
-                normalized.Contains("data zone", StringComparison.Ordinal) ||
-                normalized.Contains(" regnl", StringComparison.Ordinal) ||
-                normalized.Contains(" regional", StringComparison.Ordinal) ||
-                normalized.Contains(" ft ", StringComparison.Ordinal) ||
-                normalized.Contains(" dev ", StringComparison.Ordinal) ||
-                normalized.Contains("training", StringComparison.Ordinal) ||
-                normalized.Contains("hosting", StringComparison.Ordinal) ||
-                normalized.Contains("audio", StringComparison.Ordinal) ||
-                normalized.Contains(" aud ", StringComparison.Ordinal) ||
-                normalized.Contains("transcribe", StringComparison.Ordinal) ||
-                normalized.Contains(" tts ", StringComparison.Ordinal) ||
-                normalized.Contains(" tcrb ", StringComparison.Ordinal) ||
-                normalized.Contains(" pp ", StringComparison.Ordinal))
-                continue;
-            if (!(normalized.EndsWith(" gl", StringComparison.Ordinal) ||
-                  normalized.EndsWith(" glbl", StringComparison.Ordinal) ||
-                  normalized.EndsWith(" global", StringComparison.Ordinal)))
-                continue;
-
-            var direction = normalized.Contains(" outp ", StringComparison.Ordinal) ||
-                            normalized.Contains(" output ", StringComparison.Ordinal) ||
-                            normalized.Contains(" opt ", StringComparison.Ordinal)
-                ? "output"
-                : normalized.Contains(" inp ", StringComparison.Ordinal) || normalized.Contains(" input ", StringComparison.Ordinal)
-                    ? "input"
-                    : "";
-            if (direction.Length == 0 ||
-                !item.TryGetProperty("retailPrice", out var priceElement) ||
-                !priceElement.TryGetDouble(out var price))
-                continue;
-
-            var unit = Str(item, "unitOfMeasure");
-            var perMillion = unit.Equals("1K", StringComparison.OrdinalIgnoreCase) ? price * 1000 : price;
-            var versionRank = normalizedLabel.Contains("4o mini", StringComparison.Ordinal)
-                ? normalized.Contains("0718", StringComparison.Ordinal) ? 100 : 0
-                : normalizedLabel.Contains("4o", StringComparison.Ordinal)
-                    ? normalized.Contains("1120", StringComparison.Ordinal) ? 100
-                        : normalized.Contains("0806", StringComparison.Ordinal) ? 90
-                        : normalized.Contains("0513", StringComparison.Ordinal) ? 80
-                        : 0
-                    : 0;
-            _ = DateTimeOffset.TryParse(Str(item, "effectiveStartDate"), CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal, out var effective);
-            candidates.Add((direction, versionRank, effective, sku, Str(item, "meterName"), perMillion, unit));
+            if (item.ValueKind != JsonValueKind.Object) continue;
+            foreach (var property in item.EnumerateObject())
+            {
+                if (property.Value.ValueKind != JsonValueKind.String) continue;
+                var text = property.Value.GetString();
+                if (string.IsNullOrEmpty(text) || text.Length > 120) continue;
+                if (!values.TryGetValue(property.Name, out var set))
+                    values[property.Name] = set = new SortedSet<string>(StringComparer.Ordinal);
+                // Keep one past the cap purely as an overflow flag.
+                if (set.Count <= MaxFacetValues) set.Add(text);
+            }
         }
 
-        var selected = candidates
-            .GroupBy(row => row.Direction, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.OrderByDescending(row => row.VersionRank).ThenByDescending(row => row.Effective).First())
-            .OrderBy(row => row.Direction)
-            .ToList();
-        if (selected.Count < 2) return "";
-
-        var output = new StringBuilder();
-        output.AppendLine(paginationComplete
-            ? "FOUNDRY STANDARD GLOBAL TEXT PRICING — AUTHORITATIVE, COMPLETE; DO NOT VERIFY ELSEWHERE."
-            : "FOUNDRY STANDARD GLOBAL TEXT PRICING — PARTIAL; RETAIL API PAGINATION DID NOT COMPLETE.");
-        output.Append("model\tdirection\t").Append(currency)
-            .AppendLine(" per 1M tokens\tskuName\tmeterName\teffectiveStartDate");
-        foreach (var row in selected)
-            output.Append(label).Append('\t').Append(row.Direction).Append('\t')
-                .Append(row.PerMillion.ToString("0.########", CultureInfo.InvariantCulture)).Append('\t')
-                .Append(row.Sku).Append('\t').Append(row.Meter).Append('\t')
-                .AppendLine(row.Effective.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        var output = new StringBuilder("FACETS (live distinct values — filter with these exact strings):\n");
+        foreach (var (field, set) in values.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+        {
+            if (set.Count <= 1) continue;
+            var truncated = set.Count > MaxFacetValues;
+            output.Append("  ").Append(field).Append(" (");
+            output.Append(truncated ? $"more than {MaxFacetValues}, showing {MaxFacetValues}" : set.Count.ToString(CultureInfo.InvariantCulture));
+            output.Append("): ");
+            output.AppendLine(string.Join(" | ", set.Take(MaxFacetValues)));
+        }
         return output.ToString();
     }
 
@@ -358,8 +273,46 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             return "Error: serviceName is required (e.g. 'Virtual Machines'). Querying without a service filter would return millions of rows.";
 
         top = Math.Clamp(top, 1, 100);
+        serviceName = serviceName.Trim();
         currencyCode = string.IsNullOrWhiteSpace(currencyCode) ? "USD" : currencyCode.Trim().ToUpperInvariant();
-        var isFoundry = serviceName.Trim().Equals("Foundry Models", StringComparison.OrdinalIgnoreCase);
+        var isFoundry = serviceName.Equals("Foundry Models", StringComparison.OrdinalIgnoreCase);
+
+        // The public API's identifiers are not consistently aligned with the Azure
+        // portal/display names callers naturally provide. Normalize the stable,
+        // high-volume aliases here instead of forcing a zero-row response followed
+        // by another model round and a web fallback.
+        if (serviceName.Equals("Virtual Machines", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(armSkuName)
+            && !string.IsNullOrWhiteSpace(meterNameContains))
+        {
+            var compactMeter = meterNameContains.Replace("_", "", StringComparison.Ordinal)
+                .Replace(" ", "", StringComparison.Ordinal);
+            var compactSku = armSkuName.Replace("Standard_", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("_", "", StringComparison.Ordinal)
+                .Replace(" ", "", StringComparison.Ordinal);
+            if (compactSku.Contains(compactMeter, StringComparison.OrdinalIgnoreCase)
+                || compactMeter.Contains(compactSku, StringComparison.OrdinalIgnoreCase))
+                meterNameContains = null;
+        }
+
+        if (serviceName.Equals("Storage", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(armSkuName)
+            && armSkuName.StartsWith("P", StringComparison.OrdinalIgnoreCase)
+            && armSkuName.Contains("LRS", StringComparison.OrdinalIgnoreCase))
+        {
+            skuNameContains ??= armSkuName;
+            productNameContains ??= "Premium SSD Managed Disks";
+            armSkuName = null;
+        }
+
+        if (serviceName.Equals("Load Balancer", StringComparison.OrdinalIgnoreCase)
+            && (string.IsNullOrWhiteSpace(armRegionName)
+                || !armRegionName.Equals("Global", StringComparison.OrdinalIgnoreCase)))
+        {
+            armRegionName = "Global";
+            productNameContains = "Load Balancer";
+            skuNameContains ??= "Standard";
+        }
 
         var filters = new List<string> { $"serviceName eq '{Esc(serviceName)}'" };
         // Multi-region in ONE call: a 3-region comparison used to cost 3 sequential
@@ -370,7 +323,10 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         {
             requestedRegions = armRegionName
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(r => r.ToLowerInvariant())
+                .Select(r => serviceName.Equals("Load Balancer", StringComparison.OrdinalIgnoreCase)
+                    && r.Equals("Global", StringComparison.OrdinalIgnoreCase)
+                        ? "Global"
+                        : r.ToLowerInvariant())
                 .Distinct()
                 .ToList();
             regionCount = requestedRegions.Count;
@@ -389,6 +345,10 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         if (!string.IsNullOrWhiteSpace(productNameContains)) filters.Add($"contains(productName, '{Esc(productNameContains.Trim())}')");
         if (!string.IsNullOrWhiteSpace(skuNameContains)) filters.Add($"contains(skuName, '{Esc(skuNameContains.Trim())}')");
 
+        var vocabularyFilterCount = new[] { meterNameContains, productNameContains, skuNameContains }
+            .Count(value => !string.IsNullOrWhiteSpace(value));
+        var structuralFilters = filters.Take(filters.Count - vocabularyFilterCount).ToList();
+
         var filter = string.Join(" and ", filters);
         var url = $"https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview" +
                   $"&currencyCode={Uri.EscapeDataString(currencyCode)}" +
@@ -402,6 +362,29 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         activity?.SetTag("pricing.top", top);
 
         var firstPage = await FetchRetailPage(url, activity);
+        var vocabularyDropped = false;
+
+        // Meter/product/SKU names are not derivable from the SKU the caller knows
+        // (Standard_ND96asr_v4 meters as ND96asr_A100_v4), so a guess that matches
+        // nothing must widen to the structural filter and let the facets teach the
+        // real values — never hand back an empty table.
+        if (vocabularyFilterCount > 0 && structuralFilters.Count > 0 && RowCount(firstPage) == 0)
+        {
+            var wideFilter = string.Join(" and ", structuralFilters);
+            var widePage = await FetchRetailPage(
+                $"https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview" +
+                $"&currencyCode={Uri.EscapeDataString(currencyCode)}" +
+                $"&$filter={Uri.EscapeDataString(wideFilter)}" +
+                $"&$top={top}", activity);
+            if (RowCount(widePage) > 0)
+            {
+                firstPage = widePage;
+                filter = wideFilter;
+                vocabularyDropped = true;
+            }
+        }
+        activity?.SetTag("pricing.vocabulary_dropped", vocabularyDropped);
+
         var body = firstPage.Body;
         var pageCount = 1;
         var paginationComplete = true;
@@ -506,30 +489,13 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             header += missingRegions.Length == 0
                 ? $"Region coverage: {requestedRegions.Count}/{requestedRegions.Count}.\n"
                 : $"Region coverage incomplete: missing {string.Join(", ", missingRegions)}.\n";
+        if (vocabularyDropped)
+            header += "NOTE: your meter/product/SKU-name filter matched 0 rows and was dropped. "
+                + "These are all rows for the service/region/SKU; pick the right one using the facet values below.\n";
 
-        // Foundry pricing is the one place an agent reliably mis-reads the raw rows: the response
-        // mixes Standard/Batch, Global/DataZone/Regional, and cached/non-cached SKUs (all at
-        // different prices, each repeated per region). The full JSON is still returned below — we
-        // only PREPEND a reminder so the model picks the right skuName instead of the cheapest row.
-        // This is guidance text, not response parsing (raw-JSON contract preserved).
-        if (isFoundry)
-            header +=
-                "FOUNDRY PRICING — READ skuName BEFORE QUOTING: headline PAYG = Standard + Global "
-                + "(skuName has NO 'Batch', ends in 'Gl', input is 'Inp' not 'cd Inp'). The same price "
-                + "repeats across every region, and Batch/DataZone/Regional/cached variants are mixed in "
-                + "at different prices. Match the EXACT variant asked for (default Standard+Global) and "
-                + "state which one you quote. NEVER report the minimum retailPrice across rows.\n";
-
-        var cheapestSummary = BuildCheapestSummary(rank, serviceName, armSkuName, body, paginationComplete, missingRegions);
-        if (!string.IsNullOrEmpty(cheapestSummary))
-            return header + cheapestSummary;
-        if (body.Length > 8_000)
-        {
-            var compactLabel = string.Join(' ', new[] { armSkuName, skuNameContains, productNameContains, meterNameContains, serviceName }
-                .Where(value => !string.IsNullOrWhiteSpace(value)));
-            return header + CompactBatchResult(compactLabel, header + body);
-        }
-        return header + body;
+        // Always project + facet. Raw JSON leaves the model no vocabulary to
+        // self-correct a wrong filter with, and a full page spills to a temp file.
+        return header + CompactBatchResult(header + body);
     }
 
     private static async Task<RetailPage> FetchRetailPage(string url, System.Diagnostics.Activity? activity)
@@ -565,92 +531,6 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         }
 
         return new RetailPage((int)response.StatusCode, response.StatusCode.ToString(), body);
-    }
-
-    // "Cheapest N regions" is the single most common pricing question and the
-    // slowest: unsorted rows forced the model to either shell out to sort them
-    // (~19s of a 37s turn) or issue one API call per region (11 calls, 126s).
-    // A compact, pre-sorted digest removes both. For VM surveys, select the
-    // ordinary commercial Linux PAYG meter (not Windows, Spot, Low Priority,
-    // US Gov/DoD or China), then deduplicate by region. Returning the full page
-    // alongside the summary defeated the optimization because the CLI moved it
-    // to a temp file and the model started shell-parsing it anyway.
-    private static string BuildCheapestSummary(
-        string? rank,
-        string serviceName,
-        string? armSkuName,
-        string body,
-        bool paginationComplete,
-        IReadOnlyCollection<string> missingRegions)
-    {
-        if (!string.Equals(rank?.Trim(), "cheapest", StringComparison.OrdinalIgnoreCase))
-            return "";
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            if (!doc.RootElement.TryGetProperty("Items", out var items) ||
-                items.ValueKind != JsonValueKind.Array)
-                return "";
-
-            var rows = new List<(double Price, string Region, string ArmSku, string Product, string Sku, string Meter, string PriceType)>();
-            foreach (var it in items.EnumerateArray())
-            {
-                if (!it.TryGetProperty("retailPrice", out var p) ||
-                    !p.TryGetDouble(out var price)) continue;
-                string Str(string name) =>
-                    it.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
-                        ? v.GetString() ?? "" : "";
-                rows.Add((price, Str("armRegionName"), Str("armSkuName"), Str("productName"),
-                    Str("skuName"), Str("meterName"), Str("type")));
-            }
-            if (rows.Count == 0) return "";
-
-            IEnumerable<(double Price, string Region, string ArmSku, string Product, string Sku, string Meter, string PriceType)> ranked = rows;
-            // Pay-as-you-go only, for every service: Reservation and DevTest rows
-            // carry a lower unit price and would otherwise win "cheapest".
-            ranked = ranked.Where(r =>
-                !string.IsNullOrWhiteSpace(r.Region) &&
-                r.PriceType.Equals("Consumption", StringComparison.OrdinalIgnoreCase) &&
-                (string.IsNullOrWhiteSpace(armSkuName) ||
-                 r.ArmSku.Equals(armSkuName.Trim(), StringComparison.OrdinalIgnoreCase)));
-            if (serviceName.Trim().Equals("Virtual Machines", StringComparison.OrdinalIgnoreCase))
-            {
-                ranked = ranked.Where(r =>
-                    !r.Region.StartsWith("usgov", StringComparison.OrdinalIgnoreCase) &&
-                    !r.Region.StartsWith("usdod", StringComparison.OrdinalIgnoreCase) &&
-                    !r.Region.StartsWith("china", StringComparison.OrdinalIgnoreCase) &&
-                    !r.Product.Contains("Windows", StringComparison.OrdinalIgnoreCase) &&
-                    !r.Meter.Contains("Spot", StringComparison.OrdinalIgnoreCase) &&
-                    !r.Meter.Contains("Low Priority", StringComparison.OrdinalIgnoreCase));
-            }
-
-            var byRegion = ranked
-                .GroupBy(r => r.Region, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.OrderBy(r => r.Price).First())
-                .OrderBy(r => r.Price)
-                .ToList();
-            if (byRegion.Count == 0) return "";
-
-            var sb = new StringBuilder();
-            sb.Append(paginationComplete && missingRegions.Count == 0
-                ? "CHEAPEST-FIRST SUMMARY (complete, already filtered/sorted — do not re-query, view files, or shell-sort):\n"
-                : "CHEAPEST-FIRST SUMMARY (PARTIAL — pagination or requested-region coverage was incomplete):\n");
-            if (serviceName.Trim().Equals("Virtual Machines", StringComparison.OrdinalIgnoreCase))
-                sb.Append("Basis: commercial Azure regions, Linux standard PAYG; Windows, Spot, Low Priority, US Gov/DoD and China excluded.\n");
-            sb.Append("retailPrice\tarmRegionName\tarmSkuName\tproductName\tskuName\tmeterName\tpriceType\n");
-            foreach (var r in byRegion.Take(40))
-                sb.Append(r.Price.ToString(CultureInfo.InvariantCulture)).Append('\t')
-                    .Append(r.Region).Append('\t').Append(r.ArmSku).Append('\t')
-                    .Append(r.Product).Append('\t').Append(r.Sku).Append('\t')
-                    .Append(r.Meter).Append('\t').Append(r.PriceType).Append('\n');
-            if (byRegion.Count > 40) sb.Append($"[{byRegion.Count - 40} higher-priced regions omitted]\n");
-            sb.Append('\n');
-            return sb.ToString();
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
-        {
-            return "";
-        }
     }
 
     // OData single-quote escape: ' → ''

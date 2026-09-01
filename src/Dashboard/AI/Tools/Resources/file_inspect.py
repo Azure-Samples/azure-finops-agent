@@ -30,6 +30,7 @@ import os
 import sys
 import traceback
 import warnings
+from collections import deque
 from typing import Any
 
 # stdout MUST be pure JSON — route every warning to stderr so a stray
@@ -301,19 +302,226 @@ def _handle_csv(req: dict, raw: bytes) -> dict:
 
 
 def _handle_xlsx(req: dict, path: str) -> dict:
-    import pandas as pd
-    sheet = req.get("sheet")
-    xl = pd.ExcelFile(path, engine="openpyxl")
-    if sheet is None:
-        sheet = xl.sheet_names[0]
-    if sheet not in xl.sheet_names:
-        return _err(f"unknown sheet '{sheet}'", sheets=xl.sheet_names)
-    df = xl.parse(sheet)
-    payload = _tabular_response(df, req, kind="xlsx")
-    if isinstance(payload, dict) and payload.get("ok"):
+    # Importing pandas costs 10-15 seconds on the Windows ARM64 development
+    # path and was repeated for every workbook query. openpyxl is already the
+    # XLSX engine and can stream these operations directly without another
+    # heavyweight import or materialising entire workbooks as data frames.
+    from openpyxl import load_workbook
+
+    def headers_for(values) -> list[str]:
+        headers: list[str] = []
+        seen: dict[str, int] = {}
+        for index, value in enumerate(values):
+            base = str(value).strip() if value is not None and str(value).strip() else f"Column{index + 1}"
+            seen[base] = seen.get(base, 0) + 1
+            headers.append(base if seen[base] == 1 else f"{base}_{seen[base]}")
+        return headers
+
+    def rows_for(ws):
+        iterator = ws.iter_rows(values_only=True)
+        headers = headers_for(next(iterator, ()))
+        for values in iterator:
+            values = tuple(values[: len(headers)])
+            if not any(value is not None for value in values):
+                continue
+            if len(values) < len(headers):
+                values += (None,) * (len(headers) - len(values))
+            yield headers, values
+
+    def row_dict(headers: list[str], values: tuple) -> dict:
+        return {headers[index]: values[index] for index in range(len(headers))}
+
+    def number(value: Any) -> float | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float)):
+            parsed = float(value)
+        else:
+            try:
+                parsed = float(str(value).replace(",", "").strip())
+            except (TypeError, ValueError):
+                return None
+        return parsed if math.isfinite(parsed) else None
+
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet_names = wb.sheetnames
+        if req["mode"] == "workbook":
+            sheets = []
+            for ws in wb.worksheets:
+                iterator = ws.iter_rows(values_only=True)
+                headers = headers_for(next(iterator, ()))
+                stats = [None] * len(headers)
+                total_rows = 0
+                for values in iterator:
+                    values = tuple(values[: len(headers)])
+                    if not any(value is not None for value in values):
+                        continue
+                    total_rows += 1
+                    for index, value in enumerate(values):
+                        parsed = number(value)
+                        if parsed is None:
+                            continue
+                        current = stats[index]
+                        if current is None:
+                            stats[index] = {"count": 1, "sum": parsed, "min": parsed, "max": parsed}
+                        else:
+                            current["count"] += 1
+                            current["sum"] += parsed
+                            current["min"] = min(current["min"], parsed)
+                            current["max"] = max(current["max"], parsed)
+
+                numeric_summaries = {}
+                for index, current in enumerate(stats):
+                    if current is None or len(numeric_summaries) >= 20:
+                        continue
+                    numeric_summaries[headers[index]] = {
+                        "count": current["count"],
+                        "sum": current["sum"],
+                        "min": current["min"],
+                        "max": current["max"],
+                        "mean": current["sum"] / current["count"],
+                    }
+                sheets.append({
+                    "name": ws.title,
+                    "total_rows": total_rows,
+                    "total_columns": len(headers),
+                    "columns": headers[:SCHEMA_MAX_KEYS],
+                    "numeric_summaries": numeric_summaries,
+                })
+            return _ok(
+                kind="xlsx",
+                sheet_count=len(sheets),
+                total_rows=sum(sheet["total_rows"] for sheet in sheets),
+                sheets=sheets,
+            )
+
+        sheet = req.get("sheet") or sheet_names[0]
+        if sheet not in sheet_names:
+            return _err(f"unknown sheet '{sheet}'", sheets=sheet_names)
+        ws = wb[sheet]
+        mode = req["mode"]
+        rows = list(rows_for(ws))
+        headers = rows[0][0] if rows else headers_for(next(ws.iter_rows(values_only=True), ()))
+        data = [values for _, values in rows]
+
+        if mode in ("preview", "schema"):
+            sample = data[: min(int(req.get("rows", PREVIEW_ROWS)), MAX_ROWS_PER_CALL)]
+            dtypes = {}
+            for index, header in enumerate(headers):
+                types = {type(row[index]).__name__ for row in sample if row[index] is not None}
+                dtypes[header] = next(iter(types)) if len(types) == 1 else "object"
+            payload = _ok(
+                kind="xlsx",
+                total_rows=len(data),
+                total_columns=len(headers),
+                columns=headers,
+                dtypes=dtypes,
+            )
+            if mode == "preview":
+                payload["rows"] = [row_dict(headers, row) for row in sample]
+                payload["preview_rows"] = len(sample)
+        elif mode == "count":
+            payload = _ok(kind="xlsx", total_rows=len(data), total_columns=len(headers))
+        elif mode in ("head", "tail", "slice"):
+            count = min(int(req.get("count", PREVIEW_ROWS)), MAX_ROWS_PER_CALL)
+            if mode == "head":
+                selected = data[:count]
+                offset = 0
+            elif mode == "tail":
+                selected = list(deque(data, maxlen=count))
+                offset = max(0, len(data) - len(selected))
+            else:
+                offset = max(0, int(req.get("offset", 0)))
+                selected = data[offset : offset + count]
+            payload = _ok(kind="xlsx", offset=offset, rows=[row_dict(headers, row) for row in selected])
+        elif mode == "aggregate":
+            column = req.get("column")
+            group_by = req.get("group_by")
+            agg = req.get("agg", "sum")
+            if column not in headers:
+                return _err(f"unknown column '{column}'", columns=headers)
+            if group_by and group_by not in headers:
+                return _err(f"unknown group_by column '{group_by}'", columns=headers)
+            if agg not in ("sum", "mean", "min", "max", "count"):
+                return _err(f"unknown aggregate '{agg}'")
+            column_index = headers.index(column)
+            group_index = headers.index(group_by) if group_by else None
+            groups: dict[Any, list[float]] = {}
+            for row in data:
+                parsed = number(row[column_index])
+                if parsed is None:
+                    continue
+                key = row[group_index] if group_index is not None else None
+                if group_index is not None and key is None:
+                    continue
+                groups.setdefault(key, []).append(parsed)
+
+            def aggregate(values: list[float]) -> float | int | None:
+                if not values:
+                    return 0 if agg in ("sum", "count") else None
+                if agg == "sum":
+                    return sum(values)
+                if agg == "mean":
+                    return sum(values) / len(values)
+                if agg == "min":
+                    return min(values)
+                if agg == "max":
+                    return max(values)
+                return len(values)
+
+            if group_by:
+                limit = min(int(req.get("limit", 50)), MAX_ROWS_PER_CALL)
+                values = [(key, aggregate(group)) for key, group in groups.items()]
+                values.sort(key=lambda item: item[1] if item[1] is not None else float("-inf"), reverse=True)
+                payload = _ok(kind="xlsx", agg=agg, group_by=group_by, column=column,
+                              rows=[{group_by: key, agg: value} for key, value in values[:limit]])
+            else:
+                payload = _ok(kind="xlsx", agg=agg, column=column, value=aggregate(groups.get(None, [])))
+        elif mode == "filter":
+            column = req.get("column")
+            op = req.get("op", "eq")
+            expected = req.get("value")
+            if column not in headers:
+                return _err(f"unknown column '{column}'", columns=headers)
+            column_index = headers.index(column)
+            limit = min(int(req.get("limit", 50)), MAX_ROWS_PER_CALL)
+            matches = []
+            total_matches = 0
+            for row in data:
+                actual = row[column_index]
+                try:
+                    if op == "contains":
+                        matched = str(expected).lower() in str(actual).lower()
+                    elif op in ("gt", "lt", "ge", "le"):
+                        left, right = number(actual), number(expected)
+                        matched = left is not None and right is not None and {
+                            "gt": left > right,
+                            "lt": left < right,
+                            "ge": left >= right,
+                            "le": left <= right,
+                        }[op]
+                    elif op == "eq":
+                        matched = actual == expected or str(actual).lower() == str(expected).lower()
+                    elif op == "ne":
+                        matched = not (actual == expected or str(actual).lower() == str(expected).lower())
+                    else:
+                        return _err(f"unknown op '{op}'")
+                except Exception:
+                    matched = False
+                if matched:
+                    total_matches += 1
+                    if len(matches) < limit:
+                        matches.append(row_dict(headers, row))
+            payload = _ok(kind="xlsx", total_matches=total_matches, rows=matches)
+        else:
+            return _err(f"mode '{mode}' not supported for xlsx")
+
         payload["sheet"] = sheet
-        payload["sheets"] = xl.sheet_names
-    return payload
+        payload["sheets"] = sheet_names
+        return payload
+    finally:
+        wb.close()
 
 
 def _handle_parquet(req: dict, path: str) -> dict:

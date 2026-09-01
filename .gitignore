@@ -109,3 +109,7 @@ docs/local/
 # Playwright browser profile (local testing)
 .pw-profile/
 upload-social-preview.mjs
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]

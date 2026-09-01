@@ -63,14 +63,21 @@ public sealed class UploadedFileTools
         yield return AIFunctionFactory.Create(QueryUploadedFile, "QueryUploadedFile",
 @"Inspect or query a file the user dropped into the chat (CSV, TSV, JSON, TXT/log/md, XLSX, PDF, Parquet).
 Each upload is announced at the start of the user's turn with its fileId, kind, size, and a short preview.
-Call this tool to fetch more data — head/tail/slice for rows, schema/count for shape, filter/aggregate for tabular analysis,
+Call this tool to fetch more data — head/tail/slice for rows, schema/count for shape, workbook for all XLSX sheets,
+filter/aggregate for tabular analysis,
 text_range for long text/PDF, json_path for nested JSON. Responses are capped (≤200 rows or ≤8000 chars per call) so make
 multiple calls if you need more.
+
+This tool is the only permitted way to inspect uploaded files. Never use shell, PowerShell, Python, filesystem search, or
+the file's temp path. For XLSX, use `workbook` first: it returns every sheet's shape, columns, and bounded numeric
+count/sum/min/max/mean summaries in ONE call. If that summary answers the question, do not follow it with aggregate.
+Pass `sheet` in paramsJson only when another tabular mode is genuinely needed.
 
 Modes:
   preview     Re-emit the initial preview (rarely needed)
   schema      Columns + dtypes (tabular) or JSON schema tree
   count       Row count
+    workbook    XLSX only: every worksheet's shape, columns, and numeric summaries in one call
   head        First N rows (param: count, default 50, max 200)
   tail        Last N rows (param: count)
   slice       Rows offset..offset+count (params: offset, count)
@@ -87,7 +94,7 @@ Examples:
 
     private async Task<string> QueryUploadedFile(
         [Description("The fileId returned at upload time (12-char hex).")] string fileId,
-        [Description("Operation: preview, schema, count, head, tail, slice, text_range, filter, aggregate, json_path.")] string mode,
+        [Description("Operation: preview, schema, count, workbook, head, tail, slice, text_range, filter, aggregate, json_path.")] string mode,
         [Description("Optional JSON object with mode-specific parameters (see tool description).")] string? paramsJson)
     {
         if (string.IsNullOrWhiteSpace(fileId)) return Json(new { ok = false, error = "fileId required" });

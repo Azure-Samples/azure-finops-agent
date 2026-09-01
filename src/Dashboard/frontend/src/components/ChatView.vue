@@ -2539,6 +2539,22 @@ const chartResizeObservers = [];
 let chartSizePollTimer = null;
 let intentAnimTimer = null;
 
+function disposeMountedCharts() {
+  for (const observer of chartResizeObservers) {
+    try {
+      observer.disconnect();
+    } catch {}
+  }
+  chartResizeObservers.length = 0;
+  for (const instance of chartInstances) {
+    try {
+      instance.__finopsResizeObserver?.disconnect();
+      if (!instance.isDisposed?.()) instance.dispose();
+    } catch {}
+  }
+  chartInstances.length = 0;
+}
+
 // ── Uploaded attachments ────────────────────────────────────────────
 const attachments = ref([]); // [{ fileId, fileName, kind, sizeBytes, uploading?, error? }]
 const dragActive = ref(false);
@@ -4054,18 +4070,7 @@ async function newSession() {
   activeTools.value = [];
   hoveredTool.value = null;
   input.value = "";
-  chartInstances.forEach((c) => {
-    try {
-      c.dispose();
-    } catch {}
-  });
-  chartInstances.length = 0;
-  chartResizeObservers.forEach((ro) => {
-    try {
-      ro.disconnect();
-    } catch {}
-  });
-  chartResizeObservers.length = 0;
+  disposeMountedCharts();
   maturityScores.crawl = null;
   maturityScores.walk = null;
   maturityScores.run = null;
@@ -4077,6 +4082,11 @@ async function newSession() {
       const j = await res.json();
       createdSessionId = j.sessionId || null;
       currentSessionId.value = createdSessionId;
+      if (createdSessionId) {
+        try {
+          sessionStorage.setItem("finops_last_session", createdSessionId);
+        } catch {}
+      }
     } else {
       setNotice("error", "Couldn't start a new conversation.");
     }
@@ -4927,18 +4937,7 @@ async function clearMessages() {
   // a different identity and would otherwise leave stale "live" dots.
   runningSessions.clear();
   input.value = "";
-  chartInstances.forEach((c) => {
-    try {
-      c.dispose();
-    } catch {}
-  });
-  chartInstances.length = 0;
-  chartResizeObservers.forEach((ro) => {
-    try {
-      ro.disconnect();
-    } catch {}
-  });
-  chartResizeObservers.length = 0;
+  disposeMountedCharts();
   // Reset FinOps maturity scores in the sidebar
   maturityScores.crawl = null;
   maturityScores.walk = null;
@@ -6443,11 +6442,20 @@ function mountChart(el, chartData) {
       chartInstances.push(instance);
       instance.__finopsSize = `${el.clientWidth}x${el.clientHeight}`;
       instance.__finopsChartData = chartData;
-      const ro = new ResizeObserver(() =>
-        instance.resize(
-          document.hidden ? { animation: { duration: 0 } } : undefined,
-        ),
-      );
+      const ro = new ResizeObserver(() => {
+        if (
+          !el.isConnected ||
+          instance.isDisposed?.() ||
+          el.clientWidth < 2 ||
+          el.clientHeight < 2
+        )
+          return;
+        try {
+          instance.resize(
+            document.hidden ? { animation: { duration: 0 } } : undefined,
+          );
+        } catch {}
+      });
       ro.observe(el);
       instance.__finopsResizeObserver = ro;
       chartResizeObservers.push(ro);
@@ -6480,6 +6488,8 @@ function resizeMountedCharts() {
   const resize = () => {
     for (const instance of chartInstances) {
       try {
+        const el = instance.getDom?.();
+        if (instance.isDisposed?.() || !el?.isConnected) continue;
         instance.resize(
           document.hidden ? { animation: { duration: 0 } } : undefined,
         );
@@ -6498,7 +6508,12 @@ function pollMountedChartSizes() {
   for (const instance of [...chartInstances]) {
     try {
       const el = instance.getDom?.();
-      if (!el?.isConnected || el.clientWidth < 2 || el.clientHeight < 2)
+      if (
+        instance.isDisposed?.() ||
+        !el?.isConnected ||
+        el.clientWidth < 2 ||
+        el.clientHeight < 2
+      )
         continue;
       const size = `${el.clientWidth}x${el.clientHeight}`;
       if (instance.__finopsSize === size) continue;
@@ -6540,13 +6555,7 @@ function pollMountedChartSizes() {
 }
 
 onBeforeUnmount(() => {
-  chartInstances.forEach((c) => c.dispose());
-  chartResizeObservers.forEach((ro) => {
-    try {
-      ro.disconnect();
-    } catch {}
-  });
-  chartResizeObservers.length = 0;
+  disposeMountedCharts();
   if (jobsTickTimer) clearInterval(jobsTickTimer);
   if (jobsPollTimer) clearInterval(jobsPollTimer);
   if (chartSizePollTimer) clearInterval(chartSizePollTimer);
