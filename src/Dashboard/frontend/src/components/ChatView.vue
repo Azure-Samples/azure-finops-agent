@@ -1089,13 +1089,24 @@
                         >
                       </div>
                     </div>
-                    <a
+                    <div
                       v-if="!msg.html.expired"
-                      :href="'/api/download/html/' + msg.html.fileId"
-                      :download="msg.html.fileName"
-                      class="html-deck-card-btn"
-                      >Download</a
+                      class="html-deck-card-actions"
                     >
+                      <button
+                        type="button"
+                        class="html-deck-card-btn html-deck-card-btn--preview"
+                        @click="openDeckPreview(msg.html)"
+                      >
+                        Preview
+                      </button>
+                      <a
+                        :href="'/api/download/html/' + msg.html.fileId"
+                        :download="msg.html.fileName"
+                        class="html-deck-card-btn"
+                        >Download</a
+                      >
+                    </div>
                     <span
                       v-else
                       class="artifact-expired"
@@ -1346,12 +1357,21 @@
               >
             </div>
           </div>
-          <a
-            :href="'/api/download/html/' + htmlReady.fileId"
-            :download="htmlReady.fileName"
-            class="html-deck-card-btn"
-            >Download</a
-          >
+          <div class="html-deck-card-actions">
+            <button
+              type="button"
+              class="html-deck-card-btn html-deck-card-btn--preview"
+              @click="openDeckPreview(htmlReady)"
+            >
+              Preview
+            </button>
+            <a
+              :href="'/api/download/html/' + htmlReady.fileId"
+              :download="htmlReady.fileName"
+              class="html-deck-card-btn"
+              >Download</a
+            >
+          </div>
         </div>
 
         <!-- Script download (streaming) -->
@@ -1674,7 +1694,7 @@
                 <button
                   v-if="attachments.length > 0"
                   class="input-action-btn"
-                  :disabled="streaming || clearing"
+                  :disabled="streaming || clearing || hasPendingUploads"
                   @click="requestAnalyze()"
                   title="Find biggest cost waste and recommend actions"
                 >
@@ -1757,9 +1777,11 @@
                   v-else
                   class="action-btn"
                   :class="
-                    input.trim() ? 'action-btn--active' : 'action-btn--disabled'
+                    input.trim() && !hasPendingUploads
+                      ? 'action-btn--active'
+                      : 'action-btn--disabled'
                   "
-                  :disabled="!input.trim()"
+                  :disabled="!input.trim() || hasPendingUploads"
                   @click="send"
                 >
                   <svg
@@ -2248,6 +2270,61 @@
     </div>
     <!-- end portal-body -->
 
+    <!-- The preview is a static, vertically scrollable copy with scripts and
+          external resources removed. Its opaque sandbox origin cannot access
+          the app's cookies, storage, DOM, or authenticated APIs. -->
+    <Teleport to="body">
+      <div
+        v-if="deckPreview"
+        ref="deckPreviewOverlayEl"
+        class="deck-preview-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Generated presentation preview"
+        tabindex="-1"
+        @click.self="closeDeckPreview"
+        @keydown.esc="closeDeckPreview"
+      >
+        <div class="deck-preview-modal">
+          <div class="deck-preview-header">
+            <div>
+              <div class="deck-preview-title">Presentation preview</div>
+              <div class="deck-preview-filename">
+                {{ deckPreview.fileName || "Generated presentation" }}
+              </div>
+            </div>
+            <button
+              type="button"
+              class="deck-preview-close"
+              aria-label="Close preview"
+              @click="closeDeckPreview"
+            >
+              ×
+            </button>
+          </div>
+          <div class="deck-preview-body">
+            <div v-if="deckPreviewLoading" class="deck-preview-status">
+              Loading preview…
+            </div>
+            <div
+              v-else-if="deckPreviewError"
+              class="deck-preview-status deck-preview-status--error"
+            >
+              {{ deckPreviewError }}
+            </div>
+            <iframe
+              v-else
+              class="deck-preview-frame"
+              :srcdoc="deckPreviewHtml"
+              sandbox=""
+              referrerpolicy="no-referrer"
+              title="Generated presentation"
+            ></iframe>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- Tool popover -->
     <Teleport to="body">
       <div v-if="hoveredTool" class="tool-popover" @click.stop>
@@ -2460,17 +2537,17 @@ import hljs from "highlight.js/lib/core";
 import hljsJson from "highlight.js/lib/languages/json";
 import "highlight.js/styles/github-dark.css";
 import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  reactive,
-  ref,
-  watch,
+    computed,
+    nextTick,
+    onBeforeUnmount,
+    onMounted,
+    reactive,
+    ref,
+    watch,
 } from "vue";
 import {
-  maturityCategories,
-  pricingCategory,
+    maturityCategories,
+    pricingCategory,
 } from "../data/sidebarCategories.js";
 hljs.registerLanguage("json", hljsJson);
 
@@ -2530,6 +2607,12 @@ const streamIntent = ref("");
 const streamReasoning = ref("");
 const htmlReady = ref(null);
 const scriptReady = ref(null);
+const deckPreview = ref(null);
+const deckPreviewHtml = ref("");
+const deckPreviewLoading = ref(false);
+const deckPreviewError = ref("");
+const deckPreviewOverlayEl = ref(null);
+let deckPreviewRequest = 0;
 const messagesEl = ref(null);
 const inputEl = ref(null);
 const chartInstances = [];
@@ -2537,6 +2620,8 @@ const chartInstances = [];
 // disconnect them (they'd otherwise keep observing detached DOM forever).
 const chartResizeObservers = [];
 let chartSizePollTimer = null;
+let chartSizePollWorker = null;
+let chartSizePollWorkerUrl = "";
 let intentAnimTimer = null;
 
 function disposeMountedCharts() {
@@ -2557,9 +2642,21 @@ function disposeMountedCharts() {
 
 // ── Uploaded attachments ────────────────────────────────────────────
 const attachments = ref([]); // [{ fileId, fileName, kind, sizeBytes, uploading?, error? }]
+const hasPendingUploads = computed(() =>
+  attachments.value.some((att) => att.uploading || (!att.fileId && !att.error)),
+);
 const dragActive = ref(false);
 const fileInputEl = ref(null);
 let dragCounter = 0;
+let sendWaitingForUploads = false;
+
+async function waitForAttachmentUploads(timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (hasPendingUploads.value && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !hasPendingUploads.value;
+}
 
 function openFilePicker() {
   fileInputEl.value?.click();
@@ -2642,7 +2739,6 @@ async function uploadFiles(files) {
         : null,
     };
     attachments.value.push(placeholder);
-    const idx = attachments.value.length - 1;
     try {
       const fd = new FormData();
       fd.append("file", file, file.name);
@@ -2651,9 +2747,24 @@ async function uploadFiles(files) {
       const data = await res.json();
       const result = data.files?.[0];
       if (!result?.ok) throw new Error(result?.error || "upload rejected");
-      // Replace via proxy so Vue picks up the change
+      // Locate by stable uid, never by the original array index: another
+      // attachment may have been removed while this upload was in flight.
+      const idx = attachments.value.findIndex(
+        (att) => att.uid === placeholder.uid,
+      );
+      if (idx < 0) {
+        // The user cleared/removed this chip before the upload completed. The
+        // server now has a fileId, so delist it rather than invisibly attaching
+        // it to the next prompt.
+        try {
+          await fetch(`/api/uploads/${encodeURIComponent(result.fileId)}`, {
+            method: "DELETE",
+          });
+        } catch {}
+        continue;
+      }
       attachments.value[idx] = {
-        ...placeholder,
+        ...attachments.value[idx],
         fileId: result.fileId,
         kind: result.kind,
         sizeBytes: result.sizeBytes,
@@ -2662,11 +2773,16 @@ async function uploadFiles(files) {
         error: null,
       };
     } catch (e) {
-      attachments.value[idx] = {
-        ...placeholder,
-        uploading: false,
-        error: e.message || String(e),
-      };
+      const idx = attachments.value.findIndex(
+        (att) => att.uid === placeholder.uid,
+      );
+      if (idx >= 0) {
+        attachments.value[idx] = {
+          ...attachments.value[idx],
+          uploading: false,
+          error: e.message || String(e),
+        };
+      }
     }
   }
 }
@@ -2678,6 +2794,9 @@ async function removeAttachment(att) {
   // on disk so prior tool-call results in chat history remain valid; full
   // disposal happens on /api/chat/reset or via the 30-min TTL.
   attachments.value = attachments.value.filter((a) => a !== att);
+  // Let Vue unmount the <img> before invalidating its blob URL. Revoking while
+  // the thumbnail is still loading produces a visible console/request error.
+  await nextTick();
   if (att.thumbUrl) {
     try {
       URL.revokeObjectURL(att.thumbUrl);
@@ -2689,6 +2808,32 @@ async function removeAttachment(att) {
         method: "DELETE",
       });
     } catch {}
+  }
+}
+
+async function clearAttachments(notifyServer = true) {
+  const removed = attachments.value;
+  attachments.value = [];
+  await nextTick();
+  for (const att of removed) {
+    if (att.thumbUrl) {
+      try {
+        URL.revokeObjectURL(att.thumbUrl);
+      } catch {}
+    }
+  }
+  if (notifyServer) {
+    await Promise.all(
+      removed
+        .filter((att) => att.fileId)
+        .map(async (att) => {
+          try {
+            await fetch(`/api/uploads/${encodeURIComponent(att.fileId)}`, {
+              method: "DELETE",
+            });
+          } catch {}
+        }),
+    );
   }
 }
 
@@ -4066,7 +4211,7 @@ async function newSession() {
   perSessionCharts.delete("__pending__");
   scriptReady.value = null;
   htmlReady.value = null;
-  attachments.value = [];
+  await clearAttachments();
   activeTools.value = [];
   hoveredTool.value = null;
   input.value = "";
@@ -4694,7 +4839,7 @@ onMounted(async () => {
   document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("focus", onWindowFocus);
   window.addEventListener("resize", resizeMountedCharts);
-  chartSizePollTimer = window.setInterval(pollMountedChartSizes, 1000);
+  startChartSizePolling();
   // Sticky-scroll wiring: manual scrolls toggle following; ResizeObservers
   // keep the view pinned through ANY height change — content growth
   // (thinking panel, streamed text, charts) via .messages-inner, and
@@ -4930,7 +5075,10 @@ async function clearMessages() {
   }
   scriptReady.value = null;
   htmlReady.value = null;
-  attachments.value = [];
+  // /api/chat/reset clears the server bucket in one operation. Pending
+  // uploads that finish after this point detect their missing uid and delist
+  // themselves as well.
+  await clearAttachments(false);
   activeTools.value = [];
   hoveredTool.value = null;
   // Drop any tracked background streams — on logout/reset they belong to
@@ -5293,6 +5441,78 @@ function htmlCardTitle(count) {
 function htmlCardMeta(count) {
   const s = String(count ?? "");
   return htmlCardIsReport(count) ? s : `${s} slides`;
+}
+
+function buildStaticDeckPreview(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc
+    .querySelectorAll(
+      "script, link[rel='stylesheet'], base, object, embed, form",
+    )
+    .forEach((node) => node.remove());
+  doc.querySelectorAll("*").forEach((node) => {
+    for (const attr of [...node.attributes]) {
+      if (attr.name.toLowerCase().startsWith("on"))
+        node.removeAttribute(attr.name);
+    }
+  });
+  doc
+    .querySelectorAll("img[src^='http:'], img[src^='https:']")
+    .forEach((node) => node.remove());
+  const style = doc.createElement("style");
+  style.textContent = `
+    html, body { overflow: auto !important; background: #201f1e !important; }
+    .deck { height: auto !important; display: block !important; }
+    .slide, .slide.active, .slide.prev {
+      position: relative !important; inset: auto !important;
+      min-height: 100vh !important; opacity: 1 !important;
+      visibility: visible !important; transform: none !important;
+      transition: none !important; border-bottom: 1px solid #3b3a39;
+    }
+    .progress, .click-zone, .nav-arrow, .fs-toggle, .dots, .counter, .hint,
+    .notes-panel { display: none !important; }
+  `;
+  doc.head.appendChild(style);
+  return `<!doctype html>${doc.documentElement.outerHTML}`;
+}
+
+async function openDeckPreview(deck) {
+  if (!deck?.fileId) return;
+  const request = ++deckPreviewRequest;
+  deckPreview.value = deck;
+  deckPreviewHtml.value = "";
+  deckPreviewError.value = "";
+  deckPreviewLoading.value = true;
+  await nextTick();
+  deckPreviewOverlayEl.value?.focus();
+  try {
+    const previewUrl = `/api/download/html/${encodeURIComponent(deck.fileId)}?inline=true`;
+    const response = await fetch(previewUrl);
+    if (!response.ok) {
+      throw new Error(
+        response.status === 404
+          ? "This presentation has expired. Ask the agent to regenerate it."
+          : `Preview failed (${response.status}).`,
+      );
+    }
+    const html = await response.text();
+    if (request !== deckPreviewRequest) return;
+    deckPreviewHtml.value = buildStaticDeckPreview(html);
+  } catch (error) {
+    if (request !== deckPreviewRequest) return;
+    deckPreviewError.value =
+      error?.message || "The presentation preview could not be loaded.";
+  } finally {
+    if (request === deckPreviewRequest) deckPreviewLoading.value = false;
+  }
+}
+
+function closeDeckPreview() {
+  deckPreviewRequest++;
+  deckPreview.value = null;
+  deckPreviewHtml.value = "";
+  deckPreviewLoading.value = false;
+  deckPreviewError.value = "";
 }
 
 // Sidebar categories (FinOps maturity Crawl/Walk/Run/Playbook + Pricing) — see data/sidebarCategories.js
@@ -6480,24 +6700,64 @@ function mountChart(el, chartData) {
   }
 }
 
+function remountChartInstance(instance) {
+  const el = instance.getDom?.();
+  if (instance.isDisposed?.() || !el?.isConnected) return;
+  const chartData = instance.__finopsChartData;
+  instance.__finopsResizeObserver?.disconnect();
+  const roIndex = chartResizeObservers.indexOf(instance.__finopsResizeObserver);
+  if (roIndex >= 0) chartResizeObservers.splice(roIndex, 1);
+  const chartIndex = chartInstances.indexOf(instance);
+  if (chartIndex >= 0) chartInstances.splice(chartIndex, 1);
+  instance.dispose();
+  el._echarts_mounted = false;
+  mountChart(el, chartData);
+}
+
 function resizeMountedCharts() {
-  // ResizeObserver and requestAnimationFrame are suspended in hidden tabs
-  // (including VS Code's integrated browser). Viewport changes still dispatch
-  // window.resize. Resize once now and again after flex/media-query layout has
-  // settled; microtasks keep running in hidden documents while rAF does not.
   const resize = () => {
-    for (const instance of chartInstances) {
+    for (const instance of [...chartInstances]) {
       try {
         const el = instance.getDom?.();
         if (instance.isDisposed?.() || !el?.isConnected) continue;
-        instance.resize(
-          document.hidden ? { animation: { duration: 0 } } : undefined,
-        );
+        const size = `${el.clientWidth}x${el.clientHeight}`;
+        if (document.hidden && instance.__finopsSize !== size) {
+          remountChartInstance(instance);
+        } else {
+          instance.resize();
+        }
       } catch {}
     }
   };
+  if (document.hidden) {
+    queueMicrotask(() => queueMicrotask(resize));
+    return;
+  }
   resize();
   queueMicrotask(() => queueMicrotask(resize));
+}
+
+function startChartSizePolling() {
+  try {
+    chartSizePollWorkerUrl = URL.createObjectURL(
+      new Blob(["setInterval(() => postMessage(0), 1000)"], {
+        type: "text/javascript",
+      }),
+    );
+    chartSizePollWorker = new Worker(chartSizePollWorkerUrl);
+    chartSizePollWorker.addEventListener("message", pollMountedChartSizes);
+  } catch {
+    chartSizePollTimer = window.setInterval(pollMountedChartSizes, 1000);
+  }
+}
+
+function stopChartSizePolling() {
+  if (chartSizePollTimer) clearInterval(chartSizePollTimer);
+  chartSizePollTimer = null;
+  chartSizePollWorker?.terminate();
+  chartSizePollWorker = null;
+  if (chartSizePollWorkerUrl) URL.revokeObjectURL(chartSizePollWorkerUrl);
+  chartSizePollWorkerUrl = "";
 }
 
 function pollMountedChartSizes() {
@@ -6518,20 +6778,7 @@ function pollMountedChartSizes() {
       const size = `${el.clientWidth}x${el.clientHeight}`;
       if (instance.__finopsSize === size) continue;
       if (document.hidden) {
-        // ECharts 6 can update only the SVG/canvas viewport while leaving grid
-        // paths and text transforms in the old coordinate system when rAF is
-        // suspended. Dispose/remount forces a complete synchronous layout.
-        const chartData = instance.__finopsChartData;
-        instance.__finopsResizeObserver?.disconnect();
-        const roIndex = chartResizeObservers.indexOf(
-          instance.__finopsResizeObserver,
-        );
-        if (roIndex >= 0) chartResizeObservers.splice(roIndex, 1);
-        const chartIndex = chartInstances.indexOf(instance);
-        if (chartIndex >= 0) chartInstances.splice(chartIndex, 1);
-        instance.dispose();
-        el._echarts_mounted = false;
-        mountChart(el, chartData);
+        remountChartInstance(instance);
         continue;
       }
       instance.__finopsSize = size;
@@ -6558,7 +6805,7 @@ onBeforeUnmount(() => {
   disposeMountedCharts();
   if (jobsTickTimer) clearInterval(jobsTickTimer);
   if (jobsPollTimer) clearInterval(jobsPollTimer);
-  if (chartSizePollTimer) clearInterval(chartSizePollTimer);
+  stopChartSizePolling();
   document.removeEventListener("click", dismissPopover);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("focus", onWindowFocus);
@@ -6968,13 +7215,7 @@ async function sendPrompt(text) {
 
 async function requestAnalyze() {
   // Wait for any in-flight uploads to finish so the prompt always sees the file.
-  const pending = () => attachments.value.some((a) => !a.fileId && !a.error);
-  if (pending()) {
-    const start = Date.now();
-    while (pending() && Date.now() - start < 30000) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
+  if (!(await waitForAttachmentUploads())) return;
   const list = readyAttachments.value;
   if (list.length) {
     const names = list.map((a) => `'${a.fileName}'`).join(", ");
@@ -7019,6 +7260,19 @@ function copyScript(script) {
 
 async function send() {
   if (!props.user || clearing.value) return;
+  // Enter can arrive while an upload is still in flight even though the send
+  // button is disabled. Hold that one send until every attachment has either
+  // completed or failed, and ignore duplicate Enter presses during the wait.
+  if (hasPendingUploads.value) {
+    if (sendWaitingForUploads) return;
+    sendWaitingForUploads = true;
+    try {
+      if (!(await waitForAttachmentUploads())) return;
+    } finally {
+      sendWaitingForUploads = false;
+    }
+  }
+  if (!props.user || clearing.value) return;
   const prompt = input.value.trim();
   if (!prompt) return;
   // Per-session gate: only block sending another prompt to the SAME session
@@ -7039,6 +7293,9 @@ async function send() {
   const consumedImages = attachments.value.filter(isImageAttachment);
   if (consumedImages.length) {
     attachments.value = attachments.value.filter((a) => !isImageAttachment(a));
+    // Remove thumbnail elements before revoking their object URLs; otherwise a
+    // fast send races image decoding and logs net::ERR_FILE_NOT_FOUND.
+    await nextTick();
     for (const img of consumedImages) {
       if (img.thumbUrl) {
         try {
@@ -12004,6 +12261,12 @@ async function send() {
   font-size: 11.5px;
   color: #605e5c;
 }
+.html-deck-card-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .html-deck-card-btn {
   flex-shrink: 0;
   display: inline-flex;
@@ -12017,9 +12280,95 @@ async function send() {
   text-decoration: none;
   border: none;
   transition: background 0.15s;
+  cursor: pointer;
 }
 .html-deck-card-btn:hover {
   background: #106ebe;
+}
+.html-deck-card-btn--preview {
+  color: #005a9e;
+  background: #fff;
+  border: 1px solid #8a8886;
+}
+.html-deck-card-btn--preview:hover {
+  background: #f3f2f1;
+}
+
+.deck-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(3px);
+  outline: none;
+}
+.deck-preview-modal {
+  width: min(1180px, 96vw);
+  height: min(820px, 92vh);
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.34);
+}
+.deck-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e1dfdd;
+}
+.deck-preview-title {
+  color: #201f1e;
+  font-size: 15px;
+  font-weight: 650;
+}
+.deck-preview-filename {
+  margin-top: 2px;
+  color: #605e5c;
+  font-size: 12px;
+}
+.deck-preview-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #323130;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+.deck-preview-close:hover {
+  background: #edebe9;
+}
+.deck-preview-body {
+  min-height: 0;
+  padding: 10px;
+  background: #201f1e;
+}
+.deck-preview-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 4px;
+  background: #fff;
+}
+.deck-preview-status {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 14px;
+}
+.deck-preview-status--error {
+  color: #ffb3b3;
 }
 
 /* ── Script inline block ── */

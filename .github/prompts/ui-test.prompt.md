@@ -11,6 +11,7 @@ Default target is **local**; follow `debug-local.prompt.md` first. Test a deploy
 
 **Ground rules**
 
+- **Use `run_playwright_code` exclusively for page interaction.** Once I share an authenticated tab, pin that exact `pageId` and never call `open_browser_page`, `navigate_page`, `read_page`, `click_element`, `type_in_page`, any `mcp_playwright_browser_*` tool, or any other browser helper. Those surfaces can open or attach to a fresh anonymous context even while the real signed-in tab is already open. If the pinned tab is no longer shared, STOP and ask me to re-share that same tab; never create a replacement tab.
 - Never report a scenario as passing on a measurement you know is unreliable. Re-measure with an assertion that cannot be faked by a timing artifact.
 - If you were wrong earlier in the run, say so plainly and correct the record.
 - Fix what you find, rebuild, and **re-run the affected scenario** locally. Deploy only when the user separately and explicitly requests it.
@@ -18,7 +19,7 @@ Default target is **local**; follow `debug-local.prompt.md` first. Test a deploy
 
 ## 0. Preflight — do not skip
 
-1. **Load the browser tools.** Two `tool_search` calls: `"playwright browser navigate screenshot read page type"` and `"open browser page url click element handle dialog"`. If either returns nothing, STOP and say the test must run in VS Code Insiders. Never fall back to a system browser, never ask me to click through it manually.
+1. **Confirm the shared Playwright page.** Use one harmless `run_playwright_code` call on the exact `pageId` supplied in the shared-page attachment (return `page.url()` and `page.title()`). If that call is unavailable or says `Page not found`, STOP and ask me to re-share the same tab. Never discover or replace it through another browser tool, and never fall back to a system browser.
 2. **Confirm what is deployed.** `GET /api/version` → `sha`, `build`, `started`. After a deploy the container takes ~60–90s to roll over and **testing before rollover silently tests the OLD build**. Cross-check against the log, which is authoritative:
    ```
    AppTraces | where TimeGenerated > ago(30m)
@@ -42,8 +43,8 @@ All confirmed on this app. The naive approach costs a cycle every time.
 | `Illegal invocation` wrapping fetch                          | unbound native                                               | `const of = window.fetch.bind(window)`                                                                         |
 | ResizeObserver / rAF / smooth scroll never fire              | integrated browser reports `document.hidden === true` always | rely on reactive watchers; gate smooth scroll on `visibilityState`                                             |
 | Turn "completes" in 3s                                       | you sent while warmup was in flight                          | wait for `composer enabled && !stopBtn` before every send                                                      |
-| `Execution context was destroyed`                            | a navigation (often my sign-in) landed mid-evaluate          | re-open the page, re-install instrumentation, resume                                                           |
-| Page id "not found"                                          | the page was closed                                          | `open_browser_page` again; instrumentation does NOT survive                                                    |
+| `Execution context was destroyed`                            | a navigation (often my sign-in) landed mid-evaluate          | wait for the pinned page to settle, then re-install instrumentation on the same `pageId`                       |
+| Page id "not found"                                          | sharing was lost or the page was closed                      | STOP and ask me to re-share the same tab; never open a replacement                                             |
 
 Canonical helpers — reuse verbatim:
 

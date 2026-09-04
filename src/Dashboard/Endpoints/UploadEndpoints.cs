@@ -102,7 +102,11 @@ public static class UploadEndpoints
             if (userJson is null) return Results.Unauthorized();
             var userId = JsonSerializer.Deserialize<JsonElement>(userJson).GetProperty("id").GetInt64();
             return UploadedFileTools.RemoveForUser(userId, fileId)
-                ? Results.NoContent()
+                // Integrated Chromium reports a completed 204 DELETE as
+                // net::ERR_ABORTED after fetch has already resolved. Return a
+                // small 200 payload so successful cleanup remains observable as
+                // a successful request in browser diagnostics.
+                ? Results.Ok(new { removed = true })
                 : Results.NotFound();
         });
     }

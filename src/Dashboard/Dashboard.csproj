@@ -7,17 +7,13 @@
     <RootNamespace>AzureFinOps.Dashboard</RootNamespace>
     <UserSecretsId>1190b8a4-6595-436b-9479-b9951bd00f16</UserSecretsId>
     <!--
-      Pin the bundled Copilot CLI runtime to a PUBLISHED version.
-      GitHub.Copilot.SDK 1.0.7 ships GitHub.Copilot.SDK.props with
-      CopilotCliVersion=1.0.71, but @github/copilot 1.0.71 (final) is NOT
-      published on npm — only 1.0.71-0 (prerelease) exists; the latest
-      published final is 1.0.70. Left unpinned, the SDK's build-time
-      DownloadFile task 404s (locally AND in the ACR/Docker build) — same
-      failure mode as the 1.0.6/1.0.69 pairing before it. Verified live:
-      SDK 1.0.7 + CLI 1.0.70 boots and serves chat turns. Revisit when
-      1.0.71 (or a later final) is published.
+      Let GitHub.Copilot.SDK select its matching CLI runtime. A stale
+      CopilotCliVersion override left SDK 1.0.11 running CLI 1.0.70 instead
+      of 1.0.79; ordinary chat still worked, but native image attachments
+      reached the provider as invalid image data. If an SDK release ever
+      references an unpublished CLI package, use only a temporary override
+      and remove it as soon as the matching final is available.
     -->
-    <CopilotCliVersion>1.0.70</CopilotCliVersion>
   </PropertyGroup>
 
   <ItemGroup>

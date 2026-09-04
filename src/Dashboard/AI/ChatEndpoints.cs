@@ -364,6 +364,10 @@ public static class ChatEndpoints
             // Detaches the streaming subscriptions. Declared out here so it is
             // visible in the finally; (re)assigned by WireHandlers inside the try.
             IDisposable? handlers = null;
+            // Guards every write to this request's response. Also set in the
+            // finally, because the HttpContext is pooled and reused once the
+            // turn ends (see the finally for why that matters).
+            var streamDetached = 0;
             ActiveTurnState? turnState = null;
             try
             {
@@ -486,7 +490,6 @@ public static class ChatEndpoints
                     prompt = string.Join("\n", contextBits) + "\n" + prompt;
 
                 var done = new TaskCompletionSource();
-                var streamDetached = 0;
                 var toolTracker = new ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)>();
                 var firstEventLogged = 0;
 
@@ -842,6 +845,15 @@ public static class ChatEndpoints
             }
             finally
             {
+                // The response is finished, so this request's HttpContext goes
+                // back to ASP.NET's pool and is reused by the next request on
+                // the connection. SDK callbacks can still arrive after this
+                // point (handler disposal races an in-flight dispatch), so the
+                // stream must be marked detached BEFORE anything else — without
+                // it a late SafeEmit writes SSE bytes into an unrelated
+                // response, which then fails with "response has already
+                // started" and aborts that connection.
+                Interlocked.Exchange(ref streamDetached, 1);
                 // Detach the streaming subscriptions from whatever session they
                 // ended up bound to (original or recycled).
                 handlers?.Dispose();

@@ -1,4 +1,4 @@
-<!-- last refreshed: 2026-08-31 -->
+<!-- last refreshed: 2026-09-02 -->
 
 # Azure FinOps Agent — Copilot Instructions
 
@@ -17,6 +17,8 @@ It is designed for customers to deploy into **their own tenant and subscription*
 - Hosting: Linux container on Azure App Service
 - Infrastructure: `azure.yaml` + Bicep under `infra`
 - Observability: OpenTelemetry + Application Insights
+
+The SDK and bundled Copilot CLI are one compatibility unit. Let the installed `GitHub.Copilot.SDK` package supply `CopilotCliVersion`; do not retain an override from an older SDK. Before accepting an SDK bump, verify its exact platform CLI packages are published. A stale runtime can pass text/tool tests while breaking protocol features such as native image attachments.
 
 ## Core architecture
 
@@ -129,6 +131,8 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - Do not rewrite punctuation in streamed model text. Identifiers such as hostnames, versions, and Azure resource names must remain byte-for-byte intact.
 - Escape all model/tool-influenced text before `v-html` transformations.
 - Only the explicit Stop action marks a response as stopped; an arbitrary `AbortError` is recoverable transport failure.
+- Attachment callbacks must update chips by stable `uid`, never by array index. Wait for uploads before sending, delist files whose chips were removed in flight, and revoke blob thumbnail URLs only after Vue unmounts them.
+- Generated HTML previews must stay in a sandboxed iframe without `allow-same-origin`; model-produced deck scripts must never inherit access to application cookies, storage, DOM, or authenticated APIs.
 
 ## Code conventions
 
@@ -164,6 +168,7 @@ The frontend must be built before backend startup so `wwwroot` exists when ASP.N
 - Measure latency from the app's SSE stream, not rendered pixels.
 - Before every send, wait for the composer to be enabled and for the Stop button to be absent.
 - Select Stop only by `.action-btn--stop`.
+- For authenticated UI runs, pin the exact tab the user shared and use `run_playwright_code` exclusively. Do not use high-level browser helpers or the separate `mcp_playwright_browser_*` surface. Never open or navigate a replacement tab; if shared access is lost, ask the user to re-share the same signed-in tab.
 - Check console errors, page errors, failed requests, tool sequence/count, TTFT, total time, and persisted transcript.
 - After edits, verify disk state with `git status --short`; save all editor buffers before building.
 
