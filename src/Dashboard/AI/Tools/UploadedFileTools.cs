@@ -54,6 +54,12 @@ public sealed class UploadedFileTools
 
     private static readonly Timer _cleanupTimer;
 
+    // The model controls paramsJson. These keys are resolved by the host from the
+    // per-user upload registry and must never be overridable, or the model could
+    // point the reader at an arbitrary file on disk (CWE-73).
+    private static readonly HashSet<string> ReservedRequestKeys =
+        new(StringComparer.OrdinalIgnoreCase) { "mode", "path", "kind" };
+
     private readonly UserTokens _tokens; // not used today, kept for symmetry with other per-user tools
 
     public UploadedFileTools(UserTokens tokens) => _tokens = tokens;
@@ -118,7 +124,11 @@ Examples:
             {
                 using var doc = JsonDocument.Parse(paramsJson);
                 foreach (var p in doc.RootElement.EnumerateObject())
+                {
+                    if (ReservedRequestKeys.Contains(p.Name))
+                        return Json(new { ok = false, error = $"'{p.Name}' cannot be set in params — the file is selected by fileId." });
                     requestObj[p.Name] = JsonValueToObject(p.Value);
+                }
             }
             catch (JsonException jex)
             {
@@ -143,7 +153,7 @@ Examples:
 
         var fileId = Guid.NewGuid().ToString("N")[..12];
         var safeName = TempFileHelper.SanitizeFilename(fileName, "upload" + ext);
-        var path = Path.Combine(Path.GetTempPath(), $"{fileId}_{safeName}");
+        var path = Path.Combine(TempFileHelper.UploadRoot, $"{fileId}_{safeName}");
 
         await using (var fs = File.Create(path))
         {
@@ -337,6 +347,10 @@ Examples:
         };
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add(script);
+
+        // The helper refuses to open anything outside this root, and fails closed
+        // when the variable is missing.
+        psi.Environment["FINOPS_UPLOAD_ROOT"] = TempFileHelper.UploadRoot;
 
         var pipTarget = "/home/site/pip-packages";
         if (Directory.Exists(pipTarget))

@@ -43,6 +43,17 @@ The agent can read and apply approved non-destructive changes, but it never dele
 - Standard add-on consent tiers are read-only. Graph writes require separately granted write scopes.
 - Never log or return bearer tokens, refresh tokens, secrets, authorization headers, or connection strings.
 
+### Untrusted-input rules
+
+Treat every model-authored tool argument as attacker-controlled: it is shaped by uploaded file contents, fetched pages, Azure resource names, and tags.
+
+- A file path, blob name, URL, or command fragment must never come from a tool argument. The host resolves it from a per-user registry keyed by an opaque id.
+- When a free-form JSON parameter bag is merged into a host-built request, reject host-owned keys explicitly. Merging the model's object last silently lets it override them.
+- Filesystem readers take a base directory from the host, resolve the candidate with `realpath`, and require containment. Fail closed when the root is absent; an existence check is not a containment check.
+- Error paths must not echo the requested path or resource id back to the model — that is a probing oracle.
+- Anything reaching `v-html` is entity-escaped first, at the single entry point. Escaping only some subfragments (table cells, attributes) is not enough.
+- Model-supplied chart/render options are allow-listed and stripped of DOM and HTML sinks before they reach a renderer.
+
 ## Authentication
 
 OAuth tiers are resource-specific and delegated:

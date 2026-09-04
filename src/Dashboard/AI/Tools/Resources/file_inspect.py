@@ -578,6 +578,31 @@ def _handle_pdf(req: dict, path: str) -> dict:
 
 # ------------------------------------------------------------------------ main
 
+def _resolve_upload_path(raw: Any) -> str | None:
+    """Return `raw` resolved inside the host's upload root, else None.
+
+    CWE-73: `path` arrives over stdin from a host that is itself driven by LLM
+    tool arguments, so it is treated as untrusted. Symlinks and `..` are
+    collapsed by realpath before the containment test, and a missing/empty
+    FINOPS_UPLOAD_ROOT fails closed so a mis-wired caller can never read the
+    wider filesystem.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    roots = [r for r in (os.environ.get("FINOPS_UPLOAD_ROOT") or "").split(os.pathsep) if r]
+    if not roots:
+        return None
+    resolved = os.path.realpath(raw)
+    for root in roots:
+        root_resolved = os.path.realpath(root)
+        try:
+            if os.path.commonpath([resolved, root_resolved]) == root_resolved:
+                return resolved
+        except ValueError:  # different drives / UNC roots on Windows
+            continue
+    return None
+
+
 def main() -> int:
     try:
         req = json.loads(sys.stdin.read() or "{}")
@@ -585,10 +610,12 @@ def main() -> int:
         print(json.dumps(_err(f"bad request json: {e}")))
         return 0
 
-    path = req.get("path")
+    path = _resolve_upload_path(req.get("path"))
     kind = (req.get("kind") or "").lower()
-    if not path or not os.path.exists(path):
-        print(json.dumps(_err("file not found", path=path)))
+    if not path or not os.path.isfile(path):
+        # The requested path is deliberately not echoed back: that would turn
+        # this helper into a filesystem-probing oracle for the model.
+        print(json.dumps(_err("file not found in the upload directory")))
         return 0
 
     try:
