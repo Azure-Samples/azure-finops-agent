@@ -57,12 +57,31 @@ if (-not $objectId -or -not $webHost) {
     $merged = @([string[]]($existing + $desired) | Select-Object -Unique)
 
     az ad app update --id $objectId --web-redirect-uris @merged --output none
-    if ($LASTEXITCODE -eq 0) {
+    $updateExit = $LASTEXITCODE
+
+    # Re-read and assert: a silently dropped patch leaves the production callback
+    # missing and every post-consent sign-in fails with AADSTS50011.
+    $appliedJson = az ad app show --id $objectId --query 'web.redirectUris' -o json 2>$null
+    $applied = @()
+    if ($appliedJson) {
+        $appliedParsed = ($appliedJson | Out-String) | ConvertFrom-Json
+        if ($null -ne $appliedParsed) { $applied = [string[]]@($appliedParsed) }
+    }
+    $missing = @($desired | Where-Object { $applied -notcontains $_ })
+
+    if ($updateExit -eq 0 -and $missing.Count -eq 0) {
         Write-Host "  Redirect URIs updated:" -ForegroundColor Green
         foreach ($u in $merged) { Write-Host "    $u" -ForegroundColor Gray }
     } else {
-        Write-Host "  Failed to update redirect URIs (exit $LASTEXITCODE). Run manually:" -ForegroundColor Red
+        if ($updateExit -ne 0) {
+            Write-Host "  Failed to update redirect URIs (exit $updateExit)." -ForegroundColor Red
+        } else {
+            Write-Host "  Redirect-URI patch did not apply — missing:" -ForegroundColor Red
+            foreach ($u in $missing) { Write-Host "    $u" -ForegroundColor Red }
+        }
+        Write-Host "  OAuth sign-in will fail with AADSTS50011 until this is fixed. Run manually:" -ForegroundColor Red
         Write-Host "    az ad app update --id $objectId --web-redirect-uris $($merged -join ' ')" -ForegroundColor Gray
+        exit 1
     }
 }
 
