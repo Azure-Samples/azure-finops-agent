@@ -32,10 +32,10 @@ jobs:
     steps:
       # Shallow checkout — build number now comes from github.run_number,
       # so we don't need full git history any more.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Azure Login (OIDC)
-        uses: azure/login@v3
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ secrets.AZURE_PROD_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_PROD_TENANT_ID }}
@@ -61,10 +61,10 @@ jobs:
           echo "build=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Build & push Docker image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: src/Dashboard
           push: true

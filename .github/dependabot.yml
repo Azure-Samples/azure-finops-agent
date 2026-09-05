@@ -31,6 +31,8 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies, ci]
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: docker
     directory: /src/Dashboard
