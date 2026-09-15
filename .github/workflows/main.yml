@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - "src/Dashboard/**"
+      - "tests/**"
+      - "global.json"
+      - ".github/workflows/validate.yml"
       - ".github/workflows/main.yml"
   workflow_dispatch:
 
@@ -26,8 +29,14 @@ concurrency:
   cancel-in-progress: false # don't cancel a half-deployed prod build
 
 jobs:
+  regressions:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/validate.yml
+
   deploy:
     name: Build & Deploy
+    needs: regressions
     runs-on: ubuntu-latest
     steps:
       # Shallow checkout — build number now comes from github.run_number,

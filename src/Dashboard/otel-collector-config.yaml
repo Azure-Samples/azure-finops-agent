@@ -18,9 +18,9 @@ receivers:
   otlp:
     protocols:
       http:
-        endpoint: 0.0.0.0:4318
+        endpoint: 127.0.0.1:4318
       grpc:
-        endpoint: 0.0.0.0:4317
+        endpoint: 127.0.0.1:4317
 
 processors:
   batch:
@@ -35,8 +35,9 @@ processors:
         - 'attributes["url.path"] == "/wp-admin/install.php"'
 
 exporters:
-  azuremonitor:
+  azure_monitor:
     connection_string: ${env:APPLICATIONINSIGHTS_CONNECTION_STRING}
+    shutdown_timeout: 5s
   # Tiny stdout exporter for local debugging (only enabled when OTEL_DEBUG=1).
   debug:
     verbosity: basic
@@ -49,12 +50,12 @@ service:
     traces:
       receivers: [otlp]
       processors: [filter/drop_noise, batch]
-      exporters: [azuremonitor]
+      exporters: [azure_monitor]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [azuremonitor]
+      exporters: [azure_monitor]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [azuremonitor]
+      exporters: [azure_monitor]

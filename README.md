@@ -22,6 +22,9 @@ Azure FinOps Agent analyzes live Azure data, scores FinOps maturity, finds savin
 - CSV, TSV, JSON, XLSX, PDF, Parquet, and image analysis
 - Scheduled background jobs with durable run history
 - Charts, HTML presentations, and reviewable Azure CLI or PowerShell scripts
+- Filtered multi-column file analysis with real CSV, XLSX, and HTML downloads
+- Quota, SKU-restriction, placement, and VM-origin connectivity diagnostics
+- Exact-change approval and durable status tracking for ARM writes
 
 ## Architecture
 
@@ -41,6 +44,8 @@ flowchart LR
 ```
 
 The app runs as a Linux container on Azure App Service. Azure Developer CLI provisions Azure Container Registry, Azure OpenAI, monitoring, managed identities, RBAC, App Service, and the optional Entra application.
+
+The runtime exposes only registered host tools, without built-in shell or cross-session memory access. Run one active application instance: session gates and cooldown coordination are process-local. See [reliability contracts and verification](docs/agent-reliability.md).
 
 ## Deploy to your Azure subscription
 
@@ -115,6 +120,8 @@ Open [http://localhost:5000](http://localhost:5000).
 - The user's Azure RBAC and consented scopes remain the effective authorization boundary.
 - Azure `DELETE` and mutating action `POST` operations are blocked in code.
 - Generated downloads and session transcripts are ownership-checked.
+- ARM writes require explicit review in the application; chat text and scheduled prompts cannot approve them.
+- Budget figures can lag billing, and quota/placement evidence does not guarantee an allocation.
 - Production secrets belong in managed identities, App Service settings, or GitHub Actions secrets—not in source control.
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities and [docs/session-management.md](docs/session-management.md) for session behavior.

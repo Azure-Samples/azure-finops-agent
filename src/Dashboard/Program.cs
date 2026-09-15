@@ -95,7 +95,8 @@ if (!string.IsNullOrEmpty(appInsightsCs))
         .UseAzureMonitor(o =>
         {
             o.ConnectionString = appInsightsCs;
-            o.SamplingRatio = 1.0f;   // preserve pre-1.5.0 behavior; default in 1.5.0 is RateLimitedSampler (5 req/sec)
+            o.SamplingRatio = 1.0f;
+            o.TracesPerSecond = null;
         })
         .WithTracing(t => t
             .AddSource("AzureFinOps.AI")
@@ -433,6 +434,7 @@ app.MapSessionEndpoints(copilotFactory, telemetry, jobStore, logger);
 AzureFinOps.Dashboard.Jobs.JobEndpoints.MapJobEndpoints(app, jobStore, jobScheduler, logger);
 app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
+app.MapOperationEndpoints(copilotFactory, tokenStore);
 app.MapUploadEndpoints();
 app.MapSeoEndpoints();
 

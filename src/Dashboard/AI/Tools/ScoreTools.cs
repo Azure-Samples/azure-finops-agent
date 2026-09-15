@@ -30,7 +30,7 @@ public sealed class ScoreTools
         yield return AIFunctionFactory.Create(GetScoreHistory);
     }
 
-    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores. Each dimension gets 0-5: 0=no data, 1=critical, 2=needs work, 3=acceptable, 4=good, 5=best practice. Auto-saved to history for trend analysis.
+    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores. Each dimension must include status=observed|unknown|notApplicable. Observed dimensions get 0-5; unknown and notApplicable get score=null and a reason. Missing permission is unknown, not zero. An absent workload makes workload-specific controls notApplicable. Auto-saved to history for trend analysis.
 
 Evaluate ALL the dimensions for the requested level via QueryAzure (and GraphQuery/LogAnalytics where relevant) and score each 0-5 with a one-line `detail`. Don't ask which to score — score them all.
 
@@ -66,8 +66,40 @@ Return scores array: id=slug, label=exact name above, score=0-5, detail=one-line
         [Description("Level: 'crawl', 'walk', 'run', or 'playbook'")] string level,
         [Description(@"JSON array of score objects, e.g.: [{""id"":""tagging"",""label"":""Tagging"",""score"":3,""detail"":""45% of resources tagged""}]")] string scores)
     {
-        SaveScore(level, scores);
-        return $"__MATURITY_SCORE__:{level}:{scores}";
+        if (level is not ("crawl" or "walk" or "run" or "playbook")) return "Error: invalid maturity level.";
+        var normalized = NormalizeScores(scores);
+        if (normalized is null) return "Error: scores require id, label, detail, status and an observed score from 0 to 5, or null for unknown/notApplicable.";
+        SaveScore(level, normalized);
+        return $"__MATURITY_SCORE__:{level}:{normalized}";
+    }
+
+    internal static string? NormalizeScores(string scores)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(scores);
+            if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() is < 1 or > 30) return null;
+            var normalized = new List<object>();
+            var identifiers = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                var id = item.GetProperty("id").GetString();
+                var label = item.GetProperty("label").GetString();
+                var detail = item.GetProperty("detail").GetString();
+                var status = item.GetProperty("status").GetString();
+                if (string.IsNullOrWhiteSpace(id) || !identifiers.Add(id) || string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(detail)) return null;
+                int? score = null;
+                if (status == "observed")
+                {
+                    if (!item.GetProperty("score").TryGetInt32(out var value) || value is < 0 or > 5) return null;
+                    score = value;
+                }
+                else if (status is not ("unknown" or "notApplicable")) return null;
+                normalized.Add(new { id, label, score, detail, status });
+            }
+            return JsonSerializer.Serialize(normalized);
+        }
+        catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException) { return null; }
     }
 
     /// <summary>Persists a score produced by a consolidated evidence tool.
@@ -79,7 +111,7 @@ Return scores array: id=slug, label=exact name above, score=0-5, detail=one-line
         {
             var entry = new ScoreHistoryEntry
             {
-                Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                Timestamp = DateTimeOffset.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
                 Level = level.ToLowerInvariant(),
                 Scores = scores
             };

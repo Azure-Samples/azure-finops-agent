@@ -1,16 +1,18 @@
 import { ApplicationInsights } from "@microsoft/applicationinsights-web";
 import { createApp } from "vue";
 import App from "./App.vue";
+import { createExceptionReporter, redactDiagnosticText, safeTelemetryProperties } from "./telemetrySafety.js";
 
 let appInsights = null;
 const pendingTelemetry = [];
 
 function withTelemetry(callback) {
   if (appInsights) {
-    callback(appInsights);
+    try { callback(appInsights); } catch {}
     return;
   }
 
+  if (pendingTelemetry.length >= 100) pendingTelemetry.shift();
   pendingTelemetry.push(callback);
 }
 
@@ -25,28 +27,15 @@ function flushPendingTelemetry() {
   }
 }
 
-function normalizeError(error, fallbackMessage) {
-  if (error instanceof Error) return error;
-  if (typeof error === "string" && error.trim()) return new Error(error);
-
-  try {
-    const serialized = JSON.stringify(error);
-    if (serialized && serialized !== "{}") return new Error(serialized);
-  } catch {}
-
-  return new Error(fallbackMessage);
-}
-
-function trackFrontendException(error, properties = {}) {
-  const exception = normalizeError(error, "Unknown frontend exception");
+const trackFrontendException = createExceptionReporter((exception, properties) => {
   withTelemetry((ai) => {
     ai.trackException({ exception, properties });
   });
-}
+});
 
 function trackFrontendTrace(message, properties = {}) {
   withTelemetry((ai) => {
-    ai.trackTrace({ message, properties });
+    ai.trackTrace({ message: redactDiagnosticText(message).slice(0, 1000), properties: safeTelemetryProperties(properties) });
   });
 }
 
@@ -56,7 +45,7 @@ function trackFrontendEvent(name, properties = {}) {
   // background reconnects) and finally diagnose the "came back to an empty
   // answer" bug from real telemetry instead of guesswork.
   withTelemetry((ai) => {
-    ai.trackEvent({ name }, properties);
+    ai.trackEvent({ name }, safeTelemetryProperties(properties));
   });
 }
 
@@ -111,9 +100,10 @@ fetch("/api/config")
         connectionString: config.appInsightsConnectionString,
         enableAutoRouteTracking: true,
         enableCorsCorrelation: true,
-        enableRequestHeaderTracking: true,
-        enableResponseHeaderTracking: true,
-        enableUnhandledPromiseRejectionTracking: true,
+        enableRequestHeaderTracking: false,
+        enableResponseHeaderTracking: false,
+        disableExceptionTracking: true,
+        enableUnhandledPromiseRejectionTracking: false,
         correlationHeaderExcludedDomains: [
           "cdn.jsdelivr.net",
           "js.monitor.azure.com",
@@ -122,6 +112,10 @@ fetch("/api/config")
     });
 
     appInsights.loadAppInsights();
+    appInsights.addTelemetryInitializer((item) => {
+      if (item.baseData?.properties) item.baseData.properties = safeTelemetryProperties(item.baseData.properties);
+      if (item.baseData?.data) item.baseData.data = redactDiagnosticText(item.baseData.data);
+    });
     appInsights.trackPageView();
     window.__appInsights = appInsights;
     flushPendingTelemetry();

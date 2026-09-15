@@ -26,7 +26,7 @@ public sealed class CrawlMaturityTools
 
     public IEnumerable<AIFunction> Create()
     {
-        yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides exact MTD spend.
+        yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides a periodically evaluated MTD snapshot, not real-time or finalized cost.
     Use exactly once for Crawl/FinOps maturity scoring. Pass the exact `subscriptions` array and optional first management-group id from the connection context. Do NOT supplement it with QueryAzure, ReportMaturityScore, SuggestFollowUp, or any other tool—the score persistence, maturity SSE event, and follow-up buttons are already handled by this result.");
     }
 
@@ -103,7 +103,7 @@ public sealed class CrawlMaturityTools
 
         var evidence = new
         {
-            generatedUtc = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            generatedUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
             subscriptionCount = subscriptions.Count,
             subscriptions,
             budgets = new
@@ -115,6 +115,8 @@ public sealed class CrawlMaturityTools
                 subscriptionsWithValidatedSpend,
                 currency = currencies.Length == 1 ? currencies[0] : null,
                 totalsByCurrency,
+                dataAsOfUtc = (string?)null,
+                freshness = "Budget currentSpend is evaluated periodically and may lag billing; retrieval time is not data freshness.",
                 details = budgets
             },
             tagging = taggingTask.Result,
@@ -382,7 +384,7 @@ public sealed class CrawlMaturityTools
             using var doc = JsonDocument.Parse(ResponseBody(response));
             var values = doc.RootElement.TryGetProperty("value", out var value)
                 && value.ValueKind == JsonValueKind.Array
-                ? value.EnumerateArray().ToArray()
+                ? value.EnumerateArray().Where(IsEnabledControl).ToArray()
                 : [];
             double amount = 0;
             var actualNotifications = 0;
@@ -454,7 +456,7 @@ public sealed class CrawlMaturityTools
         }
     }
 
-    private static IReadOnlyList<MaturityScore> BuildScores(
+    internal static IReadOnlyList<MaturityScore> BuildScores(
         IReadOnlyList<SubscriptionScope> subscriptions,
         IReadOnlyList<BudgetEvidence> budgets,
         object taggingProjection,
@@ -539,7 +541,7 @@ public sealed class CrawlMaturityTools
         var commonWaste = wasteRows.Sum(r => IntProperty(r, "wasteCount"));
         var emptyGroupRows = DataRows(emptyGroupsProjection);
         var emptyGroups = emptyGroupRows.Sum(r => IntProperty(r, "emptyGroupCount"));
-        var totalWaste = commonWaste + emptyGroups;
+        var totalWaste = commonWaste;
         var wasteReadable = ProjectionStatus(wasteProjection) == 200 && ProjectionStatus(emptyGroupsProjection) == 200;
         var wasteScore = !wasteReadable ? 0 : totalWaste switch
         {
@@ -569,7 +571,7 @@ public sealed class CrawlMaturityTools
             .Select(b => $"{b.CurrentSpend!.Value.ToString("N2", CultureInfo.InvariantCulture)} {b.Currency ?? "currency unknown"} in {b.SubscriptionName}"));
         var spendSummary = FormatCostSummary(mtdSpend, mtdCurrency, totalsByCurrency);
 
-        return
+        List<MaturityScore> scores =
         [
             new("budgets", "Budgets & thresholds", budgetScore,
                 $"{coveredBudgets}/{subscriptions.Count} subscriptions have budgets; {budgets.Sum(b => b.BudgetCount)} budgets expose {notificationCount} enabled actual/forecast notifications and {spendSummary} from strict unfiltered monthly budgets."),
@@ -580,12 +582,42 @@ public sealed class CrawlMaturityTools
             new("alerts", "Cost alerts & scheduled actions", alertsScore,
                 $"{alertCount} cost alerts and {actionCount} scheduled actions cover {alertCoverage}/{subscriptions.Count} subscriptions; {alerts.Count(a => a.Status == 200) + scheduledActions.Count(a => a.Status == 200)}/{subscriptions.Count * 2} list calls succeeded."),
             new("policy", "Governance guardrails", policyScore,
-                $"{finOpsPolicies} FinOps-related policy assignments were found among {totalPolicies} total assignments, covering {policyCoverage}/{subscriptions.Count} subscriptions."),
+                $"{finOpsPolicies} potentially FinOps-related assignments among {totalPolicies} assignments; assignment inventory alone does not verify effective effects, inherited coverage, or compliance."),
             new("waste", "Waste identification & cleanup", wasteScore,
-                $"{totalWaste} waste items were found: {commonWaste} unattached disks/orphaned IPs/empty paid App Service plans plus {emptyGroups} empty resource groups ({emptyGroupSpread})."),
+                $"{commonWaste} potentially billable waste items were found. Separately, {emptyGroups} empty resource groups ({emptyGroupSpread}) are housekeeping only and have no direct resource-group charge."),
             new("visibility", "Cost visibility & ownership", visibilityScore,
                 $"Budget currentSpend provides {spendSummary} across {visibleSubscriptions}/{subscriptions.Count} subscriptions ({spendSpread}); governed ownership-tag coverage is {Math.Round(tagCoverage, 1)}% across {totalResources} resources.")
         ];
+        SetEvidenceState(scores, "budgets", allBudgetReadsOk);
+        SetEvidenceState(scores, "tagging", ProjectionStatus(taggingProjection) == 200, totalResources == 0);
+        SetEvidenceState(scores, "exports", exports.Count == subscriptions.Count && exports.All(item => item.Status == 200 && item.Error is null));
+        SetEvidenceState(scores, "alerts", alertsReadable && alerts.Count == subscriptions.Count && scheduledActions.Count == subscriptions.Count);
+        SetEvidenceState(scores, "policy", false);
+        SetEvidenceState(scores, "waste", wasteReadable);
+        SetEvidenceState(scores, "visibility", visibleSubscriptions == subscriptions.Count);
+        return scores;
+    }
+
+    private static void SetEvidenceState(List<MaturityScore> scores, string id, bool readable, bool notApplicable = false)
+    {
+        var index = scores.FindIndex(score => score.Id == id);
+        var status = !readable ? "unknown" : notApplicable ? "notApplicable" : "observed";
+        if (status != "observed") scores[index] = scores[index] with { Score = null, Status = status };
+    }
+
+    internal static bool IsEnabledControl(JsonElement item)
+    {
+        if (!item.TryGetProperty("properties", out var properties)) return true;
+        if (properties.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.False) return false;
+        if (properties.TryGetProperty("status", out var status) && status.ValueKind == JsonValueKind.String
+            && status.GetString() is { } text && (text.Equals("Disabled", StringComparison.OrdinalIgnoreCase) || text.Equals("Inactive", StringComparison.OrdinalIgnoreCase))) return false;
+        if (properties.TryGetProperty("schedule", out var schedule))
+        {
+            if (schedule.TryGetProperty("status", out var scheduleStatus) && !string.Equals(scheduleStatus.GetString(), "Active", StringComparison.OrdinalIgnoreCase)) return false;
+            if (schedule.TryGetProperty("recurrencePeriod", out var period) && period.TryGetProperty("to", out var end)
+                && DateTimeOffset.TryParse(end.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var expires) && expires < DateTimeOffset.UtcNow) return false;
+        }
+        return true;
     }
 
     private static string FormatCostSummary(
@@ -713,9 +745,9 @@ public sealed class CrawlMaturityTools
     private static string Truncate(string value, int length) =>
         value.Length <= length ? value : value[..length];
 
-    private sealed record SubscriptionScope(string Id, string Name);
+    internal sealed record SubscriptionScope(string Id, string Name);
 
-    private sealed record BudgetEvidence(
+    internal sealed record BudgetEvidence(
         string SubscriptionId,
         string SubscriptionName,
         int Status,
@@ -727,7 +759,7 @@ public sealed class CrawlMaturityTools
         int EnabledForecastNotifications,
         string? Error);
 
-    private sealed record CollectionEvidence(
+    internal sealed record CollectionEvidence(
         string SubscriptionId,
         string SubscriptionName,
         int Status,
@@ -735,9 +767,10 @@ public sealed class CrawlMaturityTools
         string[] Names,
         string? Error);
 
-    private sealed record MaturityScore(
+    internal sealed record MaturityScore(
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("label")] string Label,
-        [property: JsonPropertyName("score")] int Score,
-        [property: JsonPropertyName("detail")] string Detail);
+        [property: JsonPropertyName("score")] int? Score,
+        [property: JsonPropertyName("detail")] string Detail,
+        [property: JsonPropertyName("status")] string Status = "observed");
 }

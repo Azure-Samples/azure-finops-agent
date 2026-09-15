@@ -13,7 +13,9 @@ internal static class TempFileHelper
 
     private static string CreateUploadRoot()
     {
-        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "finops-uploads"));
+        var persistentRoot = Environment.GetEnvironmentVariable("COPILOT_HOME");
+        var root = Path.GetFullPath(string.IsNullOrWhiteSpace(persistentRoot)
+            ? Path.Combine(Path.GetTempPath(), "finops-uploads") : Path.Combine(persistentRoot, "uploads"));
         if (OperatingSystem.IsWindows())
             Directory.CreateDirectory(root);
         else

@@ -56,9 +56,9 @@ CONSUMPTION DEPRECATIONS: usageDetails → use Microsoft.CostManagement/generate
 
 For public retail pricing use https://prices.azure.com (no auth) with ?$filter=armRegionName eq '...' and serviceName eq '...' and armSkuName eq '...'&$top=20.");
 
-        yield return AIFunctionFactory.Create(QueryCostsAcrossSubscriptions, "QueryCostsAcrossSubscriptions", @"Gets an exact Cost Management total and per-subscription breakdown in ONE agent tool call. Use this for any cost request spanning all connected subscriptions; never loop QueryAzure yourself.
+        yield return AIFunctionFactory.Create(QueryCostsAcrossSubscriptions, "QueryCostsAcrossSubscriptions", @"Gets a reported Cost Management total and per-subscription breakdown in ONE agent tool call. Use this for any cost request spanning all connected subscriptions; never loop QueryAzure yourself.
 Input subscriptionsJson: the exact `subscriptions` JSON array supplied in the connection context ({id,name,...}). Input managementGroupId: the optional id/name from the context's managementGroups array. Dates are yyyy-MM-dd; `to` is the exclusive end date.
-    For the current calendar month, the tool first reads each subscription's unfiltered monthly budget `currentSpend` in parallel; this is exact live MTD cost and avoids the heavily throttled query API. For other periods it tries one management-group aggregate query, then the minimum sequential per-subscription fallback. It stops immediately when Cost Management remains throttled and reports completed, failed, and unattempted scopes. Never call this tool twice in one turn after a 429.");
+    For the current calendar month, the tool first reads each subscription's unfiltered monthly budget `currentSpend` in parallel. Budgets are evaluated periodically: report this as a delayed MTD snapshot, not a real-time or finalized bill. For other periods it tries one management-group aggregate query, then the minimum sequential per-subscription fallback. Preserve sourceEvidence cache/freshness metadata. It stops immediately when Cost Management remains throttled and reports completed, failed, and unattempted scopes. Never call this tool twice in one turn after a 429.");
 
 
         yield return AIFunctionFactory.Create(BulkAzureRequest, "BulkAzureRequest", @"Executes MANY Azure ARM requests in ONE tool call, in parallel, server-side. Use this whenever you would otherwise loop QueryAzure for the same kind of operation across multiple resources (bulk tagging, cleanup discovery, autoshutdown rollout, budget rollout across subs, multi-resource right-sizing, RBAC fan-out, etc.).
@@ -79,7 +79,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         activity?.SetTag("azure.path", path);
         activity?.SetTag("azure.has_body", !string.IsNullOrWhiteSpace(body));
         if (!string.IsNullOrWhiteSpace(body))
-            activity?.SetTag("azure.body", body.Length > 2000 ? body[..2000] + "..." : body);
+            activity?.SetTag("azure.body_length", body.Length);
 
         var token = _tokens.AzureToken;
         if (string.IsNullOrEmpty(token))
@@ -180,11 +180,11 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         if (scopes.Count == 0)
             return "HTTP 400 BadRequest\nsubscriptionsJson contained no valid subscription IDs.";
 
-        // The Consumption budgets endpoint returns subscription-level live
+        // The Consumption budgets endpoint returns subscription-level reported
         // `currentSpend` without consuming the Cost Management query QPU pool.
         // It is valid only for the current calendar month and only when an
         // unfiltered monthly budget covers the whole subscription. Use this
-        // before /query so an unrelated tenant throttle cannot hide exact MTD.
+        // before /query, while retaining the source's periodic-update caveat.
         var utcToday = DateOnly.FromDateTime(DateTime.UtcNow);
         var currentMonthStart = new DateOnly(utcToday.Year, utcToday.Month, 1);
         if (fromDate == currentMonthStart && toDate == utcToday.AddDays(1))
@@ -210,6 +210,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         });
 
         Dictionary<string, CostScopeResult>? aggregateResults = null;
+        var sourceEvidence = new List<JsonElement>();
 
         // Prefer one aggregate call. An accessible management group is not
         // guaranteed to contain the delegated subscriptions, so only 400/403/404
@@ -245,9 +246,10 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
                     method: HttpMethod.Post, jsonBody: mgBody);
                 if (mgResponse.StartsWith("HTTP 200", StringComparison.Ordinal))
                 {
+                    sourceEvidence.Add(ReadCostSourceEvidence(mgResponse));
                     var aggregate = ParseAggregateCostResponse(mgResponse, scopes);
                     if (aggregate.Error is null && aggregate.Results.Count == scopes.Count)
-                        return BuildCostResponse("managementGroup", scopes, aggregate.Results, false);
+                        return BuildCostResponse("managementGroup", scopes, aggregate.Results, false, sourceEvidence);
 
                     // Keep any requested subscriptions returned by the aggregate
                     // and query only the missing scopes below. Extra management-
@@ -288,6 +290,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
                 && TryReadCost(response, out var cost, out var currency, out parseError))
             {
                 resultsById[scope.Id] = new(scope.Id, scope.Name, 200, cost, currency, null);
+                sourceEvidence.Add(ReadCostSourceEvidence(response));
                 continue;
             }
 
@@ -318,7 +321,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         }
 
         var source = reusedAggregateResults ? "managementGroup+subscriptions" : "subscriptions";
-        return BuildCostResponse(source, scopes, resultsById, throttled);
+        return BuildCostResponse(source, scopes, resultsById, throttled, sourceEvidence);
     }
 
     private async Task<string?> TryReadCurrentMonthSpendFromBudgets(
@@ -351,6 +354,14 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         {
             complete = true,
             source = "subscriptionBudgets.currentSpend",
+            _finops = new
+            {
+                cacheStatus = "queried",
+                freshness = "periodic",
+                retrievedAtUtc = DateTimeOffset.UtcNow,
+                dataAsOfUtc = (DateTimeOffset?)null,
+                caveat = "Budget currentSpend is evaluated periodically and may lag billing. This is a reported snapshot, not a real-time or finalized bill."
+            },
             period = "currentMonthToDate",
             subscriptionCount = scopes.Count,
             totalCost = Math.Round(results.Sum(r => r.Cost), 6),
@@ -532,11 +543,23 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         }
     }
 
+    internal static JsonElement ReadCostSourceEvidence(string response)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(ResponseBody(response));
+            if (document.RootElement.TryGetProperty("_finops", out var evidence)) return evidence.Clone();
+        }
+        catch (JsonException) { }
+        return JsonSerializer.SerializeToElement(new { cacheStatus = "unknown", freshness = "unknown", dataAsOfUtc = (DateTimeOffset?)null });
+    }
+
     private static string BuildCostResponse(
         string source,
         IReadOnlyList<(string Id, string Name)> scopes,
         IReadOnlyDictionary<string, CostScopeResult> resultsById,
-        bool throttled)
+        bool throttled,
+        IReadOnlyList<JsonElement> sourceEvidence)
     {
         var orderedResults = scopes.Select(scope =>
             resultsById.TryGetValue(scope.Id, out var result)
@@ -560,6 +583,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         {
             complete,
             source,
+            sourceEvidence,
             throttled,
             subscriptionCount = scopes.Count,
             succeeded,
@@ -753,7 +777,8 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
     private async Task<string> BulkAzureRequest(
         [Description("JSON array of {method,path,body?} objects, e.g. [{\"method\":\"PATCH\",\"path\":\"/subscriptions/.../tags/default?api-version=2021-04-01\",\"body\":\"{...}\"}]")] string requestsJson,
         [Description("Max parallel requests in flight. Default 20, max 50.")] int parallelism = 20,
-        [Description("Stop the whole bulk run on the first failure. Default false (continue and report all failures).")] bool stopOnFirstError = false)
+        [Description("Stop the whole bulk run on the first failure. Default false (continue and report all failures).")] bool stopOnFirstError = false,
+        CancellationToken cancellationToken = default)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("BulkAzureRequest");
         var token = _tokens.AzureToken;
@@ -777,121 +802,101 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         if (items is null || items.Count == 0)
             return "HTTP 400 BadRequest\nrequestsJson must be a non-empty JSON array.";
 
-        var maxPar = Math.Clamp(parallelism, 1, 50);
-        activity?.SetTag("bulk.total", items.Count);
-        activity?.SetTag("bulk.parallelism", maxPar);
-
-        var sw = Stopwatch.StartNew();
-        var results = new BulkResult[items.Count];
-        var cts = new CancellationTokenSource();
-
-        await Parallel.ForEachAsync(
-            Enumerable.Range(0, items.Count),
-            new ParallelOptions { MaxDegreeOfParallelism = maxPar, CancellationToken = cts.Token },
-            async (i, ct) =>
-            {
-                var item = items[i];
-                var (httpMethod, methodError) = HttpHelper.ResolveMethod(item.Method, activity, "bulk");
-                if (methodError is not null)
-                {
-                    results[i] = new BulkResult(i, 0, item.Path ?? "", methodError, false);
-                    if (stopOnFirstError) cts.Cancel();
-                    return;
-                }
-                if (string.IsNullOrWhiteSpace(item.Path) || !item.Path.StartsWith('/'))
-                {
-                    results[i] = new BulkResult(i, 400, item.Path ?? "", $"Invalid path: '{item.Path}'", false);
-                    if (stopOnFirstError) cts.Cancel();
-                    return;
-                }
-                if (httpMethod == HttpMethod.Post)
-                {
-                    var postError = ValidateReadOnlyPostPath(item.Path, activity);
-                    if (postError is not null)
-                    {
-                        results[i] = new BulkResult(i, 403, item.Path, postError, false);
-                        if (stopOnFirstError) cts.Cancel();
-                        return;
-                    }
-                }
-
-                var hasBody = !string.IsNullOrWhiteSpace(item.Body);
-                var resp = await HttpHelper.SendWithRetryAsync(
-                    $"https://management.azure.com{item.Path}",
-                    token, activity, "bulk",
-                    method: httpMethod,
-                    jsonBody: hasBody && httpMethod != HttpMethod.Get ? item.Body : null,
-                    includeTimestamp: false,
-                    maxResponseChars: 1024); // hard cap so a stray verbose 4xx doesn't blow up the summary
-
-                // Parse the "HTTP {code} {reason}\n{body}" envelope SendWithRetryAsync returns.
-                var firstLine = resp.IndexOf('\n');
-                var statusLine = firstLine > 0 ? resp[..firstLine] : resp;
-                var statusParts = statusLine.Split(' ', 3);
-                int.TryParse(statusParts.ElementAtOrDefault(1), out var status);
-                var ok = status >= 200 && status < 300;
-                var bodyPart = firstLine > 0 ? resp[(firstLine + 1)..] : "";
-
-                string? name = null;
-                try
-                {
-                    var idx = bodyPart.IndexOf('{');
-                    if (idx >= 0)
-                    {
-                        using var doc = JsonDocument.Parse(bodyPart[idx..]);
-                        if (doc.RootElement.ValueKind == JsonValueKind.Object
-                            && doc.RootElement.TryGetProperty("name", out var n))
-                            name = n.GetString();
-                    }
-                }
-                catch { /* ignore */ }
-
-                results[i] = new BulkResult(i, status, item.Path, ok ? null : bodyPart, ok, name);
-                if (!ok && stopOnFirstError) cts.Cancel();
-            });
-
-        sw.Stop();
-        var succeeded = results.Count(r => r is not null && r.Ok);
-        var failed = results.Count(r => r is not null && !r.Ok);
-        activity?.SetTag("bulk.succeeded", succeeded);
-        activity?.SetTag("bulk.failed", failed);
-        activity?.SetTag("bulk.duration_ms", sw.ElapsedMilliseconds);
-
-        var failuresPayload = results
-            .Where(r => r is not null && !r.Ok)
-            .Take(20)
-            .Select(r => new
-            {
-                index = r!.Index,
-                status = r.Status,
-                path = r.Path,
-                error = (r.Error ?? "").Length > 200 ? r.Error![..200] : r.Error
-            });
-
-        var successSamples = results
-            .Where(r => r is not null && r.Ok)
-            .Take(5)
-            .Select(r => new { path = r!.Path, name = r.Name });
-
-        var summary = new
+        if (items.Count > 200) return "HTTP 400 BadRequest\nA batch supports at most 200 requests; split larger work explicitly.";
+        return await ExecuteBulkAsync(items, parallelism, stopOnFirstError, async (item, requestToken) =>
         {
-            total = items.Count,
-            succeeded,
-            failed,
-            durationMs = sw.ElapsedMilliseconds,
-            stopped = cts.IsCancellationRequested && stopOnFirstError,
-            failures = failuresPayload,
-            successSamples
-        };
-        return JsonSerializer.Serialize(summary);
+            var (method, methodError) = HttpHelper.ResolveMethod(item.Method, activity, "bulk");
+            if (methodError is not null) return methodError;
+            if (string.IsNullOrWhiteSpace(item.Path) || !item.Path.StartsWith('/') || item.Path.StartsWith("//")
+                || item.Path.Contains('#') || item.Path.Contains('\\')) return "HTTP 400 BadRequest\nInvalid ARM path.";
+            if (method == HttpMethod.Post && ValidateReadOnlyPostPath(item.Path, activity) is { } postError) return postError;
+            return await HttpHelper.SendWithRetryAsync($"https://management.azure.com{item.Path}", token, activity, "bulk",
+                method: method, jsonBody: method == HttpMethod.Get ? null : item.Body,
+                cancellationToken: requestToken);
+        }, cancellationToken);
     }
 
-    private sealed class BulkRequestItem
+    internal static async Task<string> ExecuteBulkAsync(IReadOnlyList<BulkRequestItem> items, int parallelism, bool stopOnFirstError,
+        Func<BulkRequestItem, CancellationToken, Task<string>> send, CancellationToken cancellationToken)
+    {
+        if (items.Count is < 1 or > 200) throw new ArgumentException("Batches support 1 to 200 items.");
+        var results = new BulkResult?[items.Count];
+        var stop = 0;
+        await Parallel.ForEachAsync(Enumerable.Range(0, items.Count),
+            new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(parallelism, 1, 50), CancellationToken = CancellationToken.None },
+            async (index, parallelToken) =>
+            {
+                if (cancellationToken.IsCancellationRequested || Volatile.Read(ref stop) != 0)
+                {
+                    results[index] = new(index, 0, "unattempted", false, null, "Not sent.");
+                    return;
+                }
+                try
+                {
+                    var response = await send(items[index], cancellationToken);
+                    var newline = response.IndexOf('\n');
+                    int.TryParse((newline < 0 ? response : response[..newline]).Split(' ').ElementAtOrDefault(1), out var status);
+                    var content = newline < 0 ? "" : response[(newline + 1)..];
+                    object? body = null;
+                    var partial = content.Length > 12000;
+                    if (!partial && content.Length > 0)
+                    {
+                        try { body = JsonSerializer.Deserialize<JsonElement>(content); }
+                        catch (JsonException) { body = SensitiveContent.Redact(content); }
+                    }
+                    var succeeded = status is >= 200 and < 300;
+                    var outcome = succeeded ? "succeeded" : "failed";
+                    if (body is JsonElement { ValueKind: JsonValueKind.Object } structured)
+                    {
+                        if (structured.TryGetProperty("operationId", out _) && structured.TryGetProperty("status", out var operationStatus))
+                            outcome = operationStatus.GetString() ?? "unknown";
+                        else if (structured.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object
+                            && properties.TryGetProperty("provisioningState", out _)) outcome = OperationStore.Classify(status, structured);
+                    }
+                    if (status == 202 && outcome == "succeeded") outcome = "accepted";
+                    results[index] = new(index, status, outcome, partial, body,
+                        partial ? "Response exceeds the per-item limit. Narrow this indexed request; no complete-coverage claim is permitted." : null);
+                    if (outcome is "failed" or "unknown" && stopOnFirstError) Interlocked.Exchange(ref stop, 1);
+                }
+                catch (OperationCanceledException)
+                {
+                    results[index] = new(index, 0, "cancelled", true, null, "Interrupted after dispatch; verify mutation state before retrying.");
+                    if (stopOnFirstError) Interlocked.Exchange(ref stop, 1);
+                }
+                catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+                {
+                    results[index] = new(index, 0, "failed", false, null, exception.GetType().Name);
+                    if (stopOnFirstError) Interlocked.Exchange(ref stop, 1);
+                }
+            });
+        var budget = 90000;
+        for (var index = 0; index < results.Length; index++)
+        {
+            var item = results[index]!;
+            var size = JsonSerializer.Serialize(item.Body).Length;
+            if (size > budget) results[index] = item with { Body = null, Partial = true, Error = "Batch data budget reached. Retrieve this indexed item separately." };
+            else budget -= size;
+        }
+        return JsonSerializer.Serialize(new
+        {
+            total = items.Count,
+            succeeded = results.Count(item => item!.Outcome == "succeeded"),
+            failed = results.Count(item => item!.Outcome == "failed"),
+            pending = results.Count(item => item!.Outcome is "awaitingApproval" or "accepted" or "inProgress" or "dispatching" or "unknown"),
+            unattempted = results.Count(item => item!.Outcome == "unattempted"),
+            cancelled = results.Count(item => item!.Outcome == "cancelled"),
+            stopped = Volatile.Read(ref stop) != 0,
+            complete = results.All(item => item is { Outcome: "succeeded", Partial: false }),
+            results
+        }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+    }
+
+    internal sealed class BulkRequestItem
     {
         public string Method { get; set; } = "GET";
         public string Path { get; set; } = "";
         public string? Body { get; set; }
     }
 
-    private sealed record BulkResult(int Index, int Status, string Path, string? Error, bool Ok, string? Name = null);
+    private sealed record BulkResult(int Index, int Status, string Outcome, bool Partial, object? Body, string? Error);
 }

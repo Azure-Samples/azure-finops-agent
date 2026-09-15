@@ -1,4 +1,4 @@
-<!-- last refreshed: 2026-09-02 -->
+<!-- last refreshed: 2026-09-15 -->
 
 # Azure FinOps Agent — Copilot Instructions
 
@@ -30,6 +30,9 @@ The SDK and bundled Copilot CLI are one compatibility unit. Let the installed `G
 - The backend continues a turn after browser disconnect and persists the answer. The frontend reconciles against the server turn gate and transcript.
 - OAuth access tokens stay in memory. Only the encrypted refresh-token identity record is persisted.
 - The Azure OpenAI provider uses `BearerTokenProvider`; keep token refresh callback-based rather than baking a static token into sessions.
+- `RuntimePolicy` applies custom-tool allowlists on create and resume. Built-ins, MCP, tool search, cross-session memory, and logged-in CLI credentials are disabled; never reintroduce `ApproveAll`.
+- `ProtectedTool` binds owner, session, and admitted SDK tool-call id inside the callback. Host cancellation and tool leases keep the gate held until execution actually stops. Only provably undispatched input failures release without an SDK terminal event.
+- Gates, cooldowns, and registries are process-local. Run one active app instance; shared files are persistence, not distributed coordination.
 
 ## Security invariants
 
@@ -37,11 +40,12 @@ The agent can read and apply approved non-destructive changes, but it never dele
 
 - `DELETE` is blocked centrally for Azure and Graph pass-through tools.
 - Azure `POST` is restricted to the read-only allowlist in `AzureQueryTools`; action endpoints such as start, restart, deallocate, power-off, and reservation return are blocked.
-- `PUT` and `PATCH` remain available under the signed-in user's Azure RBAC.
+- ARM `PUT` and `PATCH` first create an owner/session-bound proposal. Only the explicit application approval endpoint may execute the exact stored method, URL and canonical body under the user's RBAC. A prompt cannot approve a write.
 - Destructive recommendations must use `GenerateScript` so the user reviews and runs them.
 - Every session, job, upload, generated artifact, and transcript endpoint must enforce per-user ownership.
 - Standard add-on consent tiers are read-only. Graph writes require separately granted write scopes.
 - Never log or return bearer tokens, refresh tokens, secrets, authorization headers, or connection strings.
+- Screen recognizable credentials before chat/job/tool dispatch; redact tool returns and SSE data. CLI content capture is off. This does not scrub historical transcripts or detect every unlabelled secret or image pixel.
 
 ### Untrusted-input rules
 
@@ -86,12 +90,15 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 - Push aggregation, filtering, grouping, and limits into the source API.
 - Parallelize independent calls, except Cost Management `/query` and `/forecast`, which are tenant-throttled.
 - Never issue multiple Cost Management query calls in parallel. After a final 429, stop querying that service for the turn.
+- Preserve `_finops`/`sourceEvidence`, full retry deadlines, and explicit partial coverage through projections. The cache is credential/request-bound; never label cached or unknown-age billing data as freshly measured.
+- `QueryUploadedFile` uses `jsonPath` for JSON selectors. Preserve structured arrays in `paramsJson`; host `path`, `kind`, and `mode` remain reserved. Filter and group at source, retaining row counts, totals, null groups and invalid-numeric counts.
 
 ### Cross-subscription cost
 
 Use `QueryCostsAcrossSubscriptions` exactly once for all-subscription totals.
 
 - For the current calendar month, it reads unfiltered monthly-budget `currentSpend` concurrently. Strict guards require current-month dates, monthly Cost budgets, empty filters, agreeing duplicate budgets, and one currency.
+- Budget snapshots are evaluated periodically and may lag billing. State that caveat; retrieval time is not a source data timestamp and a reported total is not a finalized bill.
 - For other periods, it tries one management-group aggregate query and then the minimum sequential subscription fallback.
 - Do not list subscriptions again; connection status already provides the available scopes.
 
@@ -104,6 +111,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - `ChatEndpoints` emits `maturity_score` and `follow_up` directly.
 - Do not call `QueryAzure`, `FindIdleResources`, `ReportMaturityScore`, or `SuggestFollowUp` in the same Crawl turn.
 - Walk, Run, and Playbook continue to use `ReportMaturityScore`.
+- Unknown and not-applicable scores are null, never zero, and are excluded from the displayed denominator. An empty resource group is not itself billable waste. Do not claim effective policy enforcement from assignment-name matches.
 
 ### Retail pricing
 
@@ -115,6 +123,13 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - Meter, product and SKU names are not derivable from the ARM SKU (`Standard_ND96asr_v4` meters as `ND96asr_A100_v4`). When such a filter matches zero rows the tool drops it, re-queries on the structural filter alone, and says so — it must never return an empty table.
 - `priceType='Consumption'` includes Spot and Low Priority. Comparisons stay within one `meterName`, and answers default to the ordinary on-demand meter unless another variant was requested.
 - Foundry model comparisons must use the intended deployment tier/zone and must not silently choose Batch, cached, or Data Zone rows when Standard Global was requested.
+- Preserve `RESOLUTION` status and coverage. One targeted refinement is allowed for ambiguous/partial results. Missing prices stay unknown; the deterministic calculator rejects ambiguous decimal separators, missing rates and mixed currencies.
+
+### Compute and operations
+
+- `CheckComputeFeasibility` separates regional/family/Spot quota, SKU and zone restrictions, scope coverage, and placement likelihood. It is not a capacity guarantee or effective policy validation.
+- `CheckVmConnectivity` probes from an existing Azure VM via an existing Network Watcher. Never substitute connectivity from the app host.
+- `OperationStore` records intent before dispatch and preserves asynchronous state, polling URLs, retry deadlines and prerequisites. Use `GetOperationStatus`/`ListOperationResults`; HTTP 202 is not success and unknown writes must not be retried blindly.
 
 ### Charts and generated files
 
@@ -122,10 +137,14 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - Generated script/deck markers are converted into structured SSE events.
 - Download endpoints require an authenticated session and owner match.
 - Expired artifacts render an expired state rather than a dead link.
+- Owner-bound artifacts persist for 24 hours. `GenerateDataReport` creates real CSV/XLSX/escaped HTML with row-count checks and spreadsheet formula neutralization; never invent sandbox links.
+- Upload ids bind to one conversation. Pending uploads expire in 30 minutes; bound uploads have a 24-hour sliding lease, capped at seven days. Active readers hold leases. Starting another conversation must not delist the previous conversation's files.
 
 ## Scheduled jobs
 
 - Jobs are Entra-only and use delegated refresh tokens.
+- Every run must report `ReportJobOutcome`. Success requires host-observed complete fresh evidence for every cited request scope, plus a nonempty answer. SDK idle alone is not business success; store the validated outcome, not the model's claim.
+- Compact model context after every 20 completed runs while preserving the durable transcript. Pause on unverifiable compaction or a verified `goal_achieved`. Scheduled ARM changes still require explicit UI approval; no unattended capacity purchase.
 - Ownership is exact OID match; never fall back to a derived user-ID match.
 - Limits: 3 active jobs per user; custom cadence 1–43200 minutes; sub-daily expiry 7 days; daily or slower expiry 90 days; 5 consecutive failures auto-pause.
 - Resume is cap-checked exactly like create.
@@ -174,6 +193,8 @@ The frontend must be built before backend startup so `wwwroot` exists when ASP.N
 ## Testing
 
 - Backend: `dotnet build src/Dashboard/Dashboard.csproj --no-restore`
+- Regressions: `dotnet test tests/Dashboard.Tests/Dashboard.Tests.csproj`; Python `python -m unittest discover -s tests -p "test_*.py"`; frontend `npm run test` and `npm run test:browser`.
+- `validate.yml` runs credential-free regressions, desktop/mobile browsers and Linux image smoke checks before either deployment workflow can run. Exact SDK/CLI protocol tests must not be skipped on Linux.
 - Frontend: `npm run build` under `src/Dashboard/frontend`
 - Always verify the rendered UI for UI changes; a successful build is not a browser test.
 - Measure latency from the app's SSE stream, not rendered pixels.
@@ -184,6 +205,8 @@ The frontend must be built before backend startup so `wwwroot` exists when ASP.N
 - After edits, verify disk state with `git status --short`; save all editor buffers before building.
 
 ## Deployment
+
+Pin every external GitHub Action to a full 40-character commit SHA with a release-version comment. Verify the SHA against the upstream release, and keep `cooldown.default-days: 7` in the `github-actions` Dependabot entry. Do not replace pins with mutable tags during workflow edits.
 
 Customer deployment uses `azd up` and generates names from the selected environment. Never put deployment coordinates in tracked files.
 
@@ -198,6 +221,11 @@ Production OIDC must be branch-scoped to `main` and least-privileged: `AcrPush` 
 Do not deploy without explicit user instruction. When instructed, validate builds, diff, secrets, account context, workflow configuration, and target version before pushing.
 
 ## Observability
+
+- Host traces use `SamplingRatio = 1` with `TracesPerSecond = null`; the rate limit otherwise overrides ratio sampling. Keep host, CLI collector, and browser telemetry changes distinct.
+- Collector 0.160.0 uses `azure_monitor` with loopback OTLP receivers. Validate config, local ingestion and shutdown after collector upgrades; the optional AMQP dependency finding is tracked in `docs/agent-reliability.md`.
+- Owner-bound turn outcomes persist for 30 days and reconcile interrupted records on startup. Normal chat fulfillment stays `not_evaluated`; a completed HTTP request or SDK turn is not proof the user's objective was met.
+- Browser exception capture has one bounded, redacted, deduplicated reporting path. Do not claim the historical notification-manager exception is fixed without reproducing its trigger.
 
 Discover Application Insights and Log Analytics identifiers from `azd env get-values`, Azure Resource Graph, or the deployed resource group. Never hardcode an application ID, workspace ID, subscription, or resource group in prompts or instructions.
 

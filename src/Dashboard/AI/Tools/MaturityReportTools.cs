@@ -21,9 +21,9 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// handler, /api/download/html/{id} endpoint, frontend download card, and 30-min
 /// cleanup all work unchanged.
 /// </summary>
-public static class MaturityReportTools
+public sealed class MaturityReportTools(long ownerUserId)
 {
-    public static IEnumerable<AIFunction> Create()
+    public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateMaturityReport, "GenerateMaturityReport",
             @"Generates a DEEP, evidence-based FinOps maturity ASSESSMENT REPORT as one scrolling, print/PDF-friendly HTML document. Use this — NOT GenerateHtmlPresentation — whenever the user wants a 'maturity assessment', 'full FinOps assessment', 'FinOps Foundation report', or a board/exec maturity report with depth.
@@ -41,7 +41,7 @@ The 19 canonical capabilities (group under the 4 domains):
 Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.");
     }
 
-    private static Task<string> GenerateMaturityReport(
+    private Task<string> GenerateMaturityReport(
         [Description(@"JSON object describing the full assessment. SCHEMA:
 {
   ""customer"": ""Contoso"",                       // optional
@@ -91,16 +91,12 @@ Only 'capabilities' is strictly required; every other section renders when prese
             : $"{cust} · FinOps Maturity Assessment";
         var html = BuildShell(title, body);
 
-        var fileId = Guid.NewGuid().ToString("N")[..12];
         var safeName = TempFileHelper.SanitizeFilename(filename ?? "FinOps-Maturity-Assessment", "FinOps-Maturity-Assessment");
-        var outputPath = Path.Combine(Path.GetTempPath(), $"{fileId}_{safeName}.html");
-        File.WriteAllText(outputPath, html, new UTF8Encoding(false));
-
-        HtmlPresentationTools.GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, HttpHelper.CurrentTurnUserId());
+        var artifact = ArtifactStore.Default.Register(ownerUserId, safeName + ".html", "text/html", Encoding.UTF8.GetBytes(html));
         activity?.SetTag("report.capabilities", capabilityCount);
 
         // slideCount slot doubles as the section/capability count shown on the card.
-        return Task.FromResult($"__HTML_READY__:{fileId}:{safeName}.html:{capabilityCount} capabilities");
+        return Task.FromResult($"__HTML_READY__:{artifact.Id}:{safeName}.html:{capabilityCount} capabilities");
     }
 
     // ────────────────────────────────────────────────────────────────────

@@ -23,12 +23,12 @@ public static class CostEstimateTools
 
 WORKFLOW: 1) look up per-1M-token rates with GetAzureRetailPricing (Standard + Global unless asked otherwise); 2) pass those rates plus ONE shared set of token assumptions here; 3) report the returned numbers VERBATIM.
 
-The result is authoritative and already reconciled — input + output + cached costs sum exactly to totalMonthlyCost, and a ready-made 'breakdown' string is provided per model. In your reply, EVERY figure (headline, summary table, AND step-by-step) MUST equal these numbers exactly. Do NOT recompute or round differently. State the token assumption ONCE and reuse it for every model. If the user gives two scenarios (e.g. 1500/500 vs 100/400), call this tool ONCE PER scenario and keep them clearly separated — never mix.
+The arithmetic is reconciled, but source validity and billing freshness remain separate. Include source, rateId, region, deploymentTier, currency and dataAsOfUtc in each model when known. Input + output + cached costs sum to totalMonthlyCost. Report those calculated figures consistently, labelled as an estimate rather than measured billing. Use one assumption set per scenario; never mix or change it merely because the user challenges the answer.
 
 Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-sol, Global Standard') so the estimate states what it is based on.");
     }
 
-    private static string EstimateTokenCost(
+    internal static string EstimateTokenCost(
         [Description(@"JSON array of models to price, each with a label and per-1M-token rates (USD or the currency you pass). Schema: [{""label"":""a nano model, Global Standard"",""inputPricePer1M"":0.20,""outputPricePer1M"":1.25,""cachedInputPricePer1M"":0.02}]. cachedInputPricePer1M is optional (omit if not modeling cache hits). Rates come from GetAzureRetailPricing.")] string modelsJson,
         [Description("Average input (prompt) tokens per conversation/request. Applies to ALL models. e.g. '1500'.")] string inputTokensPerConversation,
         [Description("Average output (completion) tokens per conversation/request. Applies to ALL models. e.g. '500'.")] string outputTokensPerConversation,
@@ -45,8 +45,10 @@ Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-s
             return $"Error: outputTokensPerConversation '{outputTokensPerConversation}' is not a valid non-negative number.";
         if (!TryNum(conversationsPerMonth, out var convos) || convos < 0)
             return $"Error: conversationsPerMonth '{conversationsPerMonth}' is not a valid non-negative number.";
-        TryNum(cachedInputTokensPerConversation, out var cachedPerConvo);
-        if (cachedPerConvo < 0) cachedPerConvo = 0;
+        var cachedPerConvo = 0d;
+        if (!string.IsNullOrWhiteSpace(cachedInputTokensPerConversation)
+            && (!TryNum(cachedInputTokensPerConversation, out cachedPerConvo) || cachedPerConvo < 0))
+            return "Error: cachedInputTokensPerConversation must be a finite non-negative number using a decimal point.";
 
         var cur = string.IsNullOrWhiteSpace(currency) ? "USD" : currency.Trim().ToUpperInvariant();
 
@@ -55,22 +57,36 @@ Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-s
         catch (JsonException jex) { return $"Error: modelsJson is not valid JSON — {jex.Message}"; }
         if (modelsRoot.ValueKind != JsonValueKind.Array)
             return "Error: modelsJson must be a JSON array of model objects.";
+        if (modelsRoot.GetArrayLength() is < 1 or > 20)
+            return "Error: provide between 1 and 20 models.";
 
         using var activity = HttpHelper.Telemetry.StartActivity("EstimateTokenCost");
 
         var monthlyInputTokens = inPerConvo * convos;
         var monthlyOutputTokens = outPerConvo * convos;
         var monthlyCachedTokens = cachedPerConvo * convos;
+        if (!double.IsFinite(monthlyInputTokens) || !double.IsFinite(monthlyOutputTokens) || !double.IsFinite(monthlyCachedTokens))
+            return "Error: token volume is too large.";
 
         var models = new List<object>();
         foreach (var m in modelsRoot.EnumerateArray())
         {
-            if (m.ValueKind != JsonValueKind.Object) continue;
+            if (m.ValueKind != JsonValueKind.Object) return "Error: every model must be an object.";
 
-            var label = GetString(m, "label") ?? "(unlabeled model)";
-            var inRate = GetDouble(m, "inputPricePer1M");
-            var outRate = GetDouble(m, "outputPricePer1M");
+            var label = GetString(m, "label");
+            var inputRate = GetNullableDouble(m, "inputPricePer1M");
+            var outputRate = GetNullableDouble(m, "outputPricePer1M");
             var cachedRate = GetNullableDouble(m, "cachedInputPricePer1M");
+            if (string.IsNullOrWhiteSpace(label) || inputRate is null or < 0 || outputRate is null or < 0
+                || cachedRate is < 0 || cachedPerConvo > 0 && cachedRate is null)
+                return "Error: each labelled model requires finite non-negative input/output rates and a cached rate when cache tokens are used. Missing rates are unknown, not zero.";
+            if (m.TryGetProperty("cachedInputPricePer1M", out var cacheValue) && cacheValue.ValueKind != JsonValueKind.Null && cachedRate is null)
+                return "Error: cached input rate is invalid.";
+            var inRate = inputRate.Value;
+            var outRate = outputRate.Value;
+            var rateCurrency = GetString(m, "currency");
+            if (rateCurrency is not null && !rateCurrency.Equals(cur, StringComparison.OrdinalIgnoreCase))
+                return "Error: model rates use different currencies; convert with an explicit exchange-rate source first.";
 
             // Round each component to cents, then derive the total from the ROUNDED
             // components so the printed parts always sum exactly to the printed total.
@@ -78,6 +94,7 @@ Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-s
             var outputCost = Round2(monthlyOutputTokens / 1_000_000d * outRate);
             var cachedCost = cachedRate is double cr ? Round2(monthlyCachedTokens / 1_000_000d * cr) : 0d;
             var total = Round2(inputCost + outputCost + cachedCost);
+            if (!double.IsFinite(total)) return "Error: calculated cost exceeds the supported numeric range.";
             var perConvo = convos > 0 ? total / convos : 0d;
 
             var breakdown =
@@ -91,6 +108,17 @@ Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-s
             models.Add(new
             {
                 label,
+                evidence = new
+                {
+                    source = GetString(m, "source") ?? "user_or_model_supplied_rate_unverified",
+                    rateId = GetString(m, "rateId"),
+                    region = GetString(m, "region"),
+                    deploymentTier = GetString(m, "deploymentTier"),
+                    dataAsOfUtc = GetString(m, "dataAsOfUtc"),
+                    rateUnit = "currency per 1 million tokens",
+                    currency = cur,
+                    confidence = GetString(m, "source") is null ? "unverified_rate" : "source_claimed_not_independently_verified"
+                },
                 inputPricePer1M = inRate,
                 outputPricePer1M = outRate,
                 cachedInputPricePer1M = cachedRate,
@@ -108,6 +136,9 @@ Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-s
 
         var result = new
         {
+            estimateId = Guid.NewGuid().ToString("N"),
+            status = "hypothetical_estimate",
+            isMeasuredBill = false,
             assumptions = new
             {
                 inputTokensPerConversation = inPerConvo,
@@ -122,34 +153,31 @@ Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-s
             },
             models,
             instructions =
-                "These totals are authoritative and already reconciled (components sum to totalMonthlyCost). " +
+                "Arithmetic is reconciled, but rate/source validity and billing freshness are not established by this calculator. " +
+                "Do not replace this estimate with an extrapolated portal value unless scope, dates, deployment, token categories and cache treatment reconcile. " +
                 "In your reply, the headline, the summary table, and the step-by-step MUST all equal these numbers — " +
                 "use the per-model 'breakdown' string for the step-by-step. Do NOT recompute, do NOT blend a different " +
                 "token assumption, and always state the pricing basis (e.g. Global Standard) for each model.",
-            utc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss")
+            utc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture)
         };
 
         return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    private static bool TryNum(string? s, out double value)
+    internal static bool TryNum(string? text, out double value)
     {
         value = 0;
-        if (string.IsNullOrWhiteSpace(s)) return false;
-        // Forgive thousands separators, underscores, currency symbols and whitespace.
-        var cleaned = s.Replace(",", "").Replace("_", "").Replace("$", "").Replace("€", "").Replace("£", "").Trim();
-        return double.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out value);
+        if (string.IsNullOrWhiteSpace(text) || text.Contains(',') || text.Contains('_')) return false;
+        return double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value) && double.IsFinite(value);
     }
 
     private static string? GetString(JsonElement e, string prop) =>
         e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    private static double GetDouble(JsonElement e, string prop) => GetNullableDouble(e, prop) ?? 0d;
-
     private static double? GetNullableDouble(JsonElement e, string prop)
     {
         if (!e.TryGetProperty(prop, out var v)) return null;
-        if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)) return d;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d) && double.IsFinite(d)) return d;
         if (v.ValueKind == JsonValueKind.String && TryNum(v.GetString(), out var sd)) return sd;
         return null;
     }

@@ -2,6 +2,7 @@ using System.Text.Json;
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Observability;
+using AzureFinOps.Dashboard.Infrastructure;
 
 namespace AzureFinOps.Dashboard.Endpoints;
 
@@ -69,6 +70,13 @@ public static class SessionEndpoints
             return Results.Ok(new { active = AzureFinOps.Dashboard.AI.ChatEndpoints.IsTurnActive(sessionId) });
         });
 
+        app.MapGet("/api/sessions/{sessionId}/outcomes", async (HttpContext ctx, string sessionId) =>
+        {
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid)) return Results.Unauthorized();
+            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted)) return Results.NotFound();
+            return Results.Ok(new { outcomes = TurnOutcomeStore.Default.ForSession(userId, sessionId) });
+        });
+
         app.MapPost("/api/sessions/{sessionId}/select", async (HttpContext ctx, string sessionId) =>
         {
             if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
@@ -131,7 +139,12 @@ public static class SessionEndpoints
             // Read-only load — does NOT register this session as the user's
             // current and does NOT bump the ActiveSessions gauge. Just viewing
             // a past conversation must not switch the user's active thread.
-            var events = await copilotFactory.LoadTranscriptAsync(sessionId, userId, entraOid, ctx.RequestAborted);
+            IReadOnlyList<GitHub.Copilot.SessionEvent> events;
+            try { events = await copilotFactory.LoadTranscriptAsync(sessionId, userId, entraOid, ctx.RequestAborted); }
+            catch (CopilotSessionFactory.HistoryUnavailableException)
+            {
+                return Results.NotFound(new { code = "history_unavailable", error = "The retained conversation history is unavailable. Start a new conversation to continue." });
+            }
 
             // First pass: index tool execution results by ToolCallId so we
             // can attach result / success / error to each requested tool.
@@ -246,7 +259,7 @@ public static class SessionEndpoints
                                                     // Artifacts live 30 min in-memory + on temp disk; after a
                                                     // TTL sweep or restart the download link is dead — let the
                                                     // UI render an \"expired\" state instead of a 404 link.
-                                                    expired = !AzureFinOps.Dashboard.AI.Tools.HtmlPresentationTools.GeneratedFiles.ContainsKey(parts[0]),
+                                                    expired = ArtifactStore.Default.Find(parts[0], userId) is null,
                                                 };
                                             break;
                                         }
@@ -262,7 +275,8 @@ public static class SessionEndpoints
                                             var parts = t["__SCRIPT_READY__:".Length..].Split(':', 5);
                                             if (parts.Length >= 4)
                                             {
-                                                var live = AzureFinOps.Dashboard.AI.Tools.ScriptTools.GeneratedFiles.TryGetValue(parts[0], out var entry);
+                                                var entry = ArtifactStore.Default.Find(parts[0], userId);
+                                                var live = entry is not null;
                                                 pendingScript = new
                                                 {
                                                     fileId = parts[0],
@@ -270,7 +284,7 @@ public static class SessionEndpoints
                                                     lineCount = parts[2],
                                                     language = parts[3],
                                                     description = parts.Length > 4 ? parts[4] : "",
-                                                    content = live ? entry.Content ?? "" : "",
+                                                    content = entry is not null ? SensitiveContent.Redact(File.ReadAllText(entry.Path)) : "",
                                                     // See __HTML_READY__ above — expired artifacts render a
                                                     // \"regenerate\" hint instead of dead download/copy buttons.
                                                     expired = !live,
@@ -287,7 +301,9 @@ public static class SessionEndpoints
             }
             FlushAssistant();
 
-            return Results.Ok(new { messages });
+            var pendingChanges = OperationStore.Default.ForSession(userId, sessionId)
+                .Where(operation => operation.Status == "awaitingApproval").Select(OperationStore.Review).ToArray();
+            return Results.Ok(new { messages, pendingChanges });
         });
     }
 

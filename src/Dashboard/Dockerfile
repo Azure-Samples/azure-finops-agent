@@ -3,11 +3,8 @@
 FROM node:26-slim AS frontend
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
-# Use `npm install` instead of `npm ci` so that Linux-only platform-optional
-# deps (e.g. @emnapi/*) that aren't present when the lockfile was last
-# regenerated on a Windows dev machine still resolve cleanly in CI.
 # Plain RUN (no BuildKit cache mount) so azd's `az acr build` classic builder works.
-RUN npm install --no-audit --no-fund --prefer-offline
+RUN npm ci --no-audit --no-fund --prefer-offline
 COPY frontend/ ./
 RUN npx vite build --outDir ../wwwroot
 
@@ -38,13 +35,15 @@ RUN pip3 install --break-system-packages \
 
 # OpenTelemetry Collector (contrib build — needed for the azuremonitor exporter).
 # Bridges OTLP from the Copilot CLI subprocess into Azure Application Insights.
-COPY --from=otel/opentelemetry-collector-contrib:0.108.0 /otelcol-contrib /usr/local/bin/otelcol
+COPY --from=otel/opentelemetry-collector-contrib:0.160.0 /otelcol-contrib /usr/local/bin/otelcol
 COPY otel-collector-config.yaml /etc/otelcol/config.yaml
 
 WORKDIR /app
 COPY --from=build /app/publish .
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh && \
+  mkdir -p /home/copilot/users /home/copilot/anon /home/dataprotection-keys && \
+  chown -R app:app /home/copilot /home/dataprotection-keys
 
 # Build metadata baked into the image
 ARG BUILD_SHA=dev
@@ -71,4 +70,5 @@ ENV OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 ENV COPILOT_HOME=/home/copilot
 EXPOSE 8080
 
+USER $APP_UID
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

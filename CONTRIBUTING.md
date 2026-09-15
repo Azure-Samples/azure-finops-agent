@@ -68,6 +68,23 @@ Local dev secrets are managed via [`dotnet user-secrets`](https://learn.microsof
 - `appsettings.json` — base config with empty placeholders (committed)
 - App Service settings and managed identity — production configuration outside Git
 
+### Regression Tests
+
+Install Python 3 with `pandas` and `openpyxl` for file-query/report tests. Set `FINOPS_PYTHON` to the interpreter path when it is not the default `python` (Windows) or `python3` (Linux).
+
+From the repository root:
+
+```powershell
+dotnet test tests/Dashboard.Tests/Dashboard.Tests.csproj
+python -m unittest discover -s tests -p "test_*.py" -v
+npm --prefix src/Dashboard/frontend ci
+npm --prefix src/Dashboard/frontend run test
+```
+
+From `src/Dashboard/frontend`, run `npx playwright install chromium`, then `npm run test:browser` and `npm run build`. The browser tests cover desktop and mobile with synthetic API fixtures; they do not grant consent or mutate Azure resources.
+
+The backend suite executes the package-supplied Copilot runtime against a local synthetic model provider, including images, cancellation, compaction and resume. Do not skip runtime acquisition to make the tests pass. The shared `validate.yml` workflow also builds and starts the Linux image as non-root and tests shutdown with an unavailable telemetry destination. Both deployment workflows depend on this validation job. Pushing `main` can deploy production automatically; local tests must pass first.
+
 ### Project Structure
 
 ```

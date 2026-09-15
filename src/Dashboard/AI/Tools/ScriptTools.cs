@@ -12,17 +12,11 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// The LLM produces the script content after discussing with the user, and this tool
 /// packages it as a downloadable .ps1 or .sh file with a code preview in the UI.
 /// </summary>
-public static class ScriptTools
+public sealed class ScriptTools(long ownerUserId)
 {
-    // Store generated files for download: fileId → (path, created, content, owner).
-    // Owner is the per-turn userId from Activity Baggage — the download endpoint
-    // rejects other users' sessions (fileIds leak into logs/telemetry).
-    internal static readonly ConcurrentDictionary<string, (string Path, DateTime Created, string Content, long? Owner)> GeneratedFiles = new();
+    internal static void CleanupOldFiles() => ArtifactStore.Default.Cleanup();
 
-    internal static void CleanupOldFiles() =>
-        TempFileHelper.CleanupOldFiles(GeneratedFiles, v => v.Created, v => v.Path);
-
-    public static IEnumerable<AIFunction> Create()
+    public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateScript, "GenerateScript",
             @"Generates a downloadable Azure CLI or PowerShell script from FinOps recommendations.
@@ -34,7 +28,7 @@ If no actionable recommendations yet, do NOT call this tool. Tell the user: 'I d
 Script MUST include safety features: --what-if / confirmation prompts / dry-run mode, comments per logical step. Prefer Azure CLI (`az`) unless user asks for PowerShell.");
     }
 
-    private static Task<string> GenerateScript(
+    private Task<string> GenerateScript(
         [Description(@"The full script content (Azure CLI or PowerShell). Must include:
 - A header comment block explaining what the script does, prerequisites, and usage
 - Safety features: dry-run mode, confirmation prompts, or --what-if flags
@@ -58,18 +52,15 @@ Example header:
 
         var lang = (language ?? "bash").ToLowerInvariant();
         var ext = lang == "powershell" ? ".ps1" : ".sh";
-        var fileId = Guid.NewGuid().ToString("N")[..12];
         var safeName = string.IsNullOrWhiteSpace(filename) ? "finops-remediation" : SanitizeFilename(filename);
-        var outputPath = Path.Combine(Path.GetTempPath(), $"{fileId}_{safeName}{ext}");
         var desc = string.IsNullOrWhiteSpace(description) ? "FinOps remediation script" : description;
 
-        File.WriteAllText(outputPath, scriptContent, Encoding.UTF8);
-
-        GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, scriptContent, HttpHelper.CurrentTurnUserId());
+        var artifact = ArtifactStore.Default.Register(ownerUserId, safeName + ext,
+            lang == "powershell" ? "application/x-powershell" : "application/x-shellscript", Encoding.UTF8.GetBytes(SensitiveContent.Redact(scriptContent)));
 
         var lineCount = scriptContent.Split('\n').Length;
 
-        return Task.FromResult($"__SCRIPT_READY__:{fileId}:{safeName}{ext}:{lineCount}:{lang}:{desc}");
+        return Task.FromResult($"__SCRIPT_READY__:{artifact.Id}:{safeName}{ext}:{lineCount}:{lang}:{desc}");
     }
 
     private static string SanitizeFilename(string name) =>

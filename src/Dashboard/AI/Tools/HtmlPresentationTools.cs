@@ -15,16 +15,11 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// template with Chart.js (CDN) for charts. Keyboard nav: ←/→ to navigate,
 /// ↑ fullscreen, ↓ exit. Click zones, dot nav, progress bar, swipe — all included.
 /// </summary>
-public static class HtmlPresentationTools
+public sealed class HtmlPresentationTools(long ownerUserId)
 {
-    // fileId → (path, created, owner). Owner is the per-turn userId from Activity
-    // Baggage — the download endpoint rejects other users' sessions.
-    internal static readonly ConcurrentDictionary<string, (string Path, DateTime Created, long? Owner)> GeneratedFiles = new();
+    internal static void CleanupOldFiles() => ArtifactStore.Default.Cleanup();
 
-    internal static void CleanupOldFiles() =>
-        TempFileHelper.CleanupOldFiles(GeneratedFiles, v => v.Created, v => v.Path);
-
-    public static IEnumerable<AIFunction> Create()
+    public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateHtmlPresentation, "GenerateHtmlPresentation",
             @"Generates a self-contained HTML deck (one .html file). Use for any 'presentation', 'deck', 'slides', or 'exec summary' — there's no other format. Built-in nav: ←/→ navigate, ↑ fullscreen, ↓/Esc exit, number keys jump, touch swipe, dot nav, progress bar.
@@ -47,7 +42,7 @@ NOTE: this is a SLIDE DECK for quick exec summaries. For a DEEP FinOps maturity 
 ");
     }
 
-    private static Task<string> GenerateHtmlPresentation(
+    private Task<string> GenerateHtmlPresentation(
         [Description(@"JSON array of slides. SLIDE OBJECT SCHEMA:
 - layout: 'title' | 'section' | 'kpi' | 'chart' | 'content' | 'two_column' | 'maturity' | 'alerts' | 'table' | 'roadmap' | 'closing' (REQUIRED)
 - title: slide title (REQUIRED, except 'title' layout uses it as the hero h1)
@@ -87,9 +82,7 @@ EXAMPLE:
         if (root.ValueKind != JsonValueKind.Array)
             return Task.FromResult("Error: slides must be a JSON array.");
 
-        var fileId = Guid.NewGuid().ToString("N")[..12];
         var safeName = TempFileHelper.SanitizeFilename(filename ?? "FinOps-Deck", "FinOps-Deck");
-        var outputPath = Path.Combine(Path.GetTempPath(), $"{fileId}_{safeName}.html");
 
         var slidesHtml = new StringBuilder();
         var chartScripts = new StringBuilder();
@@ -107,10 +100,8 @@ EXAMPLE:
             : "Azure FinOps · Generated Deck";
 
         var html = BuildShell(deckTitle, slidesHtml.ToString(), chartScripts.ToString());
-        File.WriteAllText(outputPath, html, new UTF8Encoding(false));
-
-        GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, HttpHelper.CurrentTurnUserId());
-        return Task.FromResult($"__HTML_READY__:{fileId}:{safeName}.html:{slideCount}");
+        var artifact = ArtifactStore.Default.Register(ownerUserId, safeName + ".html", "text/html", Encoding.UTF8.GetBytes(html));
+        return Task.FromResult($"__HTML_READY__:{artifact.Id}:{safeName}.html:{slideCount}");
     }
 
     // ────────────────────────────────────────────────────────────────────

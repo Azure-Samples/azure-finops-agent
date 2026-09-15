@@ -17,7 +17,7 @@ public static class RetailPricingTools
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private sealed record RetailPage(int Status, string StatusText, string Body);
 
-    private const int MaxProjectedRows = 40;
+    private const int MaxProjectedRows = 200;
     private const int MaxFacetValues = 25;
 
     private static int RowCount(RetailPage page)
@@ -130,14 +130,14 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         foreach (var result in results)
         {
             output.AppendLine().Append("=== ").Append(result.Label).AppendLine(" ===");
-            output.AppendLine(CompactBatchResult(result.Result));
+            output.AppendLine(result.Result);
         }
         return output.ToString();
     }
 
     // Cap the payload so the CLI keeps the result inline: past its limit it spills
     // to a temp file and the model spends a `view` round-trip per chunk.
-    private static string CompactBatchResult(string result)
+    internal static string CompactBatchResult(string result, bool paginationComplete = true, bool widened = false, IReadOnlyList<string>? requestedRegions = null)
     {
         var jsonStart = result.IndexOf("{\"BillingCurrency\"", StringComparison.Ordinal);
         if (jsonStart < 0)
@@ -175,7 +175,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                     Clean(Str(item, "productName")), Clean(Str(item, "skuName")),
                     Clean(Str(item, "meterName")), Clean(Str(item, "unitOfMeasure")),
                     Clean(Str(item, "type")), Clean(Str(item, "reservationTerm")), Clean(savings));
-                return (Price: price, Meter: Clean(Str(item, "meterName")), Line: line);
+                return (Price: price, Meter: Clean(Str(item, "meterName")), Region: Clean(Str(item, "armRegionName")), Line: line);
             })
             .GroupBy(row => row.Line, StringComparer.Ordinal)
             .Select(group => group.First())
@@ -185,11 +185,11 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             // the ordinary on-demand meter under every Spot/Low-Priority row and the
             // model then quotes Spot as the headline price.
             var byMeter = rows
-                .GroupBy(row => row.Meter, StringComparer.Ordinal)
+                .GroupBy(row => (row.Meter, row.Region))
                 .Select(group => group.OrderBy(row => row.Price).ToList())
                 .OrderBy(group => group[0].Price)
                 .ToList();
-            var selected = new List<(double Price, string Meter, string Line)>();
+            var selected = new List<(double Price, string Meter, string Region, string Line)>();
             for (var depth = 0; selected.Count < MaxProjectedRows; depth++)
             {
                 var added = false;
@@ -206,9 +206,34 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             var queryLine = result.Split('\n').FirstOrDefault(line => line.StartsWith("Query: ", StringComparison.Ordinal));
             var output = new StringBuilder();
             if (queryLine is not null) output.AppendLine(queryLine);
+            var complete = paginationComplete && selected.Count == rows.Count;
+            var deliveredRegions = selected.Select(row => row.Region).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var missingRegions = (requestedRegions ?? []).Where(region => !deliveredRegions.Contains(region, StringComparer.OrdinalIgnoreCase)).ToArray();
+            var variants = items.EnumerateArray().Select(item => new
+            {
+                product = Str(item, "productName"),
+                sku = Str(item, "skuName"),
+                meter = Str(item, "meterName"),
+                unit = Str(item, "unitOfMeasure"),
+                type = Str(item, "type"),
+                term = Str(item, "reservationTerm")
+            }).Distinct().Count();
+            output.AppendLine("RESOLUTION " + JsonSerializer.Serialize(new
+            {
+                status = !complete || missingRegions.Length > 0 ? "partial" : rows.Count == 0 ? "missing" : widened || variants > 1 ? "ambiguous" : "exact",
+                complete = complete && missingRegions.Length == 0,
+                fetchedRows = rows.Count,
+                deliveredRows = selected.Count,
+                paginationComplete,
+                vocabularyWidened = widened,
+                variants,
+                deliveredRegions,
+                missingRequestedRegions = missingRegions,
+                instruction = "Exact means filters resolved, not allocation availability. Never choose a different meter, tier, or region to fill a missing price. One targeted refinement is permitted for ambiguous or partial results."
+            }));
             output.Append(BuildFacets(items));
-            if (byMeter.Count > 1)
-                output.AppendLine($"These rows span {byMeter.Count} different meterName values. Compare like-for-like WITHIN one meterName; do not mix meters in one comparison.");
+            if (variants > 1)
+                output.AppendLine($"These rows span {variants} price variants. Compare only matching meter, product, tier, unit and purchase type.");
             output.AppendLine(rows.Count <= selected.Count
                 ? $"{rows.Count} distinct row(s), cheapest first within each meter."
                 : $"{rows.Count} distinct rows; showing {selected.Count} spread across meters, cheapest first within each. Narrow using the facet values above.");
@@ -239,18 +264,16 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                 if (string.IsNullOrEmpty(text) || text.Length > 120) continue;
                 if (!values.TryGetValue(property.Name, out var set))
                     values[property.Name] = set = new SortedSet<string>(StringComparer.Ordinal);
-                // Keep one past the cap purely as an overflow flag.
-                if (set.Count <= MaxFacetValues) set.Add(text);
+                set.Add(text);
             }
         }
 
         var output = new StringBuilder("FACETS (live distinct values — filter with these exact strings):\n");
         foreach (var (field, set) in values.OrderBy(entry => entry.Key, StringComparer.Ordinal))
         {
-            if (set.Count <= 1) continue;
             var truncated = set.Count > MaxFacetValues;
             output.Append("  ").Append(field).Append(" (");
-            output.Append(truncated ? $"more than {MaxFacetValues}, showing {MaxFacetValues}" : set.Count.ToString(CultureInfo.InvariantCulture));
+            output.Append(truncated ? $"{set.Count}, showing {MaxFacetValues}" : set.Count.ToString(CultureInfo.InvariantCulture));
             output.Append("): ");
             output.AppendLine(string.Join(" | ", set.Take(MaxFacetValues)));
         }
@@ -339,7 +362,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         // truncate a region away entirely and silently skew the comparison.
         if (regionCount > 1)
             top = Math.Clamp(Math.Max(top, 25 * regionCount), 1, 100);
-        if (!string.IsNullOrWhiteSpace(armSkuName)) filters.Add($"armSkuName eq '{Esc(armSkuName.Trim())}'");
+        if (!string.IsNullOrWhiteSpace(armSkuName)) filters.Add(SkuFilter(armSkuName, false));
         if (!string.IsNullOrWhiteSpace(priceType)) filters.Add($"priceType eq '{Esc(priceType.Trim())}'");
         if (!string.IsNullOrWhiteSpace(meterNameContains)) filters.Add($"contains(meterName, '{Esc(meterNameContains.Trim())}')");
         if (!string.IsNullOrWhiteSpace(productNameContains)) filters.Add($"contains(productName, '{Esc(productNameContains.Trim())}')");
@@ -363,6 +386,21 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
 
         var firstPage = await FetchRetailPage(url, activity);
         var vocabularyDropped = false;
+        var skuFieldResolved = false;
+        if (RowCount(firstPage) == 0 && !string.IsNullOrWhiteSpace(armSkuName))
+        {
+            var alternate = filters.Select(value => value == SkuFilter(armSkuName, false) ? SkuFilter(armSkuName, true) : value).ToList();
+            var alternateFilter = string.Join(" and ", alternate);
+            var alternatePage = await FetchRetailPage($"https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview&currencyCode={Uri.EscapeDataString(currencyCode)}&$filter={Uri.EscapeDataString(alternateFilter)}&$top={top}", activity);
+            if (RowCount(alternatePage) > 0)
+            {
+                firstPage = alternatePage;
+                filters = alternate;
+                structuralFilters = filters.Take(filters.Count - vocabularyFilterCount).ToList();
+                filter = alternateFilter;
+                skuFieldResolved = true;
+            }
+        }
 
         // Meter/product/SKU names are not derivable from the SKU the caller knows
         // (Standard_ND96asr_v4 meters as ND96asr_A100_v4), so a guess that matches
@@ -396,6 +434,16 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         var allItems = new List<JsonElement>();
         string? billingCurrency = null;
         string? nextLink = null;
+        if (!paginate)
+        {
+            try
+            {
+                using var firstDocument = JsonDocument.Parse(body);
+                paginationComplete = !firstDocument.RootElement.TryGetProperty("NextPageLink", out var next)
+                    || next.ValueKind == JsonValueKind.Null || string.IsNullOrWhiteSpace(next.GetString());
+            }
+            catch (JsonException) { paginationComplete = false; }
+        }
 
         if (paginate)
         {
@@ -412,7 +460,10 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                         : null;
                     if (!pageDoc.RootElement.TryGetProperty("Items", out var items)
                         || items.ValueKind != JsonValueKind.Array)
+                    {
+                        paginationComplete = false;
                         break;
+                    }
                     allItems.AddRange(items.EnumerateArray().Select(item => item.Clone()));
                     nextLink = pageDoc.RootElement.TryGetProperty("NextPageLink", out var nextElement)
                         ? nextElement.GetString()
@@ -484,22 +535,24 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         catch (JsonException) { }
         var missingRegions = requestedRegions.Where(region => !foundRegions.Contains(region)).ToArray();
 
-        var header = $"HTTP {firstPage.Status} {firstPage.StatusText}\nQuery: {filter} (top={top}, currency={currencyCode})\nUTC: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}\nPages: {pageCount}; paginationComplete={paginationComplete}; rows={bodyRowCount}\n";
+        var header = $"HTTP {firstPage.Status} {firstPage.StatusText}\nQuery: {filter} (top={top}, currency={currencyCode})\nRetrieved UTC: {DateTimeOffset.UtcNow:o}\nPages: {pageCount}; paginationComplete={paginationComplete}; fetchedRows={bodyRowCount}\n";
         if (requestedRegions.Count > 0)
             header += missingRegions.Length == 0
-                ? $"Region coverage: {requestedRegions.Count}/{requestedRegions.Count}.\n"
-                : $"Region coverage incomplete: missing {string.Join(", ", missingRegions)}.\n";
+                ? $"Fetched region coverage: {requestedRegions.Count}/{requestedRegions.Count}; see RESOLUTION for delivered coverage.\n"
+                : $"Fetched region coverage incomplete: missing {string.Join(", ", missingRegions)}.\n";
+        if (skuFieldResolved) header += "SKU matched the live skuName field rather than armSkuName; the exact supplied value was retained.\n";
         if (vocabularyDropped)
             header += "NOTE: your meter/product/SKU-name filter matched 0 rows and was dropped. "
                 + "These are all rows for the service/region/SKU; pick the right one using the facet values below.\n";
 
         // Always project + facet. Raw JSON leaves the model no vocabulary to
         // self-correct a wrong filter with, and a full page spills to a temp file.
-        return header + CompactBatchResult(header + body);
+        return header + CompactBatchResult(header + body, paginationComplete, vocabularyDropped, requestedRegions);
     }
 
     private static async Task<RetailPage> FetchRetailPage(string url, System.Diagnostics.Activity? activity)
     {
+        var cancellationToken = ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None;
         const int maxAttempts = 4;
         HttpResponseMessage response = null!;
         string body = "";
@@ -507,8 +560,8 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
-            response = await Http.SendAsync(request);
-            body = await response.Content.ReadAsStringAsync();
+            response = await Http.SendAsync(request, cancellationToken);
+            body = await response.Content.ReadAsStringAsync(cancellationToken);
 
             if ((int)response.StatusCode != 429 && (int)response.StatusCode < 500) break;
             if (attempt == maxAttempts - 1) break;
@@ -527,11 +580,14 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                         "SSE cooling_down emit failed for pricing attempt={Attempt}", attempt + 1);
                 }
             }
-            await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
+            response.Dispose();
+            await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
         }
 
-        return new RetailPage((int)response.StatusCode, response.StatusCode.ToString(), body);
+        using (response) return new RetailPage((int)response.StatusCode, response.StatusCode.ToString(), body);
     }
+
+    internal static string SkuFilter(string value, bool displayName) => $"{(displayName ? "skuName" : "armSkuName")} eq '{Esc(value.Trim())}'";
 
     // OData single-quote escape: ' → ''
     private static string Esc(string s) => s.Replace("'", "''");

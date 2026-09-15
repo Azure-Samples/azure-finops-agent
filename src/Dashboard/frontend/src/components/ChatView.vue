@@ -208,7 +208,7 @@
                       class="assessment-stars"
                       :style="{ color: starColor(sc.score) }"
                     >
-                      {{ starsText(sc.score) }}
+                      {{ sc.status === "notApplicable" ? "N/A" : sc.status === "unknown" ? "Unknown" : starsText(sc.score) }}
                     </div>
                     <div class="assessment-detail-text">{{ sc.detail }}</div>
                   </div>
@@ -1094,6 +1094,7 @@
                       class="html-deck-card-actions"
                     >
                       <button
+                        v-if="/\.html$/i.test(msg.html.fileName || '')"
                         type="button"
                         class="html-deck-card-btn html-deck-card-btn--preview"
                         @click="openDeckPreview(msg.html)"
@@ -1101,7 +1102,7 @@
                         Preview
                       </button>
                       <a
-                        :href="'/api/download/html/' + msg.html.fileId"
+                        :href="'/api/download/file/' + msg.html.fileId"
                         :download="msg.html.fileName"
                         class="html-deck-card-btn"
                         >Download</a
@@ -1110,7 +1111,7 @@
                     <span
                       v-else
                       class="artifact-expired"
-                      title="Generated files are kept for 30 minutes — ask the agent to regenerate the deck"
+                      title="Generated files are kept for 24 hours; ask the agent to regenerate"
                       >Expired — ask to regenerate</span
                     >
                   </div>
@@ -1254,6 +1255,28 @@
             <div v-if="sessionNotice" class="message-row message-row--system">
               <div class="system-notice">{{ sessionNotice.text }}</div>
             </div>
+            <div v-if="activeConsentActions.length" class="message-row message-row--system">
+              <div class="system-notice">
+                <a v-for="action in activeConsentActions" :key="action.href" :href="action.href" class="html-deck-card-btn">{{ action.label }}</a>
+              </div>
+            </div>
+            <div v-for="change in activeChanges" :key="change.operationId" class="change-review">
+              <details>
+                <summary>{{ change.method }} change: {{ change.status }}</summary>
+                <div class="change-review-target">{{ change.target }}</div>
+                <pre>{{ change.body || "No request body" }}</pre>
+                <p>{{ change.costImpact }}</p>
+                <template v-if="change.status === 'awaitingApproval'">
+                  <label><input v-model="change.acknowledged" type="checkbox" :disabled="change.pending"> I reviewed this change and its potential charges</label>
+                  <div class="change-review-actions">
+                    <button type="button" class="html-deck-card-btn" :disabled="!change.acknowledged || change.pending || streaming" @click="reviewChange(change, true)">Approve change</button>
+                    <button type="button" class="html-deck-card-btn" :disabled="change.pending" @click="reviewChange(change, false)">Reject</button>
+                  </div>
+                </template>
+                <button v-else-if="['accepted','inProgress','unknown'].includes(change.status)" type="button" class="html-deck-card-btn" :disabled="streaming" @click="sendQuestion(`Check GetOperationStatus for operationId ${change.operationId} and report its actual state.`)">Check operation</button>
+                <p v-if="change.error" role="alert">{{ change.error }}</p>
+              </details>
+            </div>
 
             <!-- Streaming indicator -->
             <div v-if="streaming" class="message-row message-row--ai">
@@ -1361,12 +1384,13 @@
             <button
               type="button"
               class="html-deck-card-btn html-deck-card-btn--preview"
+              v-if="/\.html$/i.test(htmlReady.fileName || '')"
               @click="openDeckPreview(htmlReady)"
             >
               Preview
             </button>
             <a
-              :href="'/api/download/html/' + htmlReady.fileId"
+              :href="'/api/download/file/' + htmlReady.fileId"
               :download="htmlReady.fileName"
               class="html-deck-card-btn"
               >Download</a
@@ -2288,7 +2312,7 @@
         <div class="deck-preview-modal">
           <div class="deck-preview-header">
             <div>
-              <div class="deck-preview-title">Presentation preview</div>
+              <div class="deck-preview-title">Document preview</div>
               <div class="deck-preview-filename">
                 {{ deckPreview.fileName || "Generated presentation" }}
               </div>
@@ -2792,7 +2816,7 @@ async function removeAttachment(att) {
   // from the per-user listing so the next chat turn no longer surfaces this
   // fileId in the [UPLOADED FILES…] context block. The temp file is kept
   // on disk so prior tool-call results in chat history remain valid; full
-  // disposal happens on /api/chat/reset or via the 30-min TTL.
+  // disposal follows the upload retention policy.
   attachments.value = attachments.value.filter((a) => a !== att);
   // Let Vue unmount the <img> before invalidating its blob URL. Revoking while
   // the thumbnail is still loading produces a visible console/request error.
@@ -3181,6 +3205,37 @@ async function fetchPersistedTail(sid, normPrompt) {
 // transcript from five independent pollers, which stacked contradictory
 // banners and left them stuck above real messages forever.
 const sessionNotice = ref(null); // { kind, text } | null
+const sessionConsentActions = reactive(new Map());
+const activeConsentActions = computed(() => sessionConsentActions.get(currentSessionId.value) || []);
+const sessionChanges = reactive(new Map());
+const activeChanges = computed(() => sessionChanges.get(currentSessionId.value) || []);
+function rememberChange(sessionId, change) {
+  if (!/^[a-f0-9]{32}$/.test(change?.operationId || "")) return;
+  const changes = sessionChanges.get(sessionId) || [];
+  if (changes.some((item) => item.operationId === change.operationId)) return;
+  sessionChanges.set(sessionId, [...changes, { ...change, acknowledged: false, pending: false, error: "" }]);
+}
+async function reviewChange(change, approve) {
+  change.pending = true;
+  change.error = "";
+  try {
+    const response = await fetch(`/api/changes/${encodeURIComponent(change.operationId)}/${approve ? "approve" : "reject"}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ acknowledgeCostImpact: change.acknowledged === true }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Change request failed (${response.status})`);
+    change.status = approve ? result.result?.status || "unknown" : "rejected";
+    if (approve && result.result?.nextAction) change.costImpact = result.result.nextAction;
+  } catch (error) { change.error = error.message || "Unable to review this change."; }
+  finally { change.pending = false; }
+}
+const consentActionLabels = {
+  base: "Connect Azure",
+  loganalytics: "Grant Log Analytics access",
+  storage: "Grant Storage access",
+  licenses: "Grant license reporting access",
+  chargeback: "Grant cost allocation access",
+};
 function setNotice(kind, text) {
   sessionNotice.value = { kind, text };
 }
@@ -3584,7 +3639,6 @@ const currentSessionId = ref(null);
 async function loadSessions() {
   if (!azureConnected.value) {
     sessions.value = [];
-    currentSessionId.value = null;
     return;
   }
   try {
@@ -4211,7 +4265,7 @@ async function newSession() {
   perSessionCharts.delete("__pending__");
   scriptReady.value = null;
   htmlReady.value = null;
-  await clearAttachments();
+  await clearAttachments(false);
   activeTools.value = [];
   hoveredTool.value = null;
   input.value = "";
@@ -4301,6 +4355,8 @@ async function reloadSessionTranscript(sessionId) {
     );
     if (res.ok) {
       const j = await res.json();
+      sessionChanges.set(sessionId, []);
+      for (const change of j.pendingChanges || []) rememberChange(sessionId, change);
       const restored = (j.messages || []).map((m) => {
         // Re-derive the follow-up buttons from the persisted SuggestFollowUp
         // tool result — live turns keep them on the committed message, so a
@@ -5075,9 +5131,8 @@ async function clearMessages() {
   }
   scriptReady.value = null;
   htmlReady.value = null;
-  // /api/chat/reset clears the server bucket in one operation. Pending
-  // uploads that finish after this point detect their missing uid and delist
-  // themselves as well.
+  // Reset preserves files bound to the previous conversation. Pending uploads
+  // that finish after this point detect their missing uid and delist themselves.
   await clearAttachments(false);
   activeTools.value = [];
   hoveredTool.value = null;
@@ -5125,8 +5180,8 @@ function stopGeneration() {
   // read as empty answers. Tell the server to abort the turn too. keepalive so it
   // still goes out if the page is being unloaded.
   const sid = currentSessionId.value || "__pending__";
-  // loadSessions() nulls currentSessionId for anonymous users, so a direct miss
-  // is normal; with exactly one stream in flight it is unambiguously the one
+  // Before the first session event a direct miss is normal; with exactly one
+  // stream in flight it is unambiguously the one
   // the Stop button is attached to.
   const state =
     activeStreams.get(sid) ??
@@ -5399,7 +5454,7 @@ const maturityScores = reactive({
 });
 
 function maturityOverall(level) {
-  const scores = maturityScores[level];
+  const scores = (maturityScores[level] || []).filter((score) => Number.isFinite(score.score) && (!score.status || score.status === "observed"));
   if (!scores || scores.length === 0) return -1;
   return Math.round(
     scores.reduce((sum, s) => sum + s.score, 0) / scores.length,
@@ -5407,14 +5462,15 @@ function maturityOverall(level) {
 }
 
 function maturityNumeric(level) {
-  const scores = maturityScores[level];
-  if (!scores || scores.length === 0) return "0.0";
+  const all = maturityScores[level] || [];
+  const scores = all.filter((score) => Number.isFinite(score.score) && (!score.status || score.status === "observed"));
+  if (scores.length === 0) return "N/A";
   const avg = scores.reduce((sum, s) => sum + s.score, 0) / scores.length;
-  return avg.toFixed(1);
+  return `${avg.toFixed(1)} (${scores.length}/${all.length})`;
 }
 
 function starsText(score) {
-  if (score < 0) return "☆☆☆☆☆";
+  if (!Number.isFinite(score) || score < 0) return "☆☆☆☆☆";
   const full = Math.min(score, 5);
   return "★".repeat(full) + "☆".repeat(5 - full);
 }
@@ -5447,7 +5503,7 @@ function buildStaticDeckPreview(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   doc
     .querySelectorAll(
-      "script, link[rel='stylesheet'], base, object, embed, form",
+      "script, link[rel='stylesheet'], base, object, embed, form, input#filter, label[for='filter']",
     )
     .forEach((node) => node.remove());
   doc.querySelectorAll("*").forEach((node) => {
@@ -5461,7 +5517,7 @@ function buildStaticDeckPreview(html) {
     .forEach((node) => node.remove());
   const style = doc.createElement("style");
   style.textContent = `
-    html, body { overflow: auto !important; background: #201f1e !important; }
+    html, body { overflow: auto !important; }
     .deck { height: auto !important; display: block !important; }
     .slide, .slide.active, .slide.prev {
       position: relative !important; inset: auto !important;
@@ -5491,7 +5547,7 @@ async function openDeckPreview(deck) {
     if (!response.ok) {
       throw new Error(
         response.status === 404
-          ? "This presentation has expired. Ask the agent to regenerate it."
+          ? "This document has expired. Ask the agent to regenerate it."
           : `Preview failed (${response.status}).`,
       );
     }
@@ -5501,7 +5557,7 @@ async function openDeckPreview(deck) {
   } catch (error) {
     if (request !== deckPreviewRequest) return;
     deckPreviewError.value =
-      error?.message || "The presentation preview could not be loaded.";
+      error?.message || "The document preview could not be loaded.";
   } finally {
     if (request === deckPreviewRequest) deckPreviewLoading.value = false;
   }
@@ -7450,10 +7506,15 @@ async function send() {
         prompt,
         model: selectedModel.value,
         sessionId: currentSessionId.value || undefined,
+        fileIds: [...attachments.value, ...consumedImages].filter((attachment) => attachment.fileId && !attachment.error).map((attachment) => attachment.fileId),
       }),
       signal: streamAbortController.signal,
     });
 
+    if (!res.ok) {
+      const failure = await res.json().catch(() => null);
+      throw new Error(failure?.error || `Request failed (${res.status})`);
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -7560,6 +7621,8 @@ async function send() {
           data.type === "html_ready" ||
           data.type === "script_ready" ||
           data.type === "maturity_score" ||
+          data.type === "consent_required" ||
+          data.type === "approval_required" ||
           data.type === "follow_up";
         if (!routingEvent && !sessionScopedEvent && !isActiveView()) continue;
 
@@ -7944,6 +8007,18 @@ async function send() {
               streamFollowUpForTurn = data.followUp;
               if (isActiveView()) streamFollowUp.value = data.followUp;
             }
+            break;
+
+          case "consent_required": {
+            const requested = new Set((data.actions || []).map((action) => action.href));
+            const actions = Object.entries(consentActionLabels).filter(([tier]) => requested.has(`/auth/microsoft?tier=${tier}`))
+              .map(([tier, label]) => ({ label, href: `/auth/microsoft?tier=${tier}` }));
+            sessionConsentActions.set(streamingId, actions);
+            break;
+          }
+
+          case "approval_required":
+            rememberChange(streamingId, data.change);
             break;
 
           case "error":
@@ -10275,6 +10350,23 @@ async function send() {
   line-height: 1.45;
   text-align: center;
 }
+.change-review {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #e1dfdd;
+  border-radius: 6px;
+  background: #fff;
+  padding: 12px 16px;
+  color: #323130;
+  font-size: 13px;
+}
+.change-review summary { cursor: pointer; font-weight: 600; }
+.change-review-target { margin: 12px 0; overflow-wrap: anywhere; }
+.change-review pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.change-review p { margin: 10px 0; line-height: 1.5; }
+.change-review label { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
+.change-review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.change-review button:disabled { opacity: 0.55; cursor: not-allowed; }
 .bubble--user {
   max-width: 80%;
   border-radius: 8px;
