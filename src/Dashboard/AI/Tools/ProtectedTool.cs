@@ -91,6 +91,11 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         }
 
         var body = text.StartsWith("HTTP ") ? text[(text.IndexOf('\n') + 1)..] : text;
+        if (body.StartsWith("Current UTC time: ", StringComparison.Ordinal))
+        {
+            var timestampEnd = body.IndexOf('\n');
+            body = timestampEnd >= 0 ? body[(timestampEnd + 1)..] : "";
+        }
         try { using var document = JsonDocument.Parse(body); Inspect(document.RootElement); }
         catch (JsonException)
         {

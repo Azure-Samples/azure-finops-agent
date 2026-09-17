@@ -15,6 +15,7 @@ internal sealed class CostQueryCoordinator(TimeProvider? timeProvider = null) : 
     private readonly ConcurrentDictionary<string, TenantState> _tenants = new();
     private readonly MemoryCache _cache = new(new MemoryCacheOptions { SizeLimit = 8 * 1024 * 1024 });
     private static readonly TimeSpan FreshLifetime = TimeSpan.FromMinutes(2);
+    internal static readonly TimeSpan MaximumAutomaticWait = TimeSpan.FromMinutes(5);
 
     private sealed class TenantState
     {
@@ -26,7 +27,8 @@ internal sealed class CostQueryCoordinator(TimeProvider? timeProvider = null) : 
     private sealed record CachedResponse(string Response, DateTimeOffset RetrievedUtc);
 
     internal async Task<string> ExecuteAsync(string tenantKey, string requestKey,
-        Func<CancellationToken, Task<string>> send, CancellationToken cancellationToken)
+        Func<CancellationToken, Task<string>> send, CancellationToken cancellationToken,
+        Func<DateTimeOffset, bool, Task>? reportCooldown = null)
     {
         var tenant = _tenants.GetOrAdd(tenantKey, _ => new TenantState());
         await tenant.Gate.WaitAsync(cancellationToken);
@@ -39,16 +41,36 @@ internal sealed class CostQueryCoordinator(TimeProvider? timeProvider = null) : 
             var blocked = retryAt > now || turn?.CostQueriesBlocked == true;
             if (_cache.TryGetValue<CachedResponse>(requestKey, out var cached) && cached is not null
                 && (blocked || now - cached.RetrievedUtc <= FreshLifetime))
+            {
+                if (blocked && reportCooldown is not null) await reportCooldown(retryAt, false);
                 return Annotate(cached.Response, blocked ? "stale_during_cooldown" : "cached", cached.RetrievedUtc, retryAt);
-            if (blocked)
+            }
+            var latestWaitEnd = now + MaximumAutomaticWait;
+            while (blocked)
+            {
+                var remaining = retryAt - _clock.GetUtcNow();
+                if (turn?.CostQueriesBlocked != true && remaining <= TimeSpan.Zero) break;
+                var willWait = turn?.CostQueriesBlocked != true && reportCooldown is not null
+                    && remaining > TimeSpan.Zero && retryAt <= latestWaitEnd;
+                if (reportCooldown is not null) await reportCooldown(retryAt, willWait);
+                if (willWait)
+                {
+                    await Task.Delay(remaining, _clock, cancellationToken);
+                    now = _clock.GetUtcNow();
+                    lock (tenant.Sync) retryAt = tenant.RetryAtUtc;
+                    blocked = retryAt > now || turn?.CostQueriesBlocked == true;
+                    continue;
+                }
                 return "HTTP 429 TooManyRequests\n" + JsonSerializer.Serialize(new
                 {
                     error = new { code = "CostManagementCooldown", message = "Cost Management is cooling down. No request was sent. Do not query this service again in this turn." },
                     retryAtUtc = retryAt,
                     blockedForTurn = turn?.CostQueriesBlocked == true
                 });
+            }
 
             var response = await send(cancellationToken);
+            now = _clock.GetUtcNow();
             if (response.StartsWith("HTTP 200 ", StringComparison.Ordinal))
             {
                 if (response.Length <= 262144)
@@ -65,7 +87,7 @@ internal sealed class CostQueryCoordinator(TimeProvider? timeProvider = null) : 
         finally { tenant.Gate.Release(); }
     }
 
-    internal void RecordThrottle(string tenantKey, double seconds)
+    internal DateTimeOffset RecordThrottle(string tenantKey, double seconds, bool final = true)
     {
         var tenant = _tenants.GetOrAdd(tenantKey, _ => new TenantState());
         var now = _clock.GetUtcNow();
@@ -73,10 +95,14 @@ internal sealed class CostQueryCoordinator(TimeProvider? timeProvider = null) : 
         var deadline = safeSeconds >= (DateTimeOffset.MaxValue - now).TotalSeconds
             ? DateTimeOffset.MaxValue : now.AddSeconds(safeSeconds);
         lock (tenant.Sync)
+        {
             if (deadline > tenant.RetryAtUtc) tenant.RetryAtUtc = deadline;
+            deadline = tenant.RetryAtUtc;
+        }
         var turn = CurrentTurn();
-        turn?.BlockCostQueries();
+        if (final) turn?.BlockCostQueries();
         if (turn is not null) turn.NextEligibleCostQueryUtc = deadline;
+        return deadline;
     }
 
     private static TurnExecution? CurrentTurn() =>
@@ -137,9 +163,16 @@ internal sealed class CostQueryCoordinator(TimeProvider? timeProvider = null) : 
     {
         var separator = response.IndexOf('\n');
         if (separator < 0) return response;
+        var bodyStart = separator + 1;
+        if (response.AsSpan(bodyStart).StartsWith("Current UTC time: ", StringComparison.Ordinal))
+        {
+            var timestampEnd = response.IndexOf('\n', bodyStart);
+            if (timestampEnd < 0) return response;
+            bodyStart = timestampEnd + 1;
+        }
         try
         {
-            if (JsonNode.Parse(response[(separator + 1)..]) is not JsonObject body) return response;
+            if (JsonNode.Parse(response[bodyStart..]) is not JsonObject body) return response;
             body["_finops"] = JsonSerializer.SerializeToNode(new
             {
                 cacheStatus,
@@ -148,7 +181,7 @@ internal sealed class CostQueryCoordinator(TimeProvider? timeProvider = null) : 
                 freshness = "Billing data may be delayed; retrieval time is not the billing data timestamp.",
                 retryAtUtc = retryAt == default ? (DateTimeOffset?)null : retryAt
             });
-            return response[..(separator + 1)] + body.ToJsonString();
+            return response[..bodyStart] + body.ToJsonString();
         }
         catch (JsonException) { return response; }
     }

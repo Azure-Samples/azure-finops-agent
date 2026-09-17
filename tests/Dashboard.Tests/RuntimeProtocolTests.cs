@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.AI.Tools;
+using AzureFinOps.Dashboard.Infrastructure;
 using GitHub.Copilot;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -25,6 +27,10 @@ public sealed class RuntimeProtocolTests
         var called = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var requestCount = 0;
+        var costRequests = new ConcurrentQueue<long>();
+        var retryNotices = new ConcurrentQueue<HttpHelper.RetryNotice>();
+        var retryTurnStates = new ConcurrentQueue<(bool Completed, bool CostBlocked)>();
+        string? retryReporterKey = null;
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -36,6 +42,18 @@ public sealed class RuntimeProtocolTests
             var first = Interlocked.Increment(ref requestCount) == 1;
             var streaming = body.RootElement.TryGetProperty("stream", out var stream) && stream.ValueKind == JsonValueKind.True;
             await WriteResponse(context.Response, first, streaming);
+        });
+        server.MapPost("/providers/Microsoft.CostManagement/query", async (HttpContext context) =>
+        {
+            costRequests.Enqueue(Stopwatch.GetTimestamp());
+            if (costRequests.Count == 1)
+            {
+                context.Response.StatusCode = 429;
+                context.Response.Headers.RetryAfter = "1";
+                await context.Response.WriteAsJsonAsync(new { error = new { code = "429", message = "Synthetic throttle" } });
+            }
+            else
+                await context.Response.WriteAsJsonAsync(new { properties = new { rows = new[] { new object[] { 42.73, "USD" } } } });
         });
         await server.StartAsync();
         try
@@ -55,6 +73,11 @@ public sealed class RuntimeProtocolTests
                     try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
                     catch (OperationCanceledException) { cancelled.TrySetResult(); throw; }
                 }
+                var costResponse = await HttpHelper.SendWithRetryAsync(
+                    server.Urls.Single() + "/providers/Microsoft.CostManagement/query", root, null, "synthetic-cost",
+                    HttpMethod.Post, "{}", includeTimestamp: true, cancellationToken: cancellationToken);
+                Assert.StartsWith("HTTP 200", costResponse);
+                Assert.Contains("\"cacheStatus\":\"queried\"", costResponse);
                 return "synthetic evidence";
             }
             var config = new SessionConfig
@@ -75,6 +98,13 @@ public sealed class RuntimeProtocolTests
             RuntimePolicy.Apply(config);
             await using var session = await client.CreateSessionAsync(config).WaitAsync(TimeSpan.FromSeconds(30));
             Assert.True(TurnExecution.TryBegin(session.SessionId, 101, session, out var turn));
+            retryReporterKey = "101:" + session.SessionId;
+            HttpHelper.RetryReporters[retryReporterKey] = notice =>
+            {
+                retryNotices.Enqueue(notice);
+                retryTurnStates.Enqueue((turn.Completion.Task.IsCompleted, turn.CostQueriesBlocked));
+                return Task.CompletedTask;
+            };
             var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var errors = new ConcurrentQueue<string>();
             var observed = new ConcurrentQueue<string>();
@@ -118,6 +148,13 @@ public sealed class RuntimeProtocolTests
                     }));
                 }
                 Assert.Empty(errors);
+                Assert.Equal(2, costRequests.Count);
+                var costTimes = costRequests.ToArray();
+                Assert.True(Stopwatch.GetElapsedTime(costTimes[0], costTimes[1]) >= TimeSpan.FromSeconds(1));
+                var retry = Assert.Single(retryNotices);
+                Assert.True(retry.WillRetry);
+                Assert.NotNull(retry.RetryAtUtc);
+                Assert.Equal((false, false), Assert.Single(retryTurnStates));
                 var events = await session.GetEventsAsync();
                 Assert.Contains(events.OfType<AssistantMessageEvent>(), item => item.Data.Content.Contains("Synthetic result"));
                 Assert.Contains(events.OfType<ToolExecutionCompleteEvent>(), item => item.Data.Result?.Content == "synthetic evidence");
@@ -156,6 +193,7 @@ public sealed class RuntimeProtocolTests
         }
         finally
         {
+            if (retryReporterKey is not null) HttpHelper.RetryReporters.TryRemove(retryReporterKey, out _);
             await server.StopAsync();
             if (Directory.Exists(root)) Directory.Delete(root, true);
         }

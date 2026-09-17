@@ -79,6 +79,77 @@ test('short follow-up renders a real spreadsheet download without HTML preview',
   expect(errors).toEqual([]);
 });
 
+test('complete final message replaces partial deltas after a throttled detail query', async ({ page }, testInfo) => {
+  const answer = 'The requested service breakdown could not be retrieved because Azure Cost Management is throttling requests.';
+  const { requests, errors } = await arrange(page, [
+    { type: 'tool_start', tool: 'QueryAzure', id: 'synthetic-cost-query', args: '{}' },
+    { type: 'tool_done', tool: 'QueryAzure', id: 'synthetic-cost-query', success: true, result: 'HTTP 429 TooManyRequests\nRetry later.' },
+    { type: 'delta', content: '# **' },
+    { type: 'message', content: answer },
+  ]);
+  await send(page, 'I need detailed breakdown');
+  await expect(page.getByText(answer, { exact: true })).toBeVisible();
+  expect(requests).toHaveLength(1);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('cost-detail-final-message.png'), animations: 'disabled' });
+});
+
+test('cost cooldown remains visible after automatic retries are exhausted', async ({ page }, testInfo) => {
+  const answer = 'The requested resource costs are still unavailable; no detail amounts were inferred.';
+  const { errors } = await arrange(page, [
+    { type: 'tool_start', tool: 'QueryAzure', id: 'synthetic-cost-query', args: '{}' },
+    { type: 'cooling_down', tool: 'azure', url: '/synthetic/query', attempt: 2, status: 429, waitSeconds: 300, retryAtUtc: new Date(Date.now() + 300000).toISOString(), willRetry: false },
+    { type: 'tool_done', tool: 'QueryAzure', id: 'synthetic-cost-query', success: true, result: 'HTTP 429 TooManyRequests\nRetry later.' },
+    { type: 'message', content: answer },
+  ]);
+  await send(page, 'I need detailed breakdown');
+  await expect(page.getByText(answer, { exact: true })).toBeVisible();
+  await expect(page.locator('.system-notice')).toContainText('No further automatic retries. Retry after');
+  await expect(page.locator('textarea')).toBeEnabled();
+  if (testInfo.project.name === 'desktop') {
+    await expect(page.locator('.st-name').filter({ hasText: 'Throttled (HTTP 429)' })).toBeVisible();
+    await expect(page.locator('.st-icon--ok')).toHaveCount(0);
+  }
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('cost-cooldown-final.png'), animations: 'disabled' });
+});
+
+test('cost retry shows its deadline while waiting and clears after the final answer', async ({ page }, testInfo) => {
+  await page.addInitScript(({ session }) => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (input, options) => {
+      if (new URL(typeof input === 'string' ? input : input.url, location.href).pathname !== '/api/chat')
+        return originalFetch(input, options);
+      const encoder = new TextEncoder();
+      return Promise.resolve(new Response(new ReadableStream({
+        start(controller) {
+          const emit = data => controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          emit({ type: 'session', id: session });
+          emit({ type: 'tool_start', tool: 'QueryAzure', id: 'synthetic-cost-query', args: '{}' });
+          emit({ type: 'cooling_down', tool: 'azure', url: '/synthetic/query', attempt: 1, status: 429, waitSeconds: 60, retryAtUtc: new Date(Date.now() + 60000).toISOString(), willRetry: true });
+          window.__finishCostRetry = () => {
+            emit({ type: 'tool_done', tool: 'QueryAzure', id: 'synthetic-cost-query', success: true, result: 'HTTP 200 OK\n{}' });
+            emit({ type: 'message', content: 'The resource breakdown is available after retrying.' });
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          };
+        },
+      }), { headers: { 'content-type': 'text/event-stream' } }));
+    };
+  }, { session: sessionId });
+  const { errors } = await arrange(page, []);
+  await page.locator('textarea').fill('I need detailed breakdown');
+  await page.locator('textarea').press('Enter');
+  await expect(page.locator('.system-notice')).toContainText('then retrying automatically');
+  await expect(page.locator('.action-btn--stop')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('cost-retry-waiting.png'), animations: 'disabled' });
+  await page.evaluate(() => window.__finishCostRetry());
+  await expect(page.getByText('The resource breakdown is available after retrying.', { exact: true })).toBeVisible();
+  await expect(page.locator('.system-notice')).toHaveCount(0);
+  await expect(page.locator('.action-btn--stop')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('consent actions cannot navigate to tool-supplied external URLs', async ({ page }) => {
   await arrange(page, [
     { type: 'consent_required', actions: [{ label: 'ignored', href: '/auth/microsoft?tier=loganalytics' }, { label: 'unsafe', href: 'https://attacker.invalid/' }] },

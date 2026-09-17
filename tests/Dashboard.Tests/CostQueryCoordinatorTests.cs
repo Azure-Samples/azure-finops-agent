@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using AzureFinOps.Dashboard.AI;
+using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Infrastructure;
 
 namespace Dashboard.Tests;
@@ -75,6 +77,110 @@ public sealed class CostQueryCoordinatorTests
         using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
         response.Headers.Add("x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after", "300");
         Assert.Equal(300, HttpHelper.ResolveRetryAfterSeconds(response, 0));
+    }
+
+    [Fact]
+    public void LongestCostThrottleHeaderWinsAndMissingHeadersUseOneMinute()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        Assert.Equal(60, HttpHelper.ResolveRetryAfterSeconds(response, 0, costQuery: true));
+        response.Headers.Add("x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after", "10");
+        response.Headers.Add("x-ms-ratelimit-microsoft.costmanagement-clienttype-retry-after", "300");
+        response.Headers.Add("x-ms-ratelimit-microsoft.costmanagement-entity-retry-after", "120");
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(600));
+        Assert.Equal(600, HttpHelper.ResolveRetryAfterSeconds(response, 0, costQuery: true));
+        response.Headers.Add("x-ms-ratelimit-microsoft.consumption-retry-after", "1200");
+        Assert.Equal(1200, HttpHelper.ResolveRetryAfterSeconds(response, 0, costQuery: true));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TimestampedResponsesPreserveCostEvidenceAndRetryDeadline(bool throttled)
+    {
+        var clock = new TestClock();
+        using var coordinator = new CostQueryCoordinator(clock);
+        const string timestamp = "Current UTC time: 2026-01-01 00:00:00\n";
+        var result = await coordinator.ExecuteAsync("tenant", "request", token =>
+        {
+            if (throttled) coordinator.RecordThrottle("tenant", 300);
+            return Task.FromResult(throttled
+                ? "HTTP 429 TooManyRequests\n" + timestamp + "{\"error\":{\"code\":\"429\",\"message\":\"Please retry.\"}}"
+                : "HTTP 200 OK\n" + timestamp + "{\"properties\":{\"rows\":[[42.73,\"USD\"]]}}");
+        }, default);
+        Assert.Contains(timestamp, result);
+        var bodyStart = result.IndexOf(timestamp, StringComparison.Ordinal) + timestamp.Length;
+        using var parsed = JsonDocument.Parse(result[bodyStart..]);
+        var evidence = parsed.RootElement.GetProperty("_finops");
+        Assert.Equal(throttled ? "not_available" : "queried", evidence.GetProperty("cacheStatus").GetString());
+        if (throttled)
+            Assert.Equal(clock.GetUtcNow().AddMinutes(5), evidence.GetProperty("retryAtUtc").GetDateTimeOffset());
+        else
+            Assert.Equal(JsonValueKind.Null, evidence.GetProperty("retryAtUtc").ValueKind);
+    }
+
+    [Fact]
+    public async Task CancellingCooldownWaitReleasesTenantGateWithoutDispatch()
+    {
+        var clock = new TestClock();
+        using var coordinator = new CostQueryCoordinator(clock);
+        using var cancellation = new CancellationTokenSource();
+        coordinator.RecordThrottle("tenant", 60);
+        var calls = 0;
+        Task<string> Send(CancellationToken token) { calls++; return Task.FromResult(Result); }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.ExecuteAsync("tenant", "request", Send, cancellation.Token,
+            (deadline, willRetry) =>
+            {
+                Assert.True(willRetry);
+                cancellation.Cancel();
+                return Task.CompletedTask;
+            }));
+        Assert.Equal(0, calls);
+        clock.Advance(TimeSpan.FromSeconds(60));
+        Assert.StartsWith("HTTP 200", await coordinator.ExecuteAsync("tenant", "request", Send, default).WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task OnlyFinalThrottleBlocksTheTurnAndItStaysBlockedAfterDeadline()
+    {
+        var clock = new TestClock();
+        using var coordinator = new CostQueryCoordinator(clock);
+        var sessionId = Guid.NewGuid().ToString();
+        Assert.True(TurnExecution.TryBegin(sessionId, 101, null, out var turn));
+        try
+        {
+            using var context = new ToolExecutionContext(sessionId, 101, CancellationToken.None);
+            coordinator.RecordThrottle("tenant", 1, final: false);
+            Assert.False(turn.CostQueriesBlocked);
+            coordinator.RecordThrottle("tenant", 60);
+            Assert.True(turn.CostQueriesBlocked);
+            clock.Advance(TimeSpan.FromSeconds(60));
+            var calls = 0;
+            var response = await coordinator.ExecuteAsync("tenant", "new-request", token => { calls++; return Task.FromResult(Result); }, default,
+                (deadline, willRetry) => { Assert.False(willRetry); return Task.CompletedTask; });
+            Assert.Contains("\"blockedForTurn\":true", response);
+            Assert.Equal(0, calls);
+        }
+        finally
+        {
+            turn.ConfirmTerminal();
+            await turn.FinishAsync();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConsolidatedCostEvidenceRetainsProviderAndHostRetryDeadlines(bool providerResponse)
+    {
+        const string retryAt = "2026-01-01T00:05:00+00:00";
+        var response = providerResponse
+            ? "HTTP 429 TooManyRequests\nCurrent UTC time: 2026-01-01 00:00:00\n{\"error\":{\"code\":\"429\"},\"_finops\":{\"cacheStatus\":\"not_available\",\"retryAtUtc\":\"" + retryAt + "\"}}"
+            : "HTTP 429 TooManyRequests\n{\"error\":{\"code\":\"CostManagementCooldown\"},\"retryAtUtc\":\"" + retryAt + "\"}";
+        var evidence = AzureQueryTools.ReadCostSourceEvidence(response);
+        Assert.Equal("not_available", evidence.GetProperty("cacheStatus").GetString());
+        Assert.Equal(DateTimeOffset.Parse(retryAt), evidence.GetProperty("retryAtUtc").GetDateTimeOffset());
     }
 
     private sealed class TestClock : TimeProvider

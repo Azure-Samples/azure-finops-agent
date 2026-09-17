@@ -646,11 +646,16 @@ public static class ChatEndpoints
                 // — both failed to flow through that boundary; baggage does.
                 turnKey = $"{userId}:{activeSessionId}";
                 chatActivity?.SetBaggage("finops.turn.id", turnKey);
-                Infrastructure.HttpHelper.RetryReporters[turnKey] = (attempt, waitSec, url, tool, status) =>
+                Infrastructure.HttpHelper.RetryReporters[turnKey] = notice =>
                 {
                     logger.LogInformation("EMIT cooling_down sse turn={Turn} attempt={Attempt} status={Status} tool={Tool} waitSec={Wait:F1}",
-                        turnKey, attempt, status, tool, waitSec);
-                    return SafeEmit(JsonSerializer.Serialize(new { type = "cooling_down", attempt, waitSeconds = waitSec, url, tool, status }));
+                        turnKey, notice.Attempt, notice.Status, notice.Tool, notice.WaitSeconds);
+                    return SafeEmit(JsonSerializer.Serialize(new
+                    {
+                        type = "cooling_down", attempt = notice.Attempt, waitSeconds = notice.WaitSeconds,
+                        url = notice.Url, tool = notice.Tool, status = notice.Status,
+                        retryAtUtc = notice.RetryAtUtc, willRetry = notice.WillRetry
+                    }));
                 };
                 // Belt-and-braces cleanup on request abort.
                 var turnKeyForAbort = turnKey;

@@ -44,7 +44,9 @@ Never bare /providers/Microsoft.CostManagement/... — that returns 400.
 
 COST MANAGEMENT QUERY: use api-version=2026-08-01 and dataset.aggregation for totals. Add real grouping dimensions (ServiceName, ResourceGroupName, MeterCategory) only for the requested breakdown. Do NOT add 'UsageDate' to the grouping array — it's a response column, not a dimension; use granularity=""Daily"" for per-day. Never request raw cost detail rows for a summary. For totals across all subscriptions, call QueryCostsAcrossSubscriptions exactly once with connection-context scopes; never fan out one query per subscription yourself.
 
-THROTTLING: Cost Management /query and /forecast are aggressively throttled per-tenant. Interactive queries make at most one short retry; other transient calls retain the standard retry policy. Do NOT call multiple CostManagement endpoints in parallel from the same turn — Resource Graph and Advisor parallelize fine. If a call still returns HTTP 429, do not make another Cost Management call in the same turn; report the throttle and offer to retry later.
+DETAIL REQUESTS: for costs by resource/model, start with a valid resource/meter breakdown, not a totals-only query followed by another request for the actual question. Cost Management permits at most two grouping dimensions. At subscription scope use ResourceId plus Meter; derive subscription/resource-group from the scope or ResourceId instead of adding third/fourth grouping dimensions. At management-group scope use SubscriptionId plus ResourceId for resource attribution, then a targeted meter query only when still needed. Reuse returned detail to compute totals; follow pagination and disclose partial coverage. Token activity/inventory is not billed resource or model cost.
+
+THROTTLING: the host serializes Cost Management /query and /forecast and automatically retries once after the full service deadline when it is at most five minutes. The UI reports that wait. A returned HTTP 429 means the bounded retry is exhausted or the deadline is longer; do not make another Cost Management call in this turn. Read _finops.retryAtUtc or retryAtUtc, report the exact deadline, and do not offer an immediate retry before it. Other independent read services remain available, but do not present their activity as billing detail.
 
 RESOURCE GRAPH (POST /providers/Microsoft.ResourceGraph/resources): always use 'project' to limit columns and 'top N' to limit rows. Use one pipeline; Azure Resource Graph does not accept multi-statement `let ...; let ...;` queries.
 
@@ -58,7 +60,7 @@ CONSUMPTION DEPRECATIONS: usageDetails → use Microsoft.CostManagement/generate
 
 For public retail pricing use GetAzureRetailPricing, or GetAzureRetailPricingBatch for independent filter combinations; QueryAzure calls ARM only.");
 
-        yield return AIFunctionFactory.Create(QueryCostsAcrossSubscriptions, "QueryCostsAcrossSubscriptions", @"Gets a reported Cost Management total and per-subscription breakdown in ONE agent tool call. Use this for any cost request spanning all connected subscriptions; never loop QueryAzure yourself.
+        yield return AIFunctionFactory.Create(QueryCostsAcrossSubscriptions, "QueryCostsAcrossSubscriptions", @"Gets a reported Cost Management total and per-subscription breakdown in ONE agent tool call. Use this for requested subscription totals, not as a prerequisite for resource/service/model detail. For detailed spending questions use a valid grouped QueryAzure request first and derive totals from the detail when complete. Do not make users repeat the request for detail after a totals-only answer.
 Input subscriptionsJson: the exact `subscriptions` JSON array supplied in the connection context ({id,name,...}). Input managementGroupId: the optional id/name from the context's managementGroups array. Dates are yyyy-MM-dd; `to` is the exclusive end date.
 DATA SCOPING: use only the requested dates and subscriptions, but include every requested subscription for a whole-estate total. Never take a top-N sample of subscriptions or filtered budget snapshots and label it total spend. This tool has no service/resource-group filter; use a scoped QueryAzure aggregate for those breakdowns. Its host-built queries aggregate before returning results; preserve sourceEvidence and all failed/unattempted scope coverage instead of re-querying returned totals.
     For the current calendar month, the tool first reads each subscription's unfiltered monthly budget `currentSpend` in parallel. Budgets are evaluated periodically: report this as a delayed MTD snapshot, not a real-time or finalized bill. For other periods it tries one management-group aggregate query, then the minimum sequential per-subscription fallback. Preserve sourceEvidence cache/freshness metadata. It stops immediately when Cost Management remains throttled and reports completed, failed, and unattempted scopes. Never call this tool twice in one turn after a 429.");
@@ -76,7 +78,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
     private async Task<string> QueryAzure(
         [Description("HTTP method: GET, POST, PUT, or PATCH (DELETE is blocked)")] string method,
         [Description("Scoped ARM path starting with / and an api-version. Use $filter/$select/$top only when the endpoint supports them; otherwise choose a narrower endpoint or Resource Graph query. Do not fetch full collections for a summary.")] string path,
-        [Description("Optional JSON request body for POST/PUT/PATCH. For queries, filter and aggregate at the source, project only needed fields, and limit after aggregation using the API's supported syntax. Preserve complete totals and partial coverage. Omit for GET.")] string? body = null)
+        [Description("Optional JSON request body for POST/PUT/PATCH. For queries, filter and aggregate at the source and limit only after aggregation. Cost Management permits at most two grouping dimensions; use ResourceId plus Meter at subscription scope for resource/model detail. Preserve totals and coverage. Omit for GET.")] string? body = null)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("QueryAzure");
         activity?.SetTag("azure.method", method);
@@ -115,6 +117,8 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         {
             var postError = ValidateReadOnlyPostPath(path, activity);
             if (postError is not null) return postError;
+            var queryError = ValidateCostQueryBody(path, body);
+            if (queryError is not null) return queryError;
         }
 
         var hasBody = !string.IsNullOrWhiteSpace(body);
@@ -248,9 +252,9 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
                 var mgResponse = await HttpHelper.SendWithRetryAsync(
                     mgUrl, token, activity, "cost.cross_subscription.mg",
                     method: HttpMethod.Post, jsonBody: mgBody);
+                sourceEvidence.Add(ReadCostSourceEvidence(mgResponse));
                 if (mgResponse.StartsWith("HTTP 200", StringComparison.Ordinal))
                 {
-                    sourceEvidence.Add(ReadCostSourceEvidence(mgResponse));
                     var aggregate = ParseAggregateCostResponse(mgResponse, scopes);
                     if (aggregate.Error is null && aggregate.Results.Count == scopes.Count)
                         return BuildCostResponse("managementGroup", scopes, aggregate.Results, false, sourceEvidence);
@@ -270,6 +274,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
                         throttled = true,
                         attempted = 1,
                         subscriptionCount = scopes.Count,
+                        sourceEvidence,
                         detail = FirstLineAndBody(mgResponse, 500)
                     });
             }
@@ -288,13 +293,13 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
             var response = await HttpHelper.SendWithRetryAsync(
                 url, token, activity, "cost.cross_subscription.subscription",
                 method: HttpMethod.Post, jsonBody: body);
+            sourceEvidence.Add(ReadCostSourceEvidence(response));
 
             string? parseError = null;
             if (response.StartsWith("HTTP 200", StringComparison.Ordinal)
                 && TryReadCost(response, out var cost, out var currency, out parseError))
             {
                 resultsById[scope.Id] = new(scope.Id, scope.Name, 200, cost, currency, null);
-                sourceEvidence.Add(ReadCostSourceEvidence(response));
                 continue;
             }
 
@@ -553,6 +558,14 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         {
             using var document = JsonDocument.Parse(ResponseBody(response));
             if (document.RootElement.TryGetProperty("_finops", out var evidence)) return evidence.Clone();
+            if (document.RootElement.TryGetProperty("retryAtUtc", out var retryAt))
+                return JsonSerializer.SerializeToElement(new
+                {
+                    cacheStatus = "not_available",
+                    freshness = "unknown",
+                    retryAtUtc = retryAt.Clone(),
+                    dataAsOfUtc = (DateTimeOffset?)null
+                });
         }
         catch (JsonException) { }
         return JsonSerializer.SerializeToElement(new { cacheStatus = "unknown", freshness = "unknown", dataAsOfUtc = (DateTimeOffset?)null });
@@ -661,7 +674,13 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
     private static string ResponseBody(string response)
     {
         var firstNewline = response.IndexOf('\n');
-        return firstNewline >= 0 ? response[(firstNewline + 1)..] : "";
+        var body = firstNewline >= 0 ? response[(firstNewline + 1)..] : "";
+        if (body.StartsWith("Current UTC time: ", StringComparison.Ordinal))
+        {
+            var timestampEnd = body.IndexOf('\n');
+            body = timestampEnd >= 0 ? body[(timestampEnd + 1)..] : "";
+        }
+        return body;
     }
 
     private static int ParseStatusCode(string response)
@@ -771,6 +790,32 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         return BlockMutatingPost(activity);
     }
 
+    internal static string? ValidateCostQueryBody(string path, string? body)
+    {
+        var queryIndex = path.IndexOf('?');
+        var requestPath = (queryIndex < 0 ? path : path[..queryIndex]).TrimEnd('/');
+        if (!requestPath.EndsWith("/Microsoft.CostManagement/query", StringComparison.OrdinalIgnoreCase)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(body ?? "");
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return "HTTP 400 BadRequest\nCost Management query body must be a JSON object. No request was sent.";
+            if (document.RootElement.TryGetProperty("dataset", out var dataset)
+                && dataset.ValueKind == JsonValueKind.Object && dataset.TryGetProperty("grouping", out var grouping))
+            {
+                if (grouping.ValueKind != JsonValueKind.Array)
+                    return "HTTP 400 BadRequest\nCost Management dataset.grouping must be an array. No request was sent.";
+                if (grouping.GetArrayLength() > 2)
+                    return "HTTP 400 BadRequest\nCost Management supports at most two grouping dimensions. Use ResourceId plus Meter at subscription scope, or SubscriptionId plus ResourceId at management-group scope. Derive resource-group from ResourceId; do not add a third grouping. No request was sent.";
+            }
+            return null;
+        }
+        catch (JsonException)
+        {
+            return "HTTP 400 BadRequest\nCost Management query body must be valid JSON. No request was sent.";
+        }
+    }
+
     private static string BlockMutatingPost(Activity? activity)
     {
         activity?.SetTag("azure.result", "blocked_mutating_post");
@@ -814,6 +859,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
             if (string.IsNullOrWhiteSpace(item.Path) || !item.Path.StartsWith('/') || item.Path.StartsWith("//")
                 || item.Path.Contains('#') || item.Path.Contains('\\')) return "HTTP 400 BadRequest\nInvalid ARM path.";
             if (method == HttpMethod.Post && ValidateReadOnlyPostPath(item.Path, activity) is { } postError) return postError;
+            if (method == HttpMethod.Post && ValidateCostQueryBody(item.Path, item.Body) is { } queryError) return queryError;
             return await HttpHelper.SendWithRetryAsync($"https://management.azure.com{item.Path}", token, activity, "bulk",
                 method: method, jsonBody: method == HttpMethod.Get ? null : item.Body,
                 cancellationToken: requestToken);

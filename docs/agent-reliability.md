@@ -2,6 +2,24 @@
 
 This change set addresses the twenty findings from the conversation and telemetry review. Execution checks are not a blanket claim that every future model answer is correct. Tests use synthetic data unless explicitly described as a live local-model workflow.
 
+## Cost Detail And Cooldown Incident (2026-09-17)
+
+The reported five-day spending follow-up was traced in production. Cost Management returned HTTP 429, while the SDK persisted a complete explanatory final answer. The browser could instead retain only partial Markdown because it ignored complete message events after receiving any delta. A desktop/mobile stream regression reproduced that display failure before the fix.
+
+The retry path also stopped on its first Cost Management 429 before emitting cooldown feedback. Timestamp prefixes prevented the coordinator and consolidated-cost reader from preserving retry metadata; the downstream evidence classifier also missed cached/partial metadata after that prefix. Regression cases reproduced and corrected each parser boundary. Incident requests contained three or four grouping dimensions, exceeding the service's two-dimension contract; that is an additional query defect, not proof of why the service returned 429.
+
+The corrected contracts are:
+
+- Honor the longest standard, Cost Management or Consumption retry header. With no header, cost reads wait 60 seconds. One automatic retry is allowed for a service delay of at most five minutes; longer waits are returned intact. New turns can wait for an existing short cooldown.
+- Preserve per-tenant serialization, cancellation and final per-turn blocking. A final failure does not authorize another same-turn call after its deadline passes.
+- Emit `retryAtUtc` and `willRetry` with cooldown SSE events. Display waiting versus exhausted states in the main chat as well as the execution sidebar, and mark terminal 429 results as throttled.
+- Reconcile the full final assistant message instead of accepting a partial streamed prefix as complete.
+- Start detailed resource/model spending questions with valid grouped billing evidence, not an extra totals-only round. Reject more than two grouping dimensions in single and bulk calls before HTTP dispatch. Never call inventory or token activity exact billed dollars.
+
+Credential-free regressions cover a real local HTTP server returning 429 then 200 for query and forecast, exhausted retries, long deadlines, cancellation, same-turn blocking, timestamped metadata, invalid grouping, and the rendered desktop/mobile stream. The bundled SDK/CLI protocol test also executes the HTTP retry from inside a protected callback and verifies the turn remains active and the cooldown reporter resolves correctly. These tests do not establish that Azure quota will be available on the next real request; authenticated live billing acceptance is reported separately.
+
+The agent's model was separately switched to an existing Luna deployment because regional Luna quota was fully allocated. Only account-scoped inference access was added; the reused deployment's capacity and policy were preserved. Two synthetic application chats verified Luna inference, one before and one after deletion of only the agent's old Sol deployment. Deployment coordinates remain in ignored environment configuration and CI settings. Model switching does not bypass Cost Management throttling or deploy local application-code fixes.
+
 ## Backlog Coverage
 
 | Finding | Implemented control | Regression coverage |
@@ -55,6 +73,8 @@ All registries live under host-configured `COPILOT_HOME`; filesystem paths are n
 Use a single active application instance. Per-session admission, cooldowns, upload leases and approval locks are process-local. A shared persistent volume is not a distributed lock service. Anonymous continuity still depends on retaining the browser's application identity.
 
 ## Verification Gates
+
+The cost-detail/cooldown and Luna-default pre-release verification passed 225 backend tests, 18 desktop/mobile browser tests, four frontend unit tests, and 15 Python tests. The frontend production build and Bicep compilation passed. Live no-tool application checks verified Luna before and after removing the agent's old Sol deployment. These local regression checks are separate from CI/container deployment and authenticated live billing acceptance.
 
 The 2026-09-17 backend follow-up passed a clean build and all 159 .NET tests, including the real bundled-CLI protocol tests on Windows. Frontend and Linux checks were not rerun for this backend-only follow-up; the results below describe the earlier change set.
 

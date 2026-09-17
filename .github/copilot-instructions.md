@@ -13,6 +13,7 @@ It is designed for customers to deploy into **their own tenant and subscription*
 - Backend: .NET 10 minimal API in `src/Dashboard`
 - Frontend: Vue 3 + Vite + ECharts in `src/Dashboard/frontend`
 - Agent runtime: GitHub Copilot SDK with Azure OpenAI BYOK
+- Default model: `gpt-5.6-luna`, version `2026-07-09`, using the Responses API. Existing-account reuse requires that deployment to exist and the app identity to have account-scoped inference access. Verify available model-specific quota; deleting a different model does not free Luna quota.
 - Authentication: anonymous chat plus optional multi-tenant Entra OAuth
 - Hosting: Linux container on Azure App Service
 - Infrastructure: `azure.yaml` + Bicep under `infra`
@@ -94,12 +95,14 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 - `GetSavingsLedger` supports status/category/literal scopeContains filters and string limit/offset paging. Default 50 entries, maximum 200, limit=0 for totals only. Compute totals over all matches before paging and preserve both totalsComplete and detail complete/nextOffset. These filters never change the owner boundary.
 - Parallelize independent calls, except Cost Management `/query` and `/forecast`, which are tenant-throttled.
 - Never issue multiple Cost Management query calls in parallel. After a final 429, stop querying that service for the turn.
+- Cost query/forecast reads automatically retry once after a full service delay of at most five minutes. New requests may wait for an existing short cooldown; no deadline is shortened, and missing retry headers default to 60 seconds. Keep `retryAtUtc` and `willRetry` in cooldown SSE events, including host-blocked requests. A final same-turn block remains in force even after its timestamp passes.
+- Cost Management permits at most two grouping dimensions. For resource/model detail, start with ResourceId plus Meter at subscription scope, or SubscriptionId plus ResourceId at management-group scope. Do not issue a preliminary totals-only request or add resource-group as a third grouping. Preserve billed detail versus activity/inventory distinctions.
 - Preserve `_finops`/`sourceEvidence`, full retry deadlines, and explicit partial coverage through projections. The cache is credential/request-bound; never label cached or unknown-age billing data as freshly measured.
 - `QueryUploadedFile` uses `jsonPath` for JSON selectors. Preserve structured arrays in `paramsJson`; host `path`, `kind`, and `mode` remain reserved. Query mode supports 1-50 distinct output names in columns[], applied after filtering/aggregation/sorting and before response paging. Retain row counts, totals, null groups and invalid-numeric counts through projection.
 
 ### Cross-subscription cost
 
-Use `QueryCostsAcrossSubscriptions` exactly once for all-subscription totals.
+Use `QueryCostsAcrossSubscriptions` exactly once for totals-only all-subscription questions. Detailed resource/model questions start with valid grouped detail; derive totals from those rows when coverage is complete.
 
 - For the current calendar month, it reads unfiltered monthly-budget `currentSpend` concurrently. Strict guards require current-month dates, monthly Cost budgets, empty filters, agreeing duplicate budgets, and one currency.
 - Budget snapshots are evaluated periodically and may lag billing. State that caveat; retrieval time is not a source data timestamp and a reported total is not a finalized bill.
@@ -167,6 +170,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - Auto-scroll follows only while near the bottom. User scroll-up must never be overridden.
 - Hidden browser tabs suspend ResizeObserver, animation frames, transitions, and smooth scrolling. Keep reactive watcher fallbacks.
 - Do not rewrite punctuation in streamed model text. Identifiers such as hostnames, versions, and Azure resource names must remain byte-for-byte intact.
+- A complete assistant `message` event replaces partial streamed deltas and cancels queued text animation. Having received one delta is not a reason to discard the authoritative final message. Cost cooldown notices remain visible in the chat on mobile; terminal throttling must not appear as an ongoing or successful retry.
 - Escape all model/tool-influenced text before `v-html` transformations.
 - Only the explicit Stop action marks a response as stopped; an arbitrary `AbortError` is recoverable transport failure.
 - Attachment callbacks must update chips by stable `uid`, never by array index. Wait for uploads before sending, delist files whose chips were removed in flight, and revoke blob thumbnail URLs only after Vue unmounts them.

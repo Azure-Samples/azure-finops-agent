@@ -15,6 +15,9 @@ public sealed class JobOutcomeTests
     [InlineData("{\"rows\":[{\"result\":{\"skuStatus\":\"permitted\",\"quotaStatus\":\"unknown\"}}]}", true, true, true)]
     [InlineData("{\"results\":[{\"error\":\"unavailable\"}]}", false, true, false)]
     [InlineData("RESOLUTION {\"status\":\"ambiguous\",\"complete\":false}\n| prices |", true, true, true)]
+    [InlineData("HTTP 200 OK\nCurrent UTC time: 2026-01-01 00:00:00\n{\"_finops\":{\"cacheStatus\":\"cached\"}}", true, false, false)]
+    [InlineData("HTTP 200 OK\nCurrent UTC time: 2026-01-01 00:00:00\n{\"complete\":false,\"_finops\":{\"cacheStatus\":\"queried\"}}", true, true, true)]
+    [InlineData("HTTP 429 TooManyRequests\nCurrent UTC time: 2026-01-01 00:00:00\n{\"error\":{\"code\":\"429\"},\"_finops\":{\"cacheStatus\":\"not_available\"}}", false, false, false)]
     public void EvidenceClassificationParsesStructuredMetadata(string text, bool success, bool fresh, bool partial)
     {
         Assert.Equal((success, fresh, partial), ProtectedTool.InspectEvidence(text));

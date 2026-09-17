@@ -577,7 +577,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             var turnKey = System.Diagnostics.Activity.Current?.GetBaggageItem("finops.turn.id");
             if (turnKey is not null && HttpHelper.RetryReporters.TryGetValue(turnKey, out var report))
             {
-                try { await report(attempt + 1, waitSeconds, url, "pricing", (int)response.StatusCode); }
+                try { await report(new(attempt + 1, waitSeconds, url, "pricing", (int)response.StatusCode)); }
                 catch (Exception emitEx)
                 {
                     HttpHelper.Logger?.LogWarning(emitEx,

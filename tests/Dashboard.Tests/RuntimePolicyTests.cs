@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Auth;
@@ -8,6 +9,39 @@ namespace Dashboard.Tests;
 
 public sealed class RuntimePolicyTests
 {
+    [Theory]
+    [InlineData(false, 3)]
+    [InlineData(false, 4)]
+    [InlineData(true, 3)]
+    [InlineData(true, 4)]
+    public async Task CostQueriesRejectExcessGroupingBeforeDispatch(bool bulk, int dimensions)
+    {
+        const string path = "/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement/query?api-version=2026-08-01";
+        var body = JsonSerializer.Serialize(new
+        {
+            dataset = new { grouping = new[] { "SubscriptionName", "ResourceGroupName", "ResourceId", "ServiceName" }
+                .Take(dimensions).Select(name => new { type = "Dimension", name }) }
+        });
+        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create()
+            .Single(candidate => candidate.Name == (bulk ? "BulkAzureRequest" : "QueryAzure"));
+        var arguments = bulk
+            ? new AIFunctionArguments { ["requestsJson"] = JsonSerializer.Serialize(new[] { new { method = "POST", path, body } }) }
+            : new AIFunctionArguments { ["method"] = "POST", ["path"] = path, ["body"] = body };
+        var result = (await tool.InvokeAsync(arguments))!.ToString()!;
+        Assert.Contains("at most two grouping dimensions", result);
+        Assert.Contains("No request was sent", result);
+    }
+
+    [Fact]
+    public void DetailGuidanceDoesNotRequireAPreliminaryTotalQuery()
+    {
+        var tools = new AzureQueryTools(new UserTokens { UserId = 101 }).Create().ToArray();
+        Assert.Contains("not as a prerequisite", tools.Single(tool => tool.Name == "QueryCostsAcrossSubscriptions").Description);
+        Assert.Contains("at most two grouping dimensions", tools.Single(tool => tool.Name == "QueryAzure").Description);
+        Assert.Contains("do not repeatedly reprint the same totals", CopilotSessionFactory.SystemPrompt);
+        Assert.Null(AzureQueryTools.ValidateCostQueryBody("/providers/Microsoft.CostManagement/query", "{\"dataset\":{\"grouping\":[{\"type\":\"Dimension\",\"name\":\"ResourceId\"},{\"type\":\"Dimension\",\"name\":\"Meter\"}]}}"));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -31,7 +31,7 @@ if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
         "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-RESOURCE.openai.azure.com/\" " +
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
-var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.6-sol";
+var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.6-luna";
 // Optional: pin the BYOK credential to the AOAI resource's tenant. Needed for
 // local dev when the az CLI's DEFAULT account lives in a different tenant than
 // the AOAI resource (DefaultAzureCredential would mint a token for the wrong

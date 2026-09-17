@@ -29,8 +29,8 @@ Inputs below are strings unless `int`, `double`, or `bool` is shown. `=value` is
 | `GenerateDataReport` | Owner-bound artifact | `format`, `dataJson`, `filename=null` | Create CSV, XLSX, or filterable HTML from `{title,source,sheets:[{name,columns,rows,sourceRowCount}]}`; maximum 5,000 rows, 50 columns and 10 sheets. |
 | `ReportMaturityScore` | Owner-bound state | `level`, `scores` | Persist evidence-backed Crawl/Walk/Run/Playbook dimensions; unknown and not-applicable scores stay null. |
 | `GetScoreHistory` | Owner-bound state | `level=null` | Return up to 100 persisted maturity assessments, optionally filtered by level. |
-| `QueryAzure` | Delegated ARM token | `method`, `path`, `body=null` | Shape reads using supported API options only. Read-only POST is allowlisted; PUT/PATCH require host approval; DELETE is blocked. |
-| `QueryCostsAcrossSubscriptions` | Delegated ARM token | `subscriptionsJson`, `from`, `to`, `managementGroupId=null` | One all-subscription total/breakdown call; up to 500 scopes and a 366-day date range (`to` exclusive). Budget MTD may lag billing; other periods use a bounded sequential fallback. |
+| `QueryAzure` | Delegated ARM token | `method`, `path`, `body=null` | Shape reads using supported API options only. Cost queries reject more than two grouping dimensions before dispatch; detailed requests start with resource/meter evidence. Read-only POST is allowlisted; PUT/PATCH require host approval; DELETE is blocked. |
+| `QueryCostsAcrossSubscriptions` | Delegated ARM token | `subscriptionsJson`, `from`, `to`, `managementGroupId=null` | Totals-only questions: up to 500 scopes and a 366-day range (`to` exclusive). Not a prerequisite for resource/model detail. Budget MTD may lag billing; other periods use a bounded sequential fallback. Failed as well as successful reads preserve sourceEvidence and retry deadlines. |
 | `BulkAzureRequest` | Delegated ARM token | `requestsJson`, `parallelism:int=20`, `stopOnFirstError:bool=false` | 1-200 indexed requests with filtered reads or reviewable writes; concurrency 1-50. Returns pending/failed/unattempted/partial coverage. Cost queries must not be placed in a parallel batch. |
 | `CheckComputeFeasibility` | Delegated ARM token | `subscriptionsJson`, `skuNames`, `regions=all`, `count=1`, `priority=standard`, `zone=null` | 1-10 subscriptions, 1-5 exact SKUs, count 1-1000, Spot or standard, optional zone 1/2/3. Preserve explicit all-region coverage, catalogue coverage, quota, placement and eviction evidence separately. |
 | `CheckVmConnectivity` | Delegated ARM token | `networkWatcherResourceId`, `sourceVmResourceId`, `destinationAddress`, `destinationPort` | Start a bounded TCP diagnostic from an existing VM through an existing Network Watcher. |
@@ -59,6 +59,18 @@ Inputs below are strings unless `int`, `double`, or `bool` is shown. `=value` is
 | `GetPricesheetStatus` | Delegated ARM token | `operationStatusUrl` | Poll only the existing returned operation URL, respecting backoff. For rate analysis use an uploaded pricesheet; do not forward a credential-bearing download URL to public web fetch. |
 | `FindIdleResources` | Delegated ARM token | `subscriptionIds=null`, `topPerPattern:int=50` | Eight filtered Resource Graph waste patterns, 1-200 matches per pattern. Omitted subscriptions means all accessible. Empty resource groups are not themselves billable waste. |
 | `PublishFAQ` | Azure-connected user | `question`, `answer`, `title` | Publish or queue a public FinOps Q&A only; tenant-specific data is prohibited. |
+
+## Cost Detail And Retry Behavior
+
+The primary agent model defaults to `gpt-5.6-luna` version `2026-07-09`. The tool contracts and permission boundaries do not change with the model. An existing-account configuration requires a deployed model and account-scoped inference access; it does not create quota or move a deployment.
+
+Cost Management supports at most two grouping dimensions. Resource detail at a management group uses SubscriptionId plus ResourceId; subscription-level resource/model detail can use ResourceId plus Meter. Derive resource-group labels from the resource ID instead of adding another grouping. Detailed billing requests do not require a preliminary QueryCostsAcrossSubscriptions call. When billing detail is unavailable, say so without repeatedly substituting subscription totals, current inventory or token activity.
+
+The host retains per-tenant cost-query serialization and one final block per turn. It waits for the longest service retry deadline and automatically retries a cost query once when the wait is at most five minutes. Without a retry header, the delay is 60 seconds. A new request may wait for an existing short cooldown before sending; a same-turn final block cannot be bypassed. Longer deadlines are not shortened. Stop cancels both network and waiting work.
+
+Cooldown SSE includes `retryAtUtc` and `willRetry`: true means this request is waiting to continue, false means no automatic retry remains for it. The UI shows that status in the chat on mobile and desktop. Both direct timestamped responses and consolidated `sourceEvidence` retain the deadline. A full assistant message replaces partial text deltas, so a small Markdown fragment cannot hide the complete final explanation.
+
+See the [Cost Query API](https://learn.microsoft.com/rest/api/cost-management/query/usage) for its grouping and retry contracts. Successful synthetic tests do not guarantee future billing-service capacity or exact model cost attribution.
 
 ## Complete Metadata Sources
 
@@ -138,7 +150,7 @@ The nine scheduled templates are Check capacity of X (15 minutes), Reserve X whe
 | --- | --- |
 | ARM list APIs | `$filter`, `$select`, and a small `$top` whenever supported. |
 | Azure Resource Graph | `where`, `summarize` or narrow `project`, then `top`/`take`; one query pipeline. |
-| Cost Management | Dataset filters, aggregation and requested grouping over bounded dates; totals need not have grouping. Never compute a full total from top-N detail. |
+| Cost Management | Dataset filters, aggregation and at most two grouping dimensions over bounded dates; totals need not have grouping. Start detail requests with the required grouping and never compute a full total from top-N detail. |
 | Microsoft Graph | Only supported `$filter`, `$select`, `$top` or report/count operations; follow needed `@odata.nextLink` pages and disclose partial coverage. |
 | Log Analytics / App Insights | Time/resource `where`, then `summarize`, narrow `project` and bounded `top`/`take`; retain finer bins when the question requires them. |
 | Blob listings | Exact account/container and the narrowest known name/date prefix; maximum 50 names. |

@@ -1982,7 +1982,7 @@
                   />
                 </svg>
                 <svg
-                  v-else-if="tc.success"
+                  v-else-if="tc.success && !isThrottledTool(tc)"
                   class="st-icon st-icon--ok"
                   viewBox="0 0 16 16"
                   fill="none"
@@ -3625,8 +3625,8 @@ function toggleSidebar() {
   }
 }
 const plusMenuOpen = ref(false);
-const availableModels = ref(["gpt-5.6-sol"]);
-const selectedModel = ref("gpt-5.6-sol");
+const availableModels = ref(["gpt-5.6-luna"]);
+const selectedModel = ref("gpt-5.6-luna");
 
 // Auth loading state
 const authLoading = ref(""); // "" | "github" | "azure"
@@ -5332,6 +5332,10 @@ function _graph_label(path) {
   return "Microsoft Graph";
 }
 
+function isThrottledTool(tc) {
+  return tc?.done && typeof tc.result === "string" && tc.result.startsWith("HTTP 429");
+}
+
 function friendlyToolLabel(tc) {
   if (!tc) return "";
   // Live 429 backoff — set by cooling_down SSE event mid-flight.
@@ -5342,12 +5346,8 @@ function friendlyToolLabel(tc) {
   // Throttled HTTP calls: the tool itself succeeded (returned a string), but the
   // body starts with "HTTP 429 …". Show a friendly status instead of the tool name
   // so the user understands it was rate-limited, not a hard failure.
-  if (
-    tc.done &&
-    typeof tc.result === "string" &&
-    tc.result.startsWith("HTTP 429")
-  ) {
-    return "Cooling down…";
+  if (isThrottledTool(tc)) {
+    return "Throttled (HTTP 429)";
   }
   const tool = tc.tool;
   let args = tc.args;
@@ -7762,7 +7762,20 @@ async function send() {
             break;
 
           case "message":
-            if (data.content && !hasDeltas) enqueueText(data.content);
+            if (data.content) {
+              if (isActiveView()) clearNotice("cost_retry");
+              if (textAnimFrame) {
+                cancelAnimationFrame(textAnimFrame);
+                textAnimFrame = null;
+              }
+              pendingText = "";
+              streamBuffer.value = data.content;
+              hasDeltas = true;
+              clearInterval(intentAnimTimer);
+              intentAnimTimer = null;
+              streamIntent.value = "";
+              streamReasoning.value = "";
+            }
             break;
 
           case "tool_start":
@@ -7903,6 +7916,19 @@ async function send() {
             break;
 
           case "cooling_down": {
+            if (data.status === 429 && typeof data.willRetry === "boolean") {
+              const retryAt = Date.parse(data.retryAtUtc || "");
+              if (Number.isFinite(retryAt) && isActiveView()) {
+                const retryTime = new Date(retryAt).toLocaleTimeString(undefined, {
+                  hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+                });
+                if (data.willRetry) {
+                  setNotice("cost_retry", `Azure Cost Management is throttling. Waiting until ${retryTime}, then retrying automatically.`);
+                } else {
+                  setNotice("cost_cooldown", `Azure Cost Management is cooling down. No further automatic retries. Retry after ${retryTime}.`);
+                }
+              }
+            }
             // 429/5xx backoff in flight. Insert/refresh a separate ephemeral
             // ghost row in perSessionCoolers — NOT a label swap on the real
             // tool. The ghost has its own animated background and an
@@ -8279,6 +8305,7 @@ async function send() {
     }
     perSessionCoolers.delete(streamingId);
     if (isActiveView()) {
+      clearNotice("cost_retry");
       flushText();
       streamBuffer.value = "";
       activeTools.value = [];
