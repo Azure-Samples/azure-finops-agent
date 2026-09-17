@@ -52,13 +52,13 @@ internal sealed class JobOutcomeTools(long owner)
     internal IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(ReportJobOutcome, "ReportJobOutcome",
-            "For scheduled runs only: report the terminal outcome after the evidence tools finish. Success requires current, complete evidence; stale history is not evidence. Call once, then give the concise human-readable answer. A goal_achieved result pauses the schedule.");
+            "For scheduled runs only: report one terminal outcome after evidence tools finish. Supply a concise scoped summary and only the exact evidence tool names, not raw responses or prior transcripts. Do not omit failed or unattempted parts of the declared scope to claim success. Success requires current, complete evidence; stale history is not evidence. Call once, then give the concise human-readable answer. A verified goal_achieved result pauses the schedule.");
     }
 
     private string ReportJobOutcome(
         [Description("completed, unchanged, goal_achieved, blocked, partial, or failed")] string status,
-        [Description("Concise factual result, or the specific blocker. No credentials.")] string summary,
-        [Description("JSON array of the exact source tool names used for evidence in this run. Empty for a blocked or failed run.")] string evidenceToolsJson,
+        [Description("Concise scoped factual result or blocker, at most 1000 characters. Preserve partial coverage; no raw responses, transcripts or credentials.")] string summary,
+        [Description("JSON array of at most 50 exact source tool names actually used for this run's evidence, not their arguments or result bodies. Retain the full declared scope; empty for a blocked or failed run.")] string evidenceToolsJson,
         [Description("UTC timestamp supplied by the data source, not retrieval time. Omit when unavailable.")] string? dataAsOfUtc = null,
         [Description("UTC retry deadline from a tool, or the next useful source refresh time. Omit when unknown.")] string? nextEligibleRunUtc = null)
     {

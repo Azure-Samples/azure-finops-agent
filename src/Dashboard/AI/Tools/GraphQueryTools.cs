@@ -21,7 +21,7 @@ public class GraphQueryTools
     {
         yield return AIFunctionFactory.Create(QueryGraph, "QueryGraph", @"Calls Microsoft Graph API (https://graph.microsoft.com) using the signed-in user's token. Returns raw JSON.
 Methods: GET, POST, PUT, PATCH. DELETE is blocked at the code level. NOTE: the standard consent tiers only grant read-only scopes (*.Read.All / Reports.Read.All), so write calls return 403 insufficient privileges unless the tenant has consented to write scopes — surface that to the user rather than retrying.
-DATA SCOPING: ALWAYS use $select to pick only needed fields, $top to limit rows, $filter to scope. Never fetch full user objects. Paginate via @odata.nextLink for large tenants.
+DATA SCOPING: use $select for needed fields, $top for a small page, and $filter for the requested scope wherever that Graph endpoint supports them. Prefer supported server-side reports and counts for summaries; do not invent query options on endpoints such as reports or subscribedSkus. Avoid full user objects and broad collections when a narrower request answers the question. Follow @odata.nextLink only while the requested result needs more rows. A limited page is not a tenant-wide count; disclose incomplete pagination and preserve totals.
 
 Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant areas:
 - Licenses: /v1.0/subscribedSkus (consumedUnits vs prepaidUnits.enabled = unused licenses), /v1.0/users?$select=assignedLicenses
@@ -35,7 +35,7 @@ Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant a
     }
 
     private async Task<string> QueryGraph(
-        [Description("API path starting with /, e.g. /v1.0/subscribedSkus")] string path,
+        [Description("Filtered, projected, and row-bounded Graph path starting with /; use $filter, $select, and a small $top whenever supported, e.g. /v1.0/users?$filter=accountEnabled eq true&$select=id,department&$top=50.")] string path,
         [Description("HTTP method: GET, POST, PUT, or PATCH (DELETE is blocked)")] string? method = "GET",
         [Description("Optional JSON request body for POST/PUT/PATCH requests. Omit for GET.")] string? body = null)
     {

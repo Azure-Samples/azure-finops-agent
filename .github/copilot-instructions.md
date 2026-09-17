@@ -82,16 +82,20 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 
 ## Tool patterns
 
+- `GenerateScript` is always loaded. When the user requests Azure CLI or PowerShell code, call it directly with the complete executable code in `scriptContent`; it packages an owner-bound artifact and never executes the code. Tenant-specific scripts require scoped evidence first.
+- Script delivery is a proposed savings action, never an executed change. Generic code examples do not create ledger entries. See [the tool and prompt catalog](../docs/tool-catalog.md) for registration flags, inputs, limits and prompt sources; update it when these contracts change.
 - Tools fetch data and return compact raw API JSON unless a bounded projection is explicitly required for performance.
 - XLSX `workbook` inspection returns every sheet's shape, columns, and bounded numeric summaries in one call; reuse it instead of making a second aggregate call when the requested metric is already present.
 - Prefer string parameters; SDK coercion of numeric arguments can be unreliable.
 - Reuse one `CosmosClient`/HTTP client/session where applicable; do not create clients per request.
 - Tools generally do not catch API exceptions internally. Handle failures at system boundaries and let telemetry capture dependency failures.
-- Push aggregation, filtering, grouping, and limits into the source API.
+- Push aggregation, filtering, grouping, projection, and limits into the source API using only options supported by that endpoint. Aggregate before limiting rows; retain totals, pagination and partial coverage. Repeat this requirement in each broad query tool's description and parameter metadata so the model does not fetch an unfiltered collection and rely on response trimming. Output caps and post-download web filtering are not source-side download limits.
+- Apply purpose-specific payload guidance to every tool: exact IDs for single-object tools, declared full scope for assessments, and compact verified inputs for renderers/calculators/state updates. Do not add generic REST filters to tools that cannot support them or silently narrow an explicit full-result request.
+- `GetSavingsLedger` supports status/category/literal scopeContains filters and string limit/offset paging. Default 50 entries, maximum 200, limit=0 for totals only. Compute totals over all matches before paging and preserve both totalsComplete and detail complete/nextOffset. These filters never change the owner boundary.
 - Parallelize independent calls, except Cost Management `/query` and `/forecast`, which are tenant-throttled.
 - Never issue multiple Cost Management query calls in parallel. After a final 429, stop querying that service for the turn.
 - Preserve `_finops`/`sourceEvidence`, full retry deadlines, and explicit partial coverage through projections. The cache is credential/request-bound; never label cached or unknown-age billing data as freshly measured.
-- `QueryUploadedFile` uses `jsonPath` for JSON selectors. Preserve structured arrays in `paramsJson`; host `path`, `kind`, and `mode` remain reserved. Filter and group at source, retaining row counts, totals, null groups and invalid-numeric counts.
+- `QueryUploadedFile` uses `jsonPath` for JSON selectors. Preserve structured arrays in `paramsJson`; host `path`, `kind`, and `mode` remain reserved. Query mode supports 1-50 distinct output names in columns[], applied after filtering/aggregation/sorting and before response paging. Retain row counts, totals, null groups and invalid-numeric counts through projection.
 
 ### Cross-subscription cost
 
@@ -127,7 +131,11 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 
 ### Compute and operations
 
-- `CheckComputeFeasibility` separates regional/family/Spot quota, SKU and zone restrictions, scope coverage, and placement likelihood. It is not a capacity guarantee or effective policy validation.
+- `CheckComputeFeasibility` separates regional/family/Spot quota, SKU and zone restrictions, catalogue coverage, placement likelihood, and historical Spot eviction-rate bands. It is not a capacity guarantee or effective policy validation.
+- Filter requested Compute SKU records before applying retained-item limits, follow pagination, and select the record for the requested region. Large catalogues can put every GPU record beyond a generic collection limit. Preserve `catalogueCoverage` and per-region unknowns; HTTP 200 is not proof of complete coverage.
+- `LowPriorityCapable`, an existing successful Spot deployment, a current placement restriction, historical eviction risk and retail price are different evidence. Missing history is unknown, not zero risk. Cached placement scores are not fresh measurements; absent or `DataNotFound` scores are incomplete. A policy-name/parameter search does not validate effective policy.
+- Treat ordinary Spot eviction and resilience questions as infrastructure questions. Provider content-filter errors are separate from tool failures; inspect structured filter metadata, including `error.content_filters.content_filter_results`, without logging prompts or credentials. Do not silently rewrite user text or automatically retry around moderation. Do not change filter settings autonomously merely to make a test pass.
+- **Scoped maintainer exception - filters only:** An explicit maintainer request authorizes supported Azure filter and content-filter configuration changes, including custom RAI policies, configurable severity thresholds, and Bicep policy configuration. Confirm the target deployment and exact policy differences, preserve platform-required protections, avoid unintended changes to shared policies, and verify the effective configuration. Deployment still requires explicit instruction. This allowance does not extend to authentication, authorization/RBAC, ownership checks, write approvals, secret protection, destructive-operation restrictions, or any other security control.
 - `CheckVmConnectivity` probes from an existing Azure VM via an existing Network Watcher. Never substitute connectivity from the app host.
 - `OperationStore` records intent before dispatch and preserves asynchronous state, polling URLs, retry deadlines and prerequisites. Use `GetOperationStatus`/`ListOperationResults`; HTTP 202 is not success and unknown writes must not be retried blindly.
 
@@ -223,6 +231,7 @@ Do not deploy without explicit user instruction. When instructed, validate build
 ## Observability
 
 - Host traces use `SamplingRatio = 1` with `TracesPerSecond = null`; the rate limit otherwise overrides ratio sampling. Keep host, CLI collector, and browser telemetry changes distinct.
+- `ApiExceptionHandling` owns the correlated exception log for handled HTTP faults. Suppress the duplicate ASP.NET exception-handler diagnostic, retain the request metric's `error.type`, and keep framework diagnostics for faults after response start. Expected cancellation stays trace-only. Transcript ownership is rechecked under the user gate; a conflicting live owner fails closed without an exception-driven 500.
 - Collector 0.160.0 uses `azure_monitor` with loopback OTLP receivers. Validate config, local ingestion and shutdown after collector upgrades; the optional AMQP dependency finding is tracked in `docs/agent-reliability.md`.
 - Owner-bound turn outcomes persist for 30 days and reconcile interrupted records on startup. Normal chat fulfillment stays `not_evaluated`; a completed HTTP request or SDK turn is not proof the user's objective was met.
 - Browser exception capture has one bounded, redacted, deduplicated reporting path. Do not claim the historical notification-manager exception is fixed without reproducing its trigger.

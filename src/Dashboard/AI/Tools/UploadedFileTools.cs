@@ -75,9 +75,9 @@ public sealed class UploadedFileTools
 @"Inspect or query a file the user dropped into the chat (CSV, TSV, JSON, TXT/log/md, XLSX, PDF, Parquet).
 Each upload is announced at the start of the user's turn with its fileId, kind, size, and a short preview.
 Call this tool to fetch more data — head/tail/slice for rows, schema/count for shape, workbook for all XLSX sheets,
-filter/aggregate for tabular analysis,
+filter/aggregate/query for tabular analysis,
 text_range for long text/PDF, json_path for nested JSON. Responses are capped (≤200 rows or ≤8000 chars per call) so make
-multiple calls if you need more.
+multiple targeted calls only when needed. Prefer filter, aggregate, or query over broad head/slice calls. In query mode, use columns to return only needed output fields; filtering, aggregation and sorting happen before projection and pagination. Preserve source_rows, filtered_rows, total_results, totals, invalid_numeric and complete so a limited result is never presented as the full dataset. These controls reduce helper output, not the already-uploaded file size.
 
 This tool is the only permitted way to inspect uploaded files. Never use shell, PowerShell, Python, filesystem search, or
 the file's temp path. For XLSX, use `workbook` first: it returns every sheet's shape, columns, and bounded numeric
@@ -95,7 +95,7 @@ Modes:
   text_range  txt/pdf substring (params: start, length, max 8000)
   filter      Tabular: rows where column {op} value (params: column, op in eq|ne|gt|lt|ge|le|contains, value, limit)
   aggregate   Tabular: group_by + agg (params: group_by, agg in sum|mean|min|max|count, column, limit)
-    query       Tabular: filters[], group_by[] and aggregates[{column,op,as}], sort[{column,direction}], offset, limit
+    query       Tabular: filters[], group_by[] and aggregates[{column,op,as}], sort[{column,direction}], columns[], offset, limit. columns selects 1-50 distinct output names, including aggregate aliases when used.
     json_path   JSON: navigate dot/bracket selector (param: jsonPath, e.g. 'properties.rows[0].cost')
     Both aggregate and query accept filters:[{column,op,value}]. All predicates must match. group_by accepts one column or an array of up to 6 columns. Aggregate output includes source/filtered counts, totals, and explicit truncation.
 
@@ -108,7 +108,7 @@ Examples:
     private async Task<string> QueryUploadedFile(
         [Description("The fileId returned at upload time (12-char hex).")] string fileId,
         [Description("Operation: preview, schema, count, workbook, head, tail, slice, text_range, filter, aggregate, query, json_path.")] string mode,
-        [Description("Optional JSON object with mode-specific parameters (see tool description).")] string? paramsJson,
+        [Description("Optional JSON object with mode-specific parameters. For tabular query use filters[], group_by[], aggregates[{column,op,as}], sort[{column,direction}], columns[] (1-50 distinct output fields), offset and a small limit. Filter/aggregate before projecting and limiting; retain returned totals/coverage. For JSON selectors use jsonPath. Host path, kind and mode are reserved.")] string? paramsJson,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(fileId)) return Json(new { ok = false, error = "fileId required" });

@@ -15,6 +15,34 @@ namespace Dashboard.Tests;
 public sealed class ArtifactTests
 {
     [Theory]
+    [InlineData("bash", ".sh", "application/x-shellscript", "printf '%s\\n' 'Synthetic script'\nexit 73\n")]
+    [InlineData("powershell", ".ps1", "application/x-powershell", "Write-Output 'Synthetic script'\nthrow 'Do not execute generated code on the host'\n")]
+    public async Task ScriptToolPackagesCompleteCodeWithoutExecutingIt(string language, string extension, string contentType, string scriptContent)
+    {
+        var tool = new ScriptTools(101).Create().Single();
+        var result = await tool.InvokeAsync(new AIFunctionArguments
+        {
+            ["scriptContent"] = scriptContent,
+            ["filename"] = "synthetic-script",
+            ["language"] = language,
+            ["description"] = "Synthetic script artifact"
+        });
+        var marker = Assert.IsType<JsonElement>(result).GetString()!;
+        Assert.StartsWith("__SCRIPT_READY__:", marker);
+        var identifier = marker.Split(':')[1];
+        try
+        {
+            var entry = ArtifactStore.Default.Find(identifier, 101);
+            Assert.NotNull(entry);
+            Assert.Equal("synthetic-script" + extension, entry.FileName);
+            Assert.Equal(contentType, entry.ContentType);
+            Assert.Equal(scriptContent, await File.ReadAllTextAsync(entry.Path));
+            Assert.Null(ArtifactStore.Default.Find(identifier, 202));
+        }
+        finally { ArtifactStore.Default.Remove(identifier, 101); }
+    }
+
+    [Theory]
     [InlineData("csv", "text/csv")]
     [InlineData("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
     [InlineData("html", "text/html")]

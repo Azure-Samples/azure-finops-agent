@@ -1,4 +1,6 @@
 using AzureFinOps.Dashboard.AI;
+using AzureFinOps.Dashboard.AI.Tools;
+using AzureFinOps.Dashboard.Auth;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 
@@ -23,5 +25,110 @@ public sealed class RuntimePolicyTests
         Assert.Equal("disable", config.ManagedSettings!.Permissions!.DisableBypassPermissionsMode);
         Assert.NotNull(config.OnPermissionRequest);
         Assert.NotNull(config.Hooks!.OnPreToolUse);
+    }
+
+    [Theory]
+    [InlineData("QueryAzure", "path", "$filter")]
+    [InlineData("QueryAzure", "body", "aggregate")]
+    [InlineData("BulkAzureRequest", "requestsJson", "filter")]
+    [InlineData("QueryGraph", "path", "$select")]
+    [InlineData("QueryLogAnalytics", "query", "summarize")]
+    [InlineData("ListCostExportBlobs", "prefix", "prefix")]
+    [InlineData("ReadCostExportBlob", "blobPath", "exact")]
+    [InlineData("QueryUploadedFile", "paramsJson", "filters")]
+    [InlineData("CheckComputeFeasibility", "skuNames", "SKU")]
+    [InlineData("CheckVmConnectivity", "sourceVmResourceId", "VM")]
+    [InlineData("GetAzureRetailPricing", "armSkuName", "filter")]
+    [InlineData("GetAzureRetailPricingBatch", "queriesJson", "filter")]
+    [InlineData("DetectCostAnomalies", "subscriptionId", "scope")]
+    [InlineData("DetectCostAnomalies", "days", "window")]
+    [InlineData("FindIdleResources", "subscriptionIds", "scope")]
+    [InlineData("FindIdleResources", "topPerPattern", "limit")]
+    [InlineData("GetSavingsLedger", "status", "filter")]
+    [InlineData("GetSavingsLedger", "limit", "limit")]
+    [InlineData("QueryCostsAcrossSubscriptions", "subscriptionsJson", "scope")]
+    [InlineData("StartPricesheetDownload", "billingScope", "billing scope")]
+    [InlineData("GetPricesheetStatus", "operationStatusUrl", "returned")]
+    [InlineData("GetOperationStatus", "operationId", "exact")]
+    [InlineData("ListOperationResults", null, "current conversation")]
+    [InlineData("GetAzureServiceHealth", null, "no service/region filtering")]
+    public void QueryGuidanceIsPresentInToolAndParameterSchemas(string toolName, string? parameterName, string guidance)
+    {
+        var tokens = new UserTokens { UserId = 101 };
+        var tools = toolName switch
+        {
+            "QueryAzure" or "BulkAzureRequest" or "QueryCostsAcrossSubscriptions" => new AzureQueryTools(tokens).Create(),
+            "QueryGraph" => new GraphQueryTools(tokens).Create(),
+            "QueryLogAnalytics" => new LogAnalyticsQueryTools(tokens).Create(),
+            "ListCostExportBlobs" or "ReadCostExportBlob" => new StorageQueryTools(tokens).Create(),
+            "QueryUploadedFile" => new UploadedFileTools(tokens).Create(),
+            "CheckComputeFeasibility" or "CheckVmConnectivity" => new ComputeDiagnosticTools(tokens).Create(),
+            "GetAzureRetailPricing" or "GetAzureRetailPricingBatch" => RetailPricingTools.Create(),
+            "DetectCostAnomalies" => new AnomalyTools(tokens).Create(),
+            "FindIdleResources" => new IdleResourceTools(tokens).Create(),
+            "GetSavingsLedger" => new SavingsLedgerTools(tokens).Create(),
+            "StartPricesheetDownload" or "GetPricesheetStatus" => new PricesheetTools(tokens).Create(),
+            "GetOperationStatus" or "ListOperationResults" => new OperationTools(tokens).Create(),
+            "GetAzureServiceHealth" => HealthTools.Create(),
+            _ => throw new InvalidOperationException("Unexpected query tool.")
+        };
+        var tool = tools.Single(candidate => candidate.Name == toolName);
+        Assert.Contains(guidance, tool.Description, StringComparison.OrdinalIgnoreCase);
+        if (parameterName is not null)
+        {
+            var parameter = tool.JsonSchema.GetProperty("properties").GetProperty(parameterName);
+            Assert.Contains(guidance, parameter.GetProperty("description").GetString()!, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void ScriptGuidanceRequiresCompleteCodeWithoutHostExecution()
+    {
+        var tool = new ScriptTools(101).Create().Single();
+        Assert.Contains("complete code", tool.Description);
+        Assert.Contains("never executes", tool.Description);
+        Assert.DoesNotContain("ONLY AFTER", tool.Description);
+        var content = tool.JsonSchema.GetProperty("properties").GetProperty("scriptContent");
+        Assert.Contains("complete executable", content.GetProperty("description").GetString()!);
+        Assert.Contains("GenerateScript directly", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
+    public void ScriptDeliveryIsOnlyAProposedSavingsAction()
+    {
+        var tool = new SavingsLedgerTools(new UserTokens { UserId = 101 }).Create()
+            .Single(candidate => candidate.Name == "RecordSavingsAction");
+        Assert.Contains("proposed, not executed", tool.Description);
+        var status = tool.JsonSchema.GetProperty("properties").GetProperty("status");
+        Assert.Contains("generation alone is never execution", status.GetProperty("description").GetString()!);
+        Assert.Contains("A generated script is not an executed change", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Theory]
+    [InlineData("RenderChart", "data", "scoped")]
+    [InlineData("RenderAdvancedChart", "options", "scoped")]
+    [InlineData("EstimateTokenCost", "modelsJson", "requested")]
+    [InlineData("GenerateDataReport", "dataJson", "sourceRowCount")]
+    [InlineData("GenerateHtmlPresentation", "slidesJson", "scope")]
+    [InlineData("GenerateMaturityReport", "reportJson", "source aggregates")]
+    [InlineData("SuggestFollowUp", "prompt", "scope")]
+    [InlineData("ReportJobOutcome", "summary", "scope")]
+    public void OutputToolsDescribeBoundedEvidenceInputs(string toolName, string parameterName, string guidance)
+    {
+        var tools = toolName switch
+        {
+            "RenderChart" or "RenderAdvancedChart" => ChartTools.Create(),
+            "EstimateTokenCost" => CostEstimateTools.Create(),
+            "GenerateDataReport" => new ReportTools(101).Create(),
+            "GenerateHtmlPresentation" => new HtmlPresentationTools(101).Create(),
+            "GenerateMaturityReport" => new MaturityReportTools(101).Create(),
+            "SuggestFollowUp" => FollowUpTools.Create(),
+            "ReportJobOutcome" => new AzureFinOps.Dashboard.Jobs.JobOutcomeTools(101).Create(),
+            _ => throw new InvalidOperationException("Unexpected output tool.")
+        };
+        var tool = tools.Single(candidate => candidate.Name == toolName);
+        Assert.Contains(guidance, tool.Description, StringComparison.OrdinalIgnoreCase);
+        var parameter = tool.JsonSchema.GetProperty("properties").GetProperty(parameterName);
+        Assert.Contains(guidance, parameter.GetProperty("description").GetString()!, StringComparison.OrdinalIgnoreCase);
     }
 }

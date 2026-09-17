@@ -31,12 +31,14 @@ public class IdleResourceTools
 - Empty resource groups
 - Old snapshots (>30 days)
 
+DATA SCOPING: pass only the subscription IDs in the user's requested scope; omit them only for an explicitly all-accessible scan. Each pattern filters and projects at Resource Graph before applying topPerPattern (1-200). Use a small topPerPattern for a quick scan, not an estate-wide total; a limited pattern count is not the full count of matching resources. The tool always scans all eight patterns and has no resource-group, region or pattern selector. For one named pattern/resource group, use one scoped QueryAzure Resource Graph query with where, summarize/project and a result limit. Preserve all requested scope and disclose limited coverage; empty resource groups alone are not billable waste.
+
 Use for 'find waste', 'orphaned resources', 'quick cost wins'. After calling, suggest GenerateScript for cleanup.");
     }
 
     private async Task<string> FindIdleResources(
-        [Description("Optional comma-separated subscription IDs to scope the scan. Empty = all subscriptions the user has access to.")] string? subscriptionIds = null,
-        [Description("Max resources per pattern (default 50, max 200).")] int topPerPattern = 50)
+        [Description("Comma-separated subscription IDs from the requested scope. Omit only for an all-accessible scan, not when a subscription was named.")] string? subscriptionIds = null,
+        [Description("Source-side limit per pattern, 1-200, default 50. Choose a small result for discovery and do not interpret limited rows as an estate-wide count. All eight patterns are still queried.")] int topPerPattern = 50)
     {
         var token = _tokens.AzureToken;
         if (string.IsNullOrEmpty(token))

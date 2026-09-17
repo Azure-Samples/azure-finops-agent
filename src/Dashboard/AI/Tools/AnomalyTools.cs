@@ -25,16 +25,16 @@ public class AnomalyTools
 
 Use when user asks 'why did costs spike?', 'are there anomalies?', 'investigate cost increase', etc.
 
-Returns JSON: baseline_mean, baseline_stddev, threshold (mean + 2*stddev), anomalies[] (date, magnitude, grouping breakdown), summary.
+DATA SCOPING: scope to the requested subscription and the shortest 14-90 day history window that provides the requested baseline; default 35 days. The host asks Cost Management for daily sums and grouped contributors, not raw billing rows. groupBy chooses the breakdown dimension, not a resource filter. This tool cannot filter by resource group or service; for that explicit narrower scope use a filtered, aggregated QueryAzure query instead of claiming subscription-wide anomalies describe that subset.
 
-After calling, drill into each anomalous date with QueryAzure (Cost Mgmt /query grouped by ResourceGroupName or ServiceName for that date range) to find root cause.");
+Returns window, baseline, anomalies_found, anomalies (date, cost, z_score, direction, top_contributors), and recent_daily_costs. top_contributors is at most five rows per anomalous day, not a complete breakdown or proof of root cause. Reuse it; do not repeat the same Cost Management query. Correlate only anomalous windows and relevant resources with a filtered Resource Graph resourcechanges query. Request another scoped cost breakdown only for a specific missing dimension, and never after a final 429 in the turn.");
     }
 
     private async Task<string> DetectCostAnomalies(
-        [Description("Subscription ID to analyze")] string subscriptionId,
-        [Description("Days of history to fetch (baseline + detection window). Default 35.")] int days = 35,
+        [Description("Exact subscription ID from the requested scope. Do not fan out across unrelated subscriptions or treat this as a resource-group filter.")] string subscriptionId,
+        [Description("History window for baseline plus detection, clamped to 14-90 days; default 35. Use only the window needed for the question while retaining a meaningful baseline.")] int days = 35,
         [Description("Z-score threshold for flagging an anomaly. Default 2.0 (= ~95% confidence). Use 1.5 for more sensitive, 3.0 for stricter.")] double zThreshold = 2.0,
-        [Description("Optional grouping for breakdown of anomalous days: 'ServiceName', 'ResourceGroupName', 'MeterCategory'. Default 'ServiceName'.")] string groupBy = "ServiceName")
+        [Description("Grouping dimension for anomalous-day contributors: ServiceName, ResourceGroupName or MeterCategory; default ServiceName. Reuse the returned grouping before requesting another breakdown. This is not a value filter.")] string groupBy = "ServiceName")
     {
         var token = _tokens.AzureToken;
         if (string.IsNullOrEmpty(token))

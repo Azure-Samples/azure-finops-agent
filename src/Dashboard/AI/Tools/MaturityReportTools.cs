@@ -28,6 +28,8 @@ public sealed class MaturityReportTools(long ownerUserId)
         yield return AIFunctionFactory.Create(GenerateMaturityReport, "GenerateMaturityReport",
             @"Generates a DEEP, evidence-based FinOps maturity ASSESSMENT REPORT as one scrolling, print/PDF-friendly HTML document. Use this — NOT GenerateHtmlPresentation — whenever the user wants a 'maturity assessment', 'full FinOps assessment', 'FinOps Foundation report', or a board/exec maturity report with depth.
 
+DATA SCOPING: reportJson uses concise source aggregates for the requested assessment period and full declared scope. Include every requested capability and subscription, but only fields needed for scores, evidence and decisions; do not embed raw inventories, entire exports or transcripts. This is a renderer, not a data-query tool. Scope evidence queries before generating the report and preserve unknown or partial findings instead of dropping them to improve a score.
+
 This renders the canonical FinOps Foundation framework: 4 DOMAINS — 'Understand Cloud Usage & Cost', 'Quantify Business Value', 'Optimize Cloud Usage & Cost', 'Manage the FinOps Practice' — and up to 19 CAPABILITIES. Score every capability 0-5 from REAL Azure API data before calling (Resource Graph, Cost Management query+forecast, Consumption budgets, Advisor, Policy, Locks, Reservations/Capacity, Cost exports, Graph, Log Analytics).
 
 MANDATORY for credibility — every capability MUST include: concrete EVIDENCE bullets with real numbers (counts, %, $), a per-capability priority (CRITICAL/HIGH/MEDIUM/LOW), an effort estimate, the Crawl/Walk/Run definitions for THAT capability, and a per-subscription score breakdown. No empty evidence. Never invent numbers — only report what the APIs returned. Prefer projected EOM cost (Cost Management Forecast) for the headline spend.
@@ -42,7 +44,7 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
     }
 
     private Task<string> GenerateMaturityReport(
-        [Description(@"JSON object describing the full assessment. SCHEMA:
+        [Description(@"JSON object describing the full requested assessment using concise source aggregates, not raw API objects. Preserve every requested capability and declared scope, including unknown/partial evidence. SCHEMA:
 {
   ""customer"": ""Contoso"",                       // optional
   ""assessmentDate"": ""June 7, 2026"",

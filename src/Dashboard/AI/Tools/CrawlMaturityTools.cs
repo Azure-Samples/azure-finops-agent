@@ -27,11 +27,12 @@ public sealed class CrawlMaturityTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides a periodically evaluated MTD snapshot, not real-time or finalized cost.
+DATA SCOPING: the declared assessment scope controls the subscription inputs. Include every requested subscription and all seven dimensions; do not shrink a full assessment to top spenders. The host uses scoped Resource Graph aggregates and bounded evidence samples. Reuse those summaries rather than asking QueryAzure for raw inventories. Filtered budgets or sample names do not establish whole-estate spend/counts; retain coverage, unknown and notApplicable states.
     Use exactly once for Crawl/FinOps maturity scoring. Pass the exact `subscriptions` array and optional first management-group id from the connection context. Do NOT supplement it with QueryAzure, ReportMaturityScore, SuggestFollowUp, or any other tool—the score persistence, maturity SSE event, and follow-up buttons are already handled by this result.");
     }
 
     private async Task<string> GetCrawlMaturityEvidence(
-        [Description("Exact subscriptions JSON array from the connection context, with id and name fields")] string subscriptionsJson,
+        [Description("Subscription objects with id and name from connection context for the full requested assessment scope. Never remove low-spend subscriptions to make the result smaller.")] string subscriptionsJson,
         [Description("Optional management-group id or full ARM path from the connection context")] string? managementGroupId = null)
     {
         var totalSw = System.Diagnostics.Stopwatch.StartNew();

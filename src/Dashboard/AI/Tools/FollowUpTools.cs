@@ -13,6 +13,8 @@ public static class FollowUpTools
 
     [Description(@"Call after answering to suggest the next ACTION (1-3 clickable buttons). Call exactly once per turn (skip only at natural endpoints).
 
+DATA SCOPING: include only the concrete target, action and essential scope in each prompt. Reuse the current evidence without pasting tool responses, exports or the conversation transcript into button prompts. Make follow-up queries narrow enough to resolve one missing question; do not expand a resource-specific turn into a full tenant scan unless requested.
+
 Rules:
 1. Each follow-up MUST reference a concrete entity from this turn (resource, RG, service, file, $, region, window). Never generic.
 2. The follow-up is the next ACTION, not a re-summary.
@@ -34,7 +36,7 @@ Examples:
 - After file analysis: 'Rank top 5 actions by $ impact' + 'Generate remediation script for the disks' + 'Build a CFO deck'")]
     private static string SuggestFollowUp(
         [Description("Short button label (max 60 chars), e.g. 'Drill into Virtual Machines (top spender)' or 'Rank top 5 actions by $ impact'")] string label,
-        [Description("Full prompt sent when clicked \u2014 must be a complete, actionable instruction referencing concrete entities (RG, service, $ figure)")] string prompt,
+        [Description("Full prompt sent when clicked: one complete actionable instruction with the concrete target and essential scope. Do not paste tool responses or the conversation transcript into this prompt.")] string prompt,
         [Description("Optional second button label (\u226460 chars). Use after data-heavy / multi-file answers to surface a remediation script, CFO deck, or top-driver drill-down.")] string? label2 = null,
         [Description("Optional second prompt \u2014 paired with label2.")] string? prompt2 = null,
         [Description("Optional third button label (\u226460 chars).")] string? label3 = null,

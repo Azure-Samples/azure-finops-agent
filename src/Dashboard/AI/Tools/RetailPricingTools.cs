@@ -38,6 +38,8 @@ public static class RetailPricingTools
         yield return AIFunctionFactory.Create(GetAzureRetailPricing, "GetAzureRetailPricing",
             @"PUBLIC (no auth): Azure Retail Prices API — pay-as-you-go, reservation and savings-plan rates for any Azure service. Use this BEFORE QueryAzure when comparing SKUs or regions, or costing a workload that is not deployed yet.
 
+DATA SCOPING: filter at the Retail Prices API by the requested service, exact ARM SKU, regions and purchase type. Add only vocabulary filters supported by the user's wording or returned FACETS; do not invent meter names. Use the smallest top that still covers every requested meter/region. top is not a guarantee of transfer size or complete coverage, especially for ranking; inspect RESOLUTION and pagination. Preserve an explicit all-regions comparison and compute cheapest only after considering the full filtered candidate set. Do not widen to unrelated products merely to get a price.
+
 STRUCTURAL FILTERS (safe to supply from what the user named):
 - serviceName (REQUIRED): e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Load Balancer', 'Foundry Models' (covers ALL Azure OpenAI + open-model inference; the legacy 'Azure OpenAI' serviceName returns 0 rows).
 - armRegionName: lowercase, no spaces, e.g. 'eastus'. COMMA-SEPARATE to compare many regions in ONE call. Some services are priced globally rather than per region, so a region filter can legitimately match nothing.
@@ -59,6 +61,8 @@ MONTHLY / VOLUME TOTALS: call EstimateTokenCost with the per-1M rates instead of
 
         yield return AIFunctionFactory.Create(GetAzureRetailPricingBatch, "GetAzureRetailPricingBatch",
             @"PUBLIC (no auth): Runs 2-8 independent Azure Retail Prices lookups IN PARALLEL inside ONE tool call. Use this whenever a comparison or estimate needs more than one distinct service/SKU filter. Do NOT call GetAzureRetailPricing repeatedly, and do NOT use bash/powershell/rg/grep to parse or combine pricing rows.
+
+        DATA SCOPING: every queriesJson item needs its own narrow service/SKU/region/purchase-type filters and a top sized for the requested comparison. Do not duplicate identical filters or hide a whole-service scan inside the batch. Reuse one section for one SKU across comma-separated regions. Keep each section's FACETS, RESOLUTION and partial coverage; a batch does not make an incomplete price comparison complete.
 
     The tool returns a FACETS block per section with the live distinct field values. If a section's vocabulary filter matched nothing, it is dropped automatically and the wider result set is returned instead — read that section's facets and re-filter from them rather than fetching a pricing web page.
 
@@ -82,7 +86,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
     }
 
     private static async Task<string> GetAzureRetailPricingBatch(
-        [Description("JSON array of 2-8 pricing query objects. Each object: label, serviceName, and optional armRegionName, armSkuName, priceType, meterNameContains, productNameContains, skuNameContains, currencyCode, rank, top.")] string queriesJson)
+        [Description("JSON array of 2-8 independently filtered pricing queries. Each object: label, serviceName, and optional armRegionName, armSkuName, priceType, meterNameContains, productNameContains, skuNameContains, currencyCode, rank, top. Supply only requested service/SKU/region filters, deduplicate identical combinations, and keep enough rows for every required meter.")] string queriesJson)
     {
         using var doc = JsonDocument.Parse(queriesJson);
         if (doc.RootElement.ValueKind != JsonValueKind.Array)
@@ -281,16 +285,16 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
     }
 
     private static async Task<string> GetAzureRetailPricing(
-        [Description("Service name, e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Foundry Models'. REQUIRED.")] string serviceName,
+        [Description("Required service filter, e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Foundry Models'. Combine with the requested SKU, region and purchase-type filters instead of retrieving an entire service catalogue.")] string serviceName,
         [Description("ARM region (lowercase, no spaces), e.g. 'eastus', 'westeurope'. Pass a COMMA-SEPARATED LIST to compare regions in ONE call, e.g. 'eastus,westeurope,swedencentral' — always do this instead of calling the tool once per region. Empty = all regions.")] string? armRegionName = null,
-        [Description("ARM SKU name, e.g. 'Standard_D4s_v5'. Empty = all SKUs.")] string? armSkuName = null,
+        [Description("Exact ARM SKU filter, e.g. 'Standard_D4s_v5'. Supply the requested SKU when known; omit only for a requested cross-SKU comparison or a service without ARM SKU identifiers.")] string? armSkuName = null,
         [Description("Price type: 'Consumption' (PAYG), 'Reservation' (1y/3y RI), 'DevTestConsumption'. Empty = all.")] string? priceType = null,
         [Description("Substring match on meterName, e.g. 'Spot' or 'LRS'. Empty = no meter filter.")] string? meterNameContains = null,
         [Description("Substring match on productName, e.g. 'GPT' / 'Llama' / 'Phi' for Foundry Models, or 'Premium SSD' for storage. Foundry productName is a family bucket — use 'GPT' not 'gpt-4'. Empty = no product filter.")] string? productNameContains = null,
         [Description("Substring match on skuName, e.g. '8 vCore', 'RUs', 'GPT-4o Inp Gl'. Use with productNameContains when the product is a broad family. Empty = no SKU-name filter.")] string? skuNameContains = null,
         [Description("Currency code (default 'USD'). Supported: USD, EUR, GBP, JPY, NOK, etc.")] string? currencyCode = null,
         [Description("Set to 'cheapest' to PREPEND a price-sorted summary of the matching rows (one line per row, lowest retailPrice first). Use this for any 'cheapest/lowest/top N regions' question so a SINGLE call answers it — do NOT call this tool once per region and do NOT sort the rows yourself.")] string? rank = null,
-        [Description("Max results (default 50, max 100). Lower = faster.")] int top = 50)
+        [Description("Requested result size, 1-100, default 50. Prefer a small value sufficient for all requested meters/regions; the host may increase it for coverage. Not a hard download limit. Use rank='cheapest' for full filtered ranking and retain RESOLUTION coverage.")] int top = 50)
     {
         if (string.IsNullOrWhiteSpace(serviceName))
             return "Error: serviceName is required (e.g. 'Virtual Machines'). Querying without a service filter would return millions of rows.";

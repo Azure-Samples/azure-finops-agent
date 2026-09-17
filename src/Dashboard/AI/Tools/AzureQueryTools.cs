@@ -30,6 +30,8 @@ public class AzureQueryTools
         yield return AIFunctionFactory.Create(QueryAzure, "QueryAzure", @"Queries Azure ARM REST APIs (https://management.azure.com) using the signed-in user's delegated token. Returns raw JSON.
 Methods: GET, PUT, PATCH, plus allowlisted read-only POST endpoints. Mutating action POSTs and DELETE are blocked at the code level. The user's Entra RBAC is the effective access boundary.
 
+PAYLOAD DISCIPLINE: filter, aggregate, project, and limit every broad read at the source using only options that the endpoint supports. Use `$filter`, `$select`, and a small `$top` where supported; otherwise choose a narrower resource endpoint or a scoped Resource Graph query. Resource Graph uses `where`, `summarize`, `project`, and `top`; Cost Management uses dataset filters and aggregation/grouping over the requested date range. Aggregate before limiting rows so totals are not calculated from a sample. For requested full results preserve pagination, counts, `_finops`/sourceEvidence and partial coverage. Never rely on response truncation or client-side filtering to make an unfiltered collection small.
+
 Use standard ARM URL conventions; you know the resource providers and current api-versions. Common surfaces: Microsoft.CostManagement (query/forecast/exports), Microsoft.Consumption (budgets/pricesheets/reservation*), Microsoft.Capacity (reservations), Microsoft.BillingBenefits (savingsPlans), Microsoft.Advisor (recommendations), Microsoft.ResourceGraph (KQL across subs), Microsoft.Insights (metrics/diagnostics/autoscale), Microsoft.Compute, Microsoft.ContainerService, Microsoft.Network, Microsoft.Storage, Microsoft.Sql, Microsoft.Web, Microsoft.OperationalInsights, Microsoft.MachineLearningServices, Microsoft.CognitiveServices, Microsoft.App, Microsoft.Authorization (RBAC/Policy/Locks), Microsoft.Management, Microsoft.Quota, Microsoft.Carbon, Microsoft.Migrate, Microsoft.Support, Microsoft.ResourceHealth, Microsoft.Security.
 
 === NON-OBVIOUS RULES (read carefully) ===
@@ -40,7 +42,7 @@ Use standard ARM URL conventions; you know the resource providers and current ap
   /providers/Microsoft.Billing/billingAccounts/{billingAccountId}[/billingProfiles/{id}|/invoiceSections/{id}]
 Never bare /providers/Microsoft.CostManagement/... — that returns 400.
 
-COST MANAGEMENT QUERY: use api-version=2026-08-01. ALWAYS group by a real dimension (ServiceName, ResourceGroupName, MeterCategory). Do NOT add 'UsageDate' to the grouping array — it's a response column, not a dimension; use granularity=""Daily"" for per-day. Never request raw ungrouped cost data. For totals across all subscriptions, query the tenant/root management-group scope ONCE and group by SubscriptionName; never fan out one query per subscription.
+COST MANAGEMENT QUERY: use api-version=2026-08-01 and dataset.aggregation for totals. Add real grouping dimensions (ServiceName, ResourceGroupName, MeterCategory) only for the requested breakdown. Do NOT add 'UsageDate' to the grouping array — it's a response column, not a dimension; use granularity=""Daily"" for per-day. Never request raw cost detail rows for a summary. For totals across all subscriptions, call QueryCostsAcrossSubscriptions exactly once with connection-context scopes; never fan out one query per subscription yourself.
 
 THROTTLING: Cost Management /query and /forecast are aggressively throttled per-tenant. Interactive queries make at most one short retry; other transient calls retain the standard retry policy. Do NOT call multiple CostManagement endpoints in parallel from the same turn — Resource Graph and Advisor parallelize fine. If a call still returns HTTP 429, do not make another Cost Management call in the same turn; report the throttle and offer to retry later.
 
@@ -54,25 +56,27 @@ MIGRATE: Use resource type 'assessmentProjects' (NOT 'migrateProjects' — retur
 
 CONSUMPTION DEPRECATIONS: usageDetails → use Microsoft.CostManagement/generateCostDetailsReport. reservationDetails → use Microsoft.CostManagement/generateReservationDetailsReport.
 
-For public retail pricing use https://prices.azure.com (no auth) with ?$filter=armRegionName eq '...' and serviceName eq '...' and armSkuName eq '...'&$top=20.");
+For public retail pricing use GetAzureRetailPricing, or GetAzureRetailPricingBatch for independent filter combinations; QueryAzure calls ARM only.");
 
         yield return AIFunctionFactory.Create(QueryCostsAcrossSubscriptions, "QueryCostsAcrossSubscriptions", @"Gets a reported Cost Management total and per-subscription breakdown in ONE agent tool call. Use this for any cost request spanning all connected subscriptions; never loop QueryAzure yourself.
 Input subscriptionsJson: the exact `subscriptions` JSON array supplied in the connection context ({id,name,...}). Input managementGroupId: the optional id/name from the context's managementGroups array. Dates are yyyy-MM-dd; `to` is the exclusive end date.
+DATA SCOPING: use only the requested dates and subscriptions, but include every requested subscription for a whole-estate total. Never take a top-N sample of subscriptions or filtered budget snapshots and label it total spend. This tool has no service/resource-group filter; use a scoped QueryAzure aggregate for those breakdowns. Its host-built queries aggregate before returning results; preserve sourceEvidence and all failed/unattempted scope coverage instead of re-querying returned totals.
     For the current calendar month, the tool first reads each subscription's unfiltered monthly budget `currentSpend` in parallel. Budgets are evaluated periodically: report this as a delayed MTD snapshot, not a real-time or finalized bill. For other periods it tries one management-group aggregate query, then the minimum sequential per-subscription fallback. Preserve sourceEvidence cache/freshness metadata. It stops immediately when Cost Management remains throttled and reports completed, failed, and unattempted scopes. Never call this tool twice in one turn after a 429.");
 
 
         yield return AIFunctionFactory.Create(BulkAzureRequest, "BulkAzureRequest", @"Executes MANY Azure ARM requests in ONE tool call, in parallel, server-side. Use this whenever you would otherwise loop QueryAzure for the same kind of operation across multiple resources (bulk tagging, cleanup discovery, autoshutdown rollout, budget rollout across subs, multi-resource right-sizing, RBAC fan-out, etc.).
 Input: requestsJson = JSON array of {""method"":""GET|POST|PUT|PATCH"",""path"":""/...?api-version=..."",""body"":""<optional JSON string>""}.
 Optional: parallelism (default 20, max 50), stopOnFirstError (default false).
-Returns ONE compact JSON summary: {""total"":N,""succeeded"":X,""failed"":Y,""durationMs"":Z,""failures"":[{""index"":i,""status"":code,""path"":""..."",""error"":""...""}],""successSamples"":[{""path"":""..."",""name"":""...""}]}.
-DELETE is still blocked at the code level. Same per-request response trimming as QueryAzure (PUT/PATCH echoes are compacted). Throttling-aware: 429 retries are handled per request, batches stay below ARM's 1200 writes/hour/sub.
+    PAYLOAD DISCIPLINE: every read in requestsJson must filter, aggregate, project, and limit at the source using only supported API options. Prefer one scoped Resource Graph query over many broad inventory GETs. Never batch unfiltered collections and rely on trimming. Keep Cost Management /query and /forecast sequential; do not put them in a parallel batch.
+    Returns total, succeeded, failed, pending, unattempted, cancelled, stopped, complete, and indexed results with status, outcome, partial, body, and error. At most 200 requests, 12000 response characters per item, and a 90000-character batch data budget; omitted bodies are explicitly partial, not complete evidence. Narrow only those indexed reads if further detail is needed.
+    DELETE and mutating action POSTs remain blocked. PUT/PATCH create exact owner/session-bound proposals requiring explicit UI approval. Accepted, pending, unknown, and awaitingApproval outcomes are not successful writes. Respect all returned retry deadlines; never retry Cost Management after a final 429 in this turn.
 Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Build the request list from your prior Resource Graph discovery query in the same turn.");
     }
 
     private async Task<string> QueryAzure(
         [Description("HTTP method: GET, POST, PUT, or PATCH (DELETE is blocked)")] string method,
-        [Description("API path starting with /, e.g. /subscriptions?api-version=2022-12-01")] string path,
-        [Description("Optional JSON request body for POST/PUT/PATCH requests. Omit or leave empty for GET.")] string? body = null)
+        [Description("Scoped ARM path starting with / and an api-version. Use $filter/$select/$top only when the endpoint supports them; otherwise choose a narrower endpoint or Resource Graph query. Do not fetch full collections for a summary.")] string path,
+        [Description("Optional JSON request body for POST/PUT/PATCH. For queries, filter and aggregate at the source, project only needed fields, and limit after aggregation using the API's supported syntax. Preserve complete totals and partial coverage. Omit for GET.")] string? body = null)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("QueryAzure");
         activity?.SetTag("azure.method", method);
@@ -123,9 +127,9 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
     }
 
     private async Task<string> QueryCostsAcrossSubscriptions(
-        [Description("JSON array of subscription objects from the connection context, each with id and name fields")] string subscriptionsJson,
-        [Description("Inclusive start date in yyyy-MM-dd format")] string from,
-        [Description("Exclusive end date in yyyy-MM-dd format")] string to,
+        [Description("JSON array of all subscription objects in the requested scope, from connection context, with id and name fields. Never sample the array for an all-subscription total.")] string subscriptionsJson,
+        [Description("Inclusive start date in yyyy-MM-dd format. Bound to the requested period; the full date range must not exceed 366 days.")] string from,
+        [Description("Exclusive end date in yyyy-MM-dd format. Keep the requested window; do not broaden it to retrieve unrelated billing history.")] string to,
         [Description("Optional management-group id or full ARM path from the connection context")] string? managementGroupId = null)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("QueryCostsAcrossSubscriptions");
@@ -775,7 +779,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
     }
 
     private async Task<string> BulkAzureRequest(
-        [Description("JSON array of {method,path,body?} objects, e.g. [{\"method\":\"PATCH\",\"path\":\"/subscriptions/.../tags/default?api-version=2021-04-01\",\"body\":\"{...}\"}]")] string requestsJson,
+        [Description("JSON array of 1-200 {method,path,body?} objects. Each read must filter, aggregate, project, and limit at the source with supported API options. Use exact discovered targets for writes; body is a JSON string. Do not batch Cost Management /query or /forecast in parallel.")] string requestsJson,
         [Description("Max parallel requests in flight. Default 20, max 50.")] int parallelism = 20,
         [Description("Stop the whole bulk run on the first failure. Default false (continue and report all failures).")] bool stopOnFirstError = false,
         CancellationToken cancellationToken = default)

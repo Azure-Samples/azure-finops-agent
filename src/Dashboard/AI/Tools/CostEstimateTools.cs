@@ -23,13 +23,15 @@ public static class CostEstimateTools
 
 WORKFLOW: 1) look up per-1M-token rates with GetAzureRetailPricing (Standard + Global unless asked otherwise); 2) pass those rates plus ONE shared set of token assumptions here; 3) report the returned numbers VERBATIM.
 
+DATA SCOPING: modelsJson contains only the 1-20 models and deployment variants requested, with the selected rate fields and provenance. Do not copy an unfiltered retail catalogue or duplicate equivalent scenarios. Filter compatible currency/region/tier/meter evidence before calling; this calculator cannot resolve unrelated or missing rates by filtering them afterward.
+
 The arithmetic is reconciled, but source validity and billing freshness remain separate. Include source, rateId, region, deploymentTier, currency and dataAsOfUtc in each model when known. Input + output + cached costs sum to totalMonthlyCost. Report those calculated figures consistently, labelled as an estimate rather than measured billing. Use one assumption set per scenario; never mix or change it merely because the user challenges the answer.
 
 Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-sol, Global Standard') so the estimate states what it is based on.");
     }
 
     internal static string EstimateTokenCost(
-        [Description(@"JSON array of models to price, each with a label and per-1M-token rates (USD or the currency you pass). Schema: [{""label"":""a nano model, Global Standard"",""inputPricePer1M"":0.20,""outputPricePer1M"":1.25,""cachedInputPricePer1M"":0.02}]. cachedInputPricePer1M is optional (omit if not modeling cache hits). Rates come from GetAzureRetailPricing.")] string modelsJson,
+        [Description(@"JSON array of only the requested 1-20 models/variants, not an unfiltered price catalogue. Include label, per-1M rates and known provenance. Schema: [{""label"":""a nano model, Global Standard"",""inputPricePer1M"":0.20,""outputPricePer1M"":1.25,""cachedInputPricePer1M"":0.02}]. cachedInputPricePer1M is optional when not modeling cache hits. Rates come from filtered GetAzureRetailPricing results.")] string modelsJson,
         [Description("Average input (prompt) tokens per conversation/request. Applies to ALL models. e.g. '1500'.")] string inputTokensPerConversation,
         [Description("Average output (completion) tokens per conversation/request. Applies to ALL models. e.g. '500'.")] string outputTokensPerConversation,
         [Description("Number of conversations/requests per month. Applies to ALL models. e.g. '8000'.")] string conversationsPerMonth,

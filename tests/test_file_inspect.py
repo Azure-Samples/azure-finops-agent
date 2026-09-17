@@ -50,6 +50,37 @@ class FileQueryTests(unittest.TestCase):
         result = HELPER._df_query(self.frame, {"mode": "filter", "column": "owner", "op": "contains", "value": ".*"}, "csv")
         self.assertEqual(result["total_matches"], 0)
 
+    def test_projection_follows_filter_sort_and_pagination(self):
+        result = HELPER._df_query(self.frame, {
+            "mode": "query", "filters": [{"column": "category", "op": "eq", "value": "AI"}],
+            "sort": [{"column": "cost", "direction": "desc"}],
+            "columns": ["owner"], "offset": 1, "limit": 1,
+        }, "csv")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["rows"], [{"owner": "B"}])
+        self.assertEqual(result["source_rows"], 4)
+        self.assertEqual(result["filtered_rows"], 3)
+        self.assertEqual(result["total_results"], 3)
+        self.assertFalse(result["complete"])
+
+    def test_projection_preserves_full_aggregate_totals(self):
+        result = HELPER._df_query(self.frame, {
+            "mode": "query", "group_by": ["month"],
+            "aggregates": [{"column": "cost", "op": "sum", "as": "total"}],
+            "columns": ["month", "total"], "limit": 1,
+        }, "csv")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["rows"], [{"month": "Feb", "total": 70}])
+        self.assertEqual(result["totals"]["total"], 100)
+        self.assertEqual(result["total_results"], 2)
+        self.assertFalse(result["complete"])
+
+    def test_invalid_projection_is_rejected(self):
+        for columns in ([], ["cost", "cost"], ["unknown"], "cost", [1], [["cost"]], [str(index) for index in range(51)]):
+            with self.subTest(columns=columns):
+                result = HELPER._df_query(self.frame, {"mode": "query", "columns": columns}, "csv")
+                self.assertFalse(result["ok"])
+
     def test_invalid_numeric_is_unknown_not_zero(self):
         result = HELPER._df_query(pd.DataFrame({"cost": ["unknown"]}), {"mode": "aggregate", "column": "cost", "agg": "sum"}, "csv")
         self.assertIsNone(HELPER._clean(result)["value"])
@@ -77,6 +108,11 @@ class FileQueryTests(unittest.TestCase):
             result = HELPER._handle_xlsx({"mode": "aggregate", "group_by": ["month", "category"], "column": "cost", "agg": "sum", "filters": [{"column": "category", "op": "eq", "value": "AI"}]}, str(path))
             self.assertTrue(result["ok"])
             self.assertEqual(result["totals"]["sum"], 60)
+            projected = HELPER._handle_xlsx({"mode": "query", "columns": ["cost"], "limit": 1}, str(path))
+            self.assertTrue(projected["ok"])
+            self.assertEqual(projected["rows"], [{"cost": 10}])
+            self.assertEqual(projected["source_rows"], 4)
+            self.assertFalse(projected["complete"])
 
     def test_outside_root_and_missing_root_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:

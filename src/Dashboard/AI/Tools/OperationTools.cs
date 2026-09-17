@@ -14,12 +14,12 @@ public sealed class OperationTools(UserTokens tokens)
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GetOperationStatus, "GetOperationStatus",
-            "Check one host-registered Azure operation by opaque operationId. Polls only the stored ARM URL under the caller's delegated token; never accepts a URL or repeats a mutation. Respect nextPollUtc. Accepted, unknown and in-progress operations are not completed.");
+            "Check one exact host-registered Azure operation by opaque operationId. Prefer this targeted lookup over listing operations when the ID is already known. Polls only the stored ARM URL under the caller's delegated token; never accepts a URL or repeats a mutation. Respect nextPollUtc, reuse terminal results, and do not poll unrelated operations. Accepted, unknown and in-progress operations are not completed.");
         yield return AIFunctionFactory.Create(ListOperationResults, "ListOperationResults",
-            "List up to 100 recent owner-bound operations from this conversation, including prerequisite resources from partial deployments. Use after a failed VM or multi-resource change to account for what was created and generate a reviewed cleanup script. Never delete automatically.");
+            "List up to 100 recent owner-bound operations in the current conversation, including prerequisite resources from partial deployments. This fixed host-scoped list has no status, subscription or date filter; reuse it once and use GetOperationStatus for a known operation ID rather than repeatedly listing everything. It is not an all-Azure inventory or complete history beyond 100 entries. Use after a failed multi-resource change to account for prerequisites and generate a reviewed cleanup script. Never delete automatically.");
     }
 
-    private async Task<string> GetOperationStatus([Description("Opaque operationId returned by an earlier Azure mutation or diagnostic.")] string operationId,
+    private async Task<string> GetOperationStatus([Description("Exact opaque operationId returned by the earlier mutation or diagnostic being checked. Reuse this ID; do not list or poll unrelated operations.")] string operationId,
         CancellationToken cancellationToken = default)
     {
         var operation = OperationStore.Default.Find(operationId, tokens.UserId);

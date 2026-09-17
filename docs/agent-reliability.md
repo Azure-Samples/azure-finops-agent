@@ -56,6 +56,8 @@ Use a single active application instance. Per-session admission, cooldowns, uplo
 
 ## Verification Gates
 
+The 2026-09-17 backend follow-up passed a clean build and all 159 .NET tests, including the real bundled-CLI protocol tests on Windows. Frontend and Linux checks were not rerun for this backend-only follow-up; the results below describe the earlier change set.
+
 The implementation passed 128 backend tests, 12 Python tests, four frontend unit tests and ten desktop/mobile browser cases locally. Linux ACR validation ran the suites, built the complete image and verified non-root storage access, persisted-artifact cold start, CLI startup, graceful shutdown, offline telemetry behavior, and delivery of a host request burst plus an OTLP span to a local ingestion receiver. No image was published by these validation runs.
 
 The permanent suites are under `tests/Dashboard.Tests`, `tests/test_*.py`, `tests/frontend`, and `src/Dashboard/frontend/tests`. See [contributor instructions](../CONTRIBUTING.md#regression-tests) for commands.
@@ -66,10 +68,47 @@ Local-model acceptance scenarios used only synthetic inputs: a USD 7.40 token es
 
 A live HTML report retained both requested rows, downloaded successfully and rendered in an isolated preview. Restart testing caught and fixed artifact-registry static initialization with existing files. Stop released the server gate and a subsequent greeting completed; the stopped and completed outcomes were persisted. One Linux runtime completion timeout did not reproduce on rerun; the test remains enabled with provider/event diagnostics and its original timeout.
 
+## GPU And Spot Investigation (2026-09-17)
+
+The reported H100/H200 false negatives were reproduced at the API and tool boundaries, not inferred from retail prices. One subscription's Compute catalogue returned 76,962 records in a single complete page. All 93 matching H100/H200 records occurred after the tool's old 30,000-record cutoff; none survived its later SKU filter. The API also returned separate regional records with the same SKU name, while the adapter selected only the first record for every region.
+
+The fix filters requested SKUs before retaining records, follows pagination, selects a region-specific record, and exposes pages read, items examined, matching records and incomplete reasons. Unknown or partial catalogue evidence must never become "unavailable everywhere." Synthetic regressions cover late GPU records, pagination, per-region restrictions, quota, and the registered tool workflow.
+
+Other evidence corrections:
+
+| Finding | Correct interpretation and control |
+| --- | --- |
+| Model converted `complete=false` and `status=unknown` into global unavailability | Explicit prompt and result guidance preserve unknown scopes; a live synthetic provider check now answered that availability was unverified. |
+| Empty policy-parameter search was treated as policy clearance | Effective policy requires definitions/initiatives, inheritance, effects, enforcement mode, excluded scopes and exemptions; the tool reports policy as not evaluated. |
+| A successful existing Spot VM conflicted with catalogue capability and current placement restrictions | Preserve all observations. Past deployment success does not guarantee a new allocation or restart, and a current restriction does not invalidate historical success. |
+| Cheapest region was substituted for longest expected runtime | Query historical eviction-rate bands through `SpotResources`; compare price separately. Missing history stays unknown per SKU/region. |
+| HTTP 200 placement response could contain missing or `DataNotFound` scores | Validate every requested SKU/region/zone combination. Retain cache age and restriction status; failed HTTP responses are not cached. |
+
+Read-only live checks verified the catalogue, Compute usage endpoint, placement response schema and `SpotResources` query. The tested H100/H200 history query returned zero rows, which is missing evidence, not zero eviction risk. No VM allocation, restart, migration, policy change or quota increase was performed.
+
+### Provider Refusal Limitation
+
+The saved conversation contained a normal assistant refusal with no preceding host-tool error. A separate direct replay of the reported benign Spot-resilience wording reproduced HTTP 400 `content_filter` under both the committed and updated system prompts. The provider's `error.content_filters.content_filter_results` classified it as medium-severity hate; the other reported harm categories were safe and attack detectors were false. This is evidence of an upstream false positive for the replay, not a missing Compute permission or a defect introduced by the new prompt.
+
+A harmless control and a normally worded Spot-resilience scenario passed with the full updated prompt. The latter kept missing eviction history unknown and did not equate price with stability. These are bounded behavioral checks, not proof that every wording or future model response will succeed. The exact-wording filter rejection remains unresolved and should be reported through Azure OpenAI support. No filter was disabled, threshold relaxed, user text rewritten, or automatic moderation retry added.
+
+### HTTP Exception Boundary
+
+The log investigation found two transcript HTTP 500 incidents represented by four exception records: each fault was logged by both the application and ASP.NET exception-handler middleware. Ownership checks now reject a known conflicting live owner consistently and revalidate inside the transcript gate. Tests retain missing-session recovery and cancellation behavior. The production handler has one correlated application exception log, explicitly preserves `error.type` metric tags when suppressing duplicate diagnostics, and leaves post-response-start faults to framework diagnostics. Focused tests cover all four behaviors. No post-deployment telemetry check was performed.
+
+### API References
+
+- [Compute Resource SKUs list](https://learn.microsoft.com/en-us/rest/api/compute/resource-skus/list?view=rest-compute-2021-07-01): pagination and per-location records; only a location filter is supported server-side.
+- [Spot placement scores](https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/spot-placement-score): exact configuration coverage, point-in-time recommendations, missing-data status and suggested 15-30 minute caching.
+- [Spot pricing and eviction history](https://learn.microsoft.com/en-us/azure/virtual-machines/spot-vms#pricing-and-eviction-history): Resource Graph historical rate bands and their limitations.
+- [Content filtering](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/content-filter): provider filtering is separate from application tool execution and system-prompt guidance.
+- [.NET exception diagnostic suppression](https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.builder.exceptionhandleroptions.suppressdiagnosticscallback?view=aspnetcore-10.0): handled diagnostics, metric tags and post-response-start behavior.
+
 ## Remaining Operational Verification
 
 - Collector 0.160.0 retains one fixable high finding, `CVE-2026-79921` in `github.com/rabbitmq/amqp091-go` 1.12.0. The app config enables only OTLP receivers and Azure Monitor export, not AMQP/RabbitMQ. Keep this as a dependency follow-up; do not describe the entire image as vulnerability-free. The runtime scan found no critical findings; CI blocks fixable critical findings. The editor also reports vulnerabilities in the separate Node build-stage image, which is not shipped in the final runtime.
 - A fresh authenticated consent flow needs the deployment owner's shared signed-in tab and selected test tenant. Automated browser fixtures do not prove that external consent was granted.
+- The reproduced provider content-filter false positive on the original Spot-resilience wording remains open; application instructions cannot override an upstream prompt rejection.
 - No billable ARM mutation was used as a test. Real allocation, inherited policy, managed-identity behavior and resource-specific role failures require controlled deployment checks.
 - The historical browser notification-manager exception did not reproduce in the installed SDK callback tests or built browser bundle. Redaction, duplicate-capture prevention and failure containment are implemented; a causal upstream fix is not claimed.
 - Credential detection is heuristic. Historical transcript/upload cleanup and rotation of previously disclosed credentials are separate operator actions, not accomplished by this code change.

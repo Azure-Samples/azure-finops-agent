@@ -24,6 +24,8 @@ public sealed class HtmlPresentationTools(long ownerUserId)
         yield return AIFunctionFactory.Create(GenerateHtmlPresentation, "GenerateHtmlPresentation",
             @"Generates a self-contained HTML deck (one .html file). Use for any 'presentation', 'deck', 'slides', or 'exec summary' — there's no other format. Built-in nav: ←/→ navigate, ↑ fullscreen, ↓/Esc exit, number keys jump, touch swipe, dot nav, progress bar.
 
+DATA SCOPING: slidesJson contains only the requested audience, scope, period and decisions using verified aggregates already available. Do not paste raw API objects, whole exports or duplicate series into slides. Scope and aggregate queries before creating the deck; this renderer cannot fetch missing evidence. Label any top-N or partial view and retain all explicitly requested findings, using a separate detailed report when needed.
+
 LAYOUTS: title | section | kpi | chart | content | two_column | maturity | alerts | table | roadmap | closing.
 Use 'alerts' for findings (good/warn/bad). Use 'table' for top-N rankings (Status col auto-colors OK/Watch/Alert; numeric col auto-renders inline bar). 'maturity' single-state mode: omit `before` (or set =after). Use 'roadmap' for phased plans (30/60/90-day or Crawl→Walk→Run) — the CFO wants to see the journey. Use 'section' as a divider in decks ≥8 slides.
 Every slide accepts an optional `notes` field (speaker notes — presenter toggles with N). Deck supports print-to-PDF (P key) — mention this when delivering.
@@ -43,7 +45,7 @@ NOTE: this is a SLIDE DECK for quick exec summaries. For a DEEP FinOps maturity 
     }
 
     private Task<string> GenerateHtmlPresentation(
-        [Description(@"JSON array of slides. SLIDE OBJECT SCHEMA:
+        [Description(@"JSON array of scoped slides using verified aggregates and concise labels, not raw API payloads. Include all requested findings and disclose partial evidence. SLIDE OBJECT SCHEMA:
 - layout: 'title' | 'section' | 'kpi' | 'chart' | 'content' | 'two_column' | 'maturity' | 'alerts' | 'table' | 'roadmap' | 'closing' (REQUIRED)
 - title: slide title (REQUIRED, except 'title' layout uses it as the hero h1)
 - subtitle: optional one-line lead

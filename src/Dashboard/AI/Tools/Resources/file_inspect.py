@@ -318,6 +318,15 @@ def _df_query(df, req: dict, kind: str) -> dict:
             return _err("invalid sort field or direction")
         if sort:
             result = result.sort_values([item["column"] for item in sort], ascending=[item.get("direction", "asc") == "asc" for item in sort], kind="stable", na_position="last")
+        projection = req.get("columns")
+        if projection is not None:
+            if (not isinstance(projection, list) or not 1 <= len(projection) <= 50
+                    or any(not isinstance(column, str) for column in projection)
+                    or len(set(projection)) != len(projection)):
+                return _err("columns must contain 1-50 distinct output column names")
+            if any(column not in result.columns for column in projection):
+                return _err("unknown projected column", columns=list(result.columns))
+            result = result.loc[:, projection]
         total_results = len(result)
         selected = result.iloc[offset:offset + limit]
         payload = _ok(kind=kind, source_rows=source_rows, filtered_rows=filtered_rows, total_matches=filtered_rows,

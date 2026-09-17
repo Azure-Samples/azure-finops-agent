@@ -24,7 +24,7 @@ public static class ChartTools
 • race — animated line with end labels (multi-series racing over time).")] string type,
                 [Description("Chart title")] string title,
                 [Description("Series name for the legend")] string seriesName,
-                [Description(@"Data as JSON array string.
+                [Description(@"Scoped, aggregated chart data as a JSON array string. Reuse verified query results; include only the labels, values and requested series, not raw resource objects. Preserve units and disclose top-N or partial coverage in the answer.
 Single series — ALWAYS use the key 'value' for the numeric (do NOT name it after the series, e.g. don't use 'USD'):
   [[""Apple"",100],[""Banana"",200]]
   [{""name"":""A"",""value"":100},{""name"":""B"",""value"":200}]
@@ -40,11 +40,11 @@ Multi-series (grouped bar/line) — one extra key per series:
                 return JsonSerializer.Serialize(new { type, title, seriesName, data, xAxisName, yAxisName });
             },
             "RenderChart",
-            "Renders an interactive ECharts chart for single or multi-series data.");
+            "Render a chart from scoped, aggregated evidence already returned by the query tools. Select only the requested categories, time window and series; do not copy full API objects or re-query merely to chart them. Compute totals before top-N selection and disclose omitted/partial coverage. This renderer does not fetch or filter source data.");
 
         yield return AIFunctionFactory.Create(
             (
-                [Description(@"Full ECharts option object as JSON string. World maps: series type 'map' with map:'world'. Use Natural Earth country names ('United States of America' not 'USA', 'Czechia' not 'Czech Republic'). Frontend auto-registers world map GeoJSON.")] string options
+                [Description(@"Static ECharts option object as JSON string with only scoped, aggregated series and needed display options; no raw API payloads. Maximum 100000 characters. World maps: series type 'map' with map:'world'. Use Natural Earth country names ('United States of America' not 'USA', 'Czechia' not 'Czech Republic'). Frontend auto-registers world map GeoJSON.")] string options
             ) =>
             {
                 ValidateAdvancedOptions(options);
@@ -54,6 +54,8 @@ Multi-series (grouped bar/line) — one extra key per series:
             },
             "RenderAdvancedChart",
             @"Renders any ECharts visualization from raw options JSON. Use for world maps, heatmaps, treemaps, radar, gauge, or anything needing full ECharts config.
+
+DATA SCOPING: build options from scoped, aggregated evidence already returned, not entire resource objects or duplicate datasets. Include only needed series and static display options; maximum 100000 characters. Perform source filtering before calling this renderer, preserve units, and label any top-N or partial view. The renderer is not a source-query engine.
 
 CRITICAL: use static JSON values only. DOM/CSS/link-bearing options (`extraCssText`, tooltip formatter HTML, links, append targets, remote image symbols) are rejected, and the frontend forces rich-text/canvas tooltips.
 

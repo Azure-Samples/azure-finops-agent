@@ -51,6 +51,17 @@ async function send(page, prompt = 'make an Excel file') {
   await expect(page.locator('.action-btn--stop')).toHaveCount(0);
 }
 
+test('top bar links to the owner LinkedIn profile', async ({ page }) => {
+  const { errors } = await arrange(page, []);
+  const link = page.getByRole('link', { name: 'Contact Ali Reza Farahnak on LinkedIn' });
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute('href', 'https://www.linkedin.com/in/alirezafarahnak/');
+  await expect(link).toHaveAttribute('target', '_blank');
+  await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  expect(errors).toEqual([]);
+});
+
 test('short follow-up renders a real spreadsheet download without HTML preview', async ({ page }, testInfo) => {
   const { requests, errors } = await arrange(page, [
     { type: 'delta', content: 'The requested workbook is ready.' },

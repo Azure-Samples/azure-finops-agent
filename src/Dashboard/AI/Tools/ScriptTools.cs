@@ -19,19 +19,21 @@ public sealed class ScriptTools(long ownerUserId)
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateScript, "GenerateScript",
-            @"Generates a downloadable Azure CLI or PowerShell script from FinOps recommendations.
+            @"Directly creates a downloadable Azure CLI or PowerShell artifact from the complete code supplied in scriptContent. The tool packages that code with credential redaction; it never executes it and does not write or complete the code itself.
 
-Call ONLY AFTER you have analyzed the user's environment, found actionable recommendations (orphaned resources, untagged, right-sizing, idle VMs, unattached disks, missing budgets, etc.) AND confirmed the user wants a script.
+Call this tool in the same response whenever the user explicitly requests code, a script, or a repeatable command workflow. Write the complete executable script in scriptContent instead of returning only a fenced code block. For tenant-specific remediation, analyze and scope the environment first. A self-contained parameterized script does not require a tenant query.
 
-If no actionable recommendations yet, do NOT call this tool. Tell the user: 'I don't have actionable recommendations to script yet — let me first analyze your environment.'
+If the requested tenant-specific script depends on targets that have not been identified yet, query only the filtered evidence needed to identify them before calling this tool.
 
-Script MUST include safety features: --what-if / confirmation prompts / dry-run mode, comments per logical step. Prefer Azure CLI (`az`) unless user asks for PowerShell.");
+For scripts that change resources, default to dry-run and require explicit local confirmation. Use only preview flags supported by the chosen commands; do not invent a universal --what-if flag. Never embed credentials; use the user's own login, managed identity, or local secret input. Query scripts must filter and aggregate at the source with supported API options instead of downloading full collections for a summary. Prefer Azure CLI (`az`) unless user asks for PowerShell.");
     }
 
     private Task<string> GenerateScript(
-        [Description(@"The full script content (Azure CLI or PowerShell). Must include:
+        [Description(@"The complete executable script content (Azure CLI or PowerShell). Supply the actual code, not instructions asking the tool to generate it. Must include:
 - A header comment block explaining what the script does, prerequisites, and usage
-- Safety features: dry-run mode, confirmation prompts, or --what-if flags
+- For changes: dry-run by default and local confirmation, using only supported preview flags
+- No embedded credentials; use the user's login, managed identity, or local secret input
+- For queries: source-side filtering and aggregation with supported API options
 - Clear comments for each logical section
 - Error handling for critical operations
 Example header:
