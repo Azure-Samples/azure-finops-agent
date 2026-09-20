@@ -6,6 +6,27 @@ namespace Dashboard.Tests;
 public sealed class CostCalculationTests
 {
     [Fact]
+    public void LinesInheritTheExplicitSharedCurrencyWithoutRedundantArguments()
+    {
+        var result = CostCalculationTools.CalculateCost(
+            """[{"label":"Units","quantity":5,"unitPrice":5,"unit":"unit"}]""", "USD", "month");
+        using var document = JsonDocument.Parse(result);
+        Assert.Equal(25m, document.RootElement.GetProperty("total").GetDecimal());
+        Assert.Equal("USD", document.RootElement.GetProperty("lines")[0].GetProperty("currency").GetString());
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"\"")]
+    [InlineData("\"EUR\"")]
+    [InlineData("123")]
+    public void AnExplicitInvalidOrDifferentLineCurrencyIsNotDefaulted(string currencyJson)
+    {
+        var line = $$"""[{"label":"Units","quantity":5,"unitPrice":5,"unit":"unit","currency":{{currencyJson}}}]""";
+        Assert.StartsWith("Error: An explicit line currency", CostCalculationTools.CalculateCost(line, "USD", "month"));
+    }
+
+    [Fact]
     public void BackupEstimateReconcilesQuantityRatesAndTax()
     {
         var result = CostCalculationTools.CalculateCost(

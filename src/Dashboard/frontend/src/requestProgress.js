@@ -114,6 +114,7 @@ export function toolHttpStatus(result) {
 export function toolResultSucceeded(sdkSuccess, result) {
   const status = toolHttpStatus(result);
   if (sdkSuccess === false || status >= 400) return false;
+  if (typeof result === "string" && /^\s*Error:/i.test(result)) return false;
 
   let batch = result;
   if (typeof batch === "string") {

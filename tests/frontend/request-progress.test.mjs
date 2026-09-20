@@ -141,6 +141,12 @@ test('SDK success cannot turn an HTTP failure into a green success indicator', (
   assert.equal(toolResultSucceeded(true, 'HTTP 200 OK\n{}'), true);
 });
 
+test('SDK success cannot hide an explicit tool validation error', () => {
+  assert.equal(toolResultSucceeded(true, 'Error: Every line requires a billing unit.'), false);
+  assert.equal(toolResultSucceeded(true, '  ERROR: Invalid calculation input.'), false);
+  assert.equal(toolResultSucceeded(true, 'Error rates were measured over the requested period.'), true);
+});
+
 function bulkResult(overrides = {}) {
   return {
     total: 2, succeeded: 2, failed: 0, pending: 0, unattempted: 0, cancelled: 0,

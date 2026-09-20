@@ -180,6 +180,20 @@ test("complete final message replaces partial deltas after a throttled detail qu
   });
 });
 
+test("tool validation errors remain failures when the SDK callback succeeded", async ({ page }) => {
+  const { requests, errors } = await arrange(page, [
+    { type: "tool_start", tool: "CalculateCost", id: "invalid-calculation", args: "{}" },
+    { type: "tool_done", tool: "CalculateCost", id: "invalid-calculation", success: true, result: "Error: Every line requires label and unit." },
+    { type: "message", content: "The calculation input was rejected." },
+  ]);
+  await send(page, "Calculate the monthly estimate");
+  await expect(page.getByText("The calculation input was rejected.", { exact: true })).toBeVisible();
+  await expect(page.locator(".st-icon--ok")).toHaveCount(0);
+  await expect(page.locator(".st-icon--fail")).toHaveCount(1);
+  expect(requests).toHaveLength(1);
+  expect(errors).toEqual([]);
+});
+
 for (const outcome of ["failed", "cancelled", "accepted", "partial", "succeeded"]) {
   test(`bulk request ${outcome} is not confused with SDK success`, async ({ page }, testInfo) => {
     const complete = outcome === "succeeded";

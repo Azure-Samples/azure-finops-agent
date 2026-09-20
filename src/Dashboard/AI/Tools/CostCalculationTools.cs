@@ -16,13 +16,13 @@ public static class CostCalculationTools
             "Each line is quantity / unitsPerRate * unitPrice * multiplier. Only supplied numbers are calculated; no source, price tier, capacity, retention, FX or discount is invented. " +
             "For run-rate extrapolation use observed spend as quantity, unitPrice=1, unitsPerRate=elapsed days and multiplier=days in the requested period. " +
             "For growth, calculate each requested period with its own explicit quantities; an exit-month annualization is not cumulative annual spend. " +
-            "Preserve decimal TB/GB versus binary TiB/GiB and the provider's billing unit. Currency must agree on every line. " +
+            "Preserve decimal TB/GB versus binary TiB/GiB and the provider's billing unit. Lines inherit the explicitly supplied currency; any explicit line currency must match it. " +
             "Line amounts retain precision; subtotal, discount and tax are rounded to cents, and displayed components reconcile to total. This is an estimate, not measured billing.");
     }
 
     internal static string CalculateCost(
-        [Description("JSON array of 1-20 verified line items: label, quantity, unitPrice, unit, currency; optional unitsPerRate=1 and multiplier=1. Numbers or decimal-point strings are accepted. Include only the requested period/scope; never use unknown rates as zero.")] string lineItemsJson,
-        [Description("Three-letter source currency shared by every line, such as USD, EUR or CAD. No implicit currency conversion.")] string currency,
+        [Description("JSON array of 1-20 verified line items: label, quantity, unitPrice, unit; optional currency inherits the explicit top-level currency, unitsPerRate=1 and multiplier=1. Example: [{\"label\":\"Units\",\"quantity\":5,\"unitPrice\":5,\"unit\":\"unit\"}]. Numbers or decimal-point strings are accepted. Include only the requested period/scope; never use unknown rates as zero.")] string lineItemsJson,
+        [Description("Required three-letter source currency shared by every line, such as USD, EUR or CAD. Lines may omit currency to inherit this value; an explicit different currency is rejected. No implicit currency conversion.")] string currency,
         [Description("Basis of the quantities, such as month, year1 or 30-day run-rate. Use month only for a fixed monthly estimate; its annualizedTotal is not a growth projection.")] string period,
         [Description("Explicit supported discount percentage, 0-100. Default 0; do not invent negotiated discounts.")] string discountPercent = "0",
         [Description("Explicit tax percentage applied after discount, 0-100. Default 0; do not infer taxes from currency.")] string taxPercent = "0")
@@ -54,10 +54,13 @@ public static class CostCalculationTools
                 var label = Text(item, "label");
                 var unit = Text(item, "unit");
                 if (string.IsNullOrWhiteSpace(label) || label.Length > 100 || string.IsNullOrWhiteSpace(unit) || unit.Length > 60
-                    || !currency.Equals(Text(item, "currency"), StringComparison.OrdinalIgnoreCase)
                     || !Number(item, "quantity", out var quantity) || quantity < 0
                     || !Number(item, "unitPrice", out var unitPrice) || unitPrice < 0)
-                    return Error("Every labelled line requires a billing unit, matching currency, non-negative quantity and a known non-negative rate.");
+                    return Error("Every line requires label, unit, non-negative quantity and a known non-negative unitPrice.");
+                if (item.TryGetProperty("currency", out var lineCurrency)
+                    && (lineCurrency.ValueKind != JsonValueKind.String
+                        || !currency.Equals(lineCurrency.GetString(), StringComparison.OrdinalIgnoreCase)))
+                    return Error("An explicit line currency must match the top-level currency. Omit line currency to inherit that declared value; no conversion is performed.");
                 decimal unitsPerRate = 1, multiplier = 1;
                 if (item.TryGetProperty("unitsPerRate", out _) && (!Number(item, "unitsPerRate", out unitsPerRate) || unitsPerRate <= 0)
                     || item.TryGetProperty("multiplier", out _) && (!Number(item, "multiplier", out multiplier) || multiplier < 0))

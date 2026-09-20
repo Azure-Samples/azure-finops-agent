@@ -88,6 +88,7 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 - Tools fetch data and return compact raw API JSON unless a bounded projection is explicitly required for performance.
 - XLSX `workbook` inspection returns every sheet's shape, columns, and bounded numeric summaries in one call; reuse it instead of making a second aggregate call when the requested metric is already present.
 - Prefer string parameters; SDK coercion of numeric arguments can be unreliable.
+- `CalculateCost` requires one explicit top-level source currency. Omitted line currencies inherit it; explicit invalid or different currencies are rejected, never converted. Surface tool `Error:` results as failures even when SDK execution succeeded.
 - Use `CalculateCost` for non-token estimates/run-rates and `EstimateTokenCost` for token math. Keep the source currency, billing unit and scenario assumptions; an annualized exit-month cost is not cumulative annual spend. Calculators establish arithmetic, not price validity or deployability.
 - A nullable C# parameter is not optional in the emitted tool schema. Give documented optional inputs actual defaults and test both schema requiredness and invocation with omitted arguments.
 - Graph query options are endpoint-specific: `subscribedSkus` accepts only `$select`; Copilot usage functions do not accept `$filter`, `$top` or `$select`. Prefer current `/v1.0/copilot/reports/` routes and preserve CSV versus beta JSON, report version/period, source refresh date and licensed-user coverage.
