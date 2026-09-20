@@ -9,6 +9,7 @@ internal sealed class ToolExecutionContext : IDisposable
     internal long? UserId { get; }
     internal CancellationToken CancellationToken { get; }
     internal string? ApprovedOperationId { get; }
+    internal string? ToolCallId { get; init; }
 
     internal ToolExecutionContext(string? sessionId, long? userId, CancellationToken cancellationToken, string? approvedOperationId = null)
     {

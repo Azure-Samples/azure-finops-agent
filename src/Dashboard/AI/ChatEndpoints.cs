@@ -529,6 +529,7 @@ public static class ChatEndpoints
                 // NOT thread-safe — the SDK may dispatch callbacks concurrently —
                 // so we guard every mutation/read.
                 var assistantBuf = new System.Text.StringBuilder();
+                var completedAssistantMessages = new Dictionary<string, string>(StringComparer.Ordinal);
                 var assistantBufLock = new object();
 
                 // (Re)attaches the streaming + assistant-capture handlers to a
@@ -585,7 +586,12 @@ public static class ChatEndpoints
                         if (evt is AssistantMessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Data.DeltaContent))
                             lock (assistantBufLock) { assistantBuf.Append(ad.Data.DeltaContent); }
                         else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Data.Content))
-                            lock (assistantBufLock) { assistantBuf.Clear(); assistantBuf.Append(am.Data.Content); }
+                            lock (assistantBufLock)
+                            {
+                                completedAssistantMessages[am.Data.MessageId ?? "legacy"] = am.Data.Content;
+                                assistantBuf.Clear();
+                                assistantBuf.AppendJoin("\n\n", completedAssistantMessages.Values);
+                            }
                         await Task.CompletedTask;
                     });
                     return new CompositeDisposable(mainSub, captureSub);
@@ -652,9 +658,15 @@ public static class ChatEndpoints
                         turnKey, notice.Attempt, notice.Status, notice.Tool, notice.WaitSeconds);
                     return SafeEmit(JsonSerializer.Serialize(new
                     {
-                        type = "cooling_down", attempt = notice.Attempt, waitSeconds = notice.WaitSeconds,
-                        url = notice.Url, tool = notice.Tool, status = notice.Status,
-                        retryAtUtc = notice.RetryAtUtc, willRetry = notice.WillRetry
+                        type = "cooling_down",
+                        attempt = notice.Attempt,
+                        waitSeconds = notice.WaitSeconds,
+                        url = notice.Url,
+                        tool = notice.Tool,
+                        status = notice.Status,
+                        retryAtUtc = notice.RetryAtUtc,
+                        willRetry = notice.WillRetry,
+                        toolCallId = ToolExecutionContext.Current?.ToolCallId
                     }));
                 };
                 // Belt-and-braces cleanup on request abort.
@@ -1051,7 +1063,7 @@ public static class ChatEndpoints
 
         if (evt is AssistantMessageDeltaEvent delta)
         {
-            sseData = JsonSerializer.Serialize(new { type = "delta", content = delta.Data.DeltaContent });
+            sseData = JsonSerializer.Serialize(new { type = "delta", messageId = delta.Data.MessageId, content = delta.Data.DeltaContent });
         }
         else if (evt is AssistantReasoningDeltaEvent reasoningDelta)
         {
@@ -1063,7 +1075,7 @@ public static class ChatEndpoints
         }
         else if (evt is AssistantMessageEvent msg)
         {
-            sseData = JsonSerializer.Serialize(new { type = "message", content = msg.Data.Content });
+            sseData = JsonSerializer.Serialize(new { type = "message", messageId = msg.Data.MessageId, content = msg.Data.Content });
         }
         else if (evt is ToolExecutionStartEvent toolStart)
         {

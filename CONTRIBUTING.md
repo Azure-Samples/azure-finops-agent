@@ -61,12 +61,46 @@ dotnet run --urls "http://localhost:5000"
 
 > **Important**: You must set `ASPNETCORE_ENVIRONMENT=Development` before running. Without it, the app defaults to Production and the OAuth `redirect_uri` will mismatch.
 
+### Local model authorization
+
+The backend uses the local Azure CLI identity for model inference, independently of the user's browser consent for Cost Management and other tools. Verify the tenant, the configured account endpoint and the deployment before troubleshooting an inference `401` or `403`.
+
+Use the account's published **OpenAI Language Model Instance API** endpoint. For a multi-service `AIServices` account, the general `properties.endpoint` can be a different Cognitive Services endpoint; copying it into `AzureOpenAI:Endpoint` can return `PermissionDenied` even with valid OpenAI inference permissions. Read the published endpoint from the account's `properties.endpoints` instead of guessing or rewriting its hostname.
+
+Have an authorized account owner grant **Cognitive Services OpenAI User** to the CLI identity in the model account's tenant, at that account's resource scope only. Management-plane Owner access alone does not grant inference. Do not substitute API keys, broaden the grant to a subscription, or commit account/principal identifiers. [Role assignments can take up to five minutes to become effective](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/managed-identity#assign-role); verify a small synthetic inference request before retrying tenant cost queries.
+
+For privately managed developer access, the equivalent Bicep fragment below assumes your template already declares the existing model account as `modelAccount`. Supply the principal ID locally; do not add a maintainer identity to the sample's shared deployment.
+
+```bicep
+param developerPrincipalId string
+
+var inferenceRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+
+resource developerInference 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(modelAccount.id, developerPrincipalId, inferenceRoleId)
+  scope: modelAccount
+  properties: {
+    roleDefinitionId: inferenceRoleId
+    principalId: developerPrincipalId
+    principalType: 'User'
+  }
+}
+```
+
 ### Secrets
 
 Local dev secrets are managed via [`dotnet user-secrets`](https://learn.microsoft.com/aspnet/core/security/app-secrets) — they live outside the repo and cannot be committed by accident. See [README → Run locally](README.md#run-locally) for the full list of keys.
 
 - `appsettings.json` — base config with empty placeholders (committed)
 - App Service settings and managed identity — production configuration outside Git
+
+### Managed-device package feeds
+
+Use your organization's approved package source configuration. Check `dotnet nuget list source`, `python -m pip config list`, and `npm config get registry` before troubleshooting restore failures. Preserve existing approved team feeds; do not disable TLS checks or work around registry enforcement.
+
+Keep personal credentials and company-specific feed URLs out of this public sample. Configure approved sources in user-local settings or the build environment. Containers and WSL do not automatically inherit host configuration; supply their approved feed settings explicitly. A newly published package may be quarantined by the feed even when its public release exists.
+
+If dependencies are already installed and manifests have not changed, normal local builds can use `--no-restore`; this is not a substitute for validating an actual restore when dependency versions change.
 
 ### Regression Tests
 
@@ -107,6 +141,8 @@ src/Dashboard/
 - **Frontend**: Modern JavaScript, ECharts for visualization, SSE for streaming
 
 See the [README](README.md) for full architecture details.
+
+See [Minimal, Contract-Driven Architecture](docs/architecture.md) for state, transport, evidence and security boundaries.
 
 ## Reporting Issues
 

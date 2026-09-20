@@ -99,10 +99,12 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 - Apply purpose-specific payload guidance to every tool: exact IDs for single-object tools, declared full scope for assessments, and compact verified inputs for renderers/calculators/state updates. Do not add generic REST filters to tools that cannot support them or silently narrow an explicit full-result request.
 - `GetSavingsLedger` supports status/category/literal scopeContains filters and string limit/offset paging. Default 50 entries, maximum 200, limit=0 for totals only. Compute totals over all matches before paging and preserve both totalsComplete and detail complete/nextOffset. These filters never change the owner boundary.
 - Parallelize independent calls, except Cost Management `/query` and `/forecast`, which are tenant-throttled.
+- Grouped cost detail across two or more known scopes should use one `BulkAzureRequest` with `parallelism=1` instead of separate model round-trips. The host forces any cost-containing batch sequential and stops the whole batch after a final cost 429; omitted bodies retain cost `sourceEvidence`. Preserve every requested scope, date, filter and grouping.
 - Never issue multiple Cost Management query calls in parallel. After a final 429, stop querying that service for the turn.
 - Cost query/forecast reads automatically retry once after a full service delay of at most five minutes. New requests may wait for an existing short cooldown; no deadline is shortened, and missing retry headers default to 60 seconds. Keep `retryAtUtc` and `willRetry` in cooldown SSE events, including host-blocked requests. A final same-turn block remains in force even after its timestamp passes.
 - Cost Management permits at most two grouping dimensions. For resource/model detail, start with ResourceId plus Meter at subscription scope, or SubscriptionId plus ResourceId at management-group scope. Do not issue a preliminary totals-only request or add resource-group as a third grouping. Preserve billed detail versus activity/inventory distinctions.
 - Preserve `_finops`/`sourceEvidence`, full retry deadlines, and explicit partial coverage through projections. The cache is credential/request-bound; never label cached or unknown-age billing data as freshly measured.
+- Reconcile service and resource/meter totals only with matching scope, date boundaries, currency, cost type, filters and compatible source coverage. Disclose a remaining source-data gap; do not invent a cause or drop it from the total.
 - `QueryUploadedFile` uses `jsonPath` for JSON selectors. Preserve structured arrays in `paramsJson`; host `path`, `kind`, and `mode` remain reserved. Query mode supports 1-50 distinct output names in columns[], applied after filtering/aggregation/sorting and before response paging. Retain row counts, totals, null groups and invalid-numeric counts through projection.
 
 ### Cross-subscription cost
@@ -174,10 +176,16 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 ## Frontend invariants
 
 - At 900px and below, the left navigation is an overlay and the right execution sidebar is hidden.
+- Closed navigation must be invisible and inert. Keep the compact overlay aligned to the actual header, dismissible with Escape/backdrop, and return focus to its toggle.
 - Auto-scroll follows only while near the bottom. User scroll-up must never be overridden.
 - Hidden browser tabs suspend ResizeObserver, animation frames, transitions, and smooth scrolling. Keep reactive watcher fallbacks.
+- Cooldown and assistant-brand motion must respect reduced motion and pause when hidden. Completed replies stay static; wait progress is never task-completion progress, and live countdown changes must not repeatedly interrupt screen readers.
 - Do not rewrite punctuation in streamed model text. Identifiers such as hostnames, versions, and Azure resource names must remain byte-for-byte intact.
 - A complete assistant `message` event replaces partial streamed deltas and cancels queued text animation. Having received one delta is not a reason to discard the authoritative final message. Cost cooldown notices remain visible in the chat on mobile; terminal throttling must not appear as an ongoing or successful retry.
+- Scope that replacement to the SDK message ID, not the entire user turn. A separate follow-up message must append to, never erase, a completed cost answer. Keep per-stream text state isolated and preserve errors, empty-message handling and replay consistency.
+- Do not delay the primary answer for an optional follow-up tool call. A single simple next question can use the existing escaped `prompt:` link; structured multiple actions still use `SuggestFollowUp`.
+- Replay redacted SDK failures as explicit terminal notices, not assistant answers or vague reconnect pills. Live and restored errors share the same presentation, preserve partial results, and let the user edit the saved question without automatic resend or draft loss. Model inference authorization is separate from tenant sign-in.
+- Render retry progress from server deadlines and eligibility, with a reactive clock and exact tool-call association. Do not show a frozen original wait, a hardcoded retry limit, HTTP 0 as throttling, or SDK-success/HTTP-failure as a green success.
 - Escape all model/tool-influenced text before `v-html` transformations.
 - Only the explicit Stop action marks a response as stopped; an arbitrary `AbortError` is recoverable transport failure.
 - Attachment callbacks must update chips by stable `uid`, never by array index. Wait for uploads before sending, delist files whose chips were removed in flight, and revoke blob thumbnail URLs only after Vue unmounts them.

@@ -11,7 +11,7 @@ public static class FollowUpTools
         yield return AIFunctionFactory.Create(SuggestFollowUp);
     }
 
-    [Description(@"After fulfilling a tenant-data, remediation, Walk/Run, or uploaded-file request, optionally suggest the next ACTION (1-3 clickable buttons). At most one call per turn. Never substitute a follow-up offer for the deliverable already requested.
+    [Description(@"After fulfilling a tenant-data, remediation, Walk/Run, or uploaded-file request, optionally suggest the next ACTION (1-3 clickable buttons). At most one call per turn. Never substitute a follow-up offer for the deliverable already requested. For one simple next question, prefer a prompt link in the final answer instead of this extra tool round-trip. Use this tool for multiple actions or complex prompts; do not delay the primary answer just to create buttons.
 
 Do not call after GetCrawlMaturityEvidence: it already supplies clickable actions. Do not call for standalone greetings, public/anonymous pricing or health, hypothetical estimates, or clarifications; use a prompt link in the answer instead. A missing consent action is emitted by the host, not a reason to recommend repeated generic reconnects.
 
@@ -24,7 +24,7 @@ Rules:
 
 After data-heavy / uploaded-file turns, optional second/third actions may expose a scoped script, report or unresolved decision. If prioritization was already requested, deliver it now rather than suggesting the same analysis again. Never offer an immediate Cost Management retry before its returned deadline.
 
-## Small / single-question answers: just label/prompt.
+## Structured actions: label/prompt are required; second/third pairs are optional.
 
 Examples:
 - After service breakdown: 'Drill into Virtual Machines (top spender at $58K)'

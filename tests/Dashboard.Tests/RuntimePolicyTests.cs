@@ -19,8 +19,11 @@ public sealed class RuntimePolicyTests
         const string path = "/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement/query?api-version=2026-08-01";
         var body = JsonSerializer.Serialize(new
         {
-            dataset = new { grouping = new[] { "SubscriptionName", "ResourceGroupName", "ResourceId", "ServiceName" }
-                .Take(dimensions).Select(name => new { type = "Dimension", name }) }
+            dataset = new
+            {
+                grouping = new[] { "SubscriptionName", "ResourceGroupName", "ResourceId", "ServiceName" }
+                .Take(dimensions).Select(name => new { type = "Dimension", name })
+            }
         });
         var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create()
             .Single(candidate => candidate.Name == (bulk ? "BulkAzureRequest" : "QueryAzure"));
@@ -40,6 +43,16 @@ public sealed class RuntimePolicyTests
         Assert.Contains("at most two grouping dimensions", tools.Single(tool => tool.Name == "QueryAzure").Description);
         Assert.Contains("do not repeatedly reprint the same totals", CopilotSessionFactory.SystemPrompt);
         Assert.Null(AzureQueryTools.ValidateCostQueryBody("/providers/Microsoft.CostManagement/query", "{\"dataset\":{\"grouping\":[{\"type\":\"Dimension\",\"name\":\"ResourceId\"},{\"type\":\"Dimension\",\"name\":\"Meter\"}]}}"));
+    }
+
+    [Fact]
+    public async Task NullBatchItemsAreRejectedBeforeDispatch()
+    {
+        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create()
+            .Single(candidate => candidate.Name == "BulkAzureRequest");
+        var result = (await tool.InvokeAsync(new AIFunctionArguments { ["requestsJson"] = "[null]" }))!.ToString()!;
+        Assert.Contains("Every batch item must be a request object", result);
+        Assert.Contains("No request was sent", result);
     }
 
     [Theory]

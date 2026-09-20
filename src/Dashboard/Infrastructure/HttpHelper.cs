@@ -68,7 +68,7 @@ public static class HttpHelper
 
     private static readonly CostQueryCoordinator CostQueries = new();
 
-    private static bool IsInteractiveCostQueryUrl(string url) =>
+    internal static bool IsInteractiveCostQueryUrl(string url) =>
         url.Contains("/Microsoft.CostManagement/query", StringComparison.OrdinalIgnoreCase)
         || url.Contains("/Microsoft.CostManagement/forecast", StringComparison.OrdinalIgnoreCase);
 

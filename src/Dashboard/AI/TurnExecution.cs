@@ -10,6 +10,7 @@ internal sealed class TurnExecution
     internal static readonly ConcurrentDictionary<string, TurnExecution> Active = new();
     private readonly object _sync = new();
     private readonly Dictionary<string, string> _admittedTools = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _answerLengths = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _cancellation = new();
     private int _tools;
     private int _costQueriesBlocked;
@@ -32,9 +33,17 @@ internal sealed class TurnExecution
     internal bool HasUserOutput => AnswerCharacters > 0 || Volatile.Read(ref _visibleOutputs) > 0 || !ArtifactIds.IsEmpty;
     internal ConcurrentQueue<string> ArtifactIds { get; } = new();
     internal void RecordTool(bool success) { Interlocked.Increment(ref _toolsCompleted); if (!success) Interlocked.Increment(ref _toolsFailed); }
-    internal void RecordAnswer(string? content)
+    internal void RecordAnswer(string? content, string? messageId = null)
     {
-        if (!string.IsNullOrWhiteSpace(content)) Interlocked.Exchange(ref _answerCharacters, content.Length);
+        if (string.IsNullOrWhiteSpace(content)) return;
+        lock (_sync)
+        {
+            var key = messageId ?? "legacy";
+            var exists = _answerLengths.TryGetValue(key, out var previous);
+            var separator = !exists && _answerLengths.Count > 0 ? 2 : 0;
+            _answerLengths[key] = content.Length;
+            Interlocked.Add(ref _answerCharacters, content.Length - previous + separator);
+        }
     }
     internal void RecordVisibleOutput() => Interlocked.Increment(ref _visibleOutputs);
     internal bool TryClaimEmptyNotice() => Interlocked.CompareExchange(ref _emptyNoticeSent, 1, 0) == 0;
@@ -91,7 +100,7 @@ internal sealed class TurnExecution
                 AdmitTool(tool.Data.ToolCallId, tool.Data.ToolName);
             if (item is ToolExecutionCompleteEvent { Data.Success: false } failedTool)
                 RecordUndispatchedToolFailure(failedTool.Data.ToolCallId);
-            if (item is AssistantMessageEvent message) RecordAnswer(message.Data.Content);
+            if (item is AssistantMessageEvent message) RecordAnswer(message.Data.Content, message.Data.MessageId);
             if (item is SessionErrorEvent) Cancel("error");
             if (item is SessionIdleEvent or SessionErrorEvent) ConfirmTerminal();
         });

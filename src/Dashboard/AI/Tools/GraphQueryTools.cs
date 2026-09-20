@@ -73,32 +73,31 @@ Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant a
             jsonBody: hasBody && httpMethod != HttpMethod.Get ? body : null);
     }
 
+    private sealed record QueryContract(string[] Endpoints, string[] AllowedOptions, string Guidance);
+
+    private static readonly QueryContract[] QueryContracts =
+    [
+        new(["/v1.0/subscribedSkus", "/beta/subscribedSkus"], ["$select"],
+            "subscribedSkus supports only $select. Remove unsupported options such as $top, $filter and $search."),
+        new(["/beta/reports/getMicrosoft365CopilotUsageUserDetail(", "/beta/reports/getMicrosoft365CopilotUserCountSummary("], ["$format"],
+            "Legacy Copilot report functions support only $format as a query option, not $filter, $top or $select. Preserve the requested period and analyze the returned report without claiming a server-side filter."),
+        new(["/v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(", "/beta/copilot/reports/getMicrosoft365CopilotUsageUserDetail(",
+            "/v1.0/copilot/reports/getMicrosoft365CopilotUserCountSummary(", "/beta/copilot/reports/getMicrosoft365CopilotUserCountSummary("], ["$format"],
+            "Copilot usage reports use period and optional version function arguments, not $filter, $top or $select query options. The v1.0 response is CSV; beta is JSON.")
+    ];
+
     internal static string? ValidateQueryParameters(string path)
     {
         var separator = path.IndexOf('?');
         if (separator < 0) return null;
         var endpoint = path[..separator].TrimEnd('/');
+        var contract = QueryContracts.FirstOrDefault(rule => rule.Endpoints.Any(pattern =>
+            pattern.EndsWith('(') ? endpoint.StartsWith(pattern, StringComparison.OrdinalIgnoreCase)
+                : endpoint.Equals(pattern, StringComparison.OrdinalIgnoreCase)));
+        if (contract is null) return null;
         var options = QueryHelpers.ParseQuery(path[separator..]);
-        if (endpoint.Equals("/v1.0/subscribedSkus", StringComparison.OrdinalIgnoreCase)
-            || endpoint.Equals("/beta/subscribedSkus", StringComparison.OrdinalIgnoreCase))
-        {
-            if (options.Keys.Any(option => option != "$select"))
-                return "HTTP 400 BadRequest\nsubscribedSkus supports only $select. Remove unsupported options such as $top, $filter and $search. No request was sent.";
-        }
-        else if (endpoint.StartsWith("/beta/reports/getMicrosoft365CopilotUsageUserDetail(", StringComparison.OrdinalIgnoreCase)
-            || endpoint.StartsWith("/beta/reports/getMicrosoft365CopilotUserCountSummary(", StringComparison.OrdinalIgnoreCase))
-        {
-            if (options.Keys.Any(option => option != "$format"))
-                return "HTTP 400 BadRequest\nLegacy Copilot report functions support only $format as a query option, not $filter, $top or $select. Preserve the requested period and analyze the returned report without claiming a server-side filter. No request was sent.";
-        }
-        else if (endpoint.StartsWith("/v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(", StringComparison.OrdinalIgnoreCase)
-            || endpoint.StartsWith("/beta/copilot/reports/getMicrosoft365CopilotUsageUserDetail(", StringComparison.OrdinalIgnoreCase)
-            || endpoint.StartsWith("/v1.0/copilot/reports/getMicrosoft365CopilotUserCountSummary(", StringComparison.OrdinalIgnoreCase)
-            || endpoint.StartsWith("/beta/copilot/reports/getMicrosoft365CopilotUserCountSummary(", StringComparison.OrdinalIgnoreCase))
-        {
-            if (options.Keys.Any(option => option != "$format"))
-                return "HTTP 400 BadRequest\nCopilot usage reports use period and optional version function arguments, not $filter, $top or $select query options. The v1.0 response is CSV; beta is JSON. No request was sent.";
-        }
-        return null;
+        return options.Keys.Any(option => !contract.AllowedOptions.Contains(option, StringComparer.Ordinal))
+            ? $"HTTP 400 BadRequest\n{contract.Guidance} No request was sent."
+            : null;
     }
 }

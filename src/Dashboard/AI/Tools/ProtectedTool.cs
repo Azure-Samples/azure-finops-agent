@@ -22,7 +22,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
             throw new OperationCanceledException("The originating turn is not active.");
         using var lease = turn?.AcquireTool(owner!.Value, invocation!.ToolCallId);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn?.CancellationToken ?? CancellationToken.None);
-        using var context = new ToolExecutionContext(sessionId, owner, linked.Token);
+        using var context = new ToolExecutionContext(sessionId, owner, linked.Token) { ToolCallId = invocation?.ToolCallId };
         linked.Token.ThrowIfCancellationRequested();
         object? result;
         try { result = await base.InvokeCoreAsync(arguments, linked.Token); }
@@ -83,12 +83,12 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
                 if (property.Name is "cacheStatus" && value.ValueKind == JsonValueKind.String && value.GetString() is not "queried") fresh = false;
                 if (property.Name is "freshness" && value.ValueKind == JsonValueKind.String && value.GetString() is "unknown" or "periodic") fresh = false;
                 if (property.Name is "skuStatus" or "quotaStatus" && value.ValueKind == JsonValueKind.String && value.GetString() == "unknown") partial = true;
-                if (property.Name is "status" && value.ValueKind == JsonValueKind.String)
+                if (property.Name is "status" or "outcome" && value.ValueKind == JsonValueKind.String)
                 {
                     if (value.GetString() is "failed" or "cancelled") success = false;
                     if (value.GetString() is "accepted" or "inProgress" or "awaitingApproval" or "dispatching" or "unknown" or "partial" or "ambiguous" or "missing") partial = true;
                 }
-                if (property.Name is "_finops" or "sourceEvidence" or "results" or "resolution" or "coverage" or "spotPlacement" or "rows" or "result") Inspect(value);
+                if (property.Name is "_finops" or "sourceEvidence" or "results" or "resolution" or "coverage" or "spotPlacement" or "rows" or "result" or "body") Inspect(value);
             }
         }
 

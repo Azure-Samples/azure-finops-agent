@@ -14,6 +14,10 @@ public sealed class JobOutcomeTests
     [InlineData("{\"spotPlacement\":[{\"cacheStatus\":\"cached\"}]}", true, false, false)]
     [InlineData("{\"rows\":[{\"result\":{\"skuStatus\":\"permitted\",\"quotaStatus\":\"unknown\"}}]}", true, true, true)]
     [InlineData("{\"results\":[{\"error\":\"unavailable\"}]}", false, true, false)]
+    [InlineData("{\"complete\":false,\"results\":[{\"outcome\":\"failed\",\"body\":{\"error\":\"denied\"}}]}", false, true, true)]
+    [InlineData("{\"complete\":false,\"results\":[{\"outcome\":\"cancelled\"}]}", false, true, true)]
+    [InlineData("{\"complete\":true,\"results\":[{\"outcome\":\"succeeded\",\"body\":{\"_finops\":{\"cacheStatus\":\"cached\"}}}]}", true, false, false)]
+    [InlineData("{\"complete\":false,\"results\":[{\"outcome\":\"succeeded\",\"partial\":true,\"sourceEvidence\":{\"cacheStatus\":\"stale_during_cooldown\"}}]}", true, false, true)]
     [InlineData("RESOLUTION {\"status\":\"ambiguous\",\"complete\":false}\n| prices |", true, true, true)]
     [InlineData("HTTP 200 OK\nCurrent UTC time: 2026-01-01 00:00:00\n{\"_finops\":{\"cacheStatus\":\"cached\"}}", true, false, false)]
     [InlineData("HTTP 200 OK\nCurrent UTC time: 2026-01-01 00:00:00\n{\"complete\":false,\"_finops\":{\"cacheStatus\":\"queried\"}}", true, true, true)]
@@ -31,6 +35,17 @@ public sealed class JobOutcomeTests
         Assert.Equal("2026-01-01T00:00:00Z", evidence.GetProperty("retrievedAtUtc").GetString());
         Assert.False(ProtectedTool.InspectEvidence(evidence.GetRawText()).Fresh);
         Assert.False(ProtectedTool.InspectEvidence(AzureQueryTools.ReadCostSourceEvidence("HTTP 200 OK\n{}").GetRawText()).Fresh);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("\"Unavailable\"")]
+    public void NonObjectCostResponsesHaveUnknownEvidence(string body)
+    {
+        var evidence = AzureQueryTools.ReadCostSourceEvidence("HTTP 400 BadRequest\n" + body);
+        Assert.Equal("unknown", evidence.GetProperty("cacheStatus").GetString());
+        Assert.False(ProtectedTool.InspectEvidence(evidence.GetRawText()).Fresh);
     }
 
     [Fact]

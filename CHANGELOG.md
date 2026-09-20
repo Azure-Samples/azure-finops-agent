@@ -7,6 +7,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve earlier assistant messages when a later follow-up completes. SSE now carries stable message IDs, and the browser replaces only the corresponding message's partial deltas instead of the whole answer. Regression coverage reproduces a visible cost table disappearing after a follow-up on desktop and mobile.
+- Replace frozen retry labels with a deadline-based countdown and explicit waiting, retry-response and automatic-retry-stopped states. Slow requests are not presented as fresh throttling, and HTTP failures no longer receive a green success icon merely because SDK execution succeeded.
+- Stop showing indefinite reconnecting notices for owner-verified terminal failures after reload. Recovery checks the active gate and matching durable outcome coverage, preserves explicit Stop wording, and keeps uncertain histories recoverable. Model authorization errors are distinguished from tenant sign-in without suggesting keys or tokens in chat.
+- Preserve redacted SDK failure details in owner-checked transcript replay instead of replacing them with a vague status pill. Live and restored failures use an accessible error card, retain partial answers, and offer editing the saved question without automatically resending or overwriting a draft.
+- Fully hide closed compact navigation, align the open menu to the actual header, and support backdrop/Escape dismissal with focus returned to the menu control.
+- Use the account-published OpenAI inference endpoint in generated deployment outputs instead of the generic multi-service endpoint when available. Local and CI configuration must target the same published endpoint; inference roles remain account-scoped.
+
+### Changed
+
+- Replace the plain AI badge with a reusable Fluent gradient spark-and-orbit avatar. Completed replies stay still; working replies animate gently, with unique SVG IDs, accessible labels and reduced-motion/background-tab support.
+- Explain cooldowns with an animated billing-service card, a real deadline countdown and a wait-only progress bar. Slow responses and terminal stops remain distinct; no resource savings or request completion is implied, and screen readers are not interrupted every second.
+- Extract message assembly and HTTP-progress presentation into small, data-driven frontend modules using existing libraries. Add a standard local development task and document architecture boundaries and approved-feed configuration without embedding company-specific registry URLs.
+- Document local model-inference RBAC separately from browser tenant consent, and require the published OpenAI endpoint rather than a multi-service account's generic endpoint when configuring the model connection.
+- Replace repeated Graph query-option branching with a host-owned endpoint contract table and one generic validator, preserving supported parameters, rejected options and public tool APIs.
+- Move editable job templates out of the view component. Capacity monitoring preserves unknowns, reservation proposals require configured inputs and explicit application approval, and the one-minute probe reads lightweight metadata rather than repeatedly querying billing. Remove unsupported promises of immediate anomaly detection or sub-minute job completion.
+- Reduce avoidable model round-trips for grouped multi-subscription costs with the existing bulk request tool. Cost-containing batches are host-serialized, stop after a final cost 429, and preserve source metadata through response limits. Nested batch failures and cached evidence are classified explicitly.
+- Deliver completed answers before optional follow-up work; use an inline prompt link for one simple next question rather than requiring another model/tool round-trip. Require matching billing scope and source coverage when reconciling service totals with resource detail.
+
 ## [0.3.0] - 2026-09-20
 
 ### Added

@@ -117,4 +117,19 @@ public sealed class TurnOutcomeTests
         }
         finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
     }
+
+    [Fact]
+    public async Task DistinctAssistantMessagesAreCountedWithoutDuplicatingSnapshots()
+    {
+        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
+        try
+        {
+            turn.RecordAnswer("Cost table", "answer");
+            turn.RecordAnswer("Follow-up link", "follow-up");
+            turn.RecordAnswer("Follow-up link", "follow-up");
+            turn.RecordAnswer("", "tool-only");
+            Assert.Equal("Cost table\n\nFollow-up link".Length, turn.AnswerCharacters);
+        }
+        finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
+    }
 }

@@ -106,6 +106,8 @@ azd down --purge
 - [Node.js 22+](https://nodejs.org/)
 - Azure CLI authenticated to the tenant containing your Azure OpenAI resource
 
+The local Azure CLI identity also needs **Cognitive Services OpenAI User** on the configured model account. Azure management roles such as Owner do not include model-inference data permissions. This access is separate from signing into your Azure tenant in the browser; see [local model authorization](CONTRIBUTING.md#local-model-authorization).
+
 ### Configure
 
 ```powershell

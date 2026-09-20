@@ -24,5 +24,16 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("At most one", followUp.Description);
         Assert.DoesNotContain("FIRST action MUST", followUp.Description);
         Assert.DoesNotContain("ALWAYS call SuggestFollowUp", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("do not delay the primary answer", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("rather than spending a separate model round-trip", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
+    public void GroupedCostReadsUseSequentialBatchesAndPreserveReconciliationEvidence()
+    {
+        Assert.Contains("ONE `BulkAzureRequest` with parallelism=1", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Include every requested scope", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("report the unresolved amount", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("cacheStatus and retrieval times", CopilotSessionFactory.SystemPrompt);
     }
 }

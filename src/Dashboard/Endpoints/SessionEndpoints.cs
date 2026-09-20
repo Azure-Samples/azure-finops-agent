@@ -146,152 +146,162 @@ public static class SessionEndpoints
                 return Results.NotFound(new { code = "history_unavailable", error = "The retained conversation history is unavailable. Start a new conversation to continue." });
             }
 
-            // First pass: index tool execution results by ToolCallId so we
-            // can attach result / success / error to each requested tool.
-            var resultsById = new Dictionary<string, (string? Result, bool Success, string? Error)>();
-            foreach (var evt in events)
+            var messages = BuildTranscript(events, userId);
+            var pendingChanges = OperationStore.Default.ForSession(userId, sessionId)
+                .Where(operation => operation.Status == "awaitingApproval").Select(OperationStore.Review).ToArray();
+            return Results.Ok(new { messages, pendingChanges });
+        });
+    }
+
+    internal static IReadOnlyList<object> BuildTranscript(IReadOnlyList<GitHub.Copilot.SessionEvent> events, long userId)
+    {
+        // First pass: index tool execution results by ToolCallId so we
+        // can attach result / success / error to each requested tool.
+        var resultsById = new Dictionary<string, (string? Result, bool Success, string? Error)>();
+        foreach (var evt in events)
+        {
+            if (evt is GitHub.Copilot.ToolExecutionCompleteEvent tec && tec.Data is { } d && !string.IsNullOrEmpty(d.ToolCallId))
             {
-                if (evt is GitHub.Copilot.ToolExecutionCompleteEvent tec && tec.Data is { } d && !string.IsNullOrEmpty(d.ToolCallId))
-                {
-                    resultsById[d.ToolCallId] = (
-                        d.Result?.DetailedContent ?? d.Result?.Content,
-                        d.Success,
-                        d.Error?.ToString()
-                    );
-                }
+                resultsById[d.ToolCallId] = (
+                    d.Result?.DetailedContent ?? d.Result?.Content,
+                    d.Success,
+                    d.Error?.ToString()
+                );
             }
+        }
 
-            var messages = new List<object>();
-            string? pendingAssistantText = null;
-            var pendingTools = new List<object>();
-            var pendingCharts = new List<string>();
-            object? pendingHtml = null;
-            object? pendingScript = null;
+        var messages = new List<object>();
+        string? pendingAssistantText = null;
+        var pendingTools = new List<object>();
+        var pendingCharts = new List<string>();
+        object? pendingHtml = null;
+        object? pendingScript = null;
+        var hasUserMessage = false;
 
-            void FlushAssistant()
+        void FlushAssistant()
+        {
+            if (pendingAssistantText is null && pendingTools.Count == 0
+                && pendingCharts.Count == 0 && pendingHtml is null && pendingScript is null) return;
+            messages.Add(new
             {
-                if (pendingAssistantText is null && pendingTools.Count == 0
-                    && pendingCharts.Count == 0 && pendingHtml is null && pendingScript is null) return;
-                messages.Add(new
-                {
-                    role = "assistant",
-                    content = pendingAssistantText ?? "",
-                    toolCalls = pendingTools.ToArray(),
-                    charts = pendingCharts.ToArray(),
-                    html = pendingHtml,
-                    script = pendingScript,
-                });
-                pendingAssistantText = null;
-                pendingTools.Clear();
-                pendingCharts.Clear();
-                pendingHtml = null;
-                pendingScript = null;
+                role = "assistant",
+                content = pendingAssistantText ?? "",
+                toolCalls = pendingTools.ToArray(),
+                charts = pendingCharts.ToArray(),
+                html = pendingHtml,
+                script = pendingScript,
+            });
+            pendingAssistantText = null;
+            pendingTools.Clear();
+            pendingCharts.Clear();
+            pendingHtml = null;
+            pendingScript = null;
+        }
+
+        foreach (var evt in events)
+        {
+            if (evt is GitHub.Copilot.UserMessageEvent um)
+            {
+                var raw = um.Data?.Content ?? "";
+                if (IsInjectedUserContext(raw, um.Data?.Source)) continue;
+                FlushAssistant();
+                var clean = StripContextPrefix(raw);
+                if (string.IsNullOrWhiteSpace(clean)) continue;
+                messages.Add(new { role = "user", content = clean });
+                hasUserMessage = true;
             }
-
-            foreach (var evt in events)
+            else if (evt is GitHub.Copilot.AssistantMessageEvent am)
             {
-                if (evt is GitHub.Copilot.UserMessageEvent um)
+                var text = am.Data?.Content;
+                if (!string.IsNullOrEmpty(text))
                 {
-                    var raw = um.Data?.Content ?? "";
-                    if (IsInjectedUserContext(raw, um.Data?.Source)) continue;
-                    FlushAssistant();
-                    var clean = StripContextPrefix(raw);
-                    if (string.IsNullOrWhiteSpace(clean)) continue;
-                    messages.Add(new { role = "user", content = clean });
+                    pendingAssistantText = (pendingAssistantText is null ? "" : pendingAssistantText + "\n\n") + text;
                 }
-                else if (evt is GitHub.Copilot.AssistantMessageEvent am)
+                if (am.Data?.ToolRequests is { Length: > 0 } reqs)
                 {
-                    var text = am.Data?.Content;
-                    if (!string.IsNullOrEmpty(text))
+                    foreach (var r in reqs)
                     {
-                        pendingAssistantText = (pendingAssistantText is null ? "" : pendingAssistantText + "\n\n") + text;
-                    }
-                    if (am.Data?.ToolRequests is { Length: > 0 } reqs)
-                    {
-                        foreach (var r in reqs)
+                        resultsById.TryGetValue(r.ToolCallId ?? "", out var ex);
+                        pendingTools.Add(new
                         {
-                            resultsById.TryGetValue(r.ToolCallId ?? "", out var ex);
-                            pendingTools.Add(new
-                            {
-                                name = r.Name,
-                                args = r.Arguments?.ToString() ?? "",
-                                id = r.ToolCallId,
-                                intent = r.IntentionSummary,
-                                result = ex.Result,
-                                success = ex.Result is null ? (bool?)null : ex.Success,
-                                error = ex.Error,
-                            });
+                            name = r.Name,
+                            args = r.Arguments?.ToString() ?? "",
+                            id = r.ToolCallId,
+                            intent = r.IntentionSummary,
+                            result = ex.Result,
+                            success = ex.Result is null ? (bool?)null : ex.Success,
+                            error = ex.Error,
+                        });
 
-                            // Mirror ChatEndpoints.HandleToolDoneAsync side-channel parsing
-                            // so charts/scripts/decks survive a session resume.
-                            if (ex.Success && ex.Result is { } rt)
+                        // Mirror ChatEndpoints.HandleToolDoneAsync side-channel parsing
+                        // so charts/scripts/decks survive a session resume.
+                        if (ex.Success && ex.Result is { } rt)
+                        {
+                            if (r.Name == "RenderChart" || r.Name == "RenderAdvancedChart")
                             {
-                                if (r.Name == "RenderChart" || r.Name == "RenderAdvancedChart")
+                                pendingCharts.Add(rt);
+                            }
+                            else if (rt.Contains("__CHART__:"))
+                            {
+                                foreach (var line in rt.Split('\n'))
                                 {
-                                    pendingCharts.Add(rt);
-                                }
-                                else if (rt.Contains("__CHART__:"))
-                                {
-                                    foreach (var line in rt.Split('\n'))
+                                    var t = line.Trim();
+                                    if (t.StartsWith("__CHART__:"))
                                     {
-                                        var t = line.Trim();
-                                        if (t.StartsWith("__CHART__:"))
-                                        {
-                                            pendingCharts.Add(t["__CHART__:".Length..].Trim());
-                                            break;
-                                        }
+                                        pendingCharts.Add(t["__CHART__:".Length..].Trim());
+                                        break;
                                     }
                                 }
-                                if (rt.Contains("__HTML_READY__:"))
+                            }
+                            if (rt.Contains("__HTML_READY__:"))
+                            {
+                                foreach (var line in rt.Split('\n'))
                                 {
-                                    foreach (var line in rt.Split('\n'))
+                                    var t = line.Trim();
+                                    if (t.StartsWith("__HTML_READY__:"))
                                     {
-                                        var t = line.Trim();
-                                        if (t.StartsWith("__HTML_READY__:"))
-                                        {
-                                            var parts = t["__HTML_READY__:".Length..].Split(':', 3);
-                                            if (parts.Length >= 2)
-                                                pendingHtml = new
-                                                {
-                                                    fileId = parts[0],
-                                                    fileName = parts[1],
-                                                    slideCount = parts.Length > 2 ? parts[2] : "",
-                                                    // Artifacts live 30 min in-memory + on temp disk; after a
-                                                    // TTL sweep or restart the download link is dead — let the
-                                                    // UI render an \"expired\" state instead of a 404 link.
-                                                    expired = ArtifactStore.Default.Find(parts[0], userId) is null,
-                                                };
-                                            break;
-                                        }
-                                    }
-                                }
-                                if (rt.Contains("__SCRIPT_READY__:"))
-                                {
-                                    foreach (var line in rt.Split('\n'))
-                                    {
-                                        var t = line.Trim();
-                                        if (t.StartsWith("__SCRIPT_READY__:"))
-                                        {
-                                            var parts = t["__SCRIPT_READY__:".Length..].Split(':', 5);
-                                            if (parts.Length >= 4)
+                                        var parts = t["__HTML_READY__:".Length..].Split(':', 3);
+                                        if (parts.Length >= 2)
+                                            pendingHtml = new
                                             {
-                                                var entry = ArtifactStore.Default.Find(parts[0], userId);
-                                                var live = entry is not null;
-                                                pendingScript = new
-                                                {
-                                                    fileId = parts[0],
-                                                    fileName = parts[1],
-                                                    lineCount = parts[2],
-                                                    language = parts[3],
-                                                    description = parts.Length > 4 ? parts[4] : "",
-                                                    content = entry is not null ? SensitiveContent.Redact(File.ReadAllText(entry.Path)) : "",
-                                                    // See __HTML_READY__ above — expired artifacts render a
-                                                    // \"regenerate\" hint instead of dead download/copy buttons.
-                                                    expired = !live,
-                                                };
-                                            }
-                                            break;
+                                                fileId = parts[0],
+                                                fileName = parts[1],
+                                                slideCount = parts.Length > 2 ? parts[2] : "",
+                                                // Artifacts live 30 min in-memory + on temp disk; after a
+                                                // TTL sweep or restart the download link is dead — let the
+                                                // UI render an \"expired\" state instead of a 404 link.
+                                                expired = ArtifactStore.Default.Find(parts[0], userId) is null,
+                                            };
+                                        break;
+                                    }
+                                }
+                            }
+                            if (rt.Contains("__SCRIPT_READY__:"))
+                            {
+                                foreach (var line in rt.Split('\n'))
+                                {
+                                    var t = line.Trim();
+                                    if (t.StartsWith("__SCRIPT_READY__:"))
+                                    {
+                                        var parts = t["__SCRIPT_READY__:".Length..].Split(':', 5);
+                                        if (parts.Length >= 4)
+                                        {
+                                            var entry = ArtifactStore.Default.Find(parts[0], userId);
+                                            var live = entry is not null;
+                                            pendingScript = new
+                                            {
+                                                fileId = parts[0],
+                                                fileName = parts[1],
+                                                lineCount = parts[2],
+                                                language = parts[3],
+                                                description = parts.Length > 4 ? parts[4] : "",
+                                                content = entry is not null ? SensitiveContent.Redact(File.ReadAllText(entry.Path)) : "",
+                                                // See __HTML_READY__ above — expired artifacts render a
+                                                // \"regenerate\" hint instead of dead download/copy buttons.
+                                                expired = !live,
+                                            };
                                         }
+                                        break;
                                     }
                                 }
                             }
@@ -299,12 +309,19 @@ public static class SessionEndpoints
                     }
                 }
             }
-            FlushAssistant();
-
-            var pendingChanges = OperationStore.Default.ForSession(userId, sessionId)
-                .Where(operation => operation.Status == "awaitingApproval").Select(OperationStore.Review).ToArray();
-            return Results.Ok(new { messages, pendingChanges });
-        });
+            else if (evt is GitHub.Copilot.SessionErrorEvent error && hasUserMessage)
+            {
+                FlushAssistant();
+                messages.Add(new
+                {
+                    role = "system",
+                    content = SensitiveContent.Redact(error.Data.Message),
+                    terminalStatus = "error",
+                });
+            }
+        }
+        FlushAssistant();
+        return messages;
     }
 
     private static string StripContextPrefix(string raw)

@@ -1,12 +1,15 @@
 <template>
-  <div class="chat-view" :class="{ 'chat-view--hidden': documentIsHidden }">
+  <div class="chat-view" :class="{ 'chat-view--hidden': documentIsHidden }" @keydown.esc="closeMobileSidebar">
     <!-- Azure Portal-style top bar -->
     <header class="portal-header">
       <div class="portal-header-left">
         <button
           class="portal-burger"
+          ref="menuButton"
           @click="toggleSidebar"
           title="Toggle menu"
+          aria-controls="chat-navigation"
+          :aria-expanded="sidebarVisible"
         >
           <svg
             width="18"
@@ -135,7 +138,10 @@
     <div class="portal-body">
       <!-- Left sidebar -->
       <aside
+        id="chat-navigation"
         class="sidebar"
+        :inert="!sidebarVisible"
+        :aria-hidden="!sidebarVisible"
         :class="{
           'sidebar--collapsed': !sidebarOpen,
           'sidebar--mobile-open': mobileSidebarOpen,
@@ -229,7 +235,13 @@
                       class="assessment-stars"
                       :style="{ color: starColor(sc.score) }"
                     >
-                      {{ sc.status === "notApplicable" ? "N/A" : sc.status === "unknown" ? "Unknown" : starsText(sc.score) }}
+                      {{
+                        sc.status === "notApplicable"
+                          ? "N/A"
+                          : sc.status === "unknown"
+                            ? "Unknown"
+                            : starsText(sc.score)
+                      }}
                     </div>
                     <div class="assessment-detail-text">{{ sc.detail }}</div>
                   </div>
@@ -969,6 +981,14 @@
         </div>
       </aside>
 
+      <button
+        v-if="compactLayout && mobileSidebarOpen"
+        class="sidebar-backdrop"
+        type="button"
+        aria-label="Close navigation menu"
+        @click="closeMobileSidebar"
+      ></button>
+
       <!-- Center: chat area -->
       <div
         class="chat-main"
@@ -1013,8 +1033,8 @@
                   <div class="hero-card">
                     <div class="hero-card-title">Spots cost spikes</div>
                     <div class="hero-card-desc">
-                      Catches anomalies the moment they happen. Explains the
-                      why. Tells you who to bill.
+                      Flags unusual spending as billing data becomes available.
+                      Investigates likely causes and cost ownership.
                     </div>
                   </div>
                   <div class="hero-card">
@@ -1051,6 +1071,13 @@
               <div v-if="msg.role === 'user'" class="bubble bubble--user">
                 {{ msg.content }}
               </div>
+              <TurnFailureNotice
+                v-else-if="msg.failure"
+                :failure="msg.failure"
+                :can-edit="!streaming && !clearing && !input.trim()"
+                :show-edit="!currentJob"
+                @edit="editSavedQuestion(i)"
+              />
               <!-- System notices (resume / busy / recovery) get a distinct muted
                    pill instead of masquerading as AI answers with an avatar. -->
               <div v-else-if="msg.role === 'system'" class="system-notice">
@@ -1058,7 +1085,7 @@
               </div>
               <div v-else class="ai-row">
                 <div class="ai-header">
-                  <div class="ai-avatar">AI</div>
+                  <AssistantAvatar :paused="documentIsHidden" />
                 </div>
                 <div class="ai-content">
                   <div
@@ -1273,37 +1300,100 @@
             <!-- Single transient status pill — lives OUTSIDE the transcript.
                  All recovery/poll mechanisms write ONE ref (sessionNotice), so
                  pills can never stack, stick, or survive into the transcript. -->
-            <div v-if="sessionNotice" class="message-row message-row--system">
-              <div class="system-notice">{{ sessionNotice.text }}</div>
+            <div
+              v-if="sessionNotice"
+              class="message-row message-row--system"
+              :style="sessionNotice.progress ? { animation: 'none' } : undefined"
+            >
+              <RequestProgressCard
+                v-if="sessionNotice.progress"
+                :progress="progressView(sessionNotice.progress)"
+                :paused="documentIsHidden"
+              />
+              <div v-else class="system-notice">{{ sessionNoticeText }}</div>
             </div>
-            <div v-if="activeConsentActions.length" class="message-row message-row--system">
+            <div
+              v-if="activeConsentActions.length"
+              class="message-row message-row--system"
+            >
               <div class="system-notice">
-                <a v-for="action in activeConsentActions" :key="action.href" :href="action.href" class="html-deck-card-btn">{{ action.label }}</a>
+                <a
+                  v-for="action in activeConsentActions"
+                  :key="action.href"
+                  :href="action.href"
+                  class="html-deck-card-btn"
+                  >{{ action.label }}</a
+                >
               </div>
             </div>
-            <div v-for="change in activeChanges" :key="change.operationId" class="change-review">
+            <div
+              v-for="change in activeChanges"
+              :key="change.operationId"
+              class="change-review"
+            >
               <details>
-                <summary>{{ change.method }} change: {{ change.status }}</summary>
+                <summary>
+                  {{ change.method }} change: {{ change.status }}
+                </summary>
                 <div class="change-review-target">{{ change.target }}</div>
                 <pre>{{ change.body || "No request body" }}</pre>
                 <p>{{ change.costImpact }}</p>
                 <template v-if="change.status === 'awaitingApproval'">
-                  <label><input v-model="change.acknowledged" type="checkbox" :disabled="change.pending"> I reviewed this change and its potential charges</label>
+                  <label
+                    ><input
+                      v-model="change.acknowledged"
+                      type="checkbox"
+                      :disabled="change.pending"
+                    />
+                    I reviewed this change and its potential charges</label
+                  >
                   <div class="change-review-actions">
-                    <button type="button" class="html-deck-card-btn" :disabled="!change.acknowledged || change.pending || streaming" @click="reviewChange(change, true)">Approve change</button>
-                    <button type="button" class="html-deck-card-btn" :disabled="change.pending" @click="reviewChange(change, false)">Reject</button>
+                    <button
+                      type="button"
+                      class="html-deck-card-btn"
+                      :disabled="
+                        !change.acknowledged || change.pending || streaming
+                      "
+                      @click="reviewChange(change, true)"
+                    >
+                      Approve change
+                    </button>
+                    <button
+                      type="button"
+                      class="html-deck-card-btn"
+                      :disabled="change.pending"
+                      @click="reviewChange(change, false)"
+                    >
+                      Reject
+                    </button>
                   </div>
                 </template>
-                <button v-else-if="['accepted','inProgress','unknown'].includes(change.status)" type="button" class="html-deck-card-btn" :disabled="streaming" @click="sendQuestion(`Check GetOperationStatus for operationId ${change.operationId} and report its actual state.`)">Check operation</button>
+                <button
+                  v-else-if="
+                    ['accepted', 'inProgress', 'unknown'].includes(
+                      change.status,
+                    )
+                  "
+                  type="button"
+                  class="html-deck-card-btn"
+                  :disabled="streaming"
+                  @click="
+                    sendQuestion(
+                      `Check GetOperationStatus for operationId ${change.operationId} and report its actual state.`,
+                    )
+                  "
+                >
+                  Check operation
+                </button>
                 <p v-if="change.error" role="alert">{{ change.error }}</p>
               </details>
             </div>
 
             <!-- Streaming indicator -->
-            <div v-if="streaming" class="message-row message-row--ai">
+            <div v-if="streaming && (!streamFailure || streamBuffer || streamCharts.length)" class="message-row message-row--ai">
               <div class="ai-row">
                 <div class="ai-header">
-                  <div class="ai-avatar">AI</div>
+                  <AssistantAvatar :thinking="!streamFailure" :paused="documentIsHidden" />
                   <span v-if="streamIntent" class="stream-intent">
                     {{ streamIntent }}
                   </span>
@@ -1317,10 +1407,10 @@
                   ></div>
                   <div class="message-text" v-if="streamBuffer">
                     <span v-html="renderContent(streamBuffer)"></span>
-                    <span class="streaming-cursor"></span>
+                    <span v-if="!streamFailure" class="streaming-cursor"></span>
                   </div>
                   <div
-                    v-else-if="streamReasoning"
+                    v-else-if="streamReasoning && !streamFailure"
                     class="stream-reasoning-block"
                   >
                     <div class="reasoning-label">
@@ -1334,12 +1424,17 @@
                       ></div>
                     </div>
                   </div>
-                  <div class="message-text" v-else-if="!streamIntent">
+                  <div class="message-text" v-else-if="!streamIntent && !streamFailure">
                     <span class="thinking-dots thinking-dots--lg"
                       ><i></i><i></i><i></i
                     ></span>
                   </div>
                 </div>
+                <TurnFailureNotice
+                  v-if="streaming && streamFailure"
+                  :failure="streamFailure"
+                  :show-edit="false"
+                />
               </div>
             </div>
           </div>
@@ -1905,12 +2000,20 @@
                   { 'st-row--cooler-open': tc.expanded },
                 ]"
                 @click.stop="tc.expanded = !tc.expanded"
-                :title="`Cooling down ${tc.tool} (HTTP ${tc.status}) attempt ${tc.attempt}, waiting ${Math.round(tc.wait)}s`"
+                style="animation: none; transition: none"
+                :title="progressView(tc).detail"
+                role="button"
+                tabindex="0"
+                :aria-label="progressView(tc).title"
+                :aria-expanded="tc.expanded"
+                @keydown.enter.prevent="tc.expanded = !tc.expanded"
+                @keydown.space.prevent="tc.expanded = !tc.expanded"
               >
                 <svg
                   class="st-icon st-icon--cooler"
                   viewBox="0 0 16 16"
                   fill="none"
+                  aria-hidden="true"
                 >
                   <circle
                     cx="8"
@@ -1918,35 +2021,28 @@
                     r="6"
                     stroke="currentColor"
                     stroke-width="2"
-                    stroke-dasharray="6 4"
-                  >
-                    <animateTransform
-                      attributeName="transform"
-                      type="rotate"
-                      from="0 8 8"
-                      to="360 8 8"
-                      dur="1.4s"
-                      repeatCount="indefinite"
-                    />
-                  </circle>
+                  />
+                  <path
+                    :d="progressView(tc).phase === 'stopped' ? 'M6 5v6m4-6v6' : 'M8 4v4l3 2'"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                  />
                 </svg>
-                <span class="st-name"
-                  >Cooling down… {{ Math.round(tc.wait) }}s (attempt
-                  {{ tc.attempt }})</span
-                >
-                <span class="st-time">HTTP {{ tc.status }}</span>
+                <span class="st-name">{{ progressView(tc).title }}</span>
+                <span class="st-time">{{ progressView(tc).sidebarLabel }}</span>
                 <div v-if="tc.expanded" class="st-cooler-detail" @click.stop>
                   <div class="st-cooler-row">
                     <strong>Tool:</strong> {{ tc.tool }}
                   </div>
                   <div class="st-cooler-row">
-                    <strong>Status:</strong> HTTP {{ tc.status }}
+                    <strong>Status:</strong> {{ progressView(tc).badge }}
                   </div>
                   <div class="st-cooler-row">
-                    <strong>Attempt:</strong> {{ tc.attempt }} of 5
+                    <strong>Attempt:</strong> {{ tc.attempt > 0 ? tc.attempt : "Waiting for an earlier cooldown" }}
                   </div>
                   <div class="st-cooler-row">
-                    <strong>Wait:</strong> {{ Math.round(tc.wait) }}s
+                    {{ progressView(tc).detail }}
                   </div>
                   <div class="st-cooler-row st-cooler-url">
                     <strong>URL:</strong> <code>{{ tc.url }}</code>
@@ -2536,7 +2632,7 @@
                       ? "— triggers a run as soon as you save"
                       : "— just updates the schedule"
                     : newJobRunNow
-                      ? "— first result lands in its conversation within a minute"
+                      ? "— results appear in its conversation when the run finishes"
                       : "— first run waits one full interval"
                 }}</span>
               </span>
@@ -2582,17 +2678,24 @@ import hljs from "highlight.js/lib/core";
 import hljsJson from "highlight.js/lib/languages/json";
 import "highlight.js/styles/github-dark.css";
 import {
-    computed,
-    nextTick,
-    onBeforeUnmount,
-    onMounted,
-    reactive,
-    ref,
-    watch,
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
 } from "vue";
+import { createAssistantMessageStream } from "../assistantMessageStream.js";
+import { describeTurnFailure, terminalRecoveryState } from "../turnRecovery.js";
+import TurnFailureNotice from "./TurnFailureNotice.vue";
+import RequestProgressCard from "./RequestProgressCard.vue";
+import AssistantAvatar from "./AssistantAvatar.vue";
+import { JOB_TEMPLATES } from "../data/jobTemplates.js";
+import { createRequestProgress, describeRequestProgress, toolHttpStatus, toolResultSucceeded } from "../requestProgress.js";
 import {
-    maturityCategories,
-    pricingCategory,
+  maturityCategories,
+  pricingCategory,
 } from "../data/sidebarCategories.js";
 hljs.registerLanguage("json", hljsJson);
 
@@ -2625,6 +2728,7 @@ const streaming = computed(() =>
   runningSessions.has(currentSessionId.value || "__pending__"),
 );
 const streamBuffer = ref("");
+const streamFailure = ref(null);
 const activeTools = ref([]);
 // Per-session live-stream tool calls / charts. Keyed by sessionId (or the
 // "__pending__" sentinel before the server echoes the real id). This keeps
@@ -3051,6 +3155,7 @@ function flushText() {
 // "no bytes for N ms ⇒ dead" heuristic produces false positives that kill
 // healthy answers. We only reconcile once the client stream has actually ended.
 function onVisibilityChange() {
+  progressNow.value = Date.now();
   documentIsHidden.value = document.hidden;
   if (document.hidden) {
     flushText();
@@ -3091,6 +3196,7 @@ function onVisibilityChange() {
 // Backup trigger: some browsers (notably Firefox) don't fire visibilitychange
 // when a window is minimized/restored, but window focus always fires.
 function onWindowFocus() {
+  progressNow.value = Date.now();
   const sid = currentSessionId.value;
   if (sid) reconcileSessionAfterReturn(sid, "focus");
 }
@@ -3171,9 +3277,8 @@ async function reconcileSessionAfterReturn(sid, reason) {
 // generating and persists events to the on-disk session state as it goes. So
 // whenever the client's SSE dies (background-tab freeze, minimize, network
 // drop, page reload), the answer WILL appear in /api/sessions/{id}/messages —
-// we just have to wait for it and repaint. Note the turn-active probe is
-// useless here: ChatEndpoints removes the turn from ActiveTurns the moment the
-// SSE handler unwinds, seconds before the answer lands.
+// we wait for it and repaint. The owner-checked active gate and durable outcomes
+// distinguish a still-running turn from an error, timeout or explicit Stop.
 
 const normText = (s) =>
   String(s || "")
@@ -3213,8 +3318,33 @@ async function fetchPersistedTail(sid, normPrompt) {
         }
       }
     }
-    return { matched, answered, ansLen };
+    return {
+      matched,
+      exactMatch: !normPrompt || u === normPrompt,
+      answered,
+      ansLen,
+      userMessageCount: msgs.filter((message) => message.role === "user").length,
+    };
   } catch {
+    return null;
+  }
+}
+
+async function fetchTerminalRecoveryState(sid, tail) {
+  if (!tail?.exactMatch) return null;
+  try {
+    const [activeResponse, outcomesResponse] = await Promise.all([
+      fetch(`/api/sessions/${encodeURIComponent(sid)}/active`),
+      fetch(`/api/sessions/${encodeURIComponent(sid)}/outcomes`),
+    ]);
+    if (!activeResponse.ok || !outcomesResponse.ok) {
+      console.warn("Could not verify terminal turn status", activeResponse.status, outcomesResponse.status);
+      return null;
+    }
+    const [active, outcomes] = await Promise.all([activeResponse.json(), outcomesResponse.json()]);
+    return terminalRecoveryState(active.active, outcomes.outcomes, tail.userMessageCount);
+  } catch (error) {
+    console.warn("Could not verify terminal turn status", error?.name || "Error");
     return null;
   }
 }
@@ -3226,29 +3356,74 @@ async function fetchPersistedTail(sid, normPrompt) {
 // transcript from five independent pollers, which stacked contradictory
 // banners and left them stuck above real messages forever.
 const sessionNotice = ref(null); // { kind, text } | null
+const progressNow = ref(Date.now());
+let progressTimer = null;
+function progressView(progress) {
+  return describeRequestProgress(progress, progressNow.value);
+}
+const sessionNoticeText = computed(() => {
+  const notice = sessionNotice.value;
+  if (!notice?.progress) return notice?.text || "";
+  const view = progressView(notice.progress);
+  return `${view.title}. ${view.detail}`;
+});
+watch(
+  () => [...perSessionCoolers.values()].some((items) => items.length > 0)
+    || (sessionNotice.value?.progress?.deadline > progressNow.value),
+  (active) => {
+    if (active && !progressTimer) {
+      progressNow.value = Date.now();
+      progressTimer = setInterval(() => { progressNow.value = Date.now(); }, 1000);
+    } else if (!active && progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+    }
+  },
+);
 const sessionConsentActions = reactive(new Map());
-const activeConsentActions = computed(() => sessionConsentActions.get(currentSessionId.value) || []);
+const activeConsentActions = computed(
+  () => sessionConsentActions.get(currentSessionId.value) || [],
+);
 const sessionChanges = reactive(new Map());
-const activeChanges = computed(() => sessionChanges.get(currentSessionId.value) || []);
+const activeChanges = computed(
+  () => sessionChanges.get(currentSessionId.value) || [],
+);
 function rememberChange(sessionId, change) {
   if (!/^[a-f0-9]{32}$/.test(change?.operationId || "")) return;
   const changes = sessionChanges.get(sessionId) || [];
   if (changes.some((item) => item.operationId === change.operationId)) return;
-  sessionChanges.set(sessionId, [...changes, { ...change, acknowledged: false, pending: false, error: "" }]);
+  sessionChanges.set(sessionId, [
+    ...changes,
+    { ...change, acknowledged: false, pending: false, error: "" },
+  ]);
 }
 async function reviewChange(change, approve) {
   change.pending = true;
   change.error = "";
   try {
-    const response = await fetch(`/api/changes/${encodeURIComponent(change.operationId)}/${approve ? "approve" : "reject"}`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ acknowledgeCostImpact: change.acknowledged === true }),
-    });
+    const response = await fetch(
+      `/api/changes/${encodeURIComponent(change.operationId)}/${approve ? "approve" : "reject"}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          acknowledgeCostImpact: change.acknowledged === true,
+        }),
+      },
+    );
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || `Change request failed (${response.status})`);
+    if (!response.ok)
+      throw new Error(
+        result.error || `Change request failed (${response.status})`,
+      );
     change.status = approve ? result.result?.status || "unknown" : "rejected";
-    if (approve && result.result?.nextAction) change.costImpact = result.result.nextAction;
-  } catch (error) { change.error = error.message || "Unable to review this change."; }
-  finally { change.pending = false; }
+    if (approve && result.result?.nextAction)
+      change.costImpact = result.result.nextAction;
+  } catch (error) {
+    change.error = error.message || "Unable to review this change.";
+  } finally {
+    change.pending = false;
+  }
 }
 const consentActionLabels = {
   base: "Connect Azure",
@@ -3257,8 +3432,8 @@ const consentActionLabels = {
   licenses: "Grant license reporting access",
   chargeback: "Grant cost allocation access",
 };
-function setNotice(kind, text) {
-  sessionNotice.value = { kind, text };
+function setNotice(kind, text, progress = null) {
+  sessionNotice.value = { kind, text, progress };
 }
 function clearNotice(...kinds) {
   if (!sessionNotice.value) return;
@@ -3349,7 +3524,8 @@ function transcriptEndsWithNoAnswerMarker() {
   return (
     !!last &&
     last.role === "system" &&
-    (last.content === STOPPED_MARKER_TEXT ||
+    (last.terminalStatus ||
+      last.content === STOPPED_MARKER_TEXT ||
       last.content === NO_ANSWER_MARKER_TEXT)
   );
 }
@@ -3475,6 +3651,18 @@ async function tryRecoverPersistedAnswer(sid, promptText) {
           }
         }
         return true;
+      }
+      const terminal = await fetchTerminalRecoveryState(sid, tail);
+      if (terminal) {
+        if (!isVisible() || streaming.value) return false;
+        clearReconnectNotice();
+        messages.value.push({
+          role: "system",
+          content: terminal.text,
+          terminalStatus: terminal.status,
+          failure: terminal.failure,
+        });
+        return false;
       }
       // Still generating — show the (single, deduped) banner while the user is
       // looking. If they've navigated away, stand down (their view is theirs).
@@ -3617,8 +3805,21 @@ const buildNumber = ref("0");
 const buildBranch = ref("");
 const sidebarOpen = ref(true);
 const mobileSidebarOpen = ref(false);
+const menuButton = ref(null);
+const navigationMedia = window.matchMedia("(max-width: 900px)");
+const compactLayout = ref(navigationMedia.matches);
+const sidebarVisible = computed(() => compactLayout.value ? mobileSidebarOpen.value : sidebarOpen.value);
+function updateNavigationLayout(event) {
+  compactLayout.value = event.matches;
+  mobileSidebarOpen.value = false;
+}
+function closeMobileSidebar() {
+  if (!compactLayout.value || !mobileSidebarOpen.value) return;
+  mobileSidebarOpen.value = false;
+  menuButton.value?.focus();
+}
 function toggleSidebar() {
-  if (typeof window !== "undefined" && window.innerWidth <= 900) {
+  if (compactLayout.value) {
     mobileSidebarOpen.value = !mobileSidebarOpen.value;
   } else {
     sidebarOpen.value = !sidebarOpen.value;
@@ -3734,85 +3935,6 @@ function togglePane(key) {
 function toggleJobsPane() {
   togglePane("jobs");
 }
-// Ready-made jobs — clicking one prefills the form (still fully editable).
-// Kept deliberately concrete: these are the highest-value recurring asks.
-// Capacity templates lead — constrained GPU/VM capacity is the single most
-// common customer complaint, and hunt-then-act is this feature's sweet spot.
-const JOB_TEMPLATES = [
-  {
-    emoji: "📡",
-    label: "Check capacity of X",
-    name: "Capacity check: Standard_NC40ads_H100_v5",
-    interval: 15,
-    prompt:
-      "Check on-demand capacity and my quota for Standard_NC40ads_H100_v5 (replace with the VM size you're hunting) across all my subscriptions and all regions. Tell me exactly where it is deployable right now — region, subscription, quota headroom. If it's deployable nowhere, list the closest regions where only quota is missing. Read-only: do NOT create or reserve anything.",
-  },
-  {
-    emoji: "🎯",
-    label: "Reserve X when available",
-    name: "Reserve Standard_NC40ads_H100_v5 when available",
-    interval: 15,
-    prompt:
-      "Check quota and on-demand capacity for Standard_NC40ads_H100_v5 (replace with the VM size you want) across all my subscriptions and regions. IDEMPOTENCY FIRST: if a capacity reservation group named 'finops-capacity-crg' already exists in any region, do nothing and report what is already reserved. Otherwise, if the size is deployable AND I have quota headroom for it: secure it immediately by creating resource group 'finops-capacity' (if missing), capacity reservation group 'finops-capacity-crg', and an on-demand capacity reservation 'finops-reserve-1' with that size and capacity 1 in that region (ARM PUT). Then state exactly what was reserved, that it bills at the full VM rate while held, and that I should pause this job and delete the reservation (you'll generate the cleanup script) when done. If my RBAC blocks the write, say so. If nothing is deployable, list the closest regions with quota headroom.",
-  },
-  {
-    emoji: "⚡",
-    label: "1-min test",
-    name: "1-minute test",
-    interval: 1,
-    prompt:
-      "Report the current UTC timestamp and my current month-to-date Azure consumption in USD. One short sentence per run.",
-  },
-  {
-    emoji: "📊",
-    label: "Daily cost digest",
-    name: "Daily cost digest",
-    interval: 1440,
-    prompt:
-      "Summarize yesterday's Azure spend by service and subscription, compare it to the 7-day average, and call out anything unusual with likely root causes.",
-  },
-  {
-    emoji: "🚨",
-    label: "Anomaly watch",
-    name: "Cost anomaly watch",
-    interval: 60,
-    prompt:
-      "Compare today's spend rate so far against the same window over the past 7 days. Flag any service or resource group trending more than 20% above normal and identify the resources driving it.",
-  },
-  {
-    emoji: "💰",
-    label: "Budget guard",
-    name: "Budget guard",
-    interval: 1440,
-    prompt:
-      "Check every budget and the month-end forecast across all my subscriptions. Warn me if any subscription or resource group is projected to exceed its budget, with the current burn rate.",
-  },
-  {
-    emoji: "🧹",
-    label: "Idle resource sweep",
-    name: "Idle resource sweep",
-    interval: 10080,
-    prompt:
-      "Find idle and orphaned resources — unattached disks, unused public IPs, stopped-but-allocated VMs, empty App Service plans — estimate the monthly waste and generate a cleanup script for review.",
-  },
-  {
-    emoji: "💡",
-    label: "Advisor watch",
-    name: "Advisor cost watch",
-    interval: 1440,
-    prompt:
-      "Check for new Azure Advisor cost recommendations and summarize the top opportunities with estimated monthly savings, ranked by impact and effort.",
-  },
-  {
-    emoji: "↻",
-    label: "Retry last question",
-    name: "Retry last question",
-    interval: 60,
-    retryLast: true,
-    prompt:
-      "Retry the latest user question from this conversation using fresh live data, and report what changed since the previous run.",
-  },
-];
 const selectedTemplate = ref("");
 function applyTemplate(t) {
   selectedTemplate.value = t.label;
@@ -4276,6 +4398,7 @@ async function newSession() {
   clearing.value = true;
   messages.value = [];
   streamBuffer.value = "";
+  streamFailure.value = null;
   clearNotice();
   // Drop only THIS view's live buckets (current session + the "__pending__"
   // sentinel) — a session still streaming in the background needs its bucket
@@ -4357,6 +4480,7 @@ async function reloadSessionTranscript(sessionId) {
   // tool list is whole when the user switches back.
   streamFollowUp.value = null;
   streamBuffer.value = "";
+  streamFailure.value = null;
   streamIntent.value = "";
   streamReasoning.value = "";
   // A fresh view starts with no transient status pill — attachToServerTurn
@@ -4377,7 +4501,8 @@ async function reloadSessionTranscript(sessionId) {
     if (res.ok) {
       const j = await res.json();
       sessionChanges.set(sessionId, []);
-      for (const change of j.pendingChanges || []) rememberChange(sessionId, change);
+      for (const change of j.pendingChanges || [])
+        rememberChange(sessionId, change);
       const restored = (j.messages || []).map((m) => {
         // Re-derive the follow-up buttons from the persisted SuggestFollowUp
         // tool result — live turns keep them on the committed message, so a
@@ -4397,16 +4522,21 @@ async function reloadSessionTranscript(sessionId) {
             } catch {}
           }
         }
+        const failure = m.terminalStatus && m.terminalStatus !== "stopped"
+          ? describeTurnFailure(m.content, m.terminalStatus)
+          : null;
         return {
           role: m.role,
-          content: m.content || "",
+          content: failure?.text || m.content || "",
+          terminalStatus: m.terminalStatus,
+          failure,
           toolCalls: (m.toolCalls || []).map((tc) => ({
             id: tc.id,
             tool: tc.name,
             args: tc.args || "",
             result: tc.result || null,
             error: tc.error || null,
-            success: tc.success !== false,
+            success: toolResultSucceeded(tc.success, tc.result),
             intent: tc.intent || "",
             durationMs: null,
             done: true,
@@ -4912,6 +5042,7 @@ watch(
 );
 
 onMounted(async () => {
+  navigationMedia.addEventListener("change", updateNavigationLayout);
   document.addEventListener("click", dismissPopover);
   document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("focus", onWindowFocus);
@@ -4940,8 +5071,8 @@ onMounted(async () => {
   });
   // Dev helper: window.__simulateCool(waitSec?) injects a synthetic ghost
   // "cooling down" row in the current session's tool sidebar so you can
-  // verify the throttle UI without forcing a real 429. Removes itself
-  // after the wait elapses, just like a real cooler. Dev-build only —
+  // verify the throttle UI without forcing a real 429. Uses the same deadline
+  // model as a real request. Dev-build only —
   // gated on Vite's import.meta.env.DEV so production bundles don't ship it.
   if (import.meta.env.DEV) {
     window.__simulateCool = (wait = 15, status = 429) => {
@@ -4951,12 +5082,14 @@ onMounted(async () => {
         _uid: `c-sim-${Date.now()}`,
         _key: `sim|${Date.now()}`,
         _isCooler: true,
-        tool: "azure",
-        url: "https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CostManagement/query?api-version=2025-03-01",
-        attempt: 1,
-        wait,
-        status,
-        ts: Date.now(),
+        ...createRequestProgress({
+          tool: "azure",
+          url: "/synthetic/cost-query",
+          attempt: 1,
+          waitSeconds: wait,
+          status,
+          willRetry: true,
+        }, Date.now(), "Synthetic cost request"),
         expanded: false,
         done: false,
       };
@@ -5140,6 +5273,7 @@ async function clearMessages() {
   abortClientStreams("discard");
   messages.value = [];
   streamBuffer.value = "";
+  streamFailure.value = null;
   perSessionToolCalls.clear();
   perSessionCharts.clear();
   streamFollowUp.value = null;
@@ -5333,15 +5467,14 @@ function _graph_label(path) {
 }
 
 function isThrottledTool(tc) {
-  return tc?.done && typeof tc.result === "string" && tc.result.startsWith("HTTP 429");
+  return tc?.done && toolHttpStatus(tc.result) === 429;
 }
 
 function friendlyToolLabel(tc) {
   if (!tc) return "";
   // Live 429 backoff — set by cooling_down SSE event mid-flight.
   if (tc.cooling && !tc.done) {
-    const w = Math.round(tc.cooling.wait || 0);
-    return `Cooling down… ${w}s`;
+    return progressView(tc.cooling).title;
   }
   // Throttled HTTP calls: the tool itself succeeded (returned a string), but the
   // body starts with "HTTP 429 …". Show a friendly status instead of the tool name
@@ -5349,6 +5482,8 @@ function friendlyToolLabel(tc) {
   if (isThrottledTool(tc)) {
     return "Throttled (HTTP 429)";
   }
+  const httpStatus = toolHttpStatus(tc.result);
+  if (tc.done && httpStatus >= 400) return `Request failed (HTTP ${httpStatus})`;
   const tool = tc.tool;
   let args = tc.args;
   if (args && typeof args === "string") {
@@ -5475,7 +5610,11 @@ const maturityScores = reactive({
 });
 
 function maturityOverall(level) {
-  const scores = (maturityScores[level] || []).filter((score) => Number.isFinite(score.score) && (!score.status || score.status === "observed"));
+  const scores = (maturityScores[level] || []).filter(
+    (score) =>
+      Number.isFinite(score.score) &&
+      (!score.status || score.status === "observed"),
+  );
   if (!scores || scores.length === 0) return -1;
   return Math.round(
     scores.reduce((sum, s) => sum + s.score, 0) / scores.length,
@@ -5484,7 +5623,11 @@ function maturityOverall(level) {
 
 function maturityNumeric(level) {
   const all = maturityScores[level] || [];
-  const scores = all.filter((score) => Number.isFinite(score.score) && (!score.status || score.status === "observed"));
+  const scores = all.filter(
+    (score) =>
+      Number.isFinite(score.score) &&
+      (!score.status || score.status === "observed"),
+  );
   if (scores.length === 0) return "N/A";
   const avg = scores.reduce((sum, s) => sum + s.score, 0) / scores.length;
   return `${avg.toFixed(1)} (${scores.length}/${all.length})`;
@@ -6879,7 +7022,9 @@ function pollMountedChartSizes() {
 }
 
 onBeforeUnmount(() => {
+  navigationMedia.removeEventListener("change", updateNavigationLayout);
   disposeMountedCharts();
+  if (progressTimer) clearInterval(progressTimer);
   if (jobsTickTimer) clearInterval(jobsTickTimer);
   if (jobsPollTimer) clearInterval(jobsPollTimer);
   stopChartSizePolling();
@@ -7290,6 +7435,16 @@ async function sendPrompt(text) {
   send();
 }
 
+async function editSavedQuestion(messageIndex) {
+  if (streaming.value || clearing.value || currentJob.value || input.value.trim()) return;
+  const question = messages.value.slice(0, messageIndex).findLast((message) => message.role === "user");
+  if (!question) return;
+  input.value = question.content;
+  await nextTick();
+  autoGrowInput();
+  inputEl.value?.focus();
+}
+
 async function requestAnalyze() {
   // Wait for any in-flight uploads to finish so the prompt always sees the file.
   if (!(await waitForAttachmentUploads())) return;
@@ -7414,6 +7569,7 @@ async function send() {
     return cur === null || cur === streamingId;
   };
   streamBuffer.value = "";
+  streamFailure.value = null;
   activeTools.value = [];
   forceScrollToBottom(true);
 
@@ -7432,11 +7588,7 @@ async function send() {
   let charts = perSessionCharts.get(streamingId);
   let hasDeltas = false;
   let wasBusy = false;
-  // Snapshot of the most recent tool_start narration wipe. If the turn ends
-  // and NOTHING streamed after the last tool (i.e. the "narration" we wiped
-  // was actually the final answer — e.g. answer text → late tool call → end),
-  // commit restores this so the answer can never be lost from the view.
-  let lastWipedText = "";
+  const assistantMessages = createAssistantMessageStream();
   // Artifacts produced by THIS stream. Kept stream-local (not in the shared
   // htmlReady/scriptReady refs) so a deck/script finishing in a background
   // session can't pop into whichever conversation is currently in view —
@@ -7444,6 +7596,7 @@ async function send() {
   let streamHtml = null;
   let streamScript = null;
   let streamFollowUpForTurn = null;
+  let failureForTurn = null;
 
   // === TIMING HOOKS ===
   // Captures every meaningful moment of the turn so we can build a flat
@@ -7527,7 +7680,9 @@ async function send() {
         prompt,
         model: selectedModel.value,
         sessionId: currentSessionId.value || undefined,
-        fileIds: [...attachments.value, ...consumedImages].filter((attachment) => attachment.fileId && !attachment.error).map((attachment) => attachment.fileId),
+        fileIds: [...attachments.value, ...consumedImages]
+          .filter((attachment) => attachment.fileId && !attachment.error)
+          .map((attachment) => attachment.fileId),
       }),
       signal: streamAbortController.signal,
     });
@@ -7727,7 +7882,23 @@ async function send() {
             intentAnimTimer = null;
             streamIntent.value = "";
             streamReasoning.value = "";
-            enqueueText(data.content);
+            {
+              const completeText = assistantMessages.append(
+                data.content,
+                data.messageId,
+              );
+              if (isActiveView()) {
+                const displayedAndQueued = streamBuffer.value + pendingText;
+                if (completeText.startsWith(displayedAndQueued)) {
+                  enqueueText(completeText.slice(displayedAndQueued.length));
+                } else {
+                  if (textAnimFrame) cancelAnimationFrame(textAnimFrame);
+                  textAnimFrame = null;
+                  pendingText = "";
+                  streamBuffer.value = completeText;
+                }
+              }
+            }
             hasDeltas = true;
             break;
 
@@ -7762,58 +7933,27 @@ async function send() {
             break;
 
           case "message":
-            if (data.content) {
-              if (isActiveView()) clearNotice("cost_retry");
-              if (textAnimFrame) {
-                cancelAnimationFrame(textAnimFrame);
+            if (typeof data.content === "string" && data.content.trim()) {
+              const completeText = assistantMessages.complete(
+                data.content,
+                data.messageId,
+              );
+              if (isActiveView()) {
+                if (textAnimFrame) cancelAnimationFrame(textAnimFrame);
                 textAnimFrame = null;
+                pendingText = "";
+                streamBuffer.value = completeText;
+                clearInterval(intentAnimTimer);
+                intentAnimTimer = null;
+                streamIntent.value = "";
+                streamReasoning.value = "";
               }
-              pendingText = "";
-              streamBuffer.value = data.content;
               hasDeltas = true;
-              clearInterval(intentAnimTimer);
-              intentAnimTimer = null;
-              streamIntent.value = "";
-              streamReasoning.value = "";
             }
             break;
 
           case "tool_start":
-            // Text streamed BEFORE a tool call is usually mid-turn narration
-            // ("I'm rerunning…") — not the final answer — so we wipe it and let
-            // the real answer stream after the last tool completes. EXCEPT for
-            // post-answer tools: the system prompt makes the model call
-            // SuggestFollowUp (and often RenderChart/presentation tools) AFTER
-            // the final answer text has fully streamed. Wiping on those deleted
-            // the just-delivered answer — the user watched their table render
-            // and then vanish, leaving only the follow-up chip (the persisted
-            // transcript still had it, which is why reloads brought it back).
-            {
-              const postAnswerTools = new Set([
-                "SuggestFollowUp",
-                "ReportMaturityScore",
-                "PublishFAQ",
-              ]);
-              if (hasDeltas && !postAnswerTools.has(data.tool)) {
-                console.log(
-                  "[tool_start wipe] streamBuffer length before wipe=",
-                  streamBuffer.value.length,
-                  "first 60=",
-                  streamBuffer.value.slice(0, 60),
-                );
-                if (textAnimFrame) {
-                  cancelAnimationFrame(textAnimFrame);
-                  textAnimFrame = null;
-                }
-                pendingText = "";
-                // Keep the wiped text — if the turn ends with NO further deltas
-                // (the "narration" WAS the answer), commit restores it instead
-                // of losing the answer.
-                lastWipedText = streamBuffer.value;
-                streamBuffer.value = "";
-                hasDeltas = false;
-              }
-            }
+            assistantMessages.toolBoundary();
             activeTools.value = [...activeTools.value, data.tool];
             {
               const existingIdx = toolCalls.findIndex((t) => t.id === data.id);
@@ -7884,7 +8024,7 @@ async function send() {
               const tc = toolCalls.find((t) => t.id === data.id);
               if (tc) {
                 tc.done = true;
-                tc.success = data.success;
+                tc.success = toolResultSucceeded(data.success, data.result);
                 tc.durationMs = data.durationMs;
                 tc.result = data.result || null;
                 tc.error = data.error || null;
@@ -7893,6 +8033,14 @@ async function send() {
             }
             perSessionToolCalls.set(streamingId, [...toolCalls]);
             toolCalls = perSessionToolCalls.get(streamingId);
+            perSessionCoolers.set(
+              streamingId,
+              (perSessionCoolers.get(streamingId) || []).filter(
+                (item) => item.toolCallId !== data.id,
+              ),
+            );
+            if (isActiveView() && sessionNotice.value?.progress?.toolCallId === data.id)
+              clearNotice("cost_retry", "request_retry", "request_wait");
             if (
               data.tool === "SuggestFollowUp" &&
               data.success &&
@@ -7916,78 +8064,35 @@ async function send() {
             break;
 
           case "cooling_down": {
-            if (data.status === 429 && typeof data.willRetry === "boolean") {
-              const retryAt = Date.parse(data.retryAtUtc || "");
-              if (Number.isFinite(retryAt) && isActiveView()) {
-                const retryTime = new Date(retryAt).toLocaleTimeString(undefined, {
-                  hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short",
-                });
-                if (data.willRetry) {
-                  setNotice("cost_retry", `Azure Cost Management is throttling. Waiting until ${retryTime}, then retrying automatically.`);
-                } else {
-                  setNotice("cost_cooldown", `Azure Cost Management is cooling down. No further automatic retries. Retry after ${retryTime}.`);
-                }
-              }
-            }
-            // 429/5xx backoff in flight. Insert/refresh a separate ephemeral
-            // ghost row in perSessionCoolers — NOT a label swap on the real
-            // tool. The ghost has its own animated background and an
-            // expand-to-detail panel showing the throttled URL. It auto-
-            // removes after the wait elapses (or sooner if tool_done arrives).
+            progressNow.value = Date.now();
+            const pendingTools = toolCalls.filter((tool) => !tool.done);
+            const inFlight = pendingTools.find((tool) => tool.id === data.toolCallId)
+              || (pendingTools.length === 1 ? pendingTools[0] : null);
+            const service = inFlight
+              ? friendlyToolLabel({ ...inFlight, cooling: null })
+              : data.tool || "Service";
+            const progress = createRequestProgress(data, progressNow.value, service);
+            progress.toolCallId ||= inFlight?.id || null;
             const list = perSessionCoolers.get(streamingId) || [];
-            const key = `${data.tool || "http"}|${data.url || ""}`;
+            const key = `${progress.toolCallId || progress.tool.replace(/ \(slow\)$/, "")}|${progress.url}`;
             const existing = list.find((c) => c._key === key);
             if (existing) {
-              existing.attempt = data.attempt;
-              existing.wait = data.waitSeconds;
-              existing.status = data.status;
-              existing.ts = Date.now();
-              if (existing._timer) clearTimeout(existing._timer);
-              existing._timer = setTimeout(
-                () => {
-                  const arr = perSessionCoolers.get(streamingId) || [];
-                  perSessionCoolers.set(
-                    streamingId,
-                    arr.filter((x) => x._uid !== existing._uid),
-                  );
-                },
-                (data.waitSeconds || 5) * 1000 + 500,
-              );
-              perSessionCoolers.set(streamingId, [...list]);
+              Object.assign(existing, progress);
             } else {
-              const cooler = {
+              list.push({
                 _uid: `c-${Date.now()}-${crypto.randomUUID().slice(0, 4)}`,
                 _key: key,
                 _isCooler: true,
-                tool: data.tool || "http",
-                url: data.url || "",
-                attempt: data.attempt,
-                wait: data.waitSeconds,
-                status: data.status,
-                ts: Date.now(),
+                ...progress,
                 expanded: false,
                 done: false,
-              };
-              cooler._timer = setTimeout(
-                () => {
-                  const arr = perSessionCoolers.get(streamingId) || [];
-                  perSessionCoolers.set(
-                    streamingId,
-                    arr.filter((x) => x._uid !== cooler._uid),
-                  );
-                },
-                (data.waitSeconds || 5) * 1000 + 500,
-              );
-              list.push(cooler);
-              perSessionCoolers.set(streamingId, [...list]);
+              });
             }
-            // Legacy label swap on the in-flight tool — kept for accessibility.
-            const inFlight = [...toolCalls].reverse().find((t) => !t.done);
+            perSessionCoolers.set(streamingId, [...list]);
+            if (isActiveView())
+              setNotice(progress.status === 0 ? "request_wait" : progress.willRetry ? "cost_retry" : "cost_cooldown", "", progress);
             if (inFlight) {
-              inFlight.cooling = {
-                attempt: data.attempt,
-                wait: data.waitSeconds,
-              };
+              inFlight.cooling = progress;
               perSessionToolCalls.set(streamingId, [...toolCalls]);
               toolCalls = perSessionToolCalls.get(streamingId);
             }
@@ -8057,9 +8162,15 @@ async function send() {
             break;
 
           case "consent_required": {
-            const requested = new Set((data.actions || []).map((action) => action.href));
-            const actions = Object.entries(consentActionLabels).filter(([tier]) => requested.has(`/auth/microsoft?tier=${tier}`))
-              .map(([tier, label]) => ({ label, href: `/auth/microsoft?tier=${tier}` }));
+            const requested = new Set(
+              (data.actions || []).map((action) => action.href),
+            );
+            const actions = Object.entries(consentActionLabels)
+              .filter(([tier]) => requested.has(`/auth/microsoft?tier=${tier}`))
+              .map(([tier, label]) => ({
+                label,
+                href: `/auth/microsoft?tier=${tier}`,
+              }));
             sessionConsentActions.set(streamingId, actions);
             break;
           }
@@ -8069,7 +8180,12 @@ async function send() {
             break;
 
           case "error":
-            streamBuffer.value += `\n**Error:** ${data.message}`;
+            failureForTurn = describeTurnFailure(data.message, data.code === "empty_result" ? "empty" : "error");
+            if (isActiveView()) {
+              flushText();
+              streamFailure.value = failureForTurn;
+              scrollToBottom();
+            }
             break;
 
           case "timing":
@@ -8080,23 +8196,14 @@ async function send() {
     }
 
     // Flush any remaining animated text before saving
-    flushText();
-
-    // Restore a wiped answer: if the last text on screen was wiped by a late
-    // tool_start and no new deltas followed, the wiped text WAS the answer.
-    if (!streamBuffer.value.trim() && lastWipedText.trim()) {
-      console.log(
-        "[commit restore] turn ended with empty buffer; restoring wiped text len=",
-        lastWipedText.length,
-      );
-      streamBuffer.value = lastWipedText;
-    }
+    if (isActiveView()) flushText();
 
     // Clean up final message: strip transient thinking lines only. Do not try
     // to "repair" punctuation: replacing every `.<uppercase>` corrupts valid
     // Azure identifiers (for example MDE.Linux), versions, and hostnames, and
     // can split an otherwise valid markdown table into raw pipe text.
-    const clean = streamBuffer.value
+    const clean = assistantMessages
+      .text()
       .replace(/\n*\*[A-Z][^*]{3,60}\.{3}\*\n*/g, "\n")
       .replace(/^\n+/, "")
       .trim();
@@ -8124,6 +8231,7 @@ async function send() {
     let recoveredEmptyTerminal = false;
     if (
       !hasRenderableAnswer &&
+      !failureForTurn &&
       isActiveView() &&
       streamingId &&
       streamingId !== "__pending__"
@@ -8142,7 +8250,7 @@ async function send() {
       }
     }
     if (isActiveView()) {
-      if (!hasRenderableAnswer && !recoveredEmptyTerminal && !wasBusy) {
+      if (!hasRenderableAnswer && !failureForTurn && !recoveredEmptyTerminal && !wasBusy) {
         // Turn ended with nothing to render. Pushing the empty bubble here is
         // what makes it look like the app swallowed the question — the single
         // most-reported symptom. Say it plainly instead so the user can retry.
@@ -8161,6 +8269,15 @@ async function send() {
         );
         messages.value.push(msgObj);
       }
+      if (failureForTurn) {
+        messages.value.push({
+          role: "system",
+          content: failureForTurn.text,
+          terminalStatus: "error",
+          failure: failureForTurn,
+          toolCalls: hasRenderableAnswer ? [] : msgObj.toolCalls,
+        });
+      }
     }
     window.__trackAppInsightsEvent?.("chat.stream.done", {
       sessionId: streamingId,
@@ -8169,7 +8286,7 @@ async function send() {
       toolCount: String(toolCalls.length),
       committedToView: String(isActiveView()),
       hadDeltas: String(hasDeltas),
-      renderable: String(hasRenderableAnswer || recoveredEmptyTerminal),
+      renderable: String(hasRenderableAnswer || recoveredEmptyTerminal || !!failureForTurn),
     });
   } catch (err) {
     // Was this abort OUR zombie-recovery (frozen background tab) rather than
@@ -8305,9 +8422,10 @@ async function send() {
     }
     perSessionCoolers.delete(streamingId);
     if (isActiveView()) {
-      clearNotice("cost_retry");
+      clearNotice("cost_retry", "request_retry", "request_wait");
       flushText();
       streamBuffer.value = "";
+      streamFailure.value = null;
       activeTools.value = [];
       streamFollowUp.value = null;
       streamIntent.value = "";
@@ -8379,6 +8497,7 @@ async function send() {
 
 /* ── Layout shell ── */
 .chat-view {
+  --portal-header-height: 40px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -8398,7 +8517,7 @@ async function send() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 40px;
+  height: var(--portal-header-height);
   background: linear-gradient(90deg, #005a9e 0%, #0078d4 55%, #0098e0 100%);
   color: #fff;
   padding: 0 12px;
@@ -8498,6 +8617,9 @@ async function send() {
 }
 .portal-burger:hover {
   background: rgba(255, 255, 255, 0.15);
+}
+.sidebar-backdrop {
+  display: none;
 }
 .portal-title {
   font-size: 14px;
@@ -10423,13 +10545,41 @@ async function send() {
   color: #323130;
   font-size: 13px;
 }
-.change-review summary { cursor: pointer; font-weight: 600; }
-.change-review-target { margin: 12px 0; overflow-wrap: anywhere; }
-.change-review pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
-.change-review p { margin: 10px 0; line-height: 1.5; }
-.change-review label { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
-.change-review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.change-review button:disabled { opacity: 0.55; cursor: not-allowed; }
+.change-review summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.change-review-target {
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.change-review pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.change-review p {
+  margin: 10px 0;
+  line-height: 1.5;
+}
+.change-review label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.5;
+}
+.change-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.change-review button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .bubble--user {
   max-width: 80%;
   border-radius: 8px;
@@ -10447,19 +10597,6 @@ async function send() {
   max-width: 100%;
   width: 100%;
   min-width: 0;
-}
-.ai-avatar {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: #323130;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 .agent-lottie {
   flex-shrink: 0;
@@ -12794,14 +12931,15 @@ async function send() {
 @media (max-width: 900px) {
   .sidebar {
     position: fixed;
-    top: 48px;
+    top: var(--portal-header-height);
     left: 0;
     bottom: 0;
     width: 80vw;
     max-width: 320px;
     z-index: 150;
     background: #fff;
-    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.18);
+    box-shadow: none;
+    visibility: hidden;
     opacity: 1;
     border-right: 1px solid #e1dfdd;
     transform: translateX(-100%);
@@ -12815,11 +12953,21 @@ async function send() {
     box-shadow: none;
   }
   .sidebar--mobile-open {
+    visibility: visible;
     transform: translateX(0);
     box-shadow: 2px 0 12px rgba(0, 0, 0, 0.18);
   }
   .chat-view--hidden .sidebar {
     transition: none;
+  }
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: var(--portal-header-height) 0 0;
+    z-index: 140;
+    border: 0;
+    background: rgba(0, 0, 0, 0.15);
+    cursor: pointer;
   }
   .tools-sidebar {
     display: none;
