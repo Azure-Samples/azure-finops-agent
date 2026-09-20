@@ -12,7 +12,7 @@ public static class ChartTools
     public static IEnumerable<AIFunction> Create(ILogger? logger = null)
     {
         _logger = logger;
-        yield return AIFunctionFactory.Create(
+        yield return new ChartContractFunction(AIFunctionFactory.Create(
             (
                 [Description(@"Chart type:
 • bar — compare discrete categories side-by-side.
@@ -30,8 +30,8 @@ Single series — ALWAYS use the key 'value' for the numeric (do NOT name it aft
   [{""name"":""A"",""value"":100},{""name"":""B"",""value"":200}]
 Multi-series (grouped bar/line) — one extra key per series:
   [{""name"":""D2s_v5"",""East US"":70,""West Europe"":84},{""name"":""D4s_v5"",""East US"":140,""West Europe"":168}]")] string data,
-                [Description("X-axis label (optional)")] string? xAxisName,
-                [Description("Y-axis label (optional)")] string? yAxisName
+                [Description("X-axis label (optional)")] string? xAxisName = null,
+                [Description("Y-axis label (optional)")] string? yAxisName = null
             ) =>
             {
                 _logger?.LogInformation("RenderChart called: type={Type} title={Title} seriesName={SeriesName} xAxis={XAxis} yAxis={YAxis} dataLen={DataLen}",
@@ -40,7 +40,7 @@ Multi-series (grouped bar/line) — one extra key per series:
                 return JsonSerializer.Serialize(new { type, title, seriesName, data, xAxisName, yAxisName });
             },
             "RenderChart",
-            "Render a chart from scoped, aggregated evidence already returned by the query tools. Select only the requested categories, time window and series; do not copy full API objects or re-query merely to chart them. Compute totals before top-N selection and disclose omitted/partial coverage. This renderer does not fetch or filter source data.");
+            "Render a chart from scoped, aggregated evidence already returned by the query tools. The chart-kind parameter is named type, not chart. Select only the requested categories, time window and series; do not copy full API objects or re-query merely to chart them. Compute totals before top-N selection and disclose omitted/partial coverage. This renderer does not fetch or filter source data."));
 
         yield return AIFunctionFactory.Create(
             (
@@ -70,6 +70,37 @@ WORLD MAP — effectScatter on geo (e.g. Azure region pricing):
 - Azure region [lon, lat] coordinates: src/Dashboard/AI/Tools/Resources/world-map-coordinates.json (auto-loaded). Approximate fallbacks: eastus≈[-79,37], westeurope≈[5,52], swedencentral≈[18,59], japaneast≈[140,36], australiaeast≈[151,-34].
 - Non-pricing maps: uniform blue #0078D4 dots, symbolSize:10, no visualMap.");
 
+    }
+
+    private sealed class ChartContractFunction(AIFunction inner) : DelegatingAIFunction(inner)
+    {
+        protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
+        {
+            static string? Text(object? value) => value switch
+            {
+                string text => text,
+                JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
+                _ => null
+            };
+            arguments.TryGetValue("type", out var canonical);
+            arguments.TryGetValue("chart", out var legacy);
+            var type = Text(canonical);
+            var alias = Text(legacy);
+            if (type is not null && alias is not null && !type.Equals(alias, StringComparison.OrdinalIgnoreCase))
+                return Reject("RenderChart received conflicting type and chart values. Use only the type parameter.");
+            type = (type ?? alias)?.Trim().ToLowerInvariant();
+            if (type is not ("bar" or "horizontal_bar" or "line" or "pie" or "scatter" or "funnel" or "race"))
+                return Reject("RenderChart requires type: bar, horizontal_bar, line, pie, scatter, funnel or race.");
+            var normalized = new AIFunctionArguments(arguments) { ["type"] = type };
+            normalized.Remove("chart");
+            return base.InvokeCoreAsync(normalized, cancellationToken);
+        }
+
+        private static ValueTask<object?> Reject(string message)
+        {
+            _logger?.LogWarning("Chart input rejected: {Reason}", message);
+            return ValueTask.FromResult<object?>("Error: " + message);
+        }
     }
 
     private static void ValidateAdvancedOptions(string options)

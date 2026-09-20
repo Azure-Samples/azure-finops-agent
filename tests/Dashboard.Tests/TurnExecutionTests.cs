@@ -78,4 +78,42 @@ public sealed class TurnExecutionTests
         turn.ConfirmTerminal();
         Assert.True(await turn.FinishAsync());
     }
+
+    [Fact]
+    public async Task SdkRejectionBeforeCallbackIsRecordedExactlyOnce()
+    {
+        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
+        try
+        {
+            turn.AdmitTool("rejected-call", "RenderChart");
+            turn.RecordUndispatchedToolFailure("rejected-call");
+            turn.RecordUndispatchedToolFailure("rejected-call");
+            turn.RecordUndispatchedToolFailure("unknown-call");
+            Assert.Equal(1, turn.ToolsCompleted);
+            Assert.Equal(1, turn.ToolsFailed);
+            var evidence = Assert.Single(turn.ToolEvidence);
+            Assert.Equal("RenderChart", evidence.Name);
+            Assert.False(evidence.Success);
+            Assert.False(evidence.Fresh);
+            Assert.Throws<OperationCanceledException>(() => turn.AcquireTool(101, "rejected-call"));
+        }
+        finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
+    }
+
+    [Fact]
+    public async Task SdkCompletionDoesNotDoubleCountAnAcquiredCallback()
+    {
+        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
+        try
+        {
+            turn.AdmitTool("callback-call", "QueryAzure");
+            using (turn.AcquireTool(101, "callback-call"))
+                turn.RecordTool(false);
+            turn.RecordUndispatchedToolFailure("callback-call");
+            Assert.Equal(1, turn.ToolsCompleted);
+            Assert.Equal(1, turn.ToolsFailed);
+            Assert.Empty(turn.ToolEvidence);
+        }
+        finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
+    }
 }

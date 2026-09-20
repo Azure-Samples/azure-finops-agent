@@ -199,6 +199,59 @@ public sealed class RuntimeProtocolTests
         }
     }
 
+    [Fact]
+    public async Task RuntimeDeliversAChartUsingTheRetainedAliasContract()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "finops-chart-protocol-" + Guid.NewGuid().ToString("N"));
+        var calls = 0;
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var server = builder.Build();
+        server.MapPost("/v1/responses", async context =>
+        {
+            using var body = await JsonDocument.ParseAsync(context.Request.Body);
+            var streaming = body.RootElement.TryGetProperty("stream", out var stream) && stream.ValueKind == JsonValueKind.True;
+            await WriteResponse(context.Response, Interlocked.Increment(ref calls) == 1, streaming, "RenderChart",
+                """{"chart":"bar","title":"Synthetic chart","seriesName":"Count","data":"[[\"A\",10],[\"B\",20]]"}""");
+        });
+        await server.StartAsync();
+        try
+        {
+            await using var client = new CopilotClient(new CopilotClientOptions
+            {
+                Mode = CopilotClientMode.Empty, BaseDirectory = root, UseLoggedInUser = false
+            });
+            await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            var config = new SessionConfig
+            {
+                SessionId = Guid.NewGuid().ToString(), Model = "synthetic-test-model", Streaming = true, WorkingDirectory = root,
+                Provider = new ProviderConfig { Type = "openai", BaseUrl = server.Urls.Single() + "/v1/", ApiKey = "synthetic-test-only", WireApi = "responses" }
+            };
+            config.Tools = [new ProtectedTool(ChartTools.Create().Single(tool => tool.Name == "RenderChart"), 101, config.SessionId)];
+            RuntimePolicy.Apply(config);
+            await using var session = await client.CreateSessionAsync(config);
+            Assert.True(TurnExecution.TryBegin(session.SessionId, 101, session, out var turn));
+            try
+            {
+                await session.SendAsync(new MessageOptions { Prompt = "Render the two synthetic counts." });
+                await turn.Terminal.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                var completed = Assert.Single((await session.GetEventsAsync()).OfType<ToolExecutionCompleteEvent>());
+                Assert.True(completed.Data.Success);
+                using var chart = JsonDocument.Parse(completed.Data.Result!.Content!);
+                Assert.Equal("bar", chart.RootElement.GetProperty("type").GetString());
+                Assert.Equal(0, turn.ToolsFailed);
+                Assert.True(turn.HasUserOutput);
+            }
+            finally { await turn.FinishAsync(); }
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     private sealed class InvocationProbe(AIFunction inner) : DelegatingAIFunction(inner)
     {
         protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
@@ -212,11 +265,11 @@ public sealed class RuntimeProtocolTests
         }
     }
 
-    private static async Task WriteResponse(HttpResponse response, bool toolCall, bool streaming)
+    private static async Task WriteResponse(HttpResponse response, bool toolCall, bool streaming, string toolName = "ApprovedRead", string arguments = "{}")
     {
         const string responseId = "resp_synthetic";
         object item = toolCall
-            ? new { id = "fc_synthetic", type = "function_call", call_id = "call_synthetic", name = "ApprovedRead", arguments = "{}", status = "completed" }
+            ? new { id = "fc_synthetic", type = "function_call", call_id = "call_synthetic", name = toolName, arguments, status = "completed" }
             : new { id = "msg_synthetic", type = "message", role = "assistant", status = "completed", content = new[] { new { type = "output_text", text = "Synthetic result", annotations = Array.Empty<object>() } } };
         if (!streaming)
         {
@@ -236,7 +289,7 @@ public sealed class RuntimeProtocolTests
         await Event(response, "response.created", new { type = "response.created", response = new { id = responseId, status = "in_progress", output = Array.Empty<object>() } });
         await Event(response, "response.output_item.added", new { type = "response.output_item.added", output_index = 0, item });
         if (toolCall)
-            await Event(response, "response.function_call_arguments.done", new { type = "response.function_call_arguments.done", item_id = "fc_synthetic", output_index = 0, arguments = "{}" });
+            await Event(response, "response.function_call_arguments.done", new { type = "response.function_call_arguments.done", item_id = "fc_synthetic", output_index = 0, arguments });
         else
         {
             await Event(response, "response.content_part.added", new { type = "response.content_part.added", item_id = "msg_synthetic", output_index = 0, content_index = 0, part = new { type = "output_text", text = "", annotations = Array.Empty<object>() } });

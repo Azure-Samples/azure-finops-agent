@@ -67,7 +67,7 @@ public sealed class SavingsLedgerTools
     private Task<string> UpdateSavingsAction(
         [Description("Exact ledger entry id returned by RecordSavingsAction or a filtered GetSavingsLedger lookup; reuse it without repeatedly listing all entries.")] string id,
         [Description("New status: proposed | executed | verified | dismissed")] string status,
-        [Description("Verified monthly savings in USD measured from actual cost data (optional — pass empty string to leave unchanged)")] string verifiedMonthlyUsd)
+        [Description("Verified monthly savings in USD measured from actual cost data (optional — omit or pass empty string to leave unchanged)")] string verifiedMonthlyUsd = "")
     {
         var entries = Load();
         var idx = entries.FindIndex(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));

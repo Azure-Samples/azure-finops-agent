@@ -27,7 +27,7 @@ internal sealed class TurnOutcomeStore
     internal void Complete(TurnExecution turn)
     {
         var evidence = turn.ToolEvidence.ToArray();
-        var status = turn.CancellationReason ?? (turn.AnswerCharacters == 0 ? "empty" : evidence.Any(item => !item.Success || !item.Fresh || item.Partial) ? "partial" : "completed");
+        var status = turn.CancellationReason ?? (!turn.HasUserOutput ? "empty" : turn.ToolsFailed > 0 || evidence.Any(item => !item.Success || !item.Fresh || item.Partial) ? "partial" : "completed");
         var now = DateTimeOffset.UtcNow;
         Save(new(turn.RequestId, turn.UserId, turn.SessionId, status, turn.JobOutcome?.Status ?? "not_evaluated",
             turn.StartedAt, now, (long)(now - turn.StartedAt).TotalMilliseconds, turn.AnswerCharacters,

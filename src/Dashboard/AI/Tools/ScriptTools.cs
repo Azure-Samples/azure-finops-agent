@@ -43,9 +43,9 @@ Example header:
 # Prerequisites: Azure CLI 2.50+, logged in via 'az login'
 # Usage: chmod +x script.sh && ./script.sh
 # Mode: DRY-RUN by default — set DRY_RUN=false to execute")] string scriptContent,
-        [Description("Filename for the script (without extension). Default: 'finops-remediation'")] string? filename,
-        [Description("Script language: 'bash' for .sh (Azure CLI), 'powershell' for .ps1. Default: 'bash'")] string? language,
-        [Description("Brief description of what the script does (shown in the UI download button)")] string? description)
+        [Description("Filename for the script (without extension). Default: 'finops-remediation'")] string? filename = null,
+        [Description("Script language: 'bash' for .sh (Azure CLI), 'powershell' for .ps1. Default: 'bash'")] string? language = null,
+        [Description("Optional brief description of what the script does (shown in the UI download button)")] string? description = null)
     {
         if (string.IsNullOrWhiteSpace(scriptContent))
             return Task.FromResult("Error: No script content provided.");

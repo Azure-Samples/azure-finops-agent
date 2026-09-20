@@ -570,7 +570,7 @@ public static class ChatEndpoints
                             // on one response stream interleave bytes into
                             // malformed SSE frames.
                             await HandleSessionEventAsync(evt, SafeEmit, toolTracker, telemetry, copilotFactory.Deployment,
-                                userId, userLogin!, activeSessionId, chatActivity, logger, done);
+                                userId, userLogin!, activeSessionId, chatActivity, logger, done, turnState);
                         }
                         catch (Exception eventEx)
                         {
@@ -713,6 +713,16 @@ public static class ChatEndpoints
                 try
                 {
                     await Task.WhenAny(done.Task, turnState.Terminal.Task).WaitAsync(MaxTurnDuration);
+                    if (!done.Task.IsCompleted && turnState.Terminal.Task.IsCompleted)
+                    {
+                        try { await done.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+                        catch (TimeoutException)
+                        {
+                            logger.LogWarning("Terminal event delivery did not finish for turn {RequestId}", turnState.RequestId);
+                            if (EmptyResultNotice(turnState) is { } notice) await SafeEmit(notice);
+                            await SafeEmit("[DONE]");
+                        }
+                    }
                 }
                 catch (TimeoutException)
                 {
@@ -1034,7 +1044,8 @@ public static class ChatEndpoints
         string activeSessionId,
         Activity? chatActivity,
         ILogger logger,
-        TaskCompletionSource done)
+        TaskCompletionSource done,
+        TurnExecution? turnState = null)
     {
         string? sseData = null;
 
@@ -1104,10 +1115,25 @@ public static class ChatEndpoints
 
         if (evt is SessionIdleEvent || evt is SessionErrorEvent)
         {
+            if (evt is SessionIdleEvent && turnState is not null && EmptyResultNotice(turnState) is { } notice)
+            {
+                logger.LogWarning("Turn {RequestId} reached SDK idle without a user-visible result", turnState.RequestId);
+                await emit(notice);
+            }
             await emit("[DONE]");
             done.TrySetResult();
         }
     }
+
+    internal static string? EmptyResultNotice(TurnExecution turn) =>
+        turn.HasUserOutput || turn.CancellationReason is not null || turn.CancellationToken.IsCancellationRequested || !turn.TryClaimEmptyNotice()
+            ? null
+            : JsonSerializer.Serialize(new
+            {
+                type = "error",
+                code = "empty_result",
+                message = "The model finished without an answer or generated result. Your request was not fulfilled. You can retry the question; review any pending operations before retrying a change."
+            });
 
     private static async Task<string?> HandleToolDoneAsync(
         ToolExecutionCompleteEvent toolDone,

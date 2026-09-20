@@ -9,13 +9,15 @@ internal sealed class TurnExecution
 {
     internal static readonly ConcurrentDictionary<string, TurnExecution> Active = new();
     private readonly object _sync = new();
-    private readonly HashSet<string> _admittedTools = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _admittedTools = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _cancellation = new();
     private int _tools;
     private int _costQueriesBlocked;
     private int _answerCharacters;
     private int _toolsCompleted;
     private int _toolsFailed;
+    private int _visibleOutputs;
+    private int _emptyNoticeSent;
     private bool _closed;
     private bool _handlerFinished;
     private bool _released;
@@ -27,8 +29,15 @@ internal sealed class TurnExecution
     internal int AnswerCharacters => Volatile.Read(ref _answerCharacters);
     internal int ToolsCompleted => Volatile.Read(ref _toolsCompleted);
     internal int ToolsFailed => Volatile.Read(ref _toolsFailed);
+    internal bool HasUserOutput => AnswerCharacters > 0 || Volatile.Read(ref _visibleOutputs) > 0 || !ArtifactIds.IsEmpty;
     internal ConcurrentQueue<string> ArtifactIds { get; } = new();
     internal void RecordTool(bool success) { Interlocked.Increment(ref _toolsCompleted); if (!success) Interlocked.Increment(ref _toolsFailed); }
+    internal void RecordAnswer(string? content)
+    {
+        if (!string.IsNullOrWhiteSpace(content)) Interlocked.Exchange(ref _answerCharacters, content.Length);
+    }
+    internal void RecordVisibleOutput() => Interlocked.Increment(ref _visibleOutputs);
+    internal bool TryClaimEmptyNotice() => Interlocked.CompareExchange(ref _emptyNoticeSent, 1, 0) == 0;
     internal string SessionId { get; private set; }
     internal CopilotSession? Session { get; private set; }
     internal DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
@@ -79,17 +88,30 @@ internal sealed class TurnExecution
         _terminalSubscription = session?.On<SessionEvent>(item =>
         {
             if (item is ToolExecutionStartEvent tool && !string.IsNullOrWhiteSpace(tool.Data.ToolCallId))
-                AdmitTool(tool.Data.ToolCallId);
-            if (item is AssistantMessageEvent message) Interlocked.Exchange(ref _answerCharacters, message.Data.Content?.Length ?? 0);
+                AdmitTool(tool.Data.ToolCallId, tool.Data.ToolName);
+            if (item is ToolExecutionCompleteEvent { Data.Success: false } failedTool)
+                RecordUndispatchedToolFailure(failedTool.Data.ToolCallId);
+            if (item is AssistantMessageEvent message) RecordAnswer(message.Data.Content);
             if (item is SessionErrorEvent) Cancel("error");
             if (item is SessionIdleEvent or SessionErrorEvent) ConfirmTerminal();
         });
     }
 
-    internal void AdmitTool(string toolCallId)
+    internal void AdmitTool(string toolCallId, string toolName = "unknown")
     {
         lock (_sync)
-            if (!_closed && !_released) _admittedTools.Add(toolCallId);
+            if (!_closed && !_released) _admittedTools.TryAdd(toolCallId, toolName);
+    }
+
+    internal void RecordUndispatchedToolFailure(string? toolCallId)
+    {
+        lock (_sync)
+        {
+            // An acquired callback already records its outcome in ProtectedTool.
+            if (_released || toolCallId is null || !_admittedTools.Remove(toolCallId, out var name)) return;
+            RecordTool(false);
+            ToolEvidence.Enqueue(new(name, false, false, false, DateTimeOffset.UtcNow));
+        }
     }
 
     internal IDisposable AcquireTool(long owner, string? toolCallId = null)

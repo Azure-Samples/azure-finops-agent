@@ -69,7 +69,7 @@ EXAMPLE:
   {""layout"":""chart"",""title"":""VMs and AKS account for 61% of spend"",""chart"":{""type"":""horizontal_bar"",""title"":""Top services (USD)"",""labels"":[""VMs"",""AKS"",""Storage"",""SQL""],""values"":[17200,10500,5400,4200]},""bullets"":[""rg-prod-eu — top cost center at $12.7K""]},
   {""layout"":""closing"",""title"":""Re-score in 30 days"",""bullets"":[""Tag remaining 142 resources"",""Set budget alerts at 80%"",""Configure cost exports""],""cta"":{""label"":""Re-run scoring"",""url"":""/""}}
 ]")] string slidesJson,
-        [Description("Filename (without extension). Default: 'FinOps-Deck'.")] string? filename,
+        [Description("Filename (without extension). Default: 'FinOps-Deck'.")] string? filename = null,
         [Description("Optional customer/tenant name shown on the title slide and in chrome.")] string? customer = null)
     {
         if (string.IsNullOrWhiteSpace(slidesJson))

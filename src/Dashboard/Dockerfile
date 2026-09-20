@@ -35,7 +35,7 @@ RUN pip3 install --break-system-packages \
 
 # OpenTelemetry Collector (contrib build — needed for the azuremonitor exporter).
 # Bridges OTLP from the Copilot CLI subprocess into Azure Application Insights.
-COPY --from=otel/opentelemetry-collector-contrib:0.160.0 /otelcol-contrib /usr/local/bin/otelcol
+COPY --from=otel/opentelemetry-collector-contrib:0.161.0 /otelcol-contrib /usr/local/bin/otelcol
 COPY otel-collector-config.yaml /etc/otelcol/config.yaml
 
 WORKDIR /app

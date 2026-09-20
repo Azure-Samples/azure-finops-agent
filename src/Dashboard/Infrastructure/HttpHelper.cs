@@ -371,7 +371,7 @@ public static class HttpHelper
     /// <summary>
     /// Returns a standardized 401 error message when a token is missing.
     /// </summary>
-    public static string TokenMissing(string tokenName, Activity? activity, string telemetryPrefix)
+    public static string TokenMissing(string tokenName, Activity? activity, string telemetryPrefix, string? graphTier = null)
     {
         activity?.SetTag($"{telemetryPrefix}.result", "not_connected");
         activity?.SetStatus(ActivityStatusCode.Error, $"{tokenName} not connected");
@@ -379,7 +379,13 @@ public static class HttpHelper
         {
             "LogAnalyticsToken" => new[] { "loganalytics" },
             "StorageToken" => ["storage"],
-            "GraphToken" => ["licenses", "chargeback"],
+            "GraphToken" => graphTier switch
+            {
+                null => ["licenses", "chargeback"],
+                "licenses" => ["licenses"],
+                "chargeback" => ["chargeback"],
+                _ => throw new ArgumentOutOfRangeException(nameof(graphTier))
+            },
             _ => ["base"]
         };
         return "HTTP 401 Unauthorized\n" + System.Text.Json.JsonSerializer.Serialize(new

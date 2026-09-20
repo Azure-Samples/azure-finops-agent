@@ -36,6 +36,8 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         var evidence = InspectEvidence(resultText);
         if (EvidenceTools.Contains(Name)) turn?.ToolEvidence.Enqueue(new(Name, evidence.Success, evidence.Fresh, evidence.Partial, DateTimeOffset.UtcNow, scopeKey));
         turn?.RecordTool(evidence.Success);
+        if (evidence.Success && Name is "RenderChart" or "RenderAdvancedChart" or "GetCrawlMaturityEvidence" or "ReportMaturityScore")
+            turn?.RecordVisibleOutput();
         if (resultText.StartsWith("__HTML_READY__:") || resultText.StartsWith("__SCRIPT_READY__:"))
         {
             var identifier = resultText.Split(':').ElementAtOrDefault(1);
@@ -51,7 +53,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
 
     private static readonly HashSet<string> EvidenceTools = new(StringComparer.Ordinal)
     {
-        "QueryAzure", "QueryGraph", "QueryLogAnalytics", "QueryCostsAcrossSubscriptions", "GetCrawlMaturityEvidence",
+        "QueryAzure", "QueryGraph", "GetCopilotUsage", "QueryLogAnalytics", "QueryCostsAcrossSubscriptions", "GetCrawlMaturityEvidence",
         "BulkAzureRequest", "FindIdleResources", "DetectCostAnomalies", "GetAzureRetailPricing", "GetAzureRetailPricingBatch",
         "QueryUploadedFile", "ReadCostExportBlob", "ListCostExportBlobs", "FetchPublicWebPage", "CheckComputeFeasibility", "CheckVmConnectivity", "GetOperationStatus"
     };

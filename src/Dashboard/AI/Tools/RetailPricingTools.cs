@@ -56,6 +56,7 @@ READING THE ROWS: they arrive grouped by meterName, cheapest-first within each m
 DEFAULT INTERPRETATION: unless the user explicitly asked for Spot, Low Priority, Windows, reserved or zone-redundant pricing, answer with the ordinary on-demand meter — the meterName carrying no such qualifier — and name the meter you used. A 'cheapest region' question means cheapest on-demand region, not cheapest Spot region.
 
 UNIT SEMANTICS: retailPrice is the price for ONE `unitOfMeasure` of the WHOLE SKU in armSkuName/skuName. Never multiply it by a core/vCore/GPU/node count that is already part of that SKU name — e.g. armSkuName 'SQLDB_GP_Compute_Gen5_4' / skuName '4 vCore' at 1 Hour is the total hourly price for all 4 vCores, not per vCore. Multiply only by quantity the user asked for (number of instances) and by hours.
+VOLUME BANDS: retain tierMinimumUnits and currencyCode. A cheaper high-volume band is not the price for a small dataset. Match the requested quantity to the documented tier rules; split graduated tiers into separate CalculateCost lines instead of applying the cheapest band to every unit.
 
 MONTHLY / VOLUME TOTALS: call EstimateTokenCost with the per-1M rates instead of doing token arithmetic in prose.");
 
@@ -141,7 +142,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
 
     // Cap the payload so the CLI keeps the result inline: past its limit it spills
     // to a temp file and the model spends a `view` round-trip per chunk.
-    internal static string CompactBatchResult(string result, bool paginationComplete = true, bool widened = false, IReadOnlyList<string>? requestedRegions = null)
+    internal static string CompactBatchResult(string result, bool paginationComplete = true, bool widened = false, IReadOnlyList<string>? requestedRegions = null, int? topPerVariant = null)
     {
         var jsonStart = result.IndexOf("{\"BillingCurrency\"", StringComparison.Ordinal);
         if (jsonStart < 0)
@@ -158,6 +159,12 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                     ? value.GetString() ?? ""
                     : "";
             static string Clean(string value) => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+            static string Tier(JsonElement item) =>
+                item.TryGetProperty("tierMinimumUnits", out var tier) && tier.ValueKind == JsonValueKind.Number && tier.TryGetDecimal(out var minimum)
+                    ? minimum.ToString(CultureInfo.InvariantCulture) : "";
+            var billingCurrency = doc.RootElement.TryGetProperty("BillingCurrency", out var billing) && billing.ValueKind == JsonValueKind.String
+                ? billing.GetString() ?? "" : "";
+            string Currency(JsonElement item) => string.IsNullOrEmpty(Str(item, "currencyCode")) ? billingCurrency : Str(item, "currencyCode");
 
             var rows = items.EnumerateArray().Select(item =>
             {
@@ -178,8 +185,10 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                     Clean(Str(item, "armRegionName")), Clean(Str(item, "armSkuName")),
                     Clean(Str(item, "productName")), Clean(Str(item, "skuName")),
                     Clean(Str(item, "meterName")), Clean(Str(item, "unitOfMeasure")),
-                    Clean(Str(item, "type")), Clean(Str(item, "reservationTerm")), Clean(savings));
-                return (Price: price, Meter: Clean(Str(item, "meterName")), Region: Clean(Str(item, "armRegionName")), Line: line);
+                    Clean(Str(item, "type")), Clean(Str(item, "reservationTerm")), Clean(savings), Tier(item), Clean(Currency(item)));
+                var variant = string.Join('\t', Str(item, "productName"), Str(item, "skuName"), Str(item, "meterName"),
+                    Str(item, "unitOfMeasure"), Str(item, "type"), Str(item, "reservationTerm"), Tier(item), Currency(item));
+                return (Price: price, Meter: Clean(Str(item, "meterName")), Region: Clean(Str(item, "armRegionName")), Variant: variant, Line: line);
             })
             .GroupBy(row => row.Line, StringComparer.Ordinal)
             .Select(group => group.First())
@@ -188,12 +197,18 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             // Round-robin across meterName groups. A flat cheapest-first cut buries
             // the ordinary on-demand meter under every Spot/Low-Priority row and the
             // model then quotes Spot as the headline price.
-            var byMeter = rows
+            var targetRows = topPerVariant is { } requestedTop
+                ? rows.GroupBy(row => row.Variant, StringComparer.Ordinal)
+                    .SelectMany(group => group.OrderBy(row => row.Price).ThenBy(row => row.Region, StringComparer.Ordinal)
+                        .GroupBy(row => row.Region, StringComparer.OrdinalIgnoreCase).Select(region => region.First())
+                        .Take(Math.Clamp(requestedTop, 1, 100))).ToList()
+                : rows;
+            var byMeter = targetRows
                 .GroupBy(row => (row.Meter, row.Region))
                 .Select(group => group.OrderBy(row => row.Price).ToList())
                 .OrderBy(group => group[0].Price)
                 .ToList();
-            var selected = new List<(double Price, string Meter, string Region, string Line)>();
+            var selected = new List<(double Price, string Meter, string Region, string Variant, string Line)>();
             for (var depth = 0; selected.Count < MaxProjectedRows; depth++)
             {
                 var added = false;
@@ -210,9 +225,10 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             var queryLine = result.Split('\n').FirstOrDefault(line => line.StartsWith("Query: ", StringComparison.Ordinal));
             var output = new StringBuilder();
             if (queryLine is not null) output.AppendLine(queryLine);
-            var complete = paginationComplete && selected.Count == rows.Count;
+            var complete = paginationComplete && selected.Count == targetRows.Count;
             var deliveredRegions = selected.Select(row => row.Region).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            var missingRegions = (requestedRegions ?? []).Where(region => !deliveredRegions.Contains(region, StringComparer.OrdinalIgnoreCase)).ToArray();
+            var coveredRegions = (topPerVariant is null ? selected : rows).Select(row => row.Region).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missingRegions = (requestedRegions ?? []).Where(region => !coveredRegions.Contains(region)).ToArray();
             var variants = items.EnumerateArray().Select(item => new
             {
                 product = Str(item, "productName"),
@@ -220,7 +236,9 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                 meter = Str(item, "meterName"),
                 unit = Str(item, "unitOfMeasure"),
                 type = Str(item, "type"),
-                term = Str(item, "reservationTerm")
+                term = Str(item, "reservationTerm"),
+                tierMinimumUnits = Tier(item),
+                currency = Currency(item)
             }).Distinct().Count();
             output.AppendLine("RESOLUTION " + JsonSerializer.Serialize(new
             {
@@ -228,6 +246,9 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                 complete = complete && missingRegions.Length == 0,
                 fetchedRows = rows.Count,
                 deliveredRows = selected.Count,
+                detailsComplete = selected.Count == rows.Count,
+                topPerVariant,
+                rankingComplete = topPerVariant is not null ? complete : (bool?)null,
                 paginationComplete,
                 vocabularyWidened = widened,
                 variants,
@@ -238,10 +259,12 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             output.Append(BuildFacets(items));
             if (variants > 1)
                 output.AppendLine($"These rows span {variants} price variants. Compare only matching meter, product, tier, unit and purchase type.");
-            output.AppendLine(rows.Count <= selected.Count
+            output.AppendLine(topPerVariant is { } topCount
+                ? $"{rows.Count} distinct candidates; showing up to {topCount} cheapest regions per matching price variant. Ranking is global only when paginationComplete and rankingComplete are true."
+                : rows.Count <= selected.Count
                 ? $"{rows.Count} distinct row(s), cheapest first within each meter."
                 : $"{rows.Count} distinct rows; showing {selected.Count} spread across meters, cheapest first within each. Narrow using the facet values above.");
-            output.AppendLine("retailPrice\tarmRegionName\tarmSkuName\tproductName\tskuName\tmeterName\tunitOfMeasure\ttype\treservationTerm\tsavingsPlan(term:price)");
+            output.AppendLine("retailPrice\tarmRegionName\tarmSkuName\tproductName\tskuName\tmeterName\tunitOfMeasure\ttype\treservationTerm\tsavingsPlan(term:price)\ttierMinimumUnits\tcurrencyCode");
             foreach (var row in selected.OrderBy(r => r.Meter, StringComparer.Ordinal).ThenBy(r => r.Price))
                 output.AppendLine(row.Line);
             return output.ToString();
@@ -263,7 +286,9 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             if (item.ValueKind != JsonValueKind.Object) continue;
             foreach (var property in item.EnumerateObject())
             {
-                if (property.Value.ValueKind != JsonValueKind.String) continue;
+                if (property.Name is not ("serviceName" or "armRegionName" or "armSkuName" or "productName" or "skuName"
+                    or "meterName" or "unitOfMeasure" or "type" or "reservationTerm" or "currencyCode")
+                    || property.Value.ValueKind != JsonValueKind.String) continue;
                 var text = property.Value.GetString();
                 if (string.IsNullOrEmpty(text) || text.Length > 120) continue;
                 if (!values.TryGetValue(property.Name, out var set))
@@ -551,7 +576,8 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
 
         // Always project + facet. Raw JSON leaves the model no vocabulary to
         // self-correct a wrong filter with, and a full page spills to a temp file.
-        return header + CompactBatchResult(header + body, paginationComplete, vocabularyDropped, requestedRegions);
+        return header + CompactBatchResult(header + body, paginationComplete, vocabularyDropped, requestedRegions,
+            string.Equals(rank?.Trim(), "cheapest", StringComparison.OrdinalIgnoreCase) ? top : null);
     }
 
     private static async Task<RetailPage> FetchRetailPage(string url, System.Diagnostics.Activity? activity)

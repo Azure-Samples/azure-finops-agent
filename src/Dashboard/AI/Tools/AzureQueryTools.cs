@@ -58,6 +58,8 @@ MIGRATE: Use resource type 'assessmentProjects' (NOT 'migrateProjects' — retur
 
 CONSUMPTION DEPRECATIONS: usageDetails → use Microsoft.CostManagement/generateCostDetailsReport. reservationDetails → use Microsoft.CostManagement/generateReservationDetailsReport.
 
+RESERVATION UTILIZATION: reservationSummaries is NOT a tenant-root endpoint. Discover reservation orders first, then GET /providers/Microsoft.Capacity/reservationOrders/{orderId}/providers/Microsoft.Consumption/reservationSummaries?api-version=2024-08-01&grain=monthly. A discovered billing-account or billing-profile scope is another supported route. Do not invent a scope or cycle API versions after a missing-scope error. Denied/missing utilization is unknown, never proof that rightsizing will not strand a commitment.
+
 For public retail pricing use GetAzureRetailPricing, or GetAzureRetailPricingBatch for independent filter combinations; QueryAzure calls ARM only.");
 
         yield return AIFunctionFactory.Create(QueryCostsAcrossSubscriptions, "QueryCostsAcrossSubscriptions", @"Gets a reported Cost Management total and per-subscription breakdown in ONE agent tool call. Use this for requested subscription totals, not as a prerequisite for resource/service/model detail. For detailed spending questions use a valid grouped QueryAzure request first and derive totals from the detail when complete. Do not make users repeat the request for detail after a totals-only answer.
@@ -719,11 +721,19 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
     /// PolicyInsights states, etc.) MUST be prefixed with one of the five canonical scope shapes.
     /// Bare /providers/Microsoft.CostManagement/query was 5/27 of all 4xx failures in the last 5 days.
     /// </summary>
-    private static string? ValidateScopePrefix(string path)
+    internal static string? ValidateScopePrefix(string path)
     {
         // Strip query string for the check
         var qIdx = path.IndexOf('?');
         var clean = qIdx >= 0 ? path[..qIdx] : path;
+
+        if (clean.Contains("/providers/Microsoft.Consumption/reservationSummaries", StringComparison.OrdinalIgnoreCase)
+            && !Regex.IsMatch(clean,
+                @"^/providers/(?:Microsoft\.Billing/billingAccounts/[^/]+(?:/billingProfiles/[^/]+)?|Microsoft\.Capacity/reservationOrders/[^/]+(?:/reservations/[^/]+)?)/providers/Microsoft\.Consumption/reservationSummaries/?$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return "HTTP 400 BadRequest\nReservation summaries require a discovered billing account/profile or reservation-order/reservation scope. " +
+                "Use /providers/Microsoft.Capacity/reservationOrders/{orderId}/providers/Microsoft.Consumption/reservationSummaries?api-version=2024-08-01&grain=monthly after listing accessible reservation orders. " +
+                "A bare tenant-root or subscription path is not supported. No request was sent.";
 
         // Only enforce on the providers that actually require {scope}. Cost Management is the big one.
         // Consumption/budgets and PolicyInsights/policyStates also require it. ResourceGraph, Capacity,
@@ -858,6 +868,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
             if (methodError is not null) return methodError;
             if (string.IsNullOrWhiteSpace(item.Path) || !item.Path.StartsWith('/') || item.Path.StartsWith("//")
                 || item.Path.Contains('#') || item.Path.Contains('\\')) return "HTTP 400 BadRequest\nInvalid ARM path.";
+            if (ValidateScopePrefix(item.Path) is { } scopeError) return scopeError;
             if (method == HttpMethod.Post && ValidateReadOnlyPostPath(item.Path, activity) is { } postError) return postError;
             if (method == HttpMethod.Post && ValidateCostQueryBody(item.Path, item.Body) is { } queryError) return queryError;
             return await HttpHelper.SendWithRetryAsync($"https://management.azure.com{item.Path}", token, activity, "bulk",

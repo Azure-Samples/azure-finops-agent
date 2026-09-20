@@ -108,7 +108,7 @@ Examples:
     private async Task<string> QueryUploadedFile(
         [Description("The fileId returned at upload time (12-char hex).")] string fileId,
         [Description("Operation: preview, schema, count, workbook, head, tail, slice, text_range, filter, aggregate, query, json_path.")] string mode,
-        [Description("Optional JSON object with mode-specific parameters. For tabular query use filters[], group_by[], aggregates[{column,op,as}], sort[{column,direction}], columns[] (1-50 distinct output fields), offset and a small limit. Filter/aggregate before projecting and limiting; retain returned totals/coverage. For JSON selectors use jsonPath. Host path, kind and mode are reserved.")] string? paramsJson,
+        [Description("Optional JSON object with mode-specific parameters. For tabular query use filters[], group_by[], aggregates[{column,op,as}], sort[{column,direction}], columns[] (1-50 distinct output fields), offset and a small limit. Filter/aggregate before projecting and limiting; retain returned totals/coverage. For JSON selectors use jsonPath. Host path, kind and mode are reserved.")] string? paramsJson = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(fileId)) return Json(new { ok = false, error = "fileId required" });

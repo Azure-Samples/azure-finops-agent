@@ -124,9 +124,38 @@ The log investigation found two transcript HTTP 500 incidents represented by fou
 - [Content filtering](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/content-filter): provider filtering is separate from application tool execution and system-prompt guidance.
 - [.NET exception diagnostic suppression](https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.builder.exceptionhandleroptions.suppressdiagnosticscallback?view=aspnetcore-10.0): handled diagnostics, metric tags and post-response-start behavior.
 
+## Session Completion Audit (2026-09-19)
+
+The audit reviewed 100 distinct retained conversations, after first verifying operator-authorized extraction of an individual owner-bound session. Forty-two histories included retained tool events; 58 historical histories were recovered from the read-only message index without tool evidence. These are not 100 fully instrumented successful sessions. Empty workspace directories were excluded, overlapping records were deduplicated, and explicit probes were kept distinct. The sample spans multiple versions and is not a representative production success-rate estimate.
+
+The descriptive review classified 25 histories as pass, 38 partial, 16 blocked, 11 fail and 10 not evaluable from retained evidence. Some blocks are legitimate missing-input/access conditions; historical probe failures and missing rich-output evidence must not be treated as ordinary customer incidents. Customer transcripts, identities and deployment coordinates are not part of the repository or regression fixtures.
+
+| Priority mechanism | Local improvement and verification |
+| --- | --- |
+| Financial arithmetic and scenario drift | `CalculateCost` uses decimal arithmetic with explicit quantities, units, currency, discount/tax and run-rate factors; synthetic backup and calendar-denominator regressions reconcile totals. |
+| Chart/schema rejection | Canonical `type` with a guarded legacy `chart` adapter; documented optional inputs have real defaults. Real SDK/CLI and omitted-argument tests cover the boundary. |
+| Pricing rows hidden by verbose output | Global top-N selection happens after pagination and within compatible variants. Facets omit irrelevant identifiers; ranking/detail completeness and volume thresholds remain explicit. |
+| Unsupported Graph query options and stale report guidance | Endpoint-specific preflight and current Copilot report routes/response formats replace generic query-option guessing. |
+| Copilot reports too large for model context | `GetCopilotUsage` reads the supported report and returns full counts plus bounded, advancing pages; malformed, duplicate, mixed-period and mixed-date reports fail explicitly. |
+| Reservation-utilization scope errors | Single and bulk paths require discovered billing/reservation scope; guidance no longer prescribes a provider-root call or cycles versions to repair it. |
+| Currency/unit corruption | Calculator currency matching, preserved pricing bands and explicit source-currency/unit instructions; no inferred FX or taxes. |
+| Incompatible report and inventory cohorts | Activity classification uses the report's own date and identities. Current assignments must not be subtracted from older aggregate activity. |
+| SDK failures hidden from host outcomes | Admitted failures before callbacks count once, and failed auxiliary tools produce partial execution rather than a clean outcome. |
+| Conflicting follow-up instructions | The requested deliverable takes precedence; Crawl-provided actions and public prompt links do not require another follow-up tool round. |
+
+Additional hardening emits an `empty_result` event for genuinely empty terminal turns, without relabeling explicit Stop or a structured chart/score/artifact result as empty. A retained blank answer alone is not proof of this failure; host cancellation must be checked.
+
+Historical short-follow-up routing, shell access, upload-selector/lifecycle, sandbox-download and script-as-executed problems were compared with existing safeguards and regressions instead of being reported as newly introduced defects. Instruction-only improvements do not prove every future model response will obey them. No customer session was replayed to validate the changes.
+
+Authoritative contract references:
+
+- [Graph subscribedSkus query options](https://learn.microsoft.com/en-us/graph/api/subscribedsku-list?view=graph-rest-1.0)
+- [Current Copilot licensed-user report](https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail)
+- [Reservation utilization by reservation order](https://learn.microsoft.com/en-us/rest/api/consumption/reservations-summaries/list-by-reservation-order?view=rest-consumption-2024-08-01)
+
 ## Remaining Operational Verification
 
-- Collector 0.160.0 retains one fixable high finding, `CVE-2026-79921` in `github.com/rabbitmq/amqp091-go` 1.12.0. The app config enables only OTLP receivers and Azure Monitor export, not AMQP/RabbitMQ. Keep this as a dependency follow-up; do not describe the entire image as vulnerability-free. The runtime scan found no critical findings; CI blocks fixable critical findings. The editor also reports vulnerabilities in the separate Node build-stage image, which is not shipped in the final runtime.
+- The release preflight found newly reported fixable critical/high AMQP advisories in the collector 0.160.0 image. Collector 0.161.0 upgrades the bundled exporter dependency to `amqp091-go` 1.13.0. The application still enables only loopback OTLP and Azure Monitor export; this is not a reason to suppress a vulnerability finding. Revalidate configuration, ingestion, shutdown and the final image on every collector update. CI continues to reject fixable critical runtime findings. Separate Node build-stage advisories do not describe the shipped runtime.
 - A fresh authenticated consent flow needs the deployment owner's shared signed-in tab and selected test tenant. Automated browser fixtures do not prove that external consent was granted.
 - The reproduced provider content-filter false positive on the original Spot-resilience wording remains open; application instructions cannot override an upstream prompt rejection.
 - No billable ARM mutation was used as a test. Real allocation, inherited policy, managed-identity behavior and resource-specific role failures require controlled deployment checks.

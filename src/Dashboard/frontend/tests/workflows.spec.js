@@ -94,6 +94,20 @@ test('complete final message replaces partial deltas after a throttled detail qu
   await page.screenshot({ path: testInfo.outputPath('cost-detail-final-message.png'), animations: 'disabled' });
 });
 
+test('an empty model result is visibly recoverable rather than silent success', async ({ page }, testInfo) => {
+  const message = 'The model finished without an answer or generated result. Your request was not fulfilled. Review pending operations before retrying a change.';
+  const { requests, errors } = await arrange(page, [
+    { type: 'error', code: 'empty_result', message },
+  ]);
+  await send(page, 'Create the requested synthetic deck');
+  await expect(page.getByText(message, { exact: false })).toBeVisible();
+  await expect(page.locator('textarea')).toBeEnabled();
+  await expect(page.locator('.action-btn--stop')).toHaveCount(0);
+  expect(requests).toHaveLength(1);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('empty-result.png'), animations: 'disabled' });
+});
+
 test('cost cooldown remains visible after automatic retries are exhausted', async ({ page }, testInfo) => {
   const answer = 'The requested resource costs are still unavailable; no detail amounts were inferred.';
   const { errors } = await arrange(page, [

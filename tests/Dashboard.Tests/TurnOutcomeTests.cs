@@ -50,4 +50,71 @@ public sealed class TurnOutcomeTests
         }
         finally { turn.ConfirmTerminal(); await turn.FinishAsync(); Directory.Delete(root, true); }
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task FailedToolsCannotLookLikeCleanExecution(bool rejectedBeforeCallback)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "finops-outcome-failure-" + Guid.NewGuid().ToString("N"));
+        var store = new TurnOutcomeStore(root);
+        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
+        try
+        {
+            turn.RecordAnswer("A synthetic fallback answer is not proof the requested chart was delivered.");
+            if (rejectedBeforeCallback)
+            {
+                turn.AdmitTool("synthetic-call", "RenderChart");
+                turn.RecordUndispatchedToolFailure("synthetic-call");
+            }
+            else
+                turn.RecordTool(false);
+            store.Complete(turn);
+            var outcome = Assert.Single(store.ForSession(101, turn.SessionId));
+            Assert.Equal("partial", outcome.Status);
+            Assert.Equal(1, outcome.ToolsFailed);
+            Assert.Equal("not_evaluated", outcome.Fulfillment);
+        }
+        finally { turn.ConfirmTerminal(); await turn.FinishAsync(); Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task TrulyEmptyTurnsHaveAnExplicitRecoverableNotice()
+    {
+        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
+        try
+        {
+            using var notice = JsonDocument.Parse(ChatEndpoints.EmptyResultNotice(turn)!);
+            Assert.Equal("empty_result", notice.RootElement.GetProperty("code").GetString());
+            turn.RecordVisibleOutput();
+            Assert.Null(ChatEndpoints.EmptyResultNotice(turn));
+        }
+        finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
+    }
+
+    [Fact]
+    public async Task ExplicitStopIsNotMisreportedAsAnEmptyModelResult()
+    {
+        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
+        try
+        {
+            turn.Cancel("stopped");
+            Assert.Null(ChatEndpoints.EmptyResultNotice(turn));
+        }
+        finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
+    }
+
+    [Fact]
+    public async Task AToolOnlyMessageDoesNotEraseAnAlreadyDeliveredAnswer()
+    {
+        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
+        try
+        {
+            turn.RecordAnswer("Synthetic completed answer.");
+            turn.RecordAnswer("");
+            Assert.True(turn.HasUserOutput);
+            Assert.Null(ChatEndpoints.EmptyResultNotice(turn));
+        }
+        finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
+    }
 }

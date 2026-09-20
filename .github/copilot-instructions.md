@@ -88,6 +88,11 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 - Tools fetch data and return compact raw API JSON unless a bounded projection is explicitly required for performance.
 - XLSX `workbook` inspection returns every sheet's shape, columns, and bounded numeric summaries in one call; reuse it instead of making a second aggregate call when the requested metric is already present.
 - Prefer string parameters; SDK coercion of numeric arguments can be unreliable.
+- Use `CalculateCost` for non-token estimates/run-rates and `EstimateTokenCost` for token math. Keep the source currency, billing unit and scenario assumptions; an annualized exit-month cost is not cumulative annual spend. Calculators establish arithmetic, not price validity or deployability.
+- A nullable C# parameter is not optional in the emitted tool schema. Give documented optional inputs actual defaults and test both schema requiredness and invocation with omitted arguments.
+- Graph query options are endpoint-specific: `subscribedSkus` accepts only `$select`; Copilot usage functions do not accept `$filter`, `$top` or `$select`. Prefer current `/v1.0/copilot/reports/` routes and preserve CSV versus beta JSON, report version/period, source refresh date and licensed-user coverage.
+- Use `GetCopilotUsage` for bounded activity counts and inactive-user lists. Count the full report before host-side filtering/paging, retain unknown activity and report dates, and never subtract current assignments from an older aggregate usage cohort. Per-page responses remain bounded even with long names; follow nextOffset only while the report date and totals agree.
+- Reservation utilization requires a discovered billing-account/profile or reservation-order/reservation scope. Never use tenant-root `reservationSummaries`, cycle versions to repair a missing scope, or call unavailable commitment evidence proof of safe net savings.
 - Reuse one `CosmosClient`/HTTP client/session where applicable; do not create clients per request.
 - Tools generally do not catch API exceptions internally. Handle failures at system boundaries and let telemetry capture dependency failures.
 - Push aggregation, filtering, grouping, projection, and limits into the source API using only options supported by that endpoint. Aggregate before limiting rows; retain totals, pagination and partial coverage. Repeat this requirement in each broad query tool's description and parameter metadata so the model does not fetch an unfiltered collection and rely on response trimming. Output caps and post-download web filtering are not source-side download limits.
@@ -125,6 +130,8 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - One filter combination: one `GetAzureRetailPricing` call.
 - Two or more independent combinations: one `GetAzureRetailPricingBatch` call.
 - One SKU across regions uses one comma-separated region request.
+- Cheapest-region requests rank all fetched candidates within compatible variants before applying top-N. Preserve rankingComplete versus detailsComplete; incomplete source pagination cannot establish a global winner.
+- Keep tierMinimumUnits and currency in projected retail rows and separate volume bands when ranking. Do not apply a high-volume storage rate to a small dataset or multiply a whole-SKU rate by its included cores again.
 - Reuse returned rows; do not invoke shell tools to reparse usable pricing results.
 - The tool holds no per-SKU domain knowledge. Every response carries a `FACETS` block of live distinct field values, and rows are grouped by `meterName`, cheapest-first within each meter.
 - Meter, product and SKU names are not derivable from the ARM SKU (`Standard_ND96asr_v4` meters as `ND96asr_A100_v4`). When such a filter matches zero rows the tool drops it, re-queries on the structural filter alone, and says so — it must never return an empty table.
@@ -236,8 +243,11 @@ Do not deploy without explicit user instruction. When instructed, validate build
 
 - Host traces use `SamplingRatio = 1` with `TracesPerSecond = null`; the rate limit otherwise overrides ratio sampling. Keep host, CLI collector, and browser telemetry changes distinct.
 - `ApiExceptionHandling` owns the correlated exception log for handled HTTP faults. Suppress the duplicate ASP.NET exception-handler diagnostic, retain the request metric's `error.type`, and keep framework diagnostics for faults after response start. Expected cancellation stays trace-only. Transcript ownership is rechecked under the user gate; a conflicting live owner fails closed without an exception-driven 500.
-- Collector 0.160.0 uses `azure_monitor` with loopback OTLP receivers. Validate config, local ingestion and shutdown after collector upgrades; the optional AMQP dependency finding is tracked in `docs/agent-reliability.md`.
+- Collector 0.161.0 uses `azure_monitor` with loopback OTLP receivers. Validate config, local ingestion and shutdown after collector upgrades; do not suppress shipped-image vulnerabilities merely because a bundled component is not configured.
 - Owner-bound turn outcomes persist for 30 days and reconcile interrupted records on startup. Normal chat fulfillment stays `not_evaluated`; a completed HTTP request or SDK turn is not proof the user's objective was met.
+- Record SDK tool rejections that occur before the protected callback, without double-counting acquired callbacks. A nonempty fallback answer after a failed tool is not clean execution; include failed non-evidence tools in partial outcome classification.
+- Truly empty terminal turns emit a recoverable `empty_result` error. Explicit cancellation and structured chart/score/artifact outputs are not empty results; outcome fulfillment remains `not_evaluated`.
+- Use `investigate-ai-sessions.prompt.md` for end-to-end completion audits: prove authorized owner-bound extraction first, sample distinct populated conversations rather than turns or warmups, and disclose full-event versus retained-message-only coverage. Keep historical customer transcripts and deployment coordinates out of source and regression fixtures.
 - Browser exception capture has one bounded, redacted, deduplicated reporting path. Do not claim the historical notification-manager exception is fixed without reproducing its trigger.
 
 Discover Application Insights and Log Analytics identifiers from `azd env get-values`, Azure Resource Graph, or the deployed resource group. Never hardcode an application ID, workspace ID, subscription, or resource group in prompts or instructions.
