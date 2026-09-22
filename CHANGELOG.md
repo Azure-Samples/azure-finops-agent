@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Fix intermittent failures across all protected tools when SDK callbacks overtake queued tool-start events. Callbacks now wait briefly for their exact turn-bound admission instead of failing immediately; owner/session checks, cancellation and duplicate-call rejection remain enforced. Real SDK/CLI regressions cover delayed delivery, resumed sessions and shared-client isolation.
 - Avoid repeated calculator retries when the model supplies the currency once at the required top level. Omitted line currencies inherit that explicit value; mixed, blank or invalid explicit currencies still fail. Tool validation errors no longer appear successful merely because the SDK callback completed.
 - Preserve earlier assistant messages when a later follow-up completes. SSE now carries stable message IDs, and the browser replaces only the corresponding message's partial deltas instead of the whole answer. Regression coverage reproduces a visible cost table disappearing after a follow-up on desktop and mobile.
 - Replace frozen retry labels with a deadline-based countdown and explicit waiting, retry-response and automatic-retry-stopped states. Slow requests are not presented as fresh throttling, and HTTP failures no longer receive a green success icon merely because SDK execution succeeded.

@@ -199,8 +199,14 @@ public sealed class RuntimeProtocolTests
         }
     }
 
-    [Fact]
-    public async Task RuntimeDeliversAChartUsingTheRetainedAliasContract()
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    public async Task RuntimeDeliversAChartUsingTheRetainedAliasContract(bool resume, bool otherSession, bool delayedEventDelivery)
     {
         var root = Path.Combine(Path.GetTempPath(), "finops-chart-protocol-" + Guid.NewGuid().ToString("N"));
         var calls = 0;
@@ -230,7 +236,35 @@ public sealed class RuntimeProtocolTests
             };
             config.Tools = [new ProtectedTool(ChartTools.Create().Single(tool => tool.Name == "RenderChart"), 101, config.SessionId)];
             RuntimePolicy.Apply(config);
-            await using var session = await client.CreateSessionAsync(config);
+            var created = await client.CreateSessionAsync(config);
+            var resumeConfig = new ResumeSessionConfig
+            {
+                Model = config.Model, Provider = config.Provider, Streaming = true, Tools = config.Tools, WorkingDirectory = root
+            };
+            RuntimePolicy.Apply(resumeConfig);
+            if (resume)
+            {
+                Interlocked.Exchange(ref calls, 1);
+                var seeded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var seededSubscription = created.On<SessionIdleEvent>(_ => seeded.TrySetResult());
+                await created.SendAsync(new MessageOptions { Prompt = "Store this synthetic context for a resumed tool call." });
+                await seeded.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                await created.DisposeAsync();
+                Interlocked.Exchange(ref calls, 0);
+            }
+            await using var session = resume ? await client.ResumeSessionAsync(config.SessionId, resumeConfig) : created;
+            var otherConfig = new SessionConfig
+            {
+                SessionId = Guid.NewGuid().ToString(), Model = config.Model, Provider = config.Provider,
+                Streaming = true, WorkingDirectory = root
+            };
+            otherConfig.Tools = [new ProtectedTool(ChartTools.Create().Single(tool => tool.Name == "RenderChart"), 202, otherConfig.SessionId)];
+            RuntimePolicy.Apply(otherConfig);
+            await using var other = otherSession ? await client.CreateSessionAsync(otherConfig) : null;
+            using var delayedEvents = session.On<AssistantMessageEvent>(_ =>
+            {
+                if (delayedEventDelivery) Task.Delay(TimeSpan.FromMilliseconds(250)).GetAwaiter().GetResult();
+            });
             Assert.True(TurnExecution.TryBegin(session.SessionId, 101, session, out var turn));
             try
             {

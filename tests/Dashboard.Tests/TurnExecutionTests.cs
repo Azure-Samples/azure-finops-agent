@@ -80,6 +80,51 @@ public sealed class TurnExecutionTests
     }
 
     [Fact]
+    public async Task CallbackWaitsForMatchingAdmissionAndCannotRunTwice()
+    {
+        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
+        try
+        {
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(async () =>
+                await turn.AcquireToolAsync(202, "pending-call", CancellationToken.None));
+            var pending = turn.AcquireToolAsync(101, "pending-call", CancellationToken.None).AsTask();
+            Assert.False(pending.IsCompleted);
+            turn.AdmitTool("different-call");
+            Assert.False(pending.IsCompleted);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await turn.AcquireToolAsync(101, "pending-call", CancellationToken.None));
+            turn.AdmitTool("pending-call");
+            using var lease = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            turn.AdmitTool("pending-call");
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await turn.AcquireToolAsync(101, "pending-call", CancellationToken.None));
+        }
+        finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
+    }
+
+    [Theory]
+    [InlineData("caller")]
+    [InlineData("turn")]
+    [InlineData("terminal")]
+    public async Task PendingAdmissionStopsWhenCancelledOrTerminal(string reason)
+    {
+        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
+        using var caller = new CancellationTokenSource();
+        try
+        {
+            var pending = turn.AcquireToolAsync(101, "pending-call", caller.Token).AsTask();
+            Assert.False(pending.IsCompleted);
+            if (reason == "caller") caller.Cancel();
+            else if (reason == "turn") turn.Cancel();
+            else turn.ConfirmTerminal();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await pending.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(0, turn.ToolsCompleted);
+        }
+        finally { turn.ConfirmTerminal(); Assert.True(await turn.FinishAsync()); }
+    }
+
+    [Fact]
     public async Task SdkRejectionBeforeCallbackIsRecordedExactlyOnce()
     {
         Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));

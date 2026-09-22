@@ -20,8 +20,8 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
             throw new OperationCanceledException("The host invocation identity could not be verified.");
         if (sessionId is not null && (!TurnExecution.Active.TryGetValue(sessionId, out turn) || owner is null))
             throw new OperationCanceledException("The originating turn is not active.");
-        using var lease = turn?.AcquireTool(owner!.Value, invocation!.ToolCallId);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn?.CancellationToken ?? CancellationToken.None);
+        using var lease = turn is null ? null : await turn.AcquireToolAsync(owner!.Value, invocation!.ToolCallId, linked.Token);
         using var context = new ToolExecutionContext(sessionId, owner, linked.Token) { ToolCallId = invocation?.ToolCallId };
         linked.Token.ThrowIfCancellationRequested();
         object? result;

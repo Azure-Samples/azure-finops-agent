@@ -10,6 +10,8 @@ internal sealed class TurnExecution
     internal static readonly ConcurrentDictionary<string, TurnExecution> Active = new();
     private readonly object _sync = new();
     private readonly Dictionary<string, string> _admittedTools = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _observedTools = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TaskCompletionSource> _pendingAdmissions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _answerLengths = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _cancellation = new();
     private int _tools;
@@ -109,7 +111,11 @@ internal sealed class TurnExecution
     internal void AdmitTool(string toolCallId, string toolName = "unknown")
     {
         lock (_sync)
-            if (!_closed && !_released) _admittedTools.TryAdd(toolCallId, toolName);
+        {
+            if (_closed || _released || !_observedTools.Add(toolCallId)) return;
+            _admittedTools.Add(toolCallId, toolName);
+            if (_pendingAdmissions.TryGetValue(toolCallId, out var pending)) pending.TrySetResult();
+        }
     }
 
     internal void RecordUndispatchedToolFailure(string? toolCallId)
@@ -120,6 +126,33 @@ internal sealed class TurnExecution
             if (_released || toolCallId is null || !_admittedTools.Remove(toolCallId, out var name)) return;
             RecordTool(false);
             ToolEvidence.Enqueue(new(name, false, false, false, DateTimeOffset.UtcNow));
+        }
+    }
+
+    internal async ValueTask<IDisposable> AcquireToolAsync(long owner, string toolCallId, CancellationToken cancellationToken)
+    {
+        TaskCompletionSource pending;
+        lock (_sync)
+        {
+            if (owner != UserId) throw new UnauthorizedAccessException("Tool ownership could not be verified.");
+            if (_closed || _released) throw new OperationCanceledException("The originating turn is no longer accepting tools.", CancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_admittedTools.ContainsKey(toolCallId)) return AcquireTool(owner, toolCallId);
+            if (_observedTools.Contains(toolCallId) || _pendingAdmissions.ContainsKey(toolCallId))
+                throw new OperationCanceledException("The tool invocation was already claimed by this turn.", CancellationToken);
+            pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingAdmissions.Add(toolCallId, pending);
+        }
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, CancellationToken);
+            await Task.WhenAny(pending.Task, Terminal.Task).WaitAsync(TimeSpan.FromSeconds(10), linked.Token);
+            linked.Token.ThrowIfCancellationRequested();
+            return AcquireTool(owner, toolCallId);
+        }
+        finally
+        {
+            lock (_sync) _pendingAdmissions.Remove(toolCallId);
         }
     }
 

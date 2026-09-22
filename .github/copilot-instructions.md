@@ -33,6 +33,7 @@ The SDK and bundled Copilot CLI are one compatibility unit. Let the installed `G
 - The Azure OpenAI provider uses `BearerTokenProvider`; keep token refresh callback-based rather than baking a static token into sessions.
 - `RuntimePolicy` applies custom-tool allowlists on create and resume. Built-ins, MCP, tool search, cross-session memory, and logged-in CLI credentials are disabled; never reintroduce `ApproveAll`.
 - `ProtectedTool` binds owner, session, and admitted SDK tool-call id inside the callback. Host cancellation and tool leases keep the gate held until execution actually stops. Only provably undispatched input failures release without an SDK terminal event.
+- SDK tool callbacks can overtake queued session events. Await exact call-id admission with bounded cancellation-aware waiting; never assume `ToolExecutionStart` handlers have run before the callback, bypass admission, or re-admit a consumed call id.
 - Gates, cooldowns, and registries are process-local. Run one active app instance; shared files are persistence, not distributed coordination.
 
 ## Security invariants
