@@ -1,3 +1,4 @@
+using System.Buffers.Text;
 using System.Text.Json;
 using AzureFinOps.Dashboard.Infrastructure;
 using AzureFinOps.Dashboard.AI.Tools;
@@ -7,6 +8,22 @@ namespace Dashboard.Tests;
 
 public sealed class ToolResultTests
 {
+    [Fact]
+    public void RetainedHandlesAreCompactRandomReferencesNotContentIdentifiers()
+    {
+        var store = new ToolResultStore();
+        var first = store.Retain(101, "synthetic-session", "{\"rows\":[5]}", Source)!;
+        var second = store.Retain(101, "synthetic-session", "{\"rows\":[5]}", Source)!;
+
+        Assert.Equal(22, first.Id.Length);
+        Assert.Matches("\\A[A-Za-z0-9_-]{22}\\z", first.Id);
+        Assert.Equal(16, Base64Url.DecodeFromChars(first.Id).Length);
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.Equal(first.Sha256, second.Sha256);
+        Assert.Equal(first.Text, second.Text);
+        Assert.Null(new ToolResultStore().Find(101, "synthetic-session", first.Id));
+    }
+
     [Fact]
     public async Task RegisteredQueryToolEnforcesTheAmbientOwnerAndConversation()
     {
@@ -20,6 +37,10 @@ public sealed class ToolResultTests
         using (new ToolExecutionContext("synthetic-session", 101, CancellationToken.None))
         {
             arguments["resultId"] = entry.Id[..^1];
+            Assert.StartsWith("Error:", (await tool.InvokeAsync(arguments))!.ToString());
+            var last = entry.Id[^1];
+            arguments["resultId"] = entry.Id[..^1]
+                + (char.IsUpper(last) ? char.ToLowerInvariant(last) : char.ToUpperInvariant(last));
             Assert.StartsWith("Error:", (await tool.InvokeAsync(arguments))!.ToString());
             arguments["resultId"] = entry.Id;
             using var result = JsonDocument.Parse((await tool.InvokeAsync(arguments))!.ToString()!);

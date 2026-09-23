@@ -1,3 +1,4 @@
+using System.Buffers.Text;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -37,7 +38,7 @@ internal sealed class ToolResultStore(TimeProvider? clock = null, long capacityB
             data = document.RootElement.Clone();
         }
         catch (JsonException) { return null; }
-        var entry = new Entry(Guid.NewGuid().ToString("N"), owner, sessionId, text, data, bytes,
+        var entry = new Entry(Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(16)), owner, sessionId, text, data, bytes,
             Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text))), source with { Preamble = preamble }, _clock.GetUtcNow().AddMinutes(30));
         lock (_sync)
         {
@@ -75,7 +76,7 @@ internal sealed class ToolResultStore(TimeProvider? clock = null, long capacityB
         inlineComplete = false,
         schema = Discover(entry.Data),
         queryTool = "QueryToolResult",
-        guidance = "The complete redacted source JSON is retained unchanged for this owner and conversation. Query this resultId with JSONPath after inspecting schema; do not refetch Azure or narrow the requested scope because of response size. Source success, freshness and partial coverage still apply. IDs expire after 30 minutes or a host restart."
+        guidance = "The complete redacted source JSON is retained unchanged for this owner and conversation. Copy resultId exactly, including case, and query it with JSONPath after inspecting schema; do not refetch Azure or narrow the requested scope because of response size. Source success, freshness and partial coverage still apply. IDs expire after 30 minutes or a host restart."
     };
 
     // Inserted as the first root property so every existing JSON consumer still parses the result unchanged.
@@ -88,7 +89,7 @@ internal sealed class ToolResultStore(TimeProvider? clock = null, long capacityB
             resultId = entry.Id,
             queryTool = "QueryToolResult",
             expiresUtc = entry.ExpiresUtc,
-            guidance = "For totals, sums, counts, top-N, remainders or cross-row comparisons, aggregate this exact result with QueryToolResult instead of mental arithmetic; this annotation is not source data."
+            guidance = "Copy resultId exactly, including case. For totals, sums, counts, top-N, remainders or cross-row comparisons, aggregate this exact result with QueryToolResult instead of mental arithmetic; this annotation is not source data."
         });
         var empty = text.AsSpan(start + 1).TrimStart().StartsWith("}");
         return text[..(start + 1)] + "\"_resultQuery\":" + handle + (empty ? "" : ",") + text[(start + 1)..];

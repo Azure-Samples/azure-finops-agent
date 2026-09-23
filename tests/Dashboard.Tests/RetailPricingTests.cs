@@ -314,28 +314,42 @@ public sealed class RetailPricingTests
     }
 
     [Fact]
-    public void PricingMetadataRequiresEstablishedQuoteInputsWithoutBlockingCrossRegionOrGlobalComparisons()
+    public void PricingMetadataRequiresMaterialConfigurationEvenForCrossRegionRankings()
     {
         var tools = RetailPricingTools.Create().ToArray();
         Assert.All(tools, tool =>
         {
-            Assert.Contains("establish the region and material service tier/hardware inputs from the user or prior context",
+            Assert.Contains("including cross-region rankings, establish material product configuration from the user or prior context",
                 tool.Description);
+            Assert.Contains("VM OS/license or database service tier/hardware", tool.Description);
+            Assert.Contains("A fixed-region quote also requires the region", tool.Description);
             Assert.Contains("ask a concise clarification before pricing, calculation or charting", tool.Description);
             Assert.Contains("unless the user explicitly authorized an assumed scenario", tool.Description);
             Assert.Contains("Example filters are not defaults", tool.Description);
             Assert.Contains("a vCore count alone does not establish a database tier", tool.Description);
-            Assert.Contains("cross-region ranking or global rate-card comparison does not require choosing a single region",
+            Assert.Contains("cross-region ranking or global rate-card comparison waives only selecting a single region, not other material product configuration",
+                tool.Description);
+            Assert.Contains("Standard on-demand is the purchase-type default, not an OS/license or service tier default",
+                tool.Description);
+            Assert.Contains("Comparisons of explicitly named variants already establish those variants; compare them instead of asking the user to choose one",
                 tool.Description);
         });
 
         var single = tools.Single(tool => tool.Name == "GetAzureRetailPricing");
+        Assert.Contains("use standard on-demand purchase pricing unless other purchase variants are explicitly requested",
+            single.Description);
+        Assert.Contains("clarify missing material product configuration even for cross-region rankings", single.Description);
+        Assert.DoesNotContain("unless the user explicitly asked for Spot, Low Priority, Windows", single.Description);
         Assert.Contains("clarify a missing region rather than choosing an example region",
             single.JsonSchema.GetProperty("properties").GetProperty("armRegionName").GetProperty("description").GetString());
         var batch = tools.Single(tool => tool.Name == "GetAzureRetailPricingBatch");
         Assert.Contains("East US example, not default quote inputs", batch.Description);
+        var batchParameter = batch.JsonSchema.GetProperty("properties").GetProperty("queriesJson").GetProperty("description").GetString();
         Assert.Contains("ask a concise clarification before pricing, calculation or charting",
-            batch.JsonSchema.GetProperty("properties").GetProperty("queriesJson").GetProperty("description").GetString());
+            batchParameter);
+        Assert.Contains("including cross-region rankings, establish material product configuration", batchParameter);
+        Assert.Contains("waives only selecting a single region, not other material product configuration", batchParameter);
+        Assert.Contains("compare them instead of asking the user to choose one", batchParameter);
     }
 
     [Fact]

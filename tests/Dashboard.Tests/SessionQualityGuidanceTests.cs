@@ -26,6 +26,14 @@ public sealed class SessionQualityGuidanceTests
     }
 
     [Fact]
+    public void RetainedReferencesRequireExactCaseSensitiveCopying()
+    {
+        Assert.Contains("Copy each retained resultId exactly, including case", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Never abbreviate, reconstruct or try character variations", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Do not issue a query with an invented handle", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
     public void FollowUpsDoNotOverrideTheRequestedDeliverableOrCrawlWorkflow()
     {
         var followUp = FollowUpTools.Create().Single();
@@ -48,6 +56,12 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("Governance fixes are not substitutes", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("generatedUtc is bundle generation time", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("not a combined savings total", CopilotSessionFactory.SystemPrompt);
+        var shapeStart = CopilotSessionFactory.SystemPrompt.IndexOf("3. Chat answer", StringComparison.Ordinal);
+        var shapeEnd = CopilotSessionFactory.SystemPrompt.IndexOf("4. Nothing else after the table", shapeStart, StringComparison.Ordinal);
+        var shape = CopilotSessionFactory.SystemPrompt[shapeStart..shapeEnd];
+        Assert.Contains("source-freshness line here, before the table", shape);
+        Assert.Contains("source data-as-of timestamp and indexing delay are unknown", shape);
+        Assert.Contains("An Advisor retrieval timestamp does not cover inventory freshness", shape);
     }
 
     [Fact]
@@ -82,9 +96,12 @@ public sealed class SessionQualityGuidanceTests
     [Fact]
     public void PricingClarifiesMaterialInputsAndLabelsVariantsBeforeOneFinalVisual()
     {
-        Assert.Contains("clarify missing material region or service-tier inputs", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("clarify missing material product configuration, including VM OS/license basis or service tier", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("Example filters are not defaults", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("Explicit cross-region rankings and global rate-card comparisons", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("do not waive missing product configuration", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Do not ask again for variants the user explicitly named", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("purchase-type default does not choose a VM OS/license basis", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("OS/license basis, tier and purchase type in answer headlines and chart labels", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("Calculate the requested period before rendering exactly one final visual", CopilotSessionFactory.SystemPrompt);
         Assert.DoesNotContain("Use simple arithmetic directly", CopilotSessionFactory.SystemPrompt);

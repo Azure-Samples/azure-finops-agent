@@ -36,6 +36,7 @@ The SDK and bundled Copilot CLI are one compatibility unit. Let the installed `G
 - SDK tool callbacks can overtake queued session events. Await exact call-id admission with bounded cancellation-aware waiting; never assume `ToolExecutionStart` handlers have run before the callback, bypass admission, or re-admit a consumed call id.
 - SDK large-output file substitution stays disabled. Large read-only JSON may use `ToolResultStore` and `QueryToolResult`: retain the complete redacted source, discover schema dynamically, and enforce exact owner/session lookup. IDs expire after 30 minutes/restart. Smaller successful evidence objects stay inline with a root `_resultQuery` annotation so exact totals and comparisons use `QueryToolResult`; keep that annotation additive so existing parsers still read the JSON. Query paging never upgrades source freshness or coverage, and local queries never count as fresh scheduled-job evidence. Keep approval/chart/score/artifact control messages inline; never expose host paths or evaluate model code.
 - Empty `QueryToolResult` select/groupBy objects mean omitted projection/grouping. Ungrouped aggregates remain available in `totals` even with `limit=0`; grouped amounts, particularly different currencies, never become an unrequested grand total.
+- Retained-result handles use 22-character Base64url encoding of 128 cryptographically random bits. Copy them exactly, including case; never shorten, normalize, fuzzy-match or search other results to repair an invalid handle. Owner/session checks, redaction and expiry remain mandatory.
 - Gates, cooldowns, and registries are process-local. Run one active app instance; shared files are persistence, not distributed coordination.
 
 ## Security invariants
@@ -140,6 +141,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - It runs budget/current-spend, required-tag, exports, alert/scheduled-action, policy, common-waste, and empty-resource-group checks concurrently.
 - It computes and persists all seven scores and returns follow-up actions.
 - Rendered score details and answers preserve budget-snapshot lag, unknown source timestamps, and non-final billing status. Generic alert counts cannot prove anomaly-alert configuration; follow-ups verify coverage before proposing approved changes for confirmed gaps.
+- Crawl's compact problem context includes source freshness before the table: Resource Graph inventory can lag and has unknown source-as-of/indexing delay. Advisor retrieval/update dates cannot stand in for inventory freshness, and bundle generation time is not a source retrieval time.
 - `ChatEndpoints` emits `maturity_score` and `follow_up` directly.
 - Do not call `QueryAzure`, `FindIdleResources`, `ReportMaturityScore`, or `SuggestFollowUp` in the same Crawl turn.
 - Walk, Run, and Playbook continue to use `ReportMaturityScore`.
@@ -147,7 +149,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 
 ### Retail pricing
 
-- Clarify missing material region/service-tier inputs before fixed-region quotes unless established or assumptions were explicitly authorized. Example filters are not defaults. Explicit cross-region rankings and global rate cards remain supported without choosing a single region.
+- Clarify missing material product configuration (including VM OS/license and service tier) before quotes or rankings unless established or assumptions were explicitly authorized; fixed-region quotes also need a region. Example filters are not defaults. Cross-region/global comparisons waive only a single-region choice, not other configuration. Keep the ordinary on-demand default separate from OS/license, and do not re-ask for variants explicitly named for comparison.
 - Preserve the selected product's OS/license, tier and purchase-type qualifiers in headlines and chart labels; a shared ARM SKU or meter name does not prove equivalent pricing. Calculate the requested period before rendering one final visual, never an intermediate hourly chart for a monthly comparison.
 - One filter combination: one `GetAzureRetailPricing` call.
 - Two or more independent combinations: one `GetAzureRetailPricingBatch` call.
