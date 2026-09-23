@@ -1,7 +1,5 @@
 # Persistent Multi-Session Chat — Technical Description
 
-Current execution, approval, artifact and outcome contracts are documented in [agent reliability](agent-reliability.md). This document retains the original persistence design context; coordination requires one active application instance.
-
 ## 1. Purpose
 
 Before this change set, the Azure FinOps Agent had a **single live conversation per browser session**. Closing the tab, redeploying the container, or being idle past the 30-minute SDK timeout meant the user lost their chat history and had to re-consent to Azure / Graph / Log Analytics on the next visit.
@@ -14,7 +12,7 @@ Three independent persistence layers cooperate:
 
 | Layer                           | What it stores                                                          | Where                                                                                     | Lifetime                            |
 | ------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------- |
-| **Copilot SDK session state**   | Chat history, tool calls, model output                                  | SDK-managed session-state directory beneath `$COPILOT_HOME` (Azure Files `/home`)       | Until explicit delete or 30-day TTL |
+| **Copilot SDK session state**   | Chat history, tool calls, model output                                  | `$COPILOT_HOME/.copilot/session-state/{sessionId}/` (Azure Files `/home`)                 | Until explicit delete or 30-day TTL |
 | **Per-user workdir**            | SDK working directory used as the _ownership marker_                    | `$COPILOT_HOME/users/{oid}` (Entra) or `$COPILOT_HOME/anon/{userId}`                      | Same as session state               |
 | **`PersistentIdentity` record** | Encrypted `oid`, `tenantId`, derived `userId`, refresh token, GraphTier | `$COPILOT_HOME/users/{oid}/identity.json` (DataProtection-encrypted) + `finops_id` cookie | 30 days, sliding                    |
 
@@ -110,9 +108,9 @@ Every `CopilotSession` is created with `WorkingDirectory = $COPILOT_HOME/users/{
 
 `AiTelemetry.LiveSessions` is a `ConcurrentDictionary<sessionId, LiveSessionInfo>` containing only sessions currently held open in memory. `LiveSessionInfo` carries the `CopilotSession` instance, the `UserId` (init-only), and `BearerExpiry`. The SDK auto-disconnects after `SessionIdleTimeoutSeconds = 1800`, so this dict naturally trims itself; on the next prompt we transparently `ResumeSessionAsync` from the disk state with a fresh bearer.
 
-### 7.3 Callback-based bearer refresh
+### 7.3 Proactive bearer recycle (BYOK gotcha)
 
-`ProviderConfig.BearerTokenProvider` supplies a token on demand before model requests. The former static bearer and expiry-based session recycling approach is obsolete. Keep the callback on both create and resume; an OAuth token refresh must not require discarding the conversation. A missing cached SDK handle is evicted and resumed under the existing per-user gate, while genuinely unavailable history returns `history_unavailable` rather than a fabricated empty transcript.
+`ProviderConfig.BearerToken` is a _static string baked into the CLI subprocess at session creation_ — there is no callback for refreshing it. Azure OpenAI tokens expire after ~1 h, so any `CopilotSession` older than its token would 401 on every prompt. `GetOrCreateSessionAsync` checks `expiry - now < 10 min` and proactively `ResumeSessionAsync(sessionId, freshBearer)` — disk state preserved, history preserved, only the live wrapper is replaced. This must not be removed if the BYOK provider is ever swapped.
 
 ### 7.4 IDOR guard with graceful fallback
 
@@ -135,11 +133,10 @@ On the first user/assistant exchange we ask the model for a 5-word title via a t
 | `GET`    | `/api/sessions`                 | List the caller's conversations (filtered by `Cwd`). **Anon users get an empty list** — their `userId` is randomized per browser session, so they could never re-find old chats anyway; the sidebar is intentionally Entra-only. |
 | `POST`   | `/api/sessions/new`             | Force-create a new conversation and make it current.                                                                                                                                                                             |
 | `POST`   | `/api/sessions/{id}/select`     | Switch the user's "current" pointer (with IDOR check).                                                                                                                                                                           |
-| `GET`    | `/api/sessions/{id}/messages` | Owner-checked history fetch with cached-handle recovery and an explicit unavailable-history response. |
-| `GET`    | `/api/sessions/{id}/outcomes` | Owner-checked durable execution outcomes; normal chat fulfillment remains unevaluated. |
+| `GET`    | `/api/sessions/{id}/transcript` | Read-only history fetch via `LoadTranscriptAsync` — does **not** disturb `CurrentSessionId` or the live-session gauge.                                                                                                           |
 | `DELETE` | `/api/sessions/{id}`            | Tears down live wrapper, removes title, removes current-session pointer if it matches, then `_copilotClient.DeleteSessionAsync` which deletes the on-disk session-state directory.                                               |
 
-The chat SSE endpoint (`AI/ChatEndpoints.cs`) accepts an optional `sessionId` to resume a specific conversation, threads it through the IDOR check, and sends a `session` SSE event so the frontend can retain the active id in `sessionStorage`. Stop and timeout cancel host tools as well as the SDK; the gate remains held until terminal confirmation and tool-lease drainage. A browser disconnect alone does not cancel the turn.
+The chat SSE endpoint (`AI/ChatEndpoints.cs`) accepts an optional `sessionId` to resume a specific conversation, threads it through the IDOR check, and sends a `session_id` SSE event so the frontend can sync `localStorage`.
 
 ## 9. TTL janitor
 
@@ -154,7 +151,7 @@ The Vue chat UI now has a vertical-split right sidebar: tool calls on top, Conve
 1. **First visit, anon** — middleware finds no cookie, mints a random anon `userId`, the user chats; session state is written to `$COPILOT_HOME/anon/{userId}/`.
 2. **Click "Connect Azure"** — OAuth callback derives `userId` from `oid`, migrates in-memory state, writes `identity.json` + sets `finops_id` cookie. The conversation already in flight keeps its sessionId; future sessions go under `…/users/{oid}/`.
 3. **Container restart / new browser on another device** — cookie arrives → hydration middleware decrypts it, loads `identity.json`, restores session blobs. Sidebar fetches `/api/sessions`, shows all the user's past chats. Picking one rehydrates via `ResumeSessionAsync` with a freshly minted bearer.
-4. **Token expiry mid-conversation** - the bearer callback obtains a fresh token for the next model request without replacing the conversation.
+4. **Token expiry mid-conversation** — proactive recycle kicks in 10 min before expiry, swaps the live wrapper for one with a new bearer; user sees nothing.
 5. **30-day idle** — janitor sweeps the on-disk state away.
 
 ## 12. Why this design and not SQLite / Cosmos

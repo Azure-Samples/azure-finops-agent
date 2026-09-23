@@ -91,9 +91,8 @@ public static class UploadEndpoints
             var userJson = ctx.Session.GetString("user");
             if (userJson is null) return Results.Unauthorized();
             var userId = JsonSerializer.Deserialize<JsonElement>(userJson).GetProperty("id").GetInt64();
-            var requestedSession = ctx.Request.Query["sessionId"].ToString();
-            var list = UploadedFileTools.ListForUser(userId, string.IsNullOrWhiteSpace(requestedSession) ? null : requestedSession)
-                .Select(e => new { fileId = e.FileId, fileName = e.FileName, kind = e.Kind, sizeBytes = e.SizeBytes, expiresUtc = e.ExpiresUtc, sha256 = e.Sha256 });
+            var list = UploadedFileTools.ListForUser(userId)
+                .Select(e => new { fileId = e.FileId, fileName = e.FileName, kind = e.Kind, sizeBytes = e.SizeBytes });
             return Results.Ok(new { files = list });
         });
 

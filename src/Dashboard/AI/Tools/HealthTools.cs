@@ -12,7 +12,7 @@ public static class HealthTools
     public static IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GetAzureServiceHealth, "GetAzureServiceHealth",
-            "Read the public Azure Status RSS feed once for current reported incidents. This fixed feed has no service/region filtering and is not tenant-specific resource health. Reuse one response for the requested services/regions instead of fetching again per region; selecting relevant incidents afterward does not reduce the feed download. An empty public feed does not prove that a particular resource is healthy. For a named resource's health, use a scoped QueryAzure Resource Health read.");
+            "Returns current Azure service health status and active incidents from the public Azure Status RSS feed.");
     }
 
     private static async Task<string> GetAzureServiceHealth()

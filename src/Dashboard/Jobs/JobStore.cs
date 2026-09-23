@@ -34,9 +34,6 @@ public sealed class ScheduledJob
     public string? LastStatus { get; set; }
     /// <summary>First ~200 chars of the last answer, for the sidebar tooltip.</summary>
     public string? LastSummary { get; set; }
-    public DateTimeOffset? LastDataAsOfUtc { get; set; }
-    public string[] LastEvidenceTools { get; set; } = [];
-    public int LastCompactedRun { get; set; }
     public int RunCount { get; set; }
     public int ConsecutiveFailures { get; set; }
 }

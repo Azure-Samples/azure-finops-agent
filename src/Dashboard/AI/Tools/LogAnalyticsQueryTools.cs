@@ -21,7 +21,7 @@ public class LogAnalyticsQueryTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(QueryLogAnalytics, "QueryLogAnalytics", @"Runs a KQL query against a Log Analytics workspace or Application Insights component.
-DATA SCOPING: filter, aggregate, project, and bound results inside KQL. Start with `where` on the requested time range and resource scope, `summarize` for summaries, and `project` for only needed columns. Use `top`/`take` after aggregation for bounded detail; never limit raw events before computing full counts or totals. Choose the coarsest time bin that answers the question, retaining minute-level detail when explicitly needed. Drill into named outliers and do not rely on response truncation as a row limit.
+DATA SCOPING: ALWAYS use summarize/top/take/where to limit. Use bin(TimeGenerated, 1d) for time aggregation — never raw per-minute. Project only needed columns. Start aggregated, then drill down.
 LOG ANALYTICS: workspaceId is the workspace GUID — find via QueryAzure GET .../Microsoft.OperationalInsights/workspaces (customerId field).
 APP INSIGHTS: appId is the App Insights component GUID; set target='appinsights'.
 
@@ -40,8 +40,8 @@ FinOps-relevant tables (you know KQL syntax):
 
     private async Task<string> QueryLogAnalytics(
         [Description("The workspace GUID (Log Analytics) or app GUID (App Insights)")] string id,
-        [Description("KQL query with source-side where/summarize/project and top/take bounds so only the rows and columns needed for the answer are returned.")] string query,
-        [Description("Bound the scan to the requested time range, e.g. PT1H, P1D, P7D, P30D. Default: P1D. Keep the KQL time predicate consistent with this range.")] string? timespan = "P1D",
+        [Description("KQL query to execute")] string query,
+        [Description("Optional timespan, e.g. PT1H, P1D, P7D, P30D. Default: P1D")] string? timespan = "P1D",
         [Description("Target API: 'loganalytics' (default) or 'appinsights'")] string? target = "loganalytics")
     {
         using var activity = HttpHelper.Telemetry.StartActivity("QueryLogAnalytics");

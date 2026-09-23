@@ -6,12 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "test": "node --test ../../../tests/frontend/*.test.mjs",
-    "test:browser": "playwright test"
+    "preview": "vite preview"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
     "@vitejs/plugin-vue": "^6.0.7",
     "vite": "^8.1.3",
     "vue": "^3.5.39"

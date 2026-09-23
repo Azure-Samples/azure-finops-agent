@@ -92,11 +92,7 @@ resource existingAccount 'Microsoft.CognitiveServices/accounts@2026-03-01' exist
   scope: resourceGroup(existingSubId, existingRg)
 }
 
-var accountProperties = useExisting ? existingAccount!.properties : newAccount!.properties
-var serviceEndpoints object = accountProperties.?endpoints ?? {}
-
-// AIServices.endpoint is the generic route, not the published OpenAI inference route.
-output endpoint string = serviceEndpoints[?'OpenAI Language Model Instance API'] ?? accountProperties.endpoint
+output endpoint string = useExisting ? existingAccount!.properties.endpoint : newAccount!.properties.endpoint
 output accountName string = useExisting ? existingName : newAccount!.name
 output deploymentName string = deploymentName
 output resourceGroup string = useExisting ? existingRg : resourceGroup().name

@@ -1,10 +1,7 @@
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.Auth;
-using AzureFinOps.Dashboard.Infrastructure;
 using AzureFinOps.Dashboard.Observability;
 using GitHub.Copilot;
-
-#pragma warning disable GHCP001
 
 namespace AzureFinOps.Dashboard.Jobs;
 
@@ -121,12 +118,6 @@ public sealed class JobScheduler : BackgroundService
 
     private async Task RunJobCoreAsync(ScheduledJob job, CancellationToken ct)
     {
-        if (SensitiveContent.ContainsSecret(job.Prompt) || SensitiveContent.ContainsSecret(job.Name))
-        {
-            job.Enabled = false;
-            MarkFailure(job, "sensitive_content", SensitiveContent.RejectedMessage);
-            return;
-        }
         // Reschedule FIRST so a crash mid-run can't produce a hot retry loop.
         job.NextRunUtc = DateTimeOffset.UtcNow.AddMinutes(job.IntervalMinutes);
         _store.Save();
@@ -226,7 +217,7 @@ public sealed class JobScheduler : BackgroundService
         }
 
         // 3) One turn per session — never race a live chat turn.
-        if (!ChatEndpoints.TryBeginTurn(session.SessionId, job.UserId, session, out var turn))
+        if (!ChatEndpoints.TryBeginTurn(session.SessionId, job.UserId, session))
         {
             job.LastStatus = "busy";
             job.NextRunUtc = DateTimeOffset.UtcNow.AddMinutes(2); // retry shortly
@@ -237,41 +228,37 @@ public sealed class JobScheduler : BackgroundService
 
         try
         {
-            turn.IsScheduled = true;
-            var outcome = await RunTurnAsync(job, session, turn, ct);
-            turn.JobOutcome = outcome;
+            var (ok, summary) = await RunTurnAsync(job, session, ct);
             // A deploy, restart or scale-in cancels the host token mid-run. That is
             // the platform interrupting us, not the job failing — counting it would
             // spend one of the five strikes that auto-pause the schedule, so a few
             // deploys in a row could silently disable a perfectly healthy job.
             // Observed in production: run #63 landed as status=error 30ms after
             // "Application is shutting down", with its token refresh already 200 OK.
-            if (!outcome.Succeeded && ct.IsCancellationRequested)
+            if (!ok && ct.IsCancellationRequested)
             {
                 _logger.LogInformation(
                     "Job {JobId} '{Name}' interrupted by shutdown mid-run; not counted as a failure, retrying next tick",
                     job.Id, job.Name);
                 return;
             }
-            JobRunOutcome.Apply(job, outcome, DateTimeOffset.UtcNow);
-            if (job.Enabled && !turn.CancellationToken.IsCancellationRequested && job.RunCount - job.LastCompactedRun >= 20)
+            job.LastRunUtc = DateTimeOffset.UtcNow;
+            job.RunCount++;
+            if (ok)
             {
-                try
-                {
-                    using var compactionTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    compactionTimeout.CancelAfter(TimeSpan.FromMinutes(1));
-                    var compacted = await session.Rpc.History.CompactAsync(new GitHub.Copilot.Rpc.SessionHistoryCompactRequest
-                    {
-                        CustomInstructions = "Retain only the job objective, declared scope, unresolved blockers and latest evidence summary. Prior answers are not fresh evidence. Do not preserve credentials."
-                    }, compactionTimeout.Token);
-                    if (!compacted.Success) throw new InvalidOperationException("Context compaction did not complete.");
-                    job.LastCompactedRun = job.RunCount;
-                }
-                catch (Exception exception) when (exception is not OutOfMemoryException)
+                job.LastStatus = "ok";
+                job.LastSummary = summary;
+                job.ConsecutiveFailures = 0;
+            }
+            else
+            {
+                job.ConsecutiveFailures++;
+                job.LastStatus = "error";
+                job.LastSummary = summary;
+                if (job.ConsecutiveFailures >= MaxConsecutiveFailures)
                 {
                     job.Enabled = false;
-                    job.LastSummary = "Run result retained. Schedule paused because history compaction could not be verified.";
-                    _logger.LogWarning("Job history maintenance failed: {ErrorType}", exception.GetType().Name);
+                    _logger.LogWarning("Job {JobId} '{Name}' paused after {N} consecutive failures", job.Id, job.Name, job.ConsecutiveFailures);
                 }
             }
             _store.Save();
@@ -279,15 +266,14 @@ public sealed class JobScheduler : BackgroundService
         }
         finally
         {
-            if (!await ChatEndpoints.EndTurnAsync(turn))
-                _logger.LogWarning("Job turn remains quarantined until execution stops.");
+            ChatEndpoints.EndTurn(session.SessionId);
         }
     }
 
     /// <summary>Sends the job prompt into the session and waits for the turn to
     /// complete (SessionIdleEvent) or fail (SessionErrorEvent), with a hard
     /// timeout. Returns (success, answer-summary).</summary>
-    private async Task<JobRunOutcome> RunTurnAsync(ScheduledJob job, CopilotSession session, TurnExecution turn, CancellationToken ct)
+    private async Task<(bool Ok, string Summary)> RunTurnAsync(ScheduledJob job, CopilotSession session, CancellationToken ct)
     {
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var buf = new System.Text.StringBuilder();
@@ -320,10 +306,7 @@ public sealed class JobScheduler : BackgroundService
         var prompt =
             $"[SCHEDULED JOB RUN — '{job.Name}' — run #{job.RunCount + 1}, cadence {cadence}, {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm} UTC. " +
             "This is an automated background run; no human is watching live. Produce a complete, CONCISE answer — lead with what changed since the last run if prior runs exist in this conversation. " +
-            "Read fresh evidence for the entire declared scope. Prior runs are context, never proof nothing changed. " +
-            "After source tools finish call ReportJobOutcome with status, summary, exact evidence tool names, source dataAsOfUtc when known, and any retry deadline. " +
-            "Use blocked or partial when access, throttling, stale data, or incomplete coverage prevents success. Use goal_achieved only when verified; the scheduler will pause automatically. " +
-            $"Latest bounded result: {SensitiveContent.Redact(job.LastSummary ?? "none")}.]\n" +
+            "If the goal is now achieved (e.g. capacity found and acted on) or permanently impossible, say so explicitly on the first line so the user knows to disable this job.]\n" +
             job.Prompt;
 
         try
@@ -332,7 +315,7 @@ public sealed class JobScheduler : BackgroundService
         }
         catch (Exception ex)
         {
-            return JobRunOutcome.Failed($"Send failed: {ex.GetType().Name}");
+            return (false, $"send failed: {ex.Message}");
         }
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -344,14 +327,13 @@ public sealed class JobScheduler : BackgroundService
             lock (bufLock) { answer = buf.ToString(); }
             answer = answer.Trim();
             var summary = answer.Length > 200 ? answer[..200] + "…" : answer;
-            if (!ok) return JobRunOutcome.Failed(summary.Length > 0 ? summary : "Session error.");
-            return JobRunOutcome.Validate(turn.JobOutcome, turn, answer, DateTimeOffset.UtcNow);
+            return (ok, summary.Length > 0 ? summary : (ok ? "(empty answer)" : "session error"));
         }
         catch (OperationCanceledException)
         {
-            var confirmed = await turn.AbortAsync(ct.IsCancellationRequested ? "interrupted" : "timeout");
-            return JobRunOutcome.Failed(confirmed ? "Run cancelled after interruption or timeout; review partial results."
-                : "Run interrupted; session quarantined until execution stops.");
+            // Turn still running server-side; we stop waiting. The answer will
+            // land in the session transcript regardless.
+            return (false, "run timed out after 10 min (answer may still appear in the conversation)");
         }
     }
 

@@ -12,21 +12,6 @@ updates:
         patterns: ["OpenTelemetry*", "Azure.Monitor.OpenTelemetry*"]
       azure:
         patterns: ["Azure.*"]
-      identity-model:
-        patterns: ["Microsoft.IdentityModel.*", "System.IdentityModel.*"]
-      msal:
-        patterns: ["Microsoft.Identity.Client", "Microsoft.Identity.Client.Extensions.Msal"]
-
-  - package-ecosystem: nuget
-    directory: /tests/Dashboard.Tests
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
-    labels: [dependencies, dotnet]
-    groups:
-      test-tooling:
-        patterns: ["Microsoft.NET.Test.Sdk", "xunit*"]
 
   - package-ecosystem: npm
     directory: /src/Dashboard/frontend

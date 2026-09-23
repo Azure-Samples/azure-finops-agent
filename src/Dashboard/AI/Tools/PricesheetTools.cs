@@ -28,8 +28,6 @@ public class PricesheetTools
 
 USE BEFORE: region migration recs, RI/SP recommendations, anytime user mentions EA/MCA/billing account/profile.
 
-DATA SCOPING: use the one billing scope whose contract rates are required, preferring the specific MCA billing profile when known. Reuse discovered scope IDs; do not export every account/profile or restart an existing download. This API generates the scope's pricesheet and has no SKU/region row filter. For a targeted lookup in an already uploaded pricesheet, use QueryUploadedFile filters and projection instead of generating a fresh full export.
-
 SCOPE FORMATS (one):
 - EA:  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}
 - MCA: /providers/Microsoft.Billing/billingAccounts/{id}/billingProfiles/{profileId}
@@ -41,13 +39,18 @@ If you don't know the IDs, list them via QueryAzure first:
 Returns JSON with operationStatusUrl — pass to GetPricesheetStatus to poll. Typically 1–15 min for large EA, seconds for small MCA.");
 
         yield return AIFunctionFactory.Create(GetPricesheetStatus, "GetPricesheetStatus",
-            @"Poll only the existing pricesheet operationStatusUrl returned by StartPricesheetDownload. This is an exact-operation read, not a filtered rate lookup or a reason to download all contracts. Preserve the provider's status and body; a pending/ready operation is not proof that any requested rate was inspected. Respect retry deadlines and do not poll faster than every 10s. If the status URL is missing, report that blocker rather than constructing one.
+            @"Polls the pricesheet download started by StartPricesheetDownload. Pass the operationStatusUrl returned by that tool.
 
-Never pass a credential-bearing download/SAS URL to FetchPublicWebPage or other model-authored tool arguments. For rate analysis, request the downloaded pricesheet as an upload, then use QueryUploadedFile with the requested SKU/region filters and only needed output columns.");
+Returns one of:
+- {""status"":""pending""}                  — keep polling, back off ~10s between calls
+- {""status"":""ready"",""downloadUrl"":""<SAS>"",""validTill"":""...""}  — SAS valid ~1h
+- {""status"":""failed"",""error"":""...""}
+
+When ready: tell user the link is ready, OR if small enough use FetchPublicWebPage to grab the first chunk and parse rates inline. Do NOT poll faster than every 10s.");
     }
 
     private async Task<string> StartPricesheetDownload(
-        [Description("Exact billing scope for the requested contract. EA: /providers/Microsoft.Billing/billingAccounts/{id}. MCA: /providers/Microsoft.Billing/billingAccounts/{id}/billingProfiles/{profileId}. Reuse known IDs; do not broaden a single-profile request to every billing account.")] string billingScope)
+        [Description("Billing scope. EA: '/providers/Microsoft.Billing/billingAccounts/{id}'. MCA: '/providers/Microsoft.Billing/billingAccounts/{id}/billingProfiles/{profileId}'. Must start with '/'.")] string billingScope)
     {
         var token = _tokens.AzureToken;
         if (string.IsNullOrEmpty(token))
@@ -86,7 +89,7 @@ Never pass a credential-bearing download/SAS URL to FetchPublicWebPage or other 
     }
 
     private async Task<string> GetPricesheetStatus(
-        [Description("Exact full HTTPS operation status URL returned by StartPricesheetDownload. Reuse it for this operation only; not a constructed URL or a credential-bearing download/SAS URL.")] string operationStatusUrl)
+        [Description("Operation status URL returned by StartPricesheetDownload. Full https URL.")] string operationStatusUrl)
     {
         var token = _tokens.AzureToken;
         if (string.IsNullOrEmpty(token))

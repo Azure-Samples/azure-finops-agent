@@ -30,13 +30,11 @@ public sealed class ScoreTools
         yield return AIFunctionFactory.Create(GetScoreHistory);
     }
 
-    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores. Each dimension must include status=observed|unknown|notApplicable. Observed dimensions get 0-5; unknown and notApplicable get score=null and a reason. Missing permission is unknown, not zero. An absent workload makes workload-specific controls notApplicable. Auto-saved to history for trend analysis.
+    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores. Each dimension gets 0-5: 0=no data, 1=critical, 2=needs work, 3=acceptable, 4=good, 5=best practice. Auto-saved to history for trend analysis.
 
 Evaluate ALL the dimensions for the requested level via QueryAzure (and GraphQuery/LogAnalytics where relevant) and score each 0-5 with a one-line `detail`. Don't ask which to score — score them all.
 
-DATA SCOPING: use filtered source aggregates for the requested level and subscription scope, not raw resource lists. Submit all dimensions of that level with concise evidence; do not drop unknown or low-scoring dimensions to reduce payload. Explicit Crawl uses GetCrawlMaturityEvidence instead of this separate reporting call.
-
-EVIDENCE IS MANDATORY: each observed `detail` cites concrete counts, %, cost or other measured evidence. Unknown/notApplicable dimensions give a reason without invented numbers. Preserve per-subscription differences when relevant instead of treating a sample as the whole estate.
+EVIDENCE IS MANDATORY: every `detail` must cite the concrete numbers behind the score (counts, %, $ MTD, recommendation counts, savings estimates). A score with no number is not acceptable. When the estate spans multiple subscriptions, note the spread in `detail` (e.g. 'tagged 0% in Prod-EU, 38% in Sandbox') so the assessment reflects per-subscription reality, not one blended figure.
 
 CRAWL — Visibility & Baseline (id slug — label — what to check):
   1. budgets — 'Budgets & thresholds' — Cost Mgmt budgets: count, amounts, notification config. Flag unrealistic (≥$1M placeholders) and missing alerts.
@@ -63,45 +61,13 @@ RUN — Scale & Accountability (id slug — label — what to check):
   5. allocation — 'Cost allocation & MG governance' — management-group hierarchy depth, policy at MG scope, subscription-to-team mapping, Cost Mgmt cost-allocation rules.
   6. aicost — 'AI / GPU & emerging cost' — Azure OpenAI/Foundry spend, GPU VM/AKS spend, PTU vs PAYG mix; flag uncommitted GPU/AI spend. Carbon optional.
 
-Return scores array: id=slug, label=exact name above, status=observed|unknown|notApplicable, score=0-5 for observed or null otherwise, detail=concise evidence or the specific reason evidence is unavailable.")]
+Return scores array: id=slug, label=exact name above, score=0-5, detail=one-line reason WITH numbers (and per-subscription spread when relevant).")]
     private string ReportMaturityScore(
         [Description("Level: 'crawl', 'walk', 'run', or 'playbook'")] string level,
-        [Description(@"JSON array of all requested level dimensions with concise filtered evidence, not raw resource lists. Example: [{""id"":""tagging"",""label"":""Tagging"",""status"":""observed"",""score"":3,""detail"":""45% of resources tagged""}]. Include unknown/notApplicable dimensions with score=null and a reason.")] string scores)
+        [Description(@"JSON array of score objects, e.g.: [{""id"":""tagging"",""label"":""Tagging"",""score"":3,""detail"":""45% of resources tagged""}]")] string scores)
     {
-        if (level is not ("crawl" or "walk" or "run" or "playbook")) return "Error: invalid maturity level.";
-        var normalized = NormalizeScores(scores);
-        if (normalized is null) return "Error: scores require id, label, detail, status and an observed score from 0 to 5, or null for unknown/notApplicable.";
-        SaveScore(level, normalized);
-        return $"__MATURITY_SCORE__:{level}:{normalized}";
-    }
-
-    internal static string? NormalizeScores(string scores)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(scores);
-            if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() is < 1 or > 30) return null;
-            var normalized = new List<object>();
-            var identifiers = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var item in document.RootElement.EnumerateArray())
-            {
-                var id = item.GetProperty("id").GetString();
-                var label = item.GetProperty("label").GetString();
-                var detail = item.GetProperty("detail").GetString();
-                var status = item.GetProperty("status").GetString();
-                if (string.IsNullOrWhiteSpace(id) || !identifiers.Add(id) || string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(detail)) return null;
-                int? score = null;
-                if (status == "observed")
-                {
-                    if (!item.GetProperty("score").TryGetInt32(out var value) || value is < 0 or > 5) return null;
-                    score = value;
-                }
-                else if (status is not ("unknown" or "notApplicable")) return null;
-                normalized.Add(new { id, label, score, detail, status });
-            }
-            return JsonSerializer.Serialize(normalized);
-        }
-        catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException) { return null; }
+        SaveScore(level, scores);
+        return $"__MATURITY_SCORE__:{level}:{scores}";
     }
 
     /// <summary>Persists a score produced by a consolidated evidence tool.
@@ -113,7 +79,7 @@ Return scores array: id=slug, label=exact name above, status=observed|unknown|no
         {
             var entry = new ScoreHistoryEntry
             {
-                Timestamp = DateTimeOffset.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+                Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
                 Level = level.ToLowerInvariant(),
                 Scores = scores
             };
@@ -131,9 +97,9 @@ Return scores array: id=slug, label=exact name above, status=observed|unknown|no
         catch { /* non-critical — don't break scoring if persistence fails */ }
     }
 
-    [Description(@"Retrieve the owner's stored maturity history for trends. Pass the requested level filter instead of loading all levels; omit only for an explicit cross-level overview. The host filters at most 100 retained assessments, not live Azure resources. Reuse one response for the comparison rather than fetching per date. No date-range or arbitrary row-limit parameter is supported, and retained history is not an unlimited audit trail.")]
+    [Description(@"Retrieve historical FinOps maturity scores for trend analysis (current vs previous, improvement/regression over time). Use when user asks about score trends, progress, or historical comparison.")]
     private string GetScoreHistory(
-        [Description("Filter by the requested level: crawl, walk, run or playbook. Omit only for cross-level history; repeated calls for individual dates are unnecessary.")] string? level = null)
+        [Description("Optional: filter by level ('crawl', 'walk', 'run', 'playbook'). Omit to get all levels.")] string? level = null)
     {
         List<ScoreHistoryEntry> history;
         lock (_fileLock)

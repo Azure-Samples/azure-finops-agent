@@ -15,16 +15,19 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// template with Chart.js (CDN) for charts. Keyboard nav: ←/→ to navigate,
 /// ↑ fullscreen, ↓ exit. Click zones, dot nav, progress bar, swipe — all included.
 /// </summary>
-public sealed class HtmlPresentationTools(long ownerUserId)
+public static class HtmlPresentationTools
 {
-    internal static void CleanupOldFiles() => ArtifactStore.Default.Cleanup();
+    // fileId → (path, created, owner). Owner is the per-turn userId from Activity
+    // Baggage — the download endpoint rejects other users' sessions.
+    internal static readonly ConcurrentDictionary<string, (string Path, DateTime Created, long? Owner)> GeneratedFiles = new();
 
-    public IEnumerable<AIFunction> Create()
+    internal static void CleanupOldFiles() =>
+        TempFileHelper.CleanupOldFiles(GeneratedFiles, v => v.Created, v => v.Path);
+
+    public static IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateHtmlPresentation, "GenerateHtmlPresentation",
             @"Generates a self-contained HTML deck (one .html file). Use for any 'presentation', 'deck', 'slides', or 'exec summary' — there's no other format. Built-in nav: ←/→ navigate, ↑ fullscreen, ↓/Esc exit, number keys jump, touch swipe, dot nav, progress bar.
-
-DATA SCOPING: slidesJson contains only the requested audience, scope, period and decisions using verified aggregates already available. Do not paste raw API objects, whole exports or duplicate series into slides. Scope and aggregate queries before creating the deck; this renderer cannot fetch missing evidence. Label any top-N or partial view and retain all explicitly requested findings, using a separate detailed report when needed.
 
 LAYOUTS: title | section | kpi | chart | content | two_column | maturity | alerts | table | roadmap | closing.
 Use 'alerts' for findings (good/warn/bad). Use 'table' for top-N rankings (Status col auto-colors OK/Watch/Alert; numeric col auto-renders inline bar). 'maturity' single-state mode: omit `before` (or set =after). Use 'roadmap' for phased plans (30/60/90-day or Crawl→Walk→Run) — the CFO wants to see the journey. Use 'section' as a divider in decks ≥8 slides.
@@ -44,8 +47,8 @@ NOTE: this is a SLIDE DECK for quick exec summaries. For a DEEP FinOps maturity 
 ");
     }
 
-    private Task<string> GenerateHtmlPresentation(
-        [Description(@"JSON array of scoped slides using verified aggregates and concise labels, not raw API payloads. Include all requested findings and disclose partial evidence. SLIDE OBJECT SCHEMA:
+    private static Task<string> GenerateHtmlPresentation(
+        [Description(@"JSON array of slides. SLIDE OBJECT SCHEMA:
 - layout: 'title' | 'section' | 'kpi' | 'chart' | 'content' | 'two_column' | 'maturity' | 'alerts' | 'table' | 'roadmap' | 'closing' (REQUIRED)
 - title: slide title (REQUIRED, except 'title' layout uses it as the hero h1)
 - subtitle: optional one-line lead
@@ -69,7 +72,7 @@ EXAMPLE:
   {""layout"":""chart"",""title"":""VMs and AKS account for 61% of spend"",""chart"":{""type"":""horizontal_bar"",""title"":""Top services (USD)"",""labels"":[""VMs"",""AKS"",""Storage"",""SQL""],""values"":[17200,10500,5400,4200]},""bullets"":[""rg-prod-eu — top cost center at $12.7K""]},
   {""layout"":""closing"",""title"":""Re-score in 30 days"",""bullets"":[""Tag remaining 142 resources"",""Set budget alerts at 80%"",""Configure cost exports""],""cta"":{""label"":""Re-run scoring"",""url"":""/""}}
 ]")] string slidesJson,
-        [Description("Filename (without extension). Default: 'FinOps-Deck'.")] string? filename = null,
+        [Description("Filename (without extension). Default: 'FinOps-Deck'.")] string? filename,
         [Description("Optional customer/tenant name shown on the title slide and in chrome.")] string? customer = null)
     {
         if (string.IsNullOrWhiteSpace(slidesJson))
@@ -84,7 +87,9 @@ EXAMPLE:
         if (root.ValueKind != JsonValueKind.Array)
             return Task.FromResult("Error: slides must be a JSON array.");
 
+        var fileId = Guid.NewGuid().ToString("N")[..12];
         var safeName = TempFileHelper.SanitizeFilename(filename ?? "FinOps-Deck", "FinOps-Deck");
+        var outputPath = Path.Combine(Path.GetTempPath(), $"{fileId}_{safeName}.html");
 
         var slidesHtml = new StringBuilder();
         var chartScripts = new StringBuilder();
@@ -102,8 +107,10 @@ EXAMPLE:
             : "Azure FinOps · Generated Deck";
 
         var html = BuildShell(deckTitle, slidesHtml.ToString(), chartScripts.ToString());
-        var artifact = ArtifactStore.Default.Register(ownerUserId, safeName + ".html", "text/html", Encoding.UTF8.GetBytes(html));
-        return Task.FromResult($"__HTML_READY__:{artifact.Id}:{safeName}.html:{slideCount}");
+        File.WriteAllText(outputPath, html, new UTF8Encoding(false));
+
+        GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, HttpHelper.CurrentTurnUserId());
+        return Task.FromResult($"__HTML_READY__:{fileId}:{safeName}.html:{slideCount}");
     }
 
     // ────────────────────────────────────────────────────────────────────

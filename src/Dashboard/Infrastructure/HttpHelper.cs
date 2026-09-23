@@ -36,14 +36,15 @@ public static class HttpHelper
     public static ILogger? Logger { get; set; }
 
     /// <summary>
-    /// Per-turn retry status, resolved by the owner/session context established
-    /// inside the protected SDK callback. Cost throttles carry the full deadline
-    /// and whether this request will retry automatically.
+    /// Per-turn hook for reporting 429/5xx retries to the SSE stream. Keyed by
+    /// <c>userId:sessionId</c> (the "turn id") so it survives the JSON-RPC tool-callback
+    /// boundary from the Copilot CLI (where AsyncLocal does NOT flow), AND so concurrent
+    /// turns from the same user (two tabs, sidebar score racing chat) don't clobber each
+    /// other's reporter. ChatEndpoints stamps the turn id into Activity Baggage as
+    /// <c>finops.turn.id</c>; tools look it up via the current activity's baggage.
+    /// Null lookup = no-op. Signature: (attemptNumber, waitSeconds, url, telemetryPrefix, statusCode).
     /// </summary>
-    public sealed record RetryNotice(int Attempt, double WaitSeconds, string Url, string Tool, int Status,
-        DateTimeOffset? RetryAtUtc = null, bool? WillRetry = null);
-
-    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Func<RetryNotice, Task>> RetryReporters = new();
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Func<int, double, string, string, int, Task>> RetryReporters = new();
 
     /// <summary>
     /// Resolves the calling user's id from the per-turn Activity Baggage
@@ -61,22 +62,41 @@ public static class HttpHelper
         return long.TryParse(uidPart, out var uid) ? uid : null;
     }
 
+    // Max retry attempts on HTTP 429. Interactive Cost Management query/forecast
+    // calls use a lower limit below because five exponential waits can pin one chat
+    // turn for >30s even when the tenant throttle never clears.
     private const int MaxThrottleRetries = 5;
     private const int MaxInteractiveCostAttempts = 2;
 
+    // Cap on a single wait between retries (seconds). Honors Retry-After up to this ceiling
+    // so a misbehaving service can't pin us indefinitely. Cost Management commonly returns
+    // 30–60s; bigger waits are clamped to keep tool latency bounded.
     private const int MaxRetryWaitSeconds = 60;
 
-    private static readonly CostQueryCoordinator CostQueries = new();
+    // Cost Management / Consumption / Billing share an aggressive per-tenant throttle pool.
+    // App Insights showed 87/89 (97.8%) of /query calls returning 429 inside a single 34s burst
+    // — the LLM (esp. via BulkAzureRequest with parallelism=20) was fan-firing parallel queries
+    // that all collided. This semaphore globally serializes those calls to a small concurrency,
+    // turning a retry storm into ordered execution. Other ARM/Graph/LogAnalytics calls are
+    // unaffected and still parallelize freely.
+    private static readonly SemaphoreSlim CostMgmtGate = new(2, 2);
+    private const int CostMgmtQueueNotifyMs = 250;
 
-    internal static bool IsInteractiveCostQueryUrl(string url) =>
+    private static bool IsCostManagementUrl(string url) =>
+        url.Contains("/Microsoft.CostManagement/", StringComparison.OrdinalIgnoreCase)
+        || url.Contains("/Microsoft.Consumption/", StringComparison.OrdinalIgnoreCase)
+        || url.Contains("/Microsoft.Billing/", StringComparison.OrdinalIgnoreCase)
+        || url.Contains("/Microsoft.CostManagementExports/", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsInteractiveCostQueryUrl(string url) =>
         url.Contains("/Microsoft.CostManagement/query", StringComparison.OrdinalIgnoreCase)
         || url.Contains("/Microsoft.CostManagement/forecast", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Sends HTTP requests with bounded retries. Cost query/forecast calls are
-    /// tenant-serialized and retry once after a service deadline of at most five
-    /// minutes; longer deadlines are returned without shortening them. Other
-    /// retryable reads retain up to five attempts. Host cancellation interrupts waits.
+    /// Sends an HTTP request with silent retry on 429 (up to 5 attempts). On each 429 we honor,
+    /// in priority order: Cost Management's <c>x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after</c>,
+    /// then the standard <c>Retry-After</c> header (delta or HTTP-date), then exponential backoff
+    /// with jitter. After 5 failed attempts the 429 response is returned to the caller.
     /// Returns formatted "HTTP {status}\n{body}" string for the LLM.
     /// </summary>
     public static async Task<string> SendWithRetryAsync(
@@ -90,87 +110,8 @@ public static class HttpHelper
         Dictionary<string, string>? extraHeaders = null,
         int? maxResponseChars = null,
         bool bypassCostManagementGate = false,
-        int? maxAttemptsOverride = null,
-        CancellationToken cancellationToken = default)
+        int? maxAttemptsOverride = null)
     {
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
-        var mutation = method == HttpMethod.Put || method == HttpMethod.Patch;
-        OperationStore.Operation? operation = null;
-        if (mutation && OperationStore.IsArmUrl(url))
-        {
-            var context = ToolExecutionContext.Current;
-            if (context?.UserId is not { } owner || context.SessionId is null)
-                return "HTTP 403 Forbidden\nA host-owned active turn is required for Azure changes.";
-            cancellation.Token.ThrowIfCancellationRequested();
-            if (context.ApprovedOperationId is { } approvedId)
-            {
-                operation = OperationStore.Default.Find(approvedId, owner);
-                if (operation is null || !OperationStore.Default.MatchesApproved(operation, owner, context.SessionId, method!.Method, url, jsonBody))
-                    return "HTTP 403 Forbidden\nThe approved operation does not match this request.";
-            }
-            else
-            {
-                operation = OperationStore.Default.Begin(owner, context.SessionId, method!.Method, url, jsonBody, out var created, requiresApproval: true);
-                return (operation.Status == "awaitingApproval" ? "HTTP 409 ApprovalRequired\n" : "HTTP 202 Accepted\n") + OperationStore.Envelope(operation, duplicate: !created);
-            }
-        }
-        async Task<string> Send(CancellationToken requestToken)
-        {
-            try
-            {
-                return await SendCoreAsync(url, token, activity, telemetryPrefix, method, jsonBody, includeTimestamp, extraHeaders,
-                    maxResponseChars, bypassCostManagementGate, mutation ? 1 : maxAttemptsOverride, requestToken, operation);
-            }
-            catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException)
-            {
-                if (operation is not null) OperationStore.Default.MarkUncertain(operation);
-                throw;
-            }
-        }
-        if (!IsInteractiveCostQueryUrl(url)) return await Send(cancellation.Token);
-        return await CostQueries.ExecuteAsync(CostQueryCoordinator.TenantKey(token),
-            CostQueryCoordinator.RequestKey(token, (method ?? HttpMethod.Get).Method, url, jsonBody), Send, cancellation.Token,
-            (retryAt, willRetry) => ReportRetryAsync(CurrentRetryReporter(), new(0, Math.Max(0, (retryAt - DateTimeOffset.UtcNow).TotalSeconds),
-                url, telemetryPrefix, 429, retryAt, willRetry)));
-    }
-
-    private static Func<RetryNotice, Task>? CurrentRetryReporter()
-    {
-        var context = ToolExecutionContext.Current;
-        var key = context?.SessionId is not null ? $"{context.UserId}:{context.SessionId}" : "";
-        return RetryReporters.TryGetValue(key, out var report) ? report : null;
-    }
-
-    private static async Task ReportRetryAsync(Func<RetryNotice, Task>? report, RetryNotice notice)
-    {
-        if (report is null) return;
-        try { await report(notice); }
-        catch (Exception exception)
-        {
-            Logger?.LogWarning("SSE retry status could not be emitted for {Tool}: {ErrorType}", notice.Tool, exception.GetType().Name);
-        }
-    }
-
-    private static async Task<string> SendCoreAsync(
-        string url,
-        string token,
-        Activity? activity,
-        string telemetryPrefix,
-        HttpMethod? method = null,
-        string? jsonBody = null,
-        bool includeTimestamp = false,
-        Dictionary<string, string>? extraHeaders = null,
-        int? maxResponseChars = null,
-        bool bypassCostManagementGate = false,
-        int? maxAttemptsOverride = null,
-        CancellationToken cancellationToken = default,
-        OperationStore.Operation? pendingOperation = null)
-    {
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
-        var requestToken = cancellation.Token;
-        requestToken.ThrowIfCancellationRequested();
         method ??= HttpMethod.Get;
 
         var totalSw = Stopwatch.StartNew();
@@ -180,7 +121,8 @@ public static class HttpHelper
 
         // Resolve the per-turn SSE reporter ONCE up front — used for queue waits,
         // in-flight heartbeats, and retry backoffs alike. Returns no-op when absent.
-        var report = CurrentRetryReporter();
+        var turnKey = Activity.Current?.GetBaggageItem("finops.turn.id");
+        RetryReporters.TryGetValue(turnKey ?? "", out var report);
         // Never fall back from an exact turn key to a user-level match. A
         // scheduled job and an interactive chat can run concurrently for one
         // user; user-level routing can inject a job's retry details into the
@@ -193,6 +135,40 @@ public static class HttpHelper
         // "waiting in queue" instead of a frozen tool row. The opt-out is ONLY
         // valid for read-only metadata GETs issued by bounded aggregate tools;
         // it can never bypass query/forecast serialization or method security.
+        var safeMetadataBypass = bypassCostManagementGate
+            && method == HttpMethod.Get
+            && !IsInteractiveCostQueryUrl(url);
+        var isCostMgmt = IsCostManagementUrl(url) && !safeMetadataBypass;
+        var heldGate = false;
+        if (isCostMgmt)
+        {
+            if (!await CostMgmtGate.WaitAsync(CostMgmtQueueNotifyMs))
+            {
+                // Couldn't grab the gate immediately — surface a queue-wait event
+                // and keep retrying every ~3s so the ghost row stays alive in the UI.
+                var queuedSw = Stopwatch.StartNew();
+                while (!await CostMgmtGate.WaitAsync(3000))
+                {
+                    Logger?.LogInformation("HTTP queued {Tool} waitedSec={Wait:F1} url={Url}",
+                        telemetryPrefix, queuedSw.Elapsed.TotalSeconds, url);
+                    if (report is not null)
+                    {
+                        try { await report(0, 5, url, telemetryPrefix + " (queued)", 0); }
+                        catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE queued emit failed for {Tool}", telemetryPrefix); }
+                    }
+                }
+                // One final emit on acquire so the UI clears stale wait time.
+                if (report is not null)
+                {
+                    try { await report(0, 1, url, telemetryPrefix + " (queued)", 0); }
+                    catch { /* swallow */ }
+                }
+                activity?.SetTag($"{telemetryPrefix}.queued_sec", queuedSw.Elapsed.TotalSeconds);
+            }
+            heldGate = true;
+        }
+
+        try
         {
             var maxAttempts = Math.Clamp(
                 maxAttemptsOverride ?? (IsInteractiveCostQueryUrl(url)
@@ -225,7 +201,7 @@ public static class HttpHelper
                         await Task.Delay(5000, hbCts.Token);
                         while (!hbCts.IsCancellationRequested)
                         {
-                            try { await report(new(0, 6, url, telemetryPrefix + " (slow)", 0)); }
+                            try { await report(0, 6, url, telemetryPrefix + " (slow)", 0); }
                             catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE slow emit failed for {Tool}", telemetryPrefix); }
                             await Task.Delay(5000, hbCts.Token);
                         }
@@ -235,7 +211,7 @@ public static class HttpHelper
 
                 try
                 {
-                    res = await Http.SendAsync(req, requestToken);
+                    res = await Http.SendAsync(req);
                 }
                 finally
                 {
@@ -247,23 +223,11 @@ public static class HttpHelper
                 // failover or backend hiccups). Other non-success codes return to the caller.
                 var status = (int)res.StatusCode;
                 var isThrottle = status == 429;
-                var costThrottle = isThrottle && IsInteractiveCostQueryUrl(url);
                 var isTransientServer = status == 502 || status == 503 || status == 504;
                 if (!isThrottle && !isTransientServer) break;
-                var waitSeconds = ResolveRetryAfterSeconds(res, attempt, costThrottle);
-                DateTimeOffset? retryAt = null;
-                if (costThrottle)
-                {
-                    var final = attempt == maxAttempts - 1 || waitSeconds > CostQueryCoordinator.MaximumAutomaticWait.TotalSeconds;
-                    retryAt = CostQueries.RecordThrottle(CostQueryCoordinator.TenantKey(token), waitSeconds, final);
-                    if (final)
-                    {
-                        await ReportRetryAsync(report, new(attempt + 1, waitSeconds, url, telemetryPrefix, status, retryAt, false));
-                        break;
-                    }
-                }
                 if (attempt == maxAttempts - 1) break; // last attempt — return as-is to caller
 
+                var waitSeconds = ResolveRetryAfterSeconds(res, attempt);
                 totalWaitSec += waitSeconds;
                 retryCount++;
                 var reason = isThrottle ? "429" : status.ToString();
@@ -280,15 +244,25 @@ public static class HttpHelper
                 // Copilot CLI subprocess JSON-RPC tool callback) where RootId
                 // does not. ChatEndpoints stamps "finops.turn.id" (userId:sessionId)
                 // on the chat activity before SendAsync.
-                await ReportRetryAsync(report, new(attempt + 1, waitSeconds, url, telemetryPrefix, status,
-                    retryAt, costThrottle ? true : null));
-                res.Dispose();
-                await Task.Delay(TimeSpan.FromSeconds(waitSeconds), requestToken);
+                if (report is not null)
+                {
+                    try { await report(attempt + 1, waitSeconds, url, telemetryPrefix, status); }
+                    catch (Exception emitEx) { Logger?.LogWarning(emitEx, "SSE cooling_down emit failed for {Tool}", telemetryPrefix); }
+                }
+                else
+                {
+                    Logger?.LogWarning("SSE cooling_down skipped — no reporter for turn={Turn} (tool={Tool})",
+                        turnKey ?? "<none>", telemetryPrefix);
+                }
+                await Task.Delay(TimeSpan.FromSeconds(waitSeconds));
             }
         }
+        finally
+        {
+            if (heldGate) CostMgmtGate.Release();
+        }
 
-        using var completedResponse = res;
-        var responseBody = await res.Content.ReadAsStringAsync(requestToken);
+        var responseBody = await res.Content.ReadAsStringAsync();
         totalSw.Stop();
 
         RequestTotalMs.Record(totalSw.Elapsed.TotalMilliseconds,
@@ -315,19 +289,38 @@ public static class HttpHelper
         if (includeTimestamp)
             result += $"Current UTC time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}\n";
 
-        if (OperationStore.IsArmUrl(url) && (method == HttpMethod.Put || method == HttpMethod.Patch || method == HttpMethod.Post && (int)res.StatusCode == 202)
-            && ToolExecutionContext.Current is { UserId: { } owner, SessionId: { } sessionId })
+        // Trim chatty PUT/PATCH echoes — ARM returns the full resource (often 5–20KB) on success.
+        // For bulk mutations this dominates LLM input tokens with no informational value.
+        // Compact to a one-line {ok,status,name,id} summary; failures still return the full body
+        // so the LLM can diagnose. Reads (GET) and query POSTs are untouched.
+        if (res.IsSuccessStatusCode
+            && (method == HttpMethod.Put || method == HttpMethod.Patch)
+            && responseBody.Length > 256)
         {
-            var operation = pendingOperation is not null
-                ? OperationStore.Default.ObserveResponse(pendingOperation, res, responseBody)
-                : OperationStore.Default.Register(owner, sessionId, method.Method, url, jsonBody, res, responseBody);
-            return result + OperationStore.Envelope(operation);
+            string? id = null, name = null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(responseBody);
+                if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    if (doc.RootElement.TryGetProperty("id", out var idEl)) id = idEl.GetString();
+                    if (doc.RootElement.TryGetProperty("name", out var nameEl)) name = nameEl.GetString();
+                }
+            }
+            catch { /* not JSON or unexpected shape — fall through to full body */ }
+
+            if (id is not null || name is not null)
+            {
+                result += $"{{\"ok\":true,\"status\":{(int)res.StatusCode},\"method\":\"{method.Method}\",\"name\":\"{name}\",\"id\":\"{id}\"}}";
+                activity?.SetTag($"{telemetryPrefix}.response_trimmed", true);
+                return result;
+            }
         }
 
         if (maxResponseChars.HasValue && responseBody.Length > maxResponseChars.Value)
         {
             result += responseBody[..maxResponseChars.Value];
-            result += $"\n\n[PARTIAL RESULT: showing first {maxResponseChars.Value / 1024}KB of {responseBody.Length / 1024}KB. Narrow or aggregate the query before making a complete-coverage claim.]";
+            result += $"\n\n[TRUNCATED — showing first {maxResponseChars.Value / 1024}KB of {responseBody.Length / 1024}KB. Use Python with pandas for full analysis.]";
         }
         else
         {
@@ -338,29 +331,28 @@ public static class HttpHelper
     }
 
     /// <summary>
-    /// Uses the longest Cost Management or standard Retry-After deadline, without
-    /// clamping a service-specified wait. Missing cost headers default to 60 seconds;
-    /// other requests use bounded exponential backoff with jitter.
+    /// Resolves how long to wait before the next retry on a 429 response. Priority:
+    /// (1) Cost Management's QPU-specific header, (2) standard Retry-After (delta or HTTP-date),
+    /// (3) exponential backoff with jitter (2s, 4s, 8s, 16s...). Result is clamped to
+    /// [1, MaxRetryWaitSeconds].
     /// </summary>
-    internal static double ResolveRetryAfterSeconds(HttpResponseMessage res, int attempt, bool costQuery = false)
+    private static double ResolveRetryAfterSeconds(HttpResponseMessage res, int attempt)
     {
-        var serviceWait = 0d;
-        foreach (var header in res.Headers.Where(header =>
-            (header.Key.StartsWith("x-ms-ratelimit-microsoft.costmanagement-", StringComparison.OrdinalIgnoreCase)
-                && header.Key.EndsWith("-retry-after", StringComparison.OrdinalIgnoreCase))
-            || header.Key.Equals("x-ms-ratelimit-microsoft.consumption-retry-after", StringComparison.OrdinalIgnoreCase)))
+        // Cost Management exposes a service-specific retry header — prefer it when present.
+        if (res.Headers.TryGetValues("x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after", out var qpuValues)
+            && double.TryParse(qpuValues.FirstOrDefault(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var qpuSeconds)
+            && qpuSeconds > 0)
         {
-            foreach (var value in header.Value)
-                if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
-                    && double.IsFinite(seconds) && seconds > serviceWait)
-                    serviceWait = seconds;
+            return Math.Min(Math.Max(qpuSeconds, 1), MaxRetryWaitSeconds);
         }
 
+        // Standard Retry-After (seconds) or HTTP-date.
         var standard = res.Headers.RetryAfter?.Delta?.TotalSeconds
                     ?? res.Headers.RetryAfter?.Date?.Subtract(DateTimeOffset.UtcNow).TotalSeconds;
-        var requestedWait = Math.Max(serviceWait, standard ?? 0);
-        if (requestedWait > 0) return Math.Max(requestedWait, 1);
-        if (costQuery) return 60;
+        if (standard is > 0)
+        {
+            return Math.Min(Math.Max(standard.Value, 1), MaxRetryWaitSeconds);
+        }
 
         // Fallback: exponential backoff with small jitter to avoid lockstep retries.
         var backoff = Math.Pow(2, attempt + 1); // 2, 4, 8, 16, 32
@@ -371,52 +363,11 @@ public static class HttpHelper
     /// <summary>
     /// Returns a standardized 401 error message when a token is missing.
     /// </summary>
-    public static string TokenMissing(string tokenName, Activity? activity, string telemetryPrefix, string? graphTier = null)
+    public static string TokenMissing(string tokenName, Activity? activity, string telemetryPrefix)
     {
         activity?.SetTag($"{telemetryPrefix}.result", "not_connected");
         activity?.SetStatus(ActivityStatusCode.Error, $"{tokenName} not connected");
-        var tiers = tokenName switch
-        {
-            "LogAnalyticsToken" => new[] { "loganalytics" },
-            "StorageToken" => ["storage"],
-            "GraphToken" => graphTier switch
-            {
-                null => ["licenses", "chargeback"],
-                "licenses" => ["licenses"],
-                "chargeback" => ["chargeback"],
-                _ => throw new ArgumentOutOfRangeException(nameof(graphTier))
-            },
-            _ => ["base"]
-        };
-        return "HTTP 401 Unauthorized\n" + System.Text.Json.JsonSerializer.Serialize(new
-        {
-            error = new { code = "consent_required", resource = tokenName, message = "The required resource token is unavailable. Grant the matching delegated access below; an existing Azure connection need not be disconnected." },
-            authActions = tiers.Select(tier => new { label = ConsentLabels[tier], href = "/auth/microsoft?tier=" + tier }),
-            recovery = "For HTTP 403, check the user's resource RBAC instead; reconnecting does not grant Azure roles. Graph licenses and chargeback are separate use cases."
-        });
-    }
-
-    private static readonly IReadOnlyDictionary<string, string> ConsentLabels = new Dictionary<string, string>
-    {
-        ["base"] = "Connect Azure",
-        ["loganalytics"] = "Grant Log Analytics access",
-        ["storage"] = "Grant Storage access",
-        ["licenses"] = "Grant license reporting access",
-        ["chargeback"] = "Grant cost allocation access"
-    };
-
-    internal static object[] ConsentActions(string? response)
-    {
-        if (response is null || !response.StartsWith("HTTP 401 ", StringComparison.Ordinal)) return [];
-        try
-        {
-            using var document = System.Text.Json.JsonDocument.Parse(response[(response.IndexOf('\n') + 1)..]);
-            if (document.RootElement.GetProperty("error").GetProperty("code").GetString() != "consent_required") return [];
-            return document.RootElement.GetProperty("authActions").EnumerateArray().Select(action => action.GetProperty("href").GetString())
-                .Select(href => ConsentLabels.FirstOrDefault(pair => href == "/auth/microsoft?tier=" + pair.Key))
-                .Where(pair => pair.Key is not null).Select(pair => (object)new { label = pair.Value, href = "/auth/microsoft?tier=" + pair.Key }).ToArray();
-        }
-        catch (Exception exception) when (exception is System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException) { return []; }
+        return $"HTTP 401 Unauthorized\n{tokenName} is null — the user must click 'Connect Azure' in the sidebar to authenticate, then retry.";
     }
 
     /// <summary>

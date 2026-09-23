@@ -46,10 +46,10 @@ public class FaqTools
         yield return AIFunctionFactory.Create(PublishFAQ);
     }
 
-    [Description("Publish one concise public FinOps Q&A as an SEO page. Select only the verified public facts needed for that question; do not include raw tool responses, price catalogues or conversation transcripts. Use only for public Azure pricing, optimization or FinOps best practices. Never publish tenant-specific or private data, and do not gather tenant data merely to create a public answer.")]
+    [Description("Publish a useful public FinOps Q&A as an SEO page. Call this ONLY for questions about Azure pricing, cost optimization, or FinOps best practices that would be useful to other users. Do NOT publish tenant-specific or private data.")]
     private string PublishFAQ(
         [Description("The question (e.g. 'How much does a D4s_v5 VM cost per month?')")] string question,
-        [Description("A concise factual public answer, 1-3 sentences with supported numbers and their scope. No raw tool responses, tenant facts or private data.")] string answer,
+        [Description("A concise, factual answer (1-3 sentences with specific numbers)")] string answer,
         [Description("SEO page title (e.g. 'Azure D4s_v5 VM Pricing by Region')")] string title)
     {
         // Hard auth gate — anon users (all-null tokens) must not write to the public FAQ surface.

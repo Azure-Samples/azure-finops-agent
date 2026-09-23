@@ -2,7 +2,6 @@ using System.Text.Json;
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Observability;
-using AzureFinOps.Dashboard.Infrastructure;
 
 namespace AzureFinOps.Dashboard.Endpoints;
 
@@ -70,13 +69,6 @@ public static class SessionEndpoints
             return Results.Ok(new { active = AzureFinOps.Dashboard.AI.ChatEndpoints.IsTurnActive(sessionId) });
         });
 
-        app.MapGet("/api/sessions/{sessionId}/outcomes", async (HttpContext ctx, string sessionId) =>
-        {
-            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid)) return Results.Unauthorized();
-            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted)) return Results.NotFound();
-            return Results.Ok(new { outcomes = TurnOutcomeStore.Default.ForSession(userId, sessionId) });
-        });
-
         app.MapPost("/api/sessions/{sessionId}/select", async (HttpContext ctx, string sessionId) =>
         {
             if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
@@ -139,169 +131,153 @@ public static class SessionEndpoints
             // Read-only load — does NOT register this session as the user's
             // current and does NOT bump the ActiveSessions gauge. Just viewing
             // a past conversation must not switch the user's active thread.
-            IReadOnlyList<GitHub.Copilot.SessionEvent> events;
-            try { events = await copilotFactory.LoadTranscriptAsync(sessionId, userId, entraOid, ctx.RequestAborted); }
-            catch (CopilotSessionFactory.HistoryUnavailableException)
-            {
-                return Results.NotFound(new { code = "history_unavailable", error = "The retained conversation history is unavailable. Start a new conversation to continue." });
-            }
+            var events = await copilotFactory.LoadTranscriptAsync(sessionId, userId, entraOid, ctx.RequestAborted);
 
-            var messages = BuildTranscript(events, userId);
-            var pendingChanges = OperationStore.Default.ForSession(userId, sessionId)
-                .Where(operation => operation.Status == "awaitingApproval").Select(OperationStore.Review).ToArray();
-            return Results.Ok(new { messages, pendingChanges });
-        });
-    }
-
-    internal static IReadOnlyList<object> BuildTranscript(IReadOnlyList<GitHub.Copilot.SessionEvent> events, long userId)
-    {
-        // First pass: index tool execution results by ToolCallId so we
-        // can attach result / success / error to each requested tool.
-        var resultsById = new Dictionary<string, (string? Result, bool Success, string? Error)>();
-        foreach (var evt in events)
-        {
-            if (evt is GitHub.Copilot.ToolExecutionCompleteEvent tec && tec.Data is { } d && !string.IsNullOrEmpty(d.ToolCallId))
+            // First pass: index tool execution results by ToolCallId so we
+            // can attach result / success / error to each requested tool.
+            var resultsById = new Dictionary<string, (string? Result, bool Success, string? Error)>();
+            foreach (var evt in events)
             {
-                resultsById[d.ToolCallId] = (
-                    d.Result?.DetailedContent ?? d.Result?.Content,
-                    d.Success,
-                    d.Error?.ToString()
-                );
-            }
-        }
-
-        var messages = new List<object>();
-        string? pendingAssistantText = null;
-        var pendingTools = new List<object>();
-        var pendingCharts = new List<string>();
-        object? pendingHtml = null;
-        object? pendingScript = null;
-        var hasUserMessage = false;
-
-        void FlushAssistant()
-        {
-            if (pendingAssistantText is null && pendingTools.Count == 0
-                && pendingCharts.Count == 0 && pendingHtml is null && pendingScript is null) return;
-            messages.Add(new
-            {
-                role = "assistant",
-                content = pendingAssistantText ?? "",
-                toolCalls = pendingTools.ToArray(),
-                charts = pendingCharts.ToArray(),
-                html = pendingHtml,
-                script = pendingScript,
-            });
-            pendingAssistantText = null;
-            pendingTools.Clear();
-            pendingCharts.Clear();
-            pendingHtml = null;
-            pendingScript = null;
-        }
-
-        foreach (var evt in events)
-        {
-            if (evt is GitHub.Copilot.UserMessageEvent um)
-            {
-                var raw = um.Data?.Content ?? "";
-                if (IsInjectedUserContext(raw, um.Data?.Source)) continue;
-                FlushAssistant();
-                var clean = StripContextPrefix(raw);
-                if (string.IsNullOrWhiteSpace(clean)) continue;
-                messages.Add(new { role = "user", content = clean });
-                hasUserMessage = true;
-            }
-            else if (evt is GitHub.Copilot.AssistantMessageEvent am)
-            {
-                var text = am.Data?.Content;
-                if (!string.IsNullOrEmpty(text))
+                if (evt is GitHub.Copilot.ToolExecutionCompleteEvent tec && tec.Data is { } d && !string.IsNullOrEmpty(d.ToolCallId))
                 {
-                    pendingAssistantText = (pendingAssistantText is null ? "" : pendingAssistantText + "\n\n") + text;
+                    resultsById[d.ToolCallId] = (
+                        d.Result?.DetailedContent ?? d.Result?.Content,
+                        d.Success,
+                        d.Error?.ToString()
+                    );
                 }
-                if (am.Data?.ToolRequests is { Length: > 0 } reqs)
-                {
-                    foreach (var r in reqs)
-                    {
-                        resultsById.TryGetValue(r.ToolCallId ?? "", out var ex);
-                        pendingTools.Add(new
-                        {
-                            name = r.Name,
-                            args = r.Arguments?.ToString() ?? "",
-                            id = r.ToolCallId,
-                            intent = r.IntentionSummary,
-                            result = ex.Result,
-                            success = ex.Result is null ? (bool?)null : ex.Success,
-                            error = ex.Error,
-                        });
+            }
 
-                        // Mirror ChatEndpoints.HandleToolDoneAsync side-channel parsing
-                        // so charts/scripts/decks survive a session resume.
-                        if (ex.Success && ex.Result is { } rt)
+            var messages = new List<object>();
+            string? pendingAssistantText = null;
+            var pendingTools = new List<object>();
+            var pendingCharts = new List<string>();
+            object? pendingHtml = null;
+            object? pendingScript = null;
+
+            void FlushAssistant()
+            {
+                if (pendingAssistantText is null && pendingTools.Count == 0
+                    && pendingCharts.Count == 0 && pendingHtml is null && pendingScript is null) return;
+                messages.Add(new
+                {
+                    role = "assistant",
+                    content = pendingAssistantText ?? "",
+                    toolCalls = pendingTools.ToArray(),
+                    charts = pendingCharts.ToArray(),
+                    html = pendingHtml,
+                    script = pendingScript,
+                });
+                pendingAssistantText = null;
+                pendingTools.Clear();
+                pendingCharts.Clear();
+                pendingHtml = null;
+                pendingScript = null;
+            }
+
+            foreach (var evt in events)
+            {
+                if (evt is GitHub.Copilot.UserMessageEvent um)
+                {
+                    var raw = um.Data?.Content ?? "";
+                    if (IsInjectedUserContext(raw, um.Data?.Source)) continue;
+                    FlushAssistant();
+                    var clean = StripContextPrefix(raw);
+                    if (string.IsNullOrWhiteSpace(clean)) continue;
+                    messages.Add(new { role = "user", content = clean });
+                }
+                else if (evt is GitHub.Copilot.AssistantMessageEvent am)
+                {
+                    var text = am.Data?.Content;
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        pendingAssistantText = (pendingAssistantText is null ? "" : pendingAssistantText + "\n\n") + text;
+                    }
+                    if (am.Data?.ToolRequests is { Length: > 0 } reqs)
+                    {
+                        foreach (var r in reqs)
                         {
-                            if (r.Name == "RenderChart" || r.Name == "RenderAdvancedChart")
+                            resultsById.TryGetValue(r.ToolCallId ?? "", out var ex);
+                            pendingTools.Add(new
                             {
-                                pendingCharts.Add(rt);
-                            }
-                            else if (rt.Contains("__CHART__:"))
+                                name = r.Name,
+                                args = r.Arguments?.ToString() ?? "",
+                                id = r.ToolCallId,
+                                intent = r.IntentionSummary,
+                                result = ex.Result,
+                                success = ex.Result is null ? (bool?)null : ex.Success,
+                                error = ex.Error,
+                            });
+
+                            // Mirror ChatEndpoints.HandleToolDoneAsync side-channel parsing
+                            // so charts/scripts/decks survive a session resume.
+                            if (ex.Success && ex.Result is { } rt)
                             {
-                                foreach (var line in rt.Split('\n'))
+                                if (r.Name == "RenderChart" || r.Name == "RenderAdvancedChart")
                                 {
-                                    var t = line.Trim();
-                                    if (t.StartsWith("__CHART__:"))
-                                    {
-                                        pendingCharts.Add(t["__CHART__:".Length..].Trim());
-                                        break;
-                                    }
+                                    pendingCharts.Add(rt);
                                 }
-                            }
-                            if (rt.Contains("__HTML_READY__:"))
-                            {
-                                foreach (var line in rt.Split('\n'))
+                                else if (rt.Contains("__CHART__:"))
                                 {
-                                    var t = line.Trim();
-                                    if (t.StartsWith("__HTML_READY__:"))
+                                    foreach (var line in rt.Split('\n'))
                                     {
-                                        var parts = t["__HTML_READY__:".Length..].Split(':', 3);
-                                        if (parts.Length >= 2)
-                                            pendingHtml = new
-                                            {
-                                                fileId = parts[0],
-                                                fileName = parts[1],
-                                                slideCount = parts.Length > 2 ? parts[2] : "",
-                                                // Artifacts live 30 min in-memory + on temp disk; after a
-                                                // TTL sweep or restart the download link is dead — let the
-                                                // UI render an \"expired\" state instead of a 404 link.
-                                                expired = ArtifactStore.Default.Find(parts[0], userId) is null,
-                                            };
-                                        break;
-                                    }
-                                }
-                            }
-                            if (rt.Contains("__SCRIPT_READY__:"))
-                            {
-                                foreach (var line in rt.Split('\n'))
-                                {
-                                    var t = line.Trim();
-                                    if (t.StartsWith("__SCRIPT_READY__:"))
-                                    {
-                                        var parts = t["__SCRIPT_READY__:".Length..].Split(':', 5);
-                                        if (parts.Length >= 4)
+                                        var t = line.Trim();
+                                        if (t.StartsWith("__CHART__:"))
                                         {
-                                            var entry = ArtifactStore.Default.Find(parts[0], userId);
-                                            var live = entry is not null;
-                                            pendingScript = new
-                                            {
-                                                fileId = parts[0],
-                                                fileName = parts[1],
-                                                lineCount = parts[2],
-                                                language = parts[3],
-                                                description = parts.Length > 4 ? parts[4] : "",
-                                                content = entry is not null ? SensitiveContent.Redact(File.ReadAllText(entry.Path)) : "",
-                                                // See __HTML_READY__ above — expired artifacts render a
-                                                // \"regenerate\" hint instead of dead download/copy buttons.
-                                                expired = !live,
-                                            };
+                                            pendingCharts.Add(t["__CHART__:".Length..].Trim());
+                                            break;
                                         }
-                                        break;
+                                    }
+                                }
+                                if (rt.Contains("__HTML_READY__:"))
+                                {
+                                    foreach (var line in rt.Split('\n'))
+                                    {
+                                        var t = line.Trim();
+                                        if (t.StartsWith("__HTML_READY__:"))
+                                        {
+                                            var parts = t["__HTML_READY__:".Length..].Split(':', 3);
+                                            if (parts.Length >= 2)
+                                                pendingHtml = new
+                                                {
+                                                    fileId = parts[0],
+                                                    fileName = parts[1],
+                                                    slideCount = parts.Length > 2 ? parts[2] : "",
+                                                    // Artifacts live 30 min in-memory + on temp disk; after a
+                                                    // TTL sweep or restart the download link is dead — let the
+                                                    // UI render an \"expired\" state instead of a 404 link.
+                                                    expired = !AzureFinOps.Dashboard.AI.Tools.HtmlPresentationTools.GeneratedFiles.ContainsKey(parts[0]),
+                                                };
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (rt.Contains("__SCRIPT_READY__:"))
+                                {
+                                    foreach (var line in rt.Split('\n'))
+                                    {
+                                        var t = line.Trim();
+                                        if (t.StartsWith("__SCRIPT_READY__:"))
+                                        {
+                                            var parts = t["__SCRIPT_READY__:".Length..].Split(':', 5);
+                                            if (parts.Length >= 4)
+                                            {
+                                                var live = AzureFinOps.Dashboard.AI.Tools.ScriptTools.GeneratedFiles.TryGetValue(parts[0], out var entry);
+                                                pendingScript = new
+                                                {
+                                                    fileId = parts[0],
+                                                    fileName = parts[1],
+                                                    lineCount = parts[2],
+                                                    language = parts[3],
+                                                    description = parts.Length > 4 ? parts[4] : "",
+                                                    content = live ? entry.Content ?? "" : "",
+                                                    // See __HTML_READY__ above — expired artifacts render a
+                                                    // \"regenerate\" hint instead of dead download/copy buttons.
+                                                    expired = !live,
+                                                };
+                                            }
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -309,19 +285,10 @@ public static class SessionEndpoints
                     }
                 }
             }
-            else if (evt is GitHub.Copilot.SessionErrorEvent error && hasUserMessage)
-            {
-                FlushAssistant();
-                messages.Add(new
-                {
-                    role = "system",
-                    content = SensitiveContent.Redact(error.Data.Message),
-                    terminalStatus = "error",
-                });
-            }
-        }
-        FlushAssistant();
-        return messages;
+            FlushAssistant();
+
+            return Results.Ok(new { messages });
+        });
     }
 
     private static string StripContextPrefix(string raw)

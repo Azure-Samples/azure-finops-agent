@@ -5,7 +5,6 @@ using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Observability;
 using AzureFinOps.Dashboard.Endpoints;
-using AzureFinOps.Dashboard.Infrastructure;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 
@@ -31,7 +30,7 @@ if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
         "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-RESOURCE.openai.azure.com/\" " +
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
-var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.6-luna";
+var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.6-sol";
 // Optional: pin the BYOK credential to the AOAI resource's tenant. Needed for
 // local dev when the az CLI's DEFAULT account lives in a different tenant than
 // the AOAI resource (DefaultAzureCredential would mint a token for the wrong
@@ -96,8 +95,7 @@ if (!string.IsNullOrEmpty(appInsightsCs))
         .UseAzureMonitor(o =>
         {
             o.ConnectionString = appInsightsCs;
-            o.SamplingRatio = 1.0f;
-            o.TracesPerSecond = null;
+            o.SamplingRatio = 1.0f;   // preserve pre-1.5.0 behavior; default in 1.5.0 is RateLimitedSampler (5 req/sec)
         })
         .WithTracing(t => t
             .AddSource("AzureFinOps.AI")
@@ -198,7 +196,30 @@ app.UseForwardedHeaders(forwardedHeadersOptions);
 // debugging, so this only runs outside Development.
 if (!app.Environment.IsDevelopment())
 {
-    app.UseExceptionHandler(ApiExceptionHandling.CreateOptions(logger));
+    app.UseExceptionHandler(errorApp => errorApp.Run(async ctx =>
+    {
+        var ex = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+        var traceId = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? ctx.TraceIdentifier;
+        // A client navigating away / closing the tab surfaces as a cancellation.
+        // That is expected, not a fault — log it at Information WITHOUT the
+        // exception object so it never inflates the exceptions table (or trips
+        // exception-rate alerts), mirroring Ipv4HttpHandler's transient handling.
+        var aborted = ctx.RequestAborted.IsCancellationRequested || ex is OperationCanceledException;
+
+        if (aborted)
+            logger.LogInformation("Request aborted on {Method} {Path} (client disconnect, traceId={TraceId})",
+                ctx.Request.Method, ctx.Request.Path.Value, traceId);
+        else if (ex is not null)
+            logger.LogError(ex, "Unhandled exception on {Method} {Path} (traceId={TraceId})",
+                ctx.Request.Method, ctx.Request.Path.Value, traceId);
+
+        if (!ctx.Response.HasStarted && !aborted)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            ctx.Response.ContentType = "application/json";
+            await ctx.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred.", traceId });
+        }
+    }));
 }
 
 if (!app.Environment.IsDevelopment())
@@ -412,7 +433,6 @@ app.MapSessionEndpoints(copilotFactory, telemetry, jobStore, logger);
 AzureFinOps.Dashboard.Jobs.JobEndpoints.MapJobEndpoints(app, jobStore, jobScheduler, logger);
 app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
-app.MapOperationEndpoints(copilotFactory, tokenStore);
 app.MapUploadEndpoints();
 app.MapSeoEndpoints();
 

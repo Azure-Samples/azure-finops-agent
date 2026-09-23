@@ -37,7 +37,7 @@ public static class WebFetchTools
         yield return AIFunctionFactory.Create(FetchPublicWebPage, "FetchPublicWebPage",
             @"PUBLIC WEB FETCH (no auth, HTTPS only, GET only). Use this whenever a typed Azure / Graph / Log Analytics tool cannot answer — third-party SaaS / license pricing pages, Microsoft Learn docs, AWS/GCP docs, vendor changelogs, GitHub raw specs, vendor /pricing pages, vendor admin docs, regulatory rate cards, FX, etc. This is rung 4/5 of the Persistence escalation ladder.
 
-Use only as a bounded fallback for a specific unresolved question after the typed tools. Reuse sufficient API evidence. Missing information is a valid result; never invent a number or keep fetching unrelated sources.
+USE THIS TOOL EAGERLY — it is the difference between answering 'I don't know' (forbidden) and answering with a real number.
 
 Common patterns:
 - Azure pricing detail page: https://azure.microsoft.com/en-us/pricing/details/{service}/  (e.g. .../cognitive-services/openai-service/, .../virtual-machines/, .../storage/blobs/)
@@ -47,9 +47,7 @@ Common patterns:
 - AWS / GCP pricing: https://aws.amazon.com/{service}/pricing/, https://cloud.google.com/{service}/pricing
 - Vendor changelogs / release notes for new SKU / model availability.
 
-Returns: HTTP status, final URL (after redirects), content-type, and the body. HTML is stripped to plain text (script/style/nav removed); JSON / XML / plain text are returned as-is. Default output cap is 60000 characters (maxChars supports up to 200000). If truncated, refine with a more specific URL or grepFor; a URL fragment does not narrow an HTTP download.
-
-PAYLOAD DISCIPLINE: use the most specific authoritative URL available. On long pages, set grepFor to the exact SKU, model, meter, heading, or phrase needed and lower maxChars; do not fetch a broad page at the maximum cap when a focused request can answer the question. grepFor and maxChars reduce returned model context after downloading, not the upstream response size. Preserve any truncation or missing-match caveat.
+Returns: HTTP status, final URL (after redirects), content-type, and the body. HTML is stripped to plain text (script/style/nav removed); JSON / XML / plain text are returned as-is. Capped at ~60KB after stripping — if truncated, refine with a deeper / more specific URL or a fragment.
 
 Limits: HTTPS only. GET only. No cookies, no auth headers. Per-request cap ~600KB on the wire. 20s timeout.");
     }
