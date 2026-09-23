@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Make evaluation failures diagnosable without losing completed evidence when replay or judging fails. Verify parsed persisted answers, stop the suite on cancellation, keep private/partial results out of artifacts locally and in CI, and emit revision-bound repair handoffs. Diagnostic subsets cannot pass the deployment gate; fixes still require a full new-candidate run.
 - Accept connection-context subscription objects as well as GUID strings in compute feasibility, preserving strict scope validation. Large JSON evidence no longer becomes an inaccessible SDK temporary-file pointer. Bounded independent quota reads preserve every requested advertised region.
 - Keep answers in the latest user's language unless another language is requested. Substantive reasoning defaults to the verified `xhigh` setting; existing deployment overrides still apply, and this does not guarantee correctness or fixed latency.
 - Make conversation deletion truthful and stable. An inline confirmation keeps the row visible while deletion is pending, active turns must be stopped first, SDK failures surface for retry, and client state is cleared only after the backend confirms deletion instead of disappearing and flickering back.

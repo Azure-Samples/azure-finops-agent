@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import {
     buildSuite,
+    buildRepairPlan,
     evaluateSuite,
     executeCase,
+    publishableResult,
     refreshEvaluationIdentity,
     renderSummary,
     runCases,
@@ -285,9 +287,148 @@ test("internal-test runs publish verdicts but withhold answers and judge rationa
     }
 });
 
+test("repair handoff is revision-bound, deterministic and never contains private diagnostics", () => {
+    const results = rows();
+    results[0].result = {
+        ...pass(cases[0]),
+        accepted: false,
+        failurePhase: "judge",
+        judge: null,
+        answer: "private-answer",
+        errors: ["private-error"],
+    };
+    results[1].result = { ...pass(cases[1]), transcriptVerified: false };
+    results[2].result = { ...pass(cases[2]), tools: "malformed-private-data" };
+    results.pop();
+    const plan = buildRepairPlan(cases, results, sha, suiteHash);
+    assert.equal(plan.sha, sha);
+    assert.equal(plan.suiteHash, suiteHash);
+    assert.equal(plan.diagnosticOnly, true);
+    assert.equal(plan.fullSuiteRequired, true);
+    assert.deepEqual(plan.retestCaseIds, [cases[0].id, cases[1].id, cases[2].id, cases.at(-1).id]);
+    assert.deepEqual(plan.failedCases.map((item) => item.phase), ["judge", "replay", "turn", "setup"]);
+    assert.doesNotMatch(JSON.stringify(plan), /private-/);
+});
+
+test("private result publication allow-lists nested tool fields and future diagnostics", () => {
+    const result = {
+        ...pass(cases[0]),
+        failedToolDetails: ["private-detail"],
+        futureDiagnostic: "private-new-field",
+        failurePhase: "private-phase",
+        tools: [{ name: "QueryAzure", success: false, result: "private-payload", arguments: "private-args" }],
+    };
+    const published = publishableResult(result, false);
+    assert.equal(published.failurePhase, null);
+    assert.deepEqual(published.tools, [{ name: "QueryAzure", success: false }]);
+    assert.doesNotMatch(JSON.stringify(published), /private-/);
+    for (const malformed of ["private-result", ["private-result"], null])
+        assert.equal(publishableResult(malformed, false), null);
+});
+
+test("raw results and temporary writes stay outside artifacts even on interrupted execution", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "finops-private-interrupted-"));
+    let rawDirectory;
+    try {
+        await writeFile(join(directory, `${cases[1].id}.json.tmp`), "private-stale");
+        await writeFile(join(directory, `${cases[1].id}.json`), "private-stale");
+        await assert.rejects(runCases(
+            cases.slice(0, 2), directory, sha, suiteHash,
+            async (scenario, path) => {
+                rawDirectory = dirname(path);
+                assert.notEqual(rawDirectory, directory);
+                await writeFile(path + ".tmp", "private-partial");
+                await writeFile(path, JSON.stringify({ ...pass(scenario), answer: "private-answer" }));
+                throw new Error("private-exception");
+            },
+            async () => {}, false,
+        ));
+        await assert.rejects(readdir(rawDirectory));
+        for (const name of await readdir(directory))
+            assert.doesNotMatch(await readFile(join(directory, name), "utf8"), /private-/);
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        assert.equal(report.verdict.accepted, false);
+        assert.match(report.verdict.failures.join(" "), /Suite infrastructure failed/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("cancellation aborts the active process and never renews or executes another case", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "finops-cancelled-"));
+    const controller = new AbortController();
+    let executed = 0, renewed = 0, killed = 0;
+    try {
+        await assert.rejects(runCases(
+            cases.slice(0, 2), directory, sha, suiteHash,
+            (scenario, path, revision, hash, unused, signal) => executeCase(
+                scenario, path, revision, hash,
+                () => {
+                    executed++;
+                    const child = new EventEmitter();
+                    child.kill = () => {
+                        killed++;
+                        queueMicrotask(() => child.emit("close", null));
+                    };
+                    queueMicrotask(() => controller.abort());
+                    return child;
+                }, signal,
+            ),
+            async () => { renewed++; }, false, 0, { signal: controller.signal },
+        ), { name: "AbortError" });
+        assert.equal(executed, 1);
+        assert.equal(renewed, 1);
+        assert.equal(killed, 1);
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        assert.equal(report.verdict.accepted, false);
+        assert.equal(report.results.length, 1);
+        assert.equal(report.results[0].exitCode, -1);
+        assert.match(report.verdict.failures.join(" "), /Suite cancelled/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("a diagnostic subset with 100 passing cases still cannot satisfy the gate", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "finops-subset-"));
+    try {
+        const verdict = await runCases(
+            cases.slice(0, 100), directory, sha, suiteHash,
+            async (scenario, path) => {
+                await writeFile(path, JSON.stringify(pass(scenario)));
+                return 0;
+            }, async () => {}, false, 0, { diagnosticOnly: true },
+        );
+        assert.equal(verdict.accepted, false);
+        assert.match(verdict.failures.join(" "), /Diagnostic subset/);
+        assert.match(await readFile(join(directory, "summary.md"), "utf8"), /Diagnostic subset cannot/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("cancellation during identity renewal prevents dispatch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "finops-renew-cancelled-"));
+    const controller = new AbortController();
+    try {
+        await assert.rejects(runCases(
+            cases.slice(0, 2), directory, sha, suiteHash,
+            async () => assert.fail("Cancelled suite must not execute a case."),
+            async () => controller.abort(),
+            false, 0, { signal: controller.signal },
+        ), { name: "AbortError" });
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        assert.equal(report.results.length, 0);
+        assert.equal(report.verdict.accepted, false);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test("the real suite entry point exits nonzero on missing configuration and writes a failed summary", async () => {
     const directory = await mkdtemp(join(tmpdir(), "finops-suite-missing-"));
     try {
+        await writeFile(join(directory, `${cases[0].id}.json`), "private-stale");
         const result = spawnSync(
             process.execPath,
             [new URL("./suite.mjs", import.meta.url).pathname],
@@ -311,6 +452,10 @@ test("the real suite entry point exits nonzero on missing configuration and writ
             await readFile(join(directory, "summary.md"), "utf8"),
             /\*\*FAIL\*\*/,
         );
+        await assert.rejects(readFile(join(directory, `${cases[0].id}.json`)));
+        const plan = JSON.parse(await readFile(join(directory, "repair-plan.json"), "utf8"));
+        assert.equal(plan.failedCases.length, cases.length);
+        assert.ok(plan.failedCases.every((item) => item.phase === "setup"));
     } finally {
         await rm(directory, { recursive: true, force: true });
     }

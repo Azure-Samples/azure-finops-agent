@@ -1,7 +1,9 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { JOB_TEMPLATES } from "../../src/Dashboard/frontend/src/data/jobTemplates.js";
@@ -211,6 +213,10 @@ export function renderSummary(
         `**${verdict.accepted ? "PASS" : "FAIL"}** · ${results.filter((row) => row.failures.length === 0).length}/${cases.length} accepted · Revision \`${sha}\``,
         "",
         "Real model calls through the candidate chat handler and tools, with a separate structured judge. Test-host authentication is not a browser sign-in test. Job templates here test answer/tool routing, not scheduler execution.",
+        "",
+        "Failure-to-retest handoff: see `repair-plan.json`. Diagnostic subsets never authorize deployment.",
+        ...verdict.failures.filter((failure) => !/^[a-f0-9]{16}:/.test(failure))
+            .map((failure) => `- ${cell(failure)}`),
         ...(publishAnswers
             ? []
             : [
@@ -251,22 +257,92 @@ export function renderSummary(
 }
 
 export function publishableResult(result, publishAnswers) {
-    if (publishAnswers || !result || typeof result !== "object") return result;
-    const { answer, errors, reasons, judge, failedToolDetails, ...rest } =
-        result;
+    if (publishAnswers) return result;
+    if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+    // Allow-list public fields: future diagnostic payloads must remain private by default.
     return {
-        ...rest,
-        answerWithheld: typeof answer === "string" && answer.length > 0,
-        errorCount: Array.isArray(errors) ? errors.length : 0,
-        reasonCount: Array.isArray(reasons) ? reasons.length : 0,
-        judge: judge
+        id: result.id,
+        question: result.question,
+        sha: result.sha,
+        suiteHash: result.suiteHash,
+        accepted: result.accepted === true,
+        terminal: result.terminal === true,
+        transcriptVerified: result.transcriptVerified === true,
+        durationMs: Number.isFinite(result.durationMs) ? result.durationMs : null,
+        firstTokenMs: Number.isFinite(result.firstTokenMs) ? result.firstTokenMs : null,
+        toolCount: Number.isInteger(result.toolCount) ? result.toolCount : null,
+        tools: Array.isArray(result.tools)
+            ? result.tools.map((tool) => ({
+                  name: typeof tool?.name === "string" ? tool.name : "unknown",
+                  success: tool?.success === true,
+              }))
+            : [],
+        failurePhase: failurePhase(result),
+        answerWithheld: typeof result.answer === "string" && result.answer.length > 0,
+        errorCount: Array.isArray(result.errors) ? result.errors.length : 0,
+        reasonCount: Array.isArray(result.reasons) ? result.reasons.length : 0,
+        judge: result.judge
             ? {
-                  accepted: judge.accepted,
-                  grounded: judge.grounded,
-                  complete: judge.complete,
+                  accepted: result.judge.accepted === true,
+                  grounded: result.judge.grounded === true,
+                  complete: result.judge.complete === true,
               }
             : null,
     };
+}
+
+function failurePhase(result) {
+    return ["setup", "turn", "replay", "judge"].includes(result?.failurePhase)
+        ? result.failurePhase
+        : null;
+}
+
+export function buildRepairPlan(cases, results, sha, suiteHash) {
+    const failedCases = [];
+    for (const scenario of cases) {
+        const row = results.find((item) => item.id === scenario.id);
+        const failures = row
+            ? validateResult(scenario, row.result, row.exitCode, sha, suiteHash)
+            : ["No structured evaluation result."];
+        if (!failures.length) continue;
+        const result = row?.result;
+        const phase =
+            failurePhase(result) ??
+            (!result ? "setup" :
+                !result.terminal ? "turn" :
+                    !result.transcriptVerified ? "replay" :
+                        !Array.isArray(result.tools) || result.tools.some((tool) => tool?.success !== true)
+                            ? "turn" : "judge");
+        const actions = {
+            setup: "Check the dedicated evaluation configuration, identity, runner and process deadline before retesting.",
+            turn: "Inspect the failing tool or turn contract and source evidence; fix the owning code and add a regression.",
+            replay: "Compare the owner-checked persisted question and answer with the live turn; fix replay before retesting.",
+            judge: "Inspect the judge verdict and evidence; repair the answer/tool contract or judge transport without relaxing the rubric.",
+        };
+        failedCases.push({
+            id: scenario.id,
+            question: scenario.question,
+            phase,
+            failures,
+            nextAction: actions[phase],
+        });
+    }
+    return {
+        sha,
+        suiteHash,
+        diagnosticOnly: true,
+        fullSuiteRequired: true,
+        retestCaseIds: failedCases.map((item) => item.id),
+        failedCases,
+        nextStep: "Use EVAL_ONLY_IDS for local diagnosis only. After a reviewed fix, run the entire suite on the new candidate revision. Never retry unchanged failures until green.",
+    };
+}
+
+async function clearReports(output) {
+    await mkdir(output, { recursive: true });
+    for (const name of await readdir(output))
+        if (/^(?:[a-f0-9]{16}\.json(?:\.tmp)?|results\.json|repair-plan\.json|summary\.md)$/.test(name))
+            await rm(resolve(output, name), { force: true });
 }
 
 export async function runCases(
@@ -278,11 +354,19 @@ export async function runCases(
     renew = refreshEvaluationIdentity,
     publishAnswers = true,
     pauseMs = 0,
+    { signal, diagnosticOnly = false } = {},
 ) {
     const results = [];
-    await mkdir(output, { recursive: true });
+    await clearReports(output);
+    // Raw answers never enter the artifact directory, even if the runner is killed mid-write.
+    const scratch = await mkdtemp(resolve(tmpdir(), "finops-eval-results-"));
+    let suiteFailure = null;
     const report = async () => {
         const verdict = evaluateSuite(cases, results, sha, suiteHash);
+        if (diagnosticOnly)
+            verdict.failures.push("Diagnostic subset cannot satisfy the deployment gate; run the full suite.");
+        if (suiteFailure) verdict.failures.push(suiteFailure);
+        verdict.accepted = verdict.failures.length === 0;
         await writeFile(
             resolve(output, "results.json"),
             JSON.stringify(
@@ -304,21 +388,30 @@ export async function runCases(
             resolve(output, "summary.md"),
             renderSummary(cases, results, verdict, sha, publishAnswers),
         );
+        await writeFile(
+            resolve(output, "repair-plan.json"),
+            JSON.stringify(buildRepairPlan(cases, results, sha, suiteHash), null, 2),
+        );
         return verdict;
     };
-    await report();
     try {
+        await report();
         for (const [index, scenario] of cases.entries()) {
+            signal?.throwIfAborted();
             // Spaces cases so the suite does not throttle tenant-wide Cost Management quota itself.
             if (index > 0 && pauseMs > 0)
-                await new Promise((done) => setTimeout(done, pauseMs));
+                await delay(pauseMs, undefined, { signal });
+            signal?.throwIfAborted();
             await renew();
-            const resultPath = resolve(output, `${scenario.id}.json`);
+            signal?.throwIfAborted();
+            const resultPath = resolve(scratch, `${scenario.id}.json`);
             const exitCode = await execute(
                 scenario,
                 resultPath,
                 sha,
                 suiteHash,
+                undefined,
+                signal,
             );
             let result;
             try {
@@ -326,28 +419,34 @@ export async function runCases(
             } catch {
                 result = null;
             }
-            if (!publishAnswers)
-                await writeFile(
-                    resultPath,
-                    JSON.stringify(publishableResult(result, false)),
-                );
+            await writeFile(
+                resolve(output, `${scenario.id}.json`),
+                JSON.stringify(publishableResult(result, publishAnswers)),
+            );
             const failures = validateResult(
                 scenario,
                 result,
-                exitCode,
+                signal?.aborted ? -1 : exitCode,
                 sha,
                 suiteHash,
             );
-            results.push({ id: scenario.id, exitCode, result, failures });
+            results.push({ id: scenario.id, exitCode: signal?.aborted ? -1 : exitCode, result, failures });
             await report();
+            signal?.throwIfAborted();
             console.log(
                 `[${index + 1}/${cases.length}] ${scenario.id} ${failures.length ? "FAIL" : "PASS"} tools=${result?.toolCount ?? "?"} durationMs=${result?.durationMs ?? "?"} ${scenario.label}`,
             );
         }
+    } catch (error) {
+        suiteFailure = signal?.aborted
+            ? "Suite cancelled; remaining cases were not executed."
+            : "Suite infrastructure failed; remaining cases were not executed.";
+        throw error;
     } finally {
-        await report();
+        try { await report(); }
+        finally { await rm(scratch, { recursive: true, force: true }); }
     }
-    return evaluateSuite(cases, results, sha, suiteHash);
+    return report();
 }
 
 export async function executeCase(
@@ -356,8 +455,10 @@ export async function executeCase(
     sha,
     suiteHash,
     spawnProcess = spawn,
+    signal,
 ) {
     await rm(resultPath, { force: true });
+    signal?.throwIfAborted();
     return new Promise((resolveResult) => {
         const child = spawnProcess(
             "dotnet",
@@ -399,17 +500,15 @@ export async function executeCase(
             terminate,
             (scenario.maxDurationSeconds + 330) * 1000,
         );
-        const stop = () => terminate();
-        process.once("SIGTERM", stop);
-        process.once("SIGINT", stop);
+        signal?.addEventListener("abort", terminate, { once: true });
         const complete = (code) => {
             clearTimeout(timer);
-            process.removeListener("SIGTERM", stop);
-            process.removeListener("SIGINT", stop);
+            signal?.removeEventListener("abort", terminate);
             resolveResult(timedOut ? -1 : (code ?? -1));
         };
         child.on("error", () => complete(-1));
         child.on("close", complete);
+        if (signal?.aborted) terminate();
     });
 }
 
@@ -425,13 +524,20 @@ async function main() {
         process.env.EVAL_OUTPUT_DIRECTORY ?? "TestResults/live-evaluations",
     );
     const classification = process.env.EVAL_DATA_CLASSIFICATION ?? "";
-    const publishAnswers =
-        classification === "synthetic" || process.env.GITHUB_ACTIONS !== "true";
-    await mkdir(output, { recursive: true });
+    const publishAnswers = classification === "synthetic";
+    await clearReports(output);
     const initialVerdict = evaluateSuite(cases, [], sha, suiteHash);
     await writeFile(
         resolve(output, "summary.md"),
         renderSummary(cases, [], initialVerdict, sha, publishAnswers),
+    );
+    await writeFile(
+        resolve(output, "results.json"),
+        JSON.stringify({ sha, suiteHash, cases, results: [], verdict: initialVerdict }, null, 2),
+    );
+    await writeFile(
+        resolve(output, "repair-plan.json"),
+        JSON.stringify(buildRepairPlan(cases, [], sha, suiteHash), null, 2),
     );
     for (const name of [
         "EVAL_MODEL_ENDPOINT",
@@ -445,7 +551,6 @@ async function main() {
                 `Required evaluation configuration missing: ${name}.`,
             );
     if (
-        process.env.GITHUB_ACTIONS === "true" &&
         !["synthetic", "internal-test"].includes(classification)
     )
         throw new Error(
@@ -453,7 +558,7 @@ async function main() {
         );
     if (cases.length < 100)
         throw new Error("Suite contains fewer than 100 distinct questions.");
-    const only = process.env.EVAL_ONLY_IDS?.split(",").filter(Boolean) ?? [];
+    const only = process.env.EVAL_ONLY_IDS?.split(",").map((id) => id.trim()).filter(Boolean) ?? [];
     if (only.length && process.env.GITHUB_ACTIONS === "true")
         throw new Error(
             "EVAL_ONLY_IDS is a local diagnostic filter and cannot run in CI.",
@@ -461,20 +566,32 @@ async function main() {
     const planned = only.length
         ? cases.filter((item) => only.includes(item.id))
         : cases;
-    const verdict = await runCases(
-        planned,
-        output,
-        sha,
-        suiteHash,
-        executeCase,
-        refreshEvaluationIdentity,
-        publishAnswers,
-        Math.min(
-            Math.max(Number(process.env.EVAL_CASE_PAUSE_SECONDS ?? 20) || 0, 0),
-            120,
-        ) * 1000,
-    );
-    if (!verdict.accepted) process.exitCode = 1;
+    if (only.some((id) => !cases.some((item) => item.id === id)))
+        throw new Error("EVAL_ONLY_IDS contains an unknown case ID.");
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
+    try {
+        const verdict = await runCases(
+            planned,
+            output,
+            sha,
+            suiteHash,
+            executeCase,
+            refreshEvaluationIdentity,
+            publishAnswers,
+            Math.min(
+                Math.max(Number(process.env.EVAL_CASE_PAUSE_SECONDS ?? 20) || 0, 0),
+                120,
+            ) * 1000,
+            { signal: controller.signal, diagnosticOnly: only.length > 0 },
+        );
+        if (!verdict.accepted) process.exitCode = 1;
+    } finally {
+        process.removeListener("SIGTERM", stop);
+        process.removeListener("SIGINT", stop);
+    }
 }
 
 export async function refreshEvaluationIdentity(
