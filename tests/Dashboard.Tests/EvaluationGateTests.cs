@@ -1,4 +1,7 @@
 using LiveEvaluations;
+using Azure.Core;
+using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace Dashboard.Tests;
@@ -50,6 +53,47 @@ public sealed class EvaluationGateTests
 
     [Fact]
     public void CompleteRunWithValidJudgeVerdictPasses() => Assert.True(EvaluationGate.Assess(Scenario, Success, Accepted).Accepted);
+
+    [Fact]
+    public async Task JudgeSeparatesInventoryFromBillingWithoutDroppingKnownEvidence()
+    {
+        using var handler = new JudgeRequestHandler();
+        using var http = new HttpClient(handler);
+        var judge = new JudgeClient(http, new JudgeCredential(), new Uri("https://example.openai.azure.com/"), "test-model");
+        var run = Success with
+        {
+            HostContext = "Synthetic connection context",
+            VisibleOutputs = ["Synthetic chart"],
+            Tools = [new("QueryGraph", true, "{\"prepaidUnits\":{\"enabled\":20},\"consumedUnits\":5}", null,
+                "{\"url\":\"https://graph.microsoft.com/v1.0/subscribedSkus\"}")]
+        };
+
+        Assert.Equal(Accepted, await judge.AssessAsync(Scenario, run, CancellationToken.None));
+        using var request = JsonDocument.Parse(handler.RequestJson);
+        var root = request.RootElement;
+        var instructions = root.GetProperty("input")[0].GetProperty("content").GetString()!;
+        Assert.Contains("Compare every requested metric across the whole answer", instructions);
+        Assert.Contains("do not silently correct them from the evidence", instructions);
+        Assert.Contains("valid only when they denote the same interval", instructions);
+        Assert.Contains("Moving an exclusive-end label to the previous included day changes the interval", instructions);
+        Assert.Contains("not verified purchased or paid quantities", instructions);
+        Assert.Contains("Require every available inventory and assignment count", instructions);
+        Assert.Contains("Reject unsupported paid-seat or actual-waste claims", instructions);
+        Assert.Contains("If invoice or contract evidence supplies a purchased quantity or rate, require it", instructions);
+        Assert.Contains("unavailable required activity report still leaves an activity task incomplete", instructions);
+        Assert.Contains("Reject invented facts", instructions);
+        Assert.Equal("xhigh", root.GetProperty("reasoning").GetProperty("effort").GetString());
+        Assert.True(root.GetProperty("text").GetProperty("format").GetProperty("strict").GetBoolean());
+
+        using var evidence = JsonDocument.Parse(root.GetProperty("input")[1].GetProperty("content").GetString()!);
+        Assert.Equal(Scenario.Question, evidence.RootElement.GetProperty("question").GetString());
+        Assert.Equal(Scenario.Rubric, evidence.RootElement.GetProperty("rubric").GetString());
+        Assert.Equal(run.Answer, evidence.RootElement.GetProperty("Answer").GetString());
+        Assert.Equal(run.HostContext, evidence.RootElement.GetProperty("hostContext").GetString());
+        Assert.Equal(run.VisibleOutputs[0], evidence.RootElement.GetProperty("visibleOutputs")[0].GetString());
+        Assert.Equal(run.Tools[0].Result, evidence.RootElement.GetProperty("Tools")[0].GetProperty("Result").GetString());
+        Assert.Equal(run.Tools[0].Arguments, evidence.RootElement.GetProperty("Tools")[0].GetProperty("Arguments").GetString());
+    }
 
     [Theory]
     [InlineData("replay", false)]
@@ -188,4 +232,33 @@ public sealed class EvaluationGateTests
     [InlineData("{\"accepted\":\"true\",\"grounded\":true,\"complete\":true,\"reason\":\"Invalid type\"}")]
     [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"reason\":\"\"}")]
     public void MissingMalformedOrNegativeJudgeFailsClosed(string judge) => Assert.False(EvaluationGate.Assess(Scenario, Success, judge).Accepted);
+
+    private sealed class JudgeCredential : TokenCredential
+    {
+        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) =>
+            new("synthetic-test-token", DateTimeOffset.MaxValue);
+
+        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(GetToken(requestContext, cancellationToken));
+    }
+
+    private sealed class JudgeRequestHandler : HttpMessageHandler
+    {
+        public string RequestJson { get; private set; } = "";
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/openai/v1/responses", request.RequestUri!.AbsolutePath);
+            RequestJson = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new
+                {
+                    status = "completed",
+                    output = new[] { new { type = "message", content = new[] { new { type = "output_text", text = Accepted } } } }
+                })
+            };
+        }
+    }
 }

@@ -128,7 +128,7 @@ Use `QueryCostsAcrossSubscriptions` exactly once for totals-only all-subscriptio
 - For the current calendar month, it reads unfiltered monthly-budget `currentSpend` concurrently. Strict guards require current-month dates, monthly Cost budgets, empty filters, agreeing duplicate budgets, and one currency.
 - Budget snapshots are evaluated periodically and may lag billing. State that caveat; retrieval time is not a source data timestamp and a reported total is not a finalized bill.
 - For other periods, it tries one management-group aggregate query and then the minimum sequential subscription fallback.
-- Query results retain ActualCost, aggregation and exact requested exclusive date bounds. Budget snapshots retain the bounds but have no verified costType; reuse compatible historical results rather than re-querying to rediscover their cost basis.
+- Query results retain ActualCost, aggregation and exact requested exclusive date bounds. Keep the exclusive-end label on the exact returned boundary; if displaying the last included day instead, label it inclusive. Budget snapshots retain the bounds but have no verified costType; reuse compatible historical results rather than re-querying to rediscover their cost basis.
 - Do not list subscriptions again; connection status already provides the available scopes.
 
 ### Crawl maturity
@@ -254,6 +254,7 @@ The frontend must be built before backend startup so `wwwroot` exists when ASP.N
 - Local failed-evaluation diagnostics may be retained only with explicit `EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY` outside the repository and published output (including symlink targets); CI rejects the option. Delete passing captures and never publish raw failed-tool details in either data classification.
 - Preserve captured execution on credential, replay and judge exceptions. Private diagnostics include bounded redacted successful/failed tool details and failure phase, never reset completed work to an empty zero-duration record. Neither synthetic nor internal-test publication includes those private fields.
 - Distinguish a valid negative judge verdict from malformed/missing judge output in gate diagnostics. Both fail the gate; acceptance still requires all three boolean judge flags to be true and a nonempty reason, without publishing private rationale.
+- The judge checks every requested metric across all answer columns and visible outputs. Enabled prepaid inventory is not invoice-confirmed paid quantity, and assignments are not activity. Require all available counts and any supplied billing evidence, reject unsupported paid/waste claims, and keep missing required activity reports incomplete. Do not change case rubrics to repair a judge's source-metric confusion.
 - Always verify the rendered UI for UI changes; a successful build is not a browser test.
 - Measure latency from the app's SSE stream, not rendered pixels.
 - Before every send, wait for the composer to be enabled and for the Stop button to be absent.

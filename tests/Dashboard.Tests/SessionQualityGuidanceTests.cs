@@ -34,6 +34,18 @@ public sealed class SessionQualityGuidanceTests
     }
 
     [Fact]
+    public void DateRangeLabelsPreserveTheActualBoundarySemantics()
+    {
+        Assert.Contains("exclusive-end label attached to the exact source/query end boundary", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("never label the converted last included day exclusive", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Do not infer boundary semantics", CopilotSessionFactory.SystemPrompt);
+        var tool = new AzureQueryTools(new UserTokens { UserId = 101 }).Create()
+            .Single(candidate => candidate.Name == "QueryCostsAcrossSubscriptions");
+        Assert.Contains("exclusive-end label on the exact returned `to`", tool.Description);
+        Assert.Contains("label that date inclusive, never exclusive", tool.Description);
+    }
+
+    [Fact]
     public void FollowUpsDoNotOverrideTheRequestedDeliverableOrCrawlWorkflow()
     {
         var followUp = FollowUpTools.Create().Single();

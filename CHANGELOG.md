@@ -9,6 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Preserve inclusive/exclusive date labels when translating cost-query boundaries into prose; a converted last included day must not retain an exclusive-end label.
+- Judge requested metrics across the entire answer without conflating enabled license inventory, verified paid quantities and activity. Keep available counts and supplied billing evidence mandatory, reject unsupported paid/waste claims, and retain failure for unavailable required activity reports. Questions, rubrics and fail-closed acceptance are unchanged.
 - Clarify missing material product configuration, including VM OS/license and service tier, before price quotes or rankings instead of treating example filters as defaults. Cross-region comparisons waive only a single-region choice; the ordinary on-demand default does not choose an OS. Keep selected variants visible in price headlines/charts and calculate requested-period values before one final visual. Preserve independent variant rankings and existing source coverage.
 - Encode retained-result handles as 22-character Base64url with 128 cryptographically random bits instead of GUID hex, and reinforce exact case-sensitive copying. Preserve fail-closed owner/session lookup, source content, redaction and expiry; never fuzzy-match an invalid handle.
 - Place Crawl inventory freshness caveats in its required pre-table problem context, not an implicitly forbidden closing paragraph. Keep Resource Graph lag/unknown source timestamps separate from Advisor retrieval dates without changing scores or evidence.
