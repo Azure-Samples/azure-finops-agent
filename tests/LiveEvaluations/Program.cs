@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Azure.Core;
@@ -54,6 +55,11 @@ internal static class Program
 
     private static async Task<int> RunAsync()
     {
+        var expectedSha = Environment.GetEnvironmentVariable("EVAL_EXPECTED_SHA");
+        if (expectedSha is not null && !EvaluationGate.MatchesCandidateRevision(expectedSha,
+                typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+                typeof(CopilotSessionFactory).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion))
+            throw new InvalidOperationException("Candidate binaries do not match EVAL_EXPECTED_SHA; rebuild the candidate.");
         var endpoint = Environment.GetEnvironmentVariable("EVAL_MODEL_ENDPOINT") ?? throw new InvalidOperationException("Model endpoint is required.");
         var model = Environment.GetEnvironmentVariable("EVAL_MODEL") ?? "gpt-6-luna";
         var question = Environment.GetEnvironmentVariable("EVAL_QUESTION") ?? throw new InvalidOperationException("Question is required.");
@@ -65,9 +71,11 @@ internal static class Program
             throw new InvalidOperationException("Provide 1-10 evaluation subscription IDs.");
         var scopes = subscriptions.Select((subscription, index) => new { id = subscription, name = "Evaluation subscription " + (index + 1) }).ToArray();
         var ownerOid = Guid.NewGuid().ToString();
-        var tenant = Environment.GetEnvironmentVariable("EVAL_TENANT_ID") ?? "";
+        var tenant = Environment.GetEnvironmentVariable("EVAL_TENANT_ID")?.Trim() ?? "";
+        if (!Guid.TryParse(tenant, out _)) throw new InvalidOperationException("Provide the evaluation tenant ID.");
         var owner = PersistentIdentity.DeriveUserId(tenant, ownerOid);
-        TokenCredential credential = new AzureCliCredential();
+        // The subscription selects its cached CLI user; tenant-only selection uses the default CLI user.
+        TokenCredential credential = new AzureCliCredential(new AzureCliCredentialOptions { Subscription = subscriptions[0] });
         var resourceScopes = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["azure"] = "https://management.azure.com/.default",
@@ -92,7 +100,7 @@ internal static class Program
         var logger = logging.CreateLogger("LiveEvaluation");
         var identity = new PersistentIdentity(app.Services.GetRequiredService<IDataProtectionProvider>(), logging.CreateLogger<PersistentIdentity>());
         var tokens = new SessionTokenStore(options, new EntraClientCredentials(options, logging.CreateLogger<EntraClientCredentials>()), identity, logging.CreateLogger<SessionTokenStore>());
-        await using var factory = await CopilotSessionFactory.CreateAsync(telemetry, identity, options, endpoint, model,
+        await using var factory = await CopilotSessionFactory.CreateAsync(credential, telemetry, identity, options, endpoint, model,
             Environment.GetEnvironmentVariable("EVAL_REASONING_EFFORT") ?? "xhigh", logging, tenant);
         app.UseSession();
         app.Use(async (context, next) =>
@@ -166,14 +174,18 @@ internal static class Program
             }
         }
         if (pendingTools.Count > 0) errors.Add("One or more tools have no terminal result.");
-        var capture = new RunCapture(string.Join("\n\n", answers.Values), tools.ToArray(), terminal, errors.ToArray(), started.ElapsedMilliseconds, firstToken, visible.ToArray(),
-            $"Connected Azure APIs: {string.Join(", ", requestedResources)}. Connected subscriptions ({scopes.Length}): {JsonSerializer.Serialize(scopes)}. Evaluation run clock UTC (host time only; it is not a source data or budget evaluation timestamp): {DateTimeOffset.UtcNow:O}.");
+        var answer = string.Join("\n\n", answers.Values);
+        var durationMs = started.ElapsedMilliseconds;
         var transcriptVerified = false;
         if (sessionId is not null && terminal)
         {
             using var transcript = await client.GetAsync($"/api/sessions/{sessionId}/messages", deadline.Token);
-            transcriptVerified = transcript.IsSuccessStatusCode && (await transcript.Content.ReadAsStringAsync(deadline.Token)).Contains(question, StringComparison.Ordinal);
+            transcriptVerified = transcript.IsSuccessStatusCode
+                && EvaluationGate.TranscriptMatches(await transcript.Content.ReadAsStringAsync(deadline.Token), question, answer);
         }
+        if (!transcriptVerified) errors.Add("Persisted transcript did not match the completed question and answer.");
+        var capture = new RunCapture(answer, tools.ToArray(), terminal, errors.ToArray(), durationMs, firstToken, visible.ToArray(),
+            $"Connected Azure APIs: {string.Join(", ", requestedResources)}. Connected subscriptions ({scopes.Length}): {JsonSerializer.Serialize(scopes)}. Evaluation run clock UTC (host time only; it is not a source data or budget evaluation timestamp): {DateTimeOffset.UtcNow:O}.");
         using var judgeHttp = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         var scenario = new EvaluationCase(Environment.GetEnvironmentVariable("EVAL_CASE_ID") ?? "live-probe", question,
             Environment.GetEnvironmentVariable("EVAL_RUBRIC") ?? "Fulfil the question using actual tool evidence; preserve full scope and explicit unknowns. Do not confuse pricing with availability, quota with capacity, or tool completion with task success. Match the user's language.",
@@ -184,7 +196,6 @@ internal static class Program
         var judgement = await new JudgeClient(judgeHttp, credential, new Uri(endpoint), Environment.GetEnvironmentVariable("EVAL_JUDGE_MODEL") ?? model)
             .AssessAsync(scenario, capture, judgeDeadline.Token);
         var verdict = EvaluationGate.Assess(scenario, capture, judgement);
-        using var judgementDocument = JsonDocument.Parse(judgement);
         await SaveResultAsync(new
         {
             id = scenario.Id,
@@ -210,13 +221,13 @@ internal static class Program
             transcriptVerified,
             accepted = verdict.Accepted && transcriptVerified,
             reasons = verdict.Reasons.Select(reason => Redact(reason, subscriptions)),
-            judge = new
+            judge = verdict.Judge is { } judge ? new
             {
-                accepted = judgementDocument.RootElement.GetProperty("accepted").GetBoolean(),
-                grounded = judgementDocument.RootElement.GetProperty("grounded").GetBoolean(),
-                complete = judgementDocument.RootElement.GetProperty("complete").GetBoolean(),
-                reason = Redact(judgementDocument.RootElement.GetProperty("reason").GetString() ?? "", subscriptions)
-            },
+                accepted = judge.Accepted,
+                grounded = judge.Grounded,
+                complete = judge.Complete,
+                reason = Redact(judge.Reason, subscriptions)
+            } : null,
             answer = Redact(capture.Answer, subscriptions),
             errors = errors.Select(error => Redact(error, subscriptions))
         });

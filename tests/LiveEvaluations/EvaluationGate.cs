@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AzureFinOps.Dashboard.AI.Tools;
 
 namespace LiveEvaluations;
 
@@ -10,16 +11,59 @@ public sealed record ToolResult(string Name, bool Success, string Result, string
 public sealed record RunCapture(string Answer, ToolResult[] Tools, bool Terminal, string[] Errors,
     long DurationMs, long? FirstTokenMs, string[]? VisibleOutputs = null, string HostContext = "");
 
-public sealed record Verdict(bool Accepted, string[] Reasons);
+public sealed record JudgeVerdict(bool Accepted, bool Grounded, bool Complete, string Reason);
+
+public sealed record Verdict(bool Accepted, string[] Reasons, JudgeVerdict? Judge = null);
 
 public static class EvaluationGate
 {
+    public static bool MatchesCandidateRevision(string expectedSha, params string?[] informationalVersions)
+    {
+        if (expectedSha.Length != 40 || !expectedSha.All(char.IsAsciiHexDigit) || informationalVersions.Length == 0)
+            return false;
+        return informationalVersions.All(version => version is not null && version.IndexOf('+') is var separator
+            && separator > 0 && string.Equals(version[(separator + 1)..], expectedSha, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static bool TranscriptMatches(string transcriptJson, string question, string answer)
+    {
+        if (string.IsNullOrWhiteSpace(question) || string.IsNullOrWhiteSpace(answer)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(transcriptJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("messages", out var messages)
+                || messages.ValueKind != JsonValueKind.Array) return false;
+            var foundQuestion = false;
+            var answers = new List<string>();
+            foreach (var message in messages.EnumerateArray())
+            {
+                if (message.ValueKind != JsonValueKind.Object
+                    || !message.TryGetProperty("role", out var role) || role.ValueKind != JsonValueKind.String
+                    || !message.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.String)
+                    return false;
+                if (role.GetString() == "user")
+                {
+                    if (foundQuestion || content.GetString() != question) return false;
+                    foundQuestion = true;
+                }
+                else if (role.GetString() == "assistant" && foundQuestion)
+                {
+                    if (!string.IsNullOrWhiteSpace(content.GetString())) answers.Add(content.GetString()!);
+                }
+                else return false;
+            }
+            return foundQuestion && string.Equals(string.Join("\n\n", answers), answer, StringComparison.Ordinal);
+        }
+        catch (JsonException) { return false; }
+    }
+
     public static bool ToolSucceeded(ToolResult tool)
     {
         if (!tool.Success || !string.IsNullOrWhiteSpace(tool.Error)) return false;
         var text = tool.Result.TrimStart();
-        if (text.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) || text.StartsWith("HTTP 4", StringComparison.Ordinal)
-            || text.StartsWith("HTTP 5", StringComparison.Ordinal) || text.Contains("Output too large to read at once", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!ProtectedTool.InspectEvidence(text).Success
+            || text.Contains("Output too large to read at once", StringComparison.OrdinalIgnoreCase)) return false;
         if (text.StartsWith("HTTP ", StringComparison.Ordinal) && text.IndexOf('\n') is var end && end >= 0) text = text[(end + 1)..];
         try
         {
@@ -54,11 +98,12 @@ public static class EvaluationGate
         if (run.Tools.Any(tool => tool.Result.Contains("Output too large to read at once", StringComparison.OrdinalIgnoreCase)))
             reasons.Add("Required tool evidence was offloaded and unavailable to the model.");
         if (run.Tools.Length > scenario.MaxToolCalls) reasons.Add("The tool-call budget was exceeded.");
-        if (run.DurationMs > scenario.MaxDurationSeconds * 1000L) reasons.Add("The time budget was exceeded.");
+        if (run.DurationMs < 0 || run.DurationMs > scenario.MaxDurationSeconds * 1000L) reasons.Add("The run duration was invalid or over budget.");
         foreach (var name in scenario.RequiredTools)
             if (!run.Tools.Any(tool => tool.Name == name)) reasons.Add($"Required tool was not called: {name}.");
         foreach (var name in scenario.ForbiddenTools)
             if (run.Tools.Any(tool => tool.Name == name)) reasons.Add($"Forbidden tool was called: {name}.");
+        JudgeVerdict? judge = null;
         try
         {
             using var document = JsonDocument.Parse(judgeJson);
@@ -69,10 +114,14 @@ public static class EvaluationGate
                 || !verdict.TryGetProperty("complete", out var complete) || complete.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
                 || !verdict.TryGetProperty("reason", out var reason) || reason.ValueKind != JsonValueKind.String
                 || string.IsNullOrWhiteSpace(reason.GetString())) reasons.Add("Judge response did not satisfy the verdict schema.");
-            else if (!accepted.GetBoolean() || !grounded.GetBoolean() || !complete.GetBoolean())
-                reasons.Add("Judge rejected the result: " + reason.GetString());
+            else
+            {
+                judge = new(accepted.GetBoolean(), grounded.GetBoolean(), complete.GetBoolean(), reason.GetString()!);
+                if (!judge.Accepted || !judge.Grounded || !judge.Complete)
+                    reasons.Add("Judge rejected the result: " + judge.Reason);
+            }
         }
         catch (JsonException) { reasons.Add("Judge response was not valid JSON."); }
-        return new(reasons.Count == 0, reasons.ToArray());
+        return new(reasons.Count == 0, reasons.ToArray(), judge);
     }
 }

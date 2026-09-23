@@ -36,6 +36,7 @@
   <ItemGroup>
     <EmbeddedResource Include="AI\Tools\Resources\*.py" />
     <InternalsVisibleTo Include="Dashboard.Tests" />
+    <InternalsVisibleTo Include="LiveEvaluations" />
   </ItemGroup>
 
 </Project>

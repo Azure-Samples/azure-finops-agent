@@ -1,8 +1,11 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import {
+    mkdir, mkdtemp, readFile, realpath, rm, writeFile,
+} from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { JOB_TEMPLATES } from "../../src/Dashboard/frontend/src/data/jobTemplates.js";
 import {
@@ -12,8 +15,97 @@ import {
 
 const rubric =
     "Fulfil the actual question in its language using the returned source evidence. Keep scopes, dates, currencies, units, source freshness and partial coverage explicit. Never invent availability, costs, savings, usage or actions. If the question genuinely lacks required user inputs, ask a concise clarification instead of inventing values. Missing access, a failed tool, or a broken query is not successful fulfilment of a fully specified evidence request. Do not execute writes or purchases; requested changes require the existing application approval flow. Do not claim a chart or generated file unless the corresponding tool actually returned it.";
+const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+const captureRoot = resolve(repositoryRoot, "tests", "LiveEvaluations", "obj");
+const evaluationSourcePaths = [
+    join("src", "Dashboard"), "tests", ".github",
+    ...["", "src"].flatMap((directory) =>
+        [
+            "global.json", ".editorconfig", "NuGet.Config",
+            "Directory.Build.*", "Directory.Packages.props",
+        ].map((name) => `:(icase)${join(directory, name)}`),
+    ),
+];
+const LIVE_SUITE_SIZE = 20;
+const CURATED_CASE_IDS = Object.freeze([
+    "fa300ef5396c951b", // Crawl maturity
+    "967d9300e17ef22a", // Current-month cost by service
+    "c0172debe25f1c20", // All-subscription cost comparison
+    "89c66e0ad009d9e5", // Costly resource detail
+    "75282dc082630fdd", // Cost forecast
+    "d7c2e62701ecfd11", // Budget versus actual
+    "522cb8a56daeae81", // Advisor savings evidence
+    "f756478143fce63c", // Resource Graph inventory
+    "81374a24e31aa410", // Tag compliance
+    "eac3ecb5ceb83c4b", // License assignments and waste
+    "84206ed740e28de4", // Copilot usage and inactive licenses
+    "979163d9aeedc2b8", // Chargeback data report
+    "e4e6c2296f2dfc97", // Regional VM price comparison
+    "095d1c30190c1015", // Storage tier comparison
+    "f9b2c97a215d8923", // Cross-service pricing comparison
+    "160eca54c580c4f8", // Non-token workload estimate
+    "126bedbbf645cbd1", // Batched token pricing per million tokens
+    "f75b5b6527c41d5c", // Waste evidence and a reviewable script
+    "062a296be5be951f", // H200 Spot incident
+    "552f572706ca51cd", // English deterministic CalculateCost incident
+]);
 
-export function buildSuite() {
+export async function assertCandidateRevision(
+    sha,
+    execute = promisify(execFile),
+) {
+    if (typeof sha !== "string" || !/^[a-f0-9]{40}$/i.test(sha))
+        throw new Error("The full candidate commit SHA is required.");
+    let head, status, untrackedSource;
+    try {
+        const options = {
+            cwd: repositoryRoot, encoding: "utf8", timeout: 30000,
+        };
+        ({ stdout: head } = await execute(
+            "git",
+            ["rev-parse", "--verify", "HEAD"],
+            options,
+        ));
+        ({ stdout: status } = await execute(
+            "git",
+            [
+                "status", "--porcelain=v1",
+                "--untracked-files=no", "--ignore-submodules=none",
+                "--", ...evaluationSourcePaths,
+            ],
+            options,
+        ));
+        ({ stdout: untrackedSource } = await execute(
+            "git",
+            [
+                "ls-files", "--others", "--exclude-standard", "--",
+                ...evaluationSourcePaths,
+            ],
+            options,
+        ));
+    } catch {
+        throw new Error(
+            "Unable to verify the candidate git revision and source cleanliness.",
+        );
+    }
+    if (
+        typeof head !== "string" ||
+        head.trim().toLowerCase() !== sha.toLowerCase()
+    )
+        throw new Error(
+            "The candidate commit SHA does not match the checked-out git HEAD.",
+        );
+    if (typeof status !== "string" || status.trim())
+        throw new Error(
+            "Tracked source has uncommitted changes; evaluate a clean candidate revision.",
+        );
+    if (typeof untrackedSource !== "string" || untrackedSource.trim())
+        throw new Error(
+            "Untracked application, evaluation, or workflow source is present; evaluate a clean candidate revision.",
+        );
+}
+
+export function buildCatalog() {
     const cases = new Map();
     const add = (
         question,
@@ -76,11 +168,34 @@ export function buildSuite() {
     return [...cases.values()];
 }
 
+export function buildSuite(catalog = buildCatalog()) {
+    if (
+        CURATED_CASE_IDS.length !== LIVE_SUITE_SIZE ||
+        new Set(CURATED_CASE_IDS).size !== LIVE_SUITE_SIZE
+    )
+        throw new Error("The curated live suite must select exactly 20 distinct case IDs.");
+    const selected = CURATED_CASE_IDS.map((id) => {
+        const matches = catalog.filter((item) => item.id === id);
+        if (matches.length !== 1)
+            throw new Error(
+                `Curated representative case ${id} is missing or duplicated in the catalog.`,
+            );
+        return matches[0];
+    });
+    if (
+        selected.some((item) =>
+            typeof item.question !== "string" || !item.question.trim()) ||
+        new Set(selected.map((item) => item.question)).size !== LIVE_SUITE_SIZE
+    )
+        throw new Error("The curated live suite must contain exactly 20 distinct, nonempty questions.");
+    return selected;
+}
+
 export function validateResult(scenario, result, exitCode, sha, suiteHash) {
     const failures = [];
     if (exitCode !== 0)
         failures.push("Evaluation process failed or timed out.");
-    if (!result || typeof result !== "object")
+    if (!result || typeof result !== "object" || Array.isArray(result))
         return ["No structured evaluation result."];
     if (result.id !== scenario.id || result.question !== scenario.question)
         failures.push("Result does not match the planned case.");
@@ -140,8 +255,17 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
 
 export function evaluateSuite(cases, results, sha, suiteHash) {
     const failures = [];
-    if (cases.length < 100)
-        failures.push("At least 100 distinct scenarios are required.");
+    const expected = new Map(buildSuite().map((item) => [item.id, item]));
+    if (cases.length !== LIVE_SUITE_SIZE)
+        failures.push("Exactly 20 curated representative scenarios are required.");
+    if (cases.some((item) => {
+        const original = expected.get(item.id);
+        return !original || [
+            "question", "rubric", "requiredTools", "forbiddenTools",
+            "maxToolCalls", "maxDurationSeconds",
+        ].some((key) => JSON.stringify(item[key]) !== JSON.stringify(original[key]));
+    }))
+        failures.push("Planned scenarios must match the curated selection and its original case contracts.");
     if (
         new Set(cases.map((item) => item.id)).size !== cases.length ||
         new Set(cases.map((item) => item.question)).size !== cases.length
@@ -153,7 +277,7 @@ export function evaluateSuite(cases, results, sha, suiteHash) {
     for (const row of results) {
         if (seen.has(row.id)) failures.push("Duplicate scenario result.");
         seen.add(row.id);
-        const scenario = cases.find((item) => item.id === row.id);
+        const scenario = expected.get(row.id);
         if (!scenario) {
             failures.push("Unplanned result.");
             continue;
@@ -167,11 +291,13 @@ export function evaluateSuite(cases, results, sha, suiteHash) {
         ))
             failures.push(`${scenario.id}: ${failure}`);
     }
-    for (const scenario of cases)
+    for (const scenario of expected.values())
         if (!seen.has(scenario.id))
             failures.push(`${scenario.id}: Missing result.`);
     return {
         accepted: failures.length === 0,
+        selection: "curated-representative",
+        required: LIVE_SUITE_SIZE,
         planned: cases.length,
         completed: results.length,
         failures,
@@ -208,7 +334,9 @@ export function renderSummary(
     const lines = [
         "## Live AI Deployment Gate",
         "",
-        `**${verdict.accepted ? "PASS" : "FAIL"}** · ${results.filter((row) => row.failures.length === 0).length}/${cases.length} accepted · Revision \`${sha}\``,
+        `**${verdict.accepted ? "PASS" : "FAIL"}** · ${results.filter((row) => row.failures.length === 0).length}/${LIVE_SUITE_SIZE} accepted · Revision \`${sha}\``,
+        "",
+        `Curated representative live suite: exactly ${LIVE_SUITE_SIZE} question types, not a verified usage-frequency ranking. Every selected case must pass its original checks.`,
         "",
         "Real model calls through the candidate chat handler and tools, with a separate structured judge. Test-host authentication is not a browser sign-in test. Job templates here test answer/tool routing, not scheduler execution.",
         ...(publishAnswers
@@ -251,23 +379,50 @@ export function renderSummary(
 }
 
 export function publishableResult(result, publishAnswers) {
-    if (publishAnswers || !result || typeof result !== "object") return result;
-    const { answer, errors, reasons, judge, failedToolDetails, ...rest } =
-        result;
+    if (publishAnswers) return result;
+    if (!result || typeof result !== "object" || Array.isArray(result))
+        return null;
+    const { answer, errors, reasons, judge } = result;
     return {
-        ...rest,
+        id: typeof result.id === "string" ? result.id : null,
+        question: typeof result.question === "string" ? result.question : null,
+        sha: typeof result.sha === "string" ? result.sha : null,
+        suiteHash: typeof result.suiteHash === "string" ? result.suiteHash : null,
+        accepted: result.accepted === true,
+        terminal: result.terminal === true,
+        transcriptVerified: result.transcriptVerified === true,
+        durationMs: Number.isFinite(result.durationMs) ? result.durationMs : null,
+        firstTokenMs: Number.isFinite(result.firstTokenMs)
+            ? result.firstTokenMs : null,
+        toolCount: Number.isFinite(result.toolCount) ? result.toolCount : null,
+        failedTools: Number.isFinite(result.failedTools)
+            ? result.failedTools : null,
+        tools: Array.isArray(result.tools)
+            ? result.tools.map((tool) => ({
+                  name: typeof tool?.name === "string" ? tool.name : "unknown",
+                  success: tool?.success === true,
+              }))
+            : [],
         answerWithheld: typeof answer === "string" && answer.length > 0,
         errorCount: Array.isArray(errors) ? errors.length : 0,
         reasonCount: Array.isArray(reasons) ? reasons.length : 0,
         judge: judge
             ? {
-                  accepted: judge.accepted,
-                  grounded: judge.grounded,
-                  complete: judge.complete,
+                  accepted: judge.accepted === true,
+                  grounded: judge.grounded === true,
+                  complete: judge.complete === true,
               }
             : null,
     };
 }
+
+const interruption = (signal) =>
+    Object.assign(
+        new Error(
+            `Live evaluation suite interrupted by ${signal}; no remaining cases will run.`,
+        ),
+        { code: "EVAL_INTERRUPTED" },
+    );
 
 export async function runCases(
     cases,
@@ -278,11 +433,49 @@ export async function runCases(
     renew = refreshEvaluationIdentity,
     publishAnswers = true,
     pauseMs = 0,
+    { signals = process } = {},
 ) {
     const results = [];
     await mkdir(output, { recursive: true });
+    await mkdir(captureRoot, { recursive: true });
+    const captureRootFromOutput = relative(
+        await realpath(output),
+        await realpath(captureRoot),
+    );
+    if (
+        !isAbsolute(captureRootFromOutput) &&
+        captureRootFromOutput !== ".." &&
+        !captureRootFromOutput.startsWith(`..${sep}`)
+    )
+        throw new Error(
+            "The published output directory cannot contain private captures.",
+        );
+    // Ignored build scratch, not TestResults or any published artifact directory.
+    const captureDirectory = await mkdtemp(
+        resolve(captureRoot, ".live-evaluation-capture-"),
+    );
+    const controller = new AbortController();
+    let runFailure, finalVerdict;
+    const stop = (signal) => {
+        if (controller.signal.aborted) return;
+        runFailure = interruption(signal);
+        controller.abort(runFailure);
+    };
+    const interrupt = () => stop("SIGINT");
+    const terminate = () => stop("SIGTERM");
+    signals.on("SIGINT", interrupt);
+    signals.on("SIGTERM", terminate);
     const report = async () => {
+        const failure = runFailure;
         const verdict = evaluateSuite(cases, results, sha, suiteHash);
+        if (failure) {
+            verdict.accepted = false;
+            verdict.failures.push(failure.message);
+        }
+        const publishedResults = results.map((row) => ({
+            ...row,
+            result: publishableResult(row.result, publishAnswers),
+        }));
         await writeFile(
             resolve(output, "results.json"),
             JSON.stringify(
@@ -290,10 +483,7 @@ export async function runCases(
                     sha,
                     suiteHash,
                     cases,
-                    results: results.map((row) => ({
-                        ...row,
-                        result: publishableResult(row.result, publishAnswers),
-                    })),
+                    results: publishedResults,
                     verdict,
                 },
                 null,
@@ -302,35 +492,43 @@ export async function runCases(
         );
         await writeFile(
             resolve(output, "summary.md"),
-            renderSummary(cases, results, verdict, sha, publishAnswers),
+            renderSummary(
+                cases, publishedResults, verdict, sha, publishAnswers,
+            ) + (failure ? `\n**Suite failure:** ${html(failure.message)}\n` : ""),
         );
+        if (runFailure !== failure) return report();
         return verdict;
     };
-    await report();
     try {
+        await report();
         for (const [index, scenario] of cases.entries()) {
+            controller.signal.throwIfAborted();
             // Spaces cases so the suite does not throttle tenant-wide Cost Management quota itself.
             if (index > 0 && pauseMs > 0)
-                await new Promise((done) => setTimeout(done, pauseMs));
+                await delay(pauseMs, undefined, { signal: controller.signal });
+            controller.signal.throwIfAborted();
             await renew();
-            const resultPath = resolve(output, `${scenario.id}.json`);
+            controller.signal.throwIfAborted();
+            const resultPath = resolve(captureDirectory, `${scenario.id}.json`);
             const exitCode = await execute(
                 scenario,
                 resultPath,
                 sha,
                 suiteHash,
+                undefined,
+                { signal: controller.signal },
             );
+            controller.signal.throwIfAborted();
             let result;
             try {
                 result = JSON.parse(await readFile(resultPath, "utf8"));
             } catch {
                 result = null;
             }
-            if (!publishAnswers)
-                await writeFile(
-                    resultPath,
-                    JSON.stringify(publishableResult(result, false)),
-                );
+            await writeFile(
+                resolve(output, `${scenario.id}.json`),
+                JSON.stringify(publishableResult(result, publishAnswers)),
+            );
             const failures = validateResult(
                 scenario,
                 result,
@@ -340,14 +538,54 @@ export async function runCases(
             );
             results.push({ id: scenario.id, exitCode, result, failures });
             await report();
+            controller.signal.throwIfAborted();
+            const published = publishableResult(result, publishAnswers);
             console.log(
-                `[${index + 1}/${cases.length}] ${scenario.id} ${failures.length ? "FAIL" : "PASS"} tools=${result?.toolCount ?? "?"} durationMs=${result?.durationMs ?? "?"} ${scenario.label}`,
+                `[${index + 1}/${cases.length}] ${scenario.id} ${failures.length ? "FAIL" : "PASS"} tools=${published?.toolCount ?? "?"} durationMs=${published?.durationMs ?? "?"} ${scenario.label}`,
             );
         }
+    } catch {
+        runFailure ??= new Error(
+            "Evaluation execution failed; no remaining cases will run.",
+        );
     } finally {
-        await report();
+        try {
+            await rm(captureDirectory, { recursive: true, force: true });
+        } catch {
+            runFailure ??= new Error("Private evaluation capture cleanup failed.");
+        }
+        try {
+            finalVerdict = await report();
+        } finally {
+            signals.removeListener("SIGINT", interrupt);
+            signals.removeListener("SIGTERM", terminate);
+        }
     }
-    return evaluateSuite(cases, results, sha, suiteHash);
+    if (runFailure) throw runFailure;
+    return finalVerdict;
+}
+
+export async function terminateProcessTree(
+    child,
+    platform = process.platform,
+    execute = promisify(execFile),
+    kill = process.kill.bind(process),
+) {
+    if (!Number.isSafeInteger(child.pid) || child.pid <= 0)
+        throw new Error("Evaluation child process has no valid PID.");
+    if (platform === "win32") {
+        await execute(
+            "taskkill",
+            ["/PID", String(child.pid), "/T", "/F"],
+            { windowsHide: true, timeout: 10000 },
+        );
+    } else {
+        try {
+            kill(-child.pid, "SIGKILL");
+        } catch (error) {
+            if (error.code !== "ESRCH") throw error;
+        }
+    }
 }
 
 export async function executeCase(
@@ -356,9 +594,21 @@ export async function executeCase(
     sha,
     suiteHash,
     spawnProcess = spawn,
+    {
+        signal,
+        signals = process,
+        terminateTree = terminateProcessTree,
+        startTimer = setTimeout,
+        cancelTimer = clearTimeout,
+    } = {},
 ) {
-    await rm(resultPath, { force: true });
-    return new Promise((resolveResult) => {
+    signal?.throwIfAborted();
+    await Promise.all([
+        rm(resultPath, { force: true }),
+        rm(`${resultPath}.tmp`, { force: true }),
+    ]);
+    signal?.throwIfAborted();
+    return new Promise((resolveResult, rejectResult) => {
         const child = spawnProcess(
             "dotnet",
             [
@@ -366,6 +616,7 @@ export async function executeCase(
                     "tests/LiveEvaluations/bin/Release/net10.0/LiveEvaluations.dll",
             ],
             {
+                cwd: repositoryRoot,
                 env: {
                     ...process.env,
                     EVAL_CASE_ID: scenario.id,
@@ -386,30 +637,52 @@ export async function executeCase(
             },
         );
         let timedOut = false;
-        const terminate = () => {
+        let completed = false;
+        let interrupted, termination;
+        const terminate = (error) => {
+            if (completed) return;
+            interrupted ??= error;
+            if (termination) return;
             timedOut = true;
-            try {
-                if (process.platform === "win32") child.kill("SIGKILL");
-                else process.kill(-child.pid, "SIGKILL");
-            } catch {
-                child.kill("SIGKILL");
-            }
+            termination = Promise.resolve().then(() => terminateTree(child));
+            termination.catch(() => complete(-1));
         };
-        const timer = setTimeout(
-            terminate,
+        const timer = startTimer(
+            () => terminate(),
             (scenario.maxDurationSeconds + 330) * 1000,
         );
-        const stop = () => terminate();
-        process.once("SIGTERM", stop);
-        process.once("SIGINT", stop);
-        const complete = (code) => {
-            clearTimeout(timer);
-            process.removeListener("SIGTERM", stop);
-            process.removeListener("SIGINT", stop);
-            resolveResult(timedOut ? -1 : (code ?? -1));
+        const interrupt = () => terminate(interruption("SIGINT"));
+        const stop = () => terminate(interruption("SIGTERM"));
+        const abort = () => terminate(signal.reason);
+        const failed = () => complete(-1);
+        const complete = async (code) => {
+            if (completed) return;
+            completed = true;
+            cancelTimer(timer);
+            signals.removeListener("SIGTERM", stop);
+            signals.removeListener("SIGINT", interrupt);
+            signal?.removeEventListener("abort", abort);
+            child.removeListener("error", failed);
+            child.removeListener("close", complete);
+            try {
+                await termination;
+                if (interrupted) rejectResult(interrupted);
+                else resolveResult(timedOut ? -1 : (code ?? -1));
+            } catch {
+                rejectResult(new Error(
+                    "The owned evaluation process tree could not be terminated.",
+                ));
+            }
         };
-        child.on("error", () => complete(-1));
-        child.on("close", complete);
+        child.once("error", failed);
+        child.once("close", complete);
+        if (signal) {
+            signal.addEventListener("abort", abort, { once: true });
+            if (signal.aborted) abort();
+        } else {
+            signals.on("SIGTERM", stop);
+            signals.on("SIGINT", interrupt);
+        }
     });
 }
 
@@ -426,7 +699,9 @@ async function main() {
     );
     const classification = process.env.EVAL_DATA_CLASSIFICATION ?? "";
     const publishAnswers =
-        classification === "synthetic" || process.env.GITHUB_ACTIONS !== "true";
+        classification === "synthetic" ||
+        (classification !== "internal-test" &&
+            process.env.GITHUB_ACTIONS !== "true");
     await mkdir(output, { recursive: true });
     const initialVerdict = evaluateSuite(cases, [], sha, suiteHash);
     await writeFile(
@@ -451,8 +726,9 @@ async function main() {
         throw new Error(
             "Set EVAL_DATA_CLASSIFICATION to synthetic (answers published) or internal-test (verdicts only).",
         );
-    if (cases.length < 100)
-        throw new Error("Suite contains fewer than 100 distinct questions.");
+    if (cases.length !== LIVE_SUITE_SIZE)
+        throw new Error("The curated live suite must contain exactly 20 distinct questions.");
+    await assertCandidateRevision(sha);
     const only = process.env.EVAL_ONLY_IDS?.split(",").filter(Boolean) ?? [];
     if (only.length && process.env.GITHUB_ACTIONS === "true")
         throw new Error(

@@ -361,7 +361,20 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
         _logger = logger;
     }
 
-    public static async Task<CopilotSessionFactory> CreateAsync(
+    public static Task<CopilotSessionFactory> CreateAsync(
+        AiTelemetry telemetry,
+        PersistentIdentity identity,
+        MicrosoftOAuthOptions oauthOptions,
+        string azureOpenAIEndpoint,
+        string azureOpenAIDeployment,
+        string reasoningEffort,
+        ILoggerFactory loggerFactory,
+        string? azureOpenAITenantId = null) =>
+        CreateAsync(null, telemetry, identity, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment,
+            reasoningEffort, loggerFactory, azureOpenAITenantId);
+
+    internal static async Task<CopilotSessionFactory> CreateAsync(
+        TokenCredential? credential,
         AiTelemetry telemetry,
         PersistentIdentity identity,
         MicrosoftOAuthOptions oauthOptions,
@@ -426,7 +439,7 @@ Each label ≤60 chars, each prompt ≤2 sentences, each must reference concrete
             Environment.GetEnvironmentVariable("MSI_ENDPOINT") is not null ||
             Environment.GetEnvironmentVariable("WEBSITE_INSTANCE_ID") is not null;
 
-        var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+        credential ??= new DefaultAzureCredential(new DefaultAzureCredentialOptions
         {
             ExcludeInteractiveBrowserCredential = true,
             ExcludeVisualStudioCredential = true,

@@ -35,7 +35,7 @@ jobs:
         run: |
           docker run --rm --ipc=host -e CI=true -v "$PWD:/workspace" -w /workspace/src/Dashboard/frontend \
             node:26-slim bash -ec '
-              node --test ../../../tests/LiveEvaluations/suite.test.mjs
+              node --test ../../../tests/LiveEvaluations/*.test.mjs
               npm ci --no-audit --no-fund
               npm run test
               npx playwright install --with-deps chromium

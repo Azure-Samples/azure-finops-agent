@@ -3,12 +3,14 @@ name: Live AI evaluation gate
 on:
   workflow_call:
     secrets:
+      # Environment-scoped secrets are resolved on the job, not by its caller.
+      # The configuration step below still requires all three values.
       AZURE_EVAL_CLIENT_ID:
-        required: true
+        required: false
       AZURE_EVAL_TENANT_ID:
-        required: true
+        required: false
       AZURE_EVAL_SUBSCRIPTION_ID:
-        required: true
+        required: false
   workflow_dispatch:
 
 permissions:
@@ -44,14 +46,18 @@ jobs:
 
       - name: Validate required evaluation configuration
         run: |
+          missing=0
           for name in EVAL_CLIENT_ID EVAL_TENANT_ID EVAL_LOGIN_SUBSCRIPTION EVAL_SUBSCRIPTION_IDS EVAL_MODEL_ENDPOINT EVAL_MODEL EVAL_JUDGE_MODEL; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Missing required live evaluation configuration: $name"
-              exit 1
+              missing=1
             fi
           done
           if [[ "$EVAL_DATA_CLASSIFICATION" != "synthetic" && "$EVAL_DATA_CLASSIFICATION" != "internal-test" ]]; then
             echo "::error::Set EVAL_DATA_CLASSIFICATION to synthetic (answers published) or internal-test (verdicts only). Customer responses must not be published."
+            missing=1
+          fi
+          if [[ "$missing" == 1 ]]; then
             exit 1
           fi
 
@@ -78,7 +84,7 @@ jobs:
       - name: Build candidate evaluator and validate gate behavior
         run: |
           dotnet build tests/LiveEvaluations/LiveEvaluations.csproj --configuration Release --nologo
-          node --test tests/LiveEvaluations/suite.test.mjs
+          node --test tests/LiveEvaluations/*.test.mjs
 
       - name: Execute every live question and require unanimous acceptance
         timeout-minutes: 300

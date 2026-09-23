@@ -16,6 +16,11 @@ on:
       - ".github/workflows/live-evaluations.yml"
       - ".github/workflows/feature.yml"
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy to the test slot after every validation gate passes
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -30,10 +35,10 @@ env:
   RESOURCE_GROUP: ${{ vars.TEST_RESOURCE_GROUP }}
   VERIFY_URL: ${{ vars.TEST_VERIFY_URL }}
 
-# Only one deploy at a time: every branch targets the same configured test slot.
+# Validation-only dispatches must not cancel a deployment to the shared slot.
 concurrency:
-  group: test-slot-deploy
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'workflow_dispatch' && !inputs.deploy && 'test-slot-evaluation' || 'test-slot-deploy' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy }}
 
 jobs:
   regressions:
@@ -55,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     # Dependabot-triggered runs don't get access to repo secrets, so azure/login
     # would fail. Skip — these PRs are reviewed and merged via main.yml.
-    if: github.actor != 'dependabot[bot]'
+    if: github.actor != 'dependabot[bot]' && (github.event_name != 'workflow_dispatch' || inputs.deploy)
     steps:
       # Shallow checkout — we no longer need full git history (build number
       # comes from github.run_number instead of `git rev-list --count HEAD`).
