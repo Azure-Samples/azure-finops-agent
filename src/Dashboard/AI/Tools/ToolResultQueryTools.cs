@@ -18,7 +18,7 @@ public sealed class ToolResultQueryTools(long owner)
 
     private async Task<string> QueryToolResult(
         [Description("Opaque resultId from a queryable_tool_result response in this conversation; never a file path or URL.")] string resultId,
-        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\"}. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path. Optional sort:[{path:$.total,direction:desc|asc}], offset=0, limit=50 (max 200, 0 for totals). select plus aggregates (without groupBy) returns the selected rows and overall totals across every match. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
+        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\"}. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path. Empty select/groupBy objects mean no projection/grouping. Optional sort:[{path:$.total,direction:desc|asc}], offset=0, limit=50 (max 200, 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
         CancellationToken cancellationToken = default)
     {
         var context = ToolExecutionContext.Current;
@@ -154,12 +154,13 @@ public sealed class ToolResultQueryTools(long owner)
                     }
                     rows.Add(group.Key);
                 }
-                if (projection.Count > 0)
+                if (groups.Count == 0)
                 {
                     using (var totalsDocument = JsonDocument.Parse(rows.Single().ToString(Newtonsoft.Json.Formatting.None)))
                         totals = totalsDocument.RootElement.Clone();
-                    rows = selected.Select(row => (JToken)Project(row, projection, CheckBudget, ReserveProjection)).ToList();
                 }
+                if (projection.Count > 0)
+                    rows = selected.Select(row => (JToken)Project(row, projection, CheckBudget, ReserveProjection)).ToList();
             }
             else rows = selected.Select(row => projection.Count == 0 ? row : Project(row, projection, CheckBudget, ReserveProjection)).ToList();
 
@@ -332,7 +333,7 @@ public sealed class ToolResultQueryTools(long owner)
             Require(property.Name.Length is > 0 and <= 80 && property.Value.ValueKind == JsonValueKind.String && !paths.ContainsKey(property.Name), "Field names and paths must be distinct strings.");
             paths.Add(property.Name, property.Value.GetString()!);
         }
-        Require(paths.Count is > 0 && paths.Count <= max, "Field selection count exceeds its limit.");
+        Require(paths.Count <= max, "Field selection count exceeds its limit.");
         return paths;
     }
 

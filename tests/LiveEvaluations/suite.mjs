@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-    mkdir, mkdtemp, readFile, realpath, rm, writeFile,
+    mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -324,6 +324,10 @@ export function renderSummary(
     sha,
     publishAnswers = true,
 ) {
+    results = results.map((row) => ({
+        ...row,
+        result: publishableResult(row.result, publishAnswers),
+    }));
     const preview = (value, maximum) => {
         const escaped = html(value);
         return escaped.length <= maximum
@@ -379,11 +383,11 @@ export function renderSummary(
 }
 
 export function publishableResult(result, publishAnswers) {
-    if (publishAnswers) return result;
     if (!result || typeof result !== "object" || Array.isArray(result))
         return null;
     const { answer, errors, reasons, judge } = result;
-    return {
+    // Opt-in diagnostics and future private extensions are never public, even for synthetic data.
+    const published = {
         id: typeof result.id === "string" ? result.id : null,
         question: typeof result.question === "string" ? result.question : null,
         sha: typeof result.sha === "string" ? result.sha : null,
@@ -403,14 +407,34 @@ export function publishableResult(result, publishAnswers) {
                   success: tool?.success === true,
               }))
             : [],
-        answerWithheld: typeof answer === "string" && answer.length > 0,
-        errorCount: Array.isArray(errors) ? errors.length : 0,
-        reasonCount: Array.isArray(reasons) ? reasons.length : 0,
         judge: judge
             ? {
                   accepted: judge.accepted === true,
                   grounded: judge.grounded === true,
                   complete: judge.complete === true,
+              }
+            : null,
+    };
+    if (!publishAnswers)
+        return {
+            ...published,
+            answerWithheld: typeof answer === "string" && answer.length > 0,
+            errorCount: Array.isArray(errors) ? errors.length : 0,
+            reasonCount: Array.isArray(reasons) ? reasons.length : 0,
+        };
+    return {
+        ...published,
+        answer: typeof answer === "string" ? answer : null,
+        errors: Array.isArray(errors)
+            ? errors.map((error) => typeof error === "string" ? error : "Non-text error withheld.")
+            : null,
+        reasons: Array.isArray(reasons)
+            ? reasons.map((reason) => typeof reason === "string" ? reason : "Non-text reason withheld.")
+            : null,
+        judge: published.judge
+            ? {
+                  ...published.judge,
+                  reason: typeof judge.reason === "string" ? judge.reason : null,
               }
             : null,
     };
@@ -424,6 +448,58 @@ const interruption = (signal) =>
         { code: "EVAL_INTERRUPTED" },
     );
 
+function assertLocalPrivateDiagnostics(directory, environment) {
+    if (directory && ["GITHUB_ACTIONS", "CI", "TF_BUILD"].some((key) => {
+        const value = String(environment[key] ?? "").trim().toLowerCase();
+        return value && value !== "false" && value !== "0";
+    }))
+        throw new Error("Private evaluation diagnostics are local-only and cannot be enabled in CI.");
+}
+
+const containsPath = (root, candidate) => {
+    const path = relative(root, candidate);
+    return !isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`);
+};
+
+async function privateDiagnosticsLocation(directory, output, sourceRoot) {
+    if (typeof directory !== "string" || !isAbsolute(directory))
+        throw new Error("Private diagnostics require an existing absolute directory.");
+    let location, source, published;
+    try {
+        [location, source, published] = await Promise.all([
+            realpath(directory), realpath(sourceRoot), realpath(output),
+        ]);
+        if (!(await stat(location)).isDirectory())
+            throw new Error("Not a directory.");
+    } catch {
+        throw new Error("Private diagnostics require an existing, accessible directory.");
+    }
+    if ([source, published].some((root) =>
+        containsPath(root, location) || containsPath(location, root)))
+        throw new Error(
+            "Private diagnostics must not overlap the repository or published output, including symlink targets.",
+        );
+    return location;
+}
+
+export async function preparePrivateDiagnostics(
+    directory,
+    output,
+    environment = process.env,
+    sourceRoot = repositoryRoot,
+) {
+    if (directory === undefined || directory === "") return null;
+    assertLocalPrivateDiagnostics(directory, environment);
+    const location = await privateDiagnosticsLocation(directory, output, sourceRoot);
+    let captureDirectory;
+    try {
+        captureDirectory = await mkdtemp(join(location, "live-evaluations-"));
+    } catch {
+        throw new Error("Private diagnostics retention setup failed; no cases were started.");
+    }
+    return privateDiagnosticsLocation(captureDirectory, output, sourceRoot);
+}
+
 export async function runCases(
     cases,
     output,
@@ -433,7 +509,12 @@ export async function runCases(
     renew = refreshEvaluationIdentity,
     publishAnswers = true,
     pauseMs = 0,
-    { signals = process } = {},
+    {
+        signals = process,
+        privateDiagnosticsDirectory,
+        environment = process.env,
+        diagnosticsSourceRoot = repositoryRoot,
+    } = {},
 ) {
     const results = [];
     await mkdir(output, { recursive: true });
@@ -450,8 +531,11 @@ export async function runCases(
         throw new Error(
             "The published output directory cannot contain private captures.",
         );
-    // Ignored build scratch, not TestResults or any published artifact directory.
-    const captureDirectory = await mkdtemp(
+    const retainedCapture = await preparePrivateDiagnostics(
+        privateDiagnosticsDirectory, output, environment, diagnosticsSourceRoot,
+    );
+    // Default captures remain disposable; retained captures require explicit local opt-in.
+    const captureDirectory = retainedCapture ?? await mkdtemp(
         resolve(captureRoot, ".live-evaluation-capture-"),
     );
     const controller = new AbortController();
@@ -493,7 +577,7 @@ export async function runCases(
         await writeFile(
             resolve(output, "summary.md"),
             renderSummary(
-                cases, publishedResults, verdict, sha, publishAnswers,
+                cases, results, verdict, sha, publishAnswers,
             ) + (failure ? `\n**Suite failure:** ${html(failure.message)}\n` : ""),
         );
         if (runFailure !== failure) return report();
@@ -525,16 +609,32 @@ export async function runCases(
             } catch {
                 result = null;
             }
-            await writeFile(
-                resolve(output, `${scenario.id}.json`),
-                JSON.stringify(publishableResult(result, publishAnswers)),
-            );
             const failures = validateResult(
                 scenario,
                 result,
                 exitCode,
                 sha,
                 suiteHash,
+            );
+            if (retainedCapture && failures.length === 0) {
+                try {
+                    const location = await privateDiagnosticsLocation(
+                        captureDirectory, output, diagnosticsSourceRoot,
+                    );
+                    await Promise.all([
+                        rm(join(location, `${scenario.id}.json`), { force: true }),
+                        rm(join(location, `${scenario.id}.json.tmp`), { force: true }),
+                    ]);
+                } catch {
+                    runFailure = new Error(
+                        "Private evaluation diagnostics cleanup failed; passing captures could not be removed.",
+                    );
+                    throw runFailure;
+                }
+            }
+            await writeFile(
+                resolve(output, `${scenario.id}.json`),
+                JSON.stringify(publishableResult(result, publishAnswers)),
             );
             results.push({ id: scenario.id, exitCode, result, failures });
             await report();
@@ -549,10 +649,33 @@ export async function runCases(
             "Evaluation execution failed; no remaining cases will run.",
         );
     } finally {
-        try {
-            await rm(captureDirectory, { recursive: true, force: true });
-        } catch {
-            runFailure ??= new Error("Private evaluation capture cleanup failed.");
+        if (retainedCapture) {
+            try {
+                const location = await privateDiagnosticsLocation(
+                    captureDirectory, output, diagnosticsSourceRoot,
+                );
+                await writeFile(
+                    join(location, "diagnostics.json"),
+                    JSON.stringify({
+                        sha, suiteHash, cases,
+                        completed: results.length,
+                        results: results.filter((row) => row.failures.length > 0),
+                        failure: runFailure?.message ?? null,
+                    }, null, 2),
+                    { mode: 0o600, flag: "wx" },
+                );
+            } catch {
+                const failure = "Private evaluation diagnostics retention failed; local captures may be incomplete.";
+                runFailure = new Error(
+                    runFailure ? `${runFailure.message} ${failure}` : failure,
+                );
+            }
+        } else {
+            try {
+                await rm(captureDirectory, { recursive: true, force: true });
+            } catch {
+                runFailure ??= new Error("Private evaluation capture cleanup failed.");
+            }
         }
         try {
             finalVerdict = await report();
@@ -708,6 +831,9 @@ async function main() {
         resolve(output, "summary.md"),
         renderSummary(cases, [], initialVerdict, sha, publishAnswers),
     );
+    assertLocalPrivateDiagnostics(
+        process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY, process.env,
+    );
     for (const name of [
         "EVAL_MODEL_ENDPOINT",
         "EVAL_MODEL",
@@ -749,6 +875,10 @@ async function main() {
             Math.max(Number(process.env.EVAL_CASE_PAUSE_SECONDS ?? 20) || 0, 0),
             120,
         ) * 1000,
+        {
+            privateDiagnosticsDirectory:
+                process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY,
+        },
     );
     if (!verdict.accepted) process.exitCode = 1;
 }

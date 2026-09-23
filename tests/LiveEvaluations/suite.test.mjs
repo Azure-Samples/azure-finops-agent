@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
-    mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile,
+    mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile,
 } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ import {
     buildSuite,
     evaluateSuite,
     executeCase,
+    preparePrivateDiagnostics,
     publishableResult,
     refreshEvaluationIdentity,
     renderSummary,
@@ -31,6 +32,22 @@ async function createDirectory() {
     const root = join(repositoryRoot, "tests", "LiveEvaluations", "obj");
     await mkdir(root, { recursive: true });
     return mkdtemp(join(root, ".live-evaluation-test-"));
+}
+async function createDiagnosticsFixture() {
+    const directory = await createDirectory();
+    const sourceRoot = join(directory, "source");
+    const output = join(directory, "published");
+    const diagnostics = join(directory, "private");
+    await Promise.all([sourceRoot, output, diagnostics].map((path) =>
+        mkdir(path, { recursive: true })));
+    return {
+        directory, sourceRoot, output, diagnostics,
+        options: {
+            privateDiagnosticsDirectory: diagnostics,
+            diagnosticsSourceRoot: sourceRoot,
+            environment: {},
+        },
+    };
 }
 const sha = "a".repeat(40),
     suiteHash = "b".repeat(64);
@@ -803,6 +820,281 @@ test("internal-test runs publish verdicts but withhold answers and judge rationa
     }
 });
 
+test("local diagnostics retain redacted failed-case rationale without changing public classification or acceptance", async () => {
+    const fixture = await createDiagnosticsFixture();
+    let captureDirectory;
+    try {
+        const preserved = join(fixture.diagnostics, "operator-owned.txt");
+        await writeFile(preserved, "preserve existing diagnostics");
+        const verdict = await runCases(
+            cases, fixture.output, sha, suiteHash,
+            async (scenario, path) => {
+                captureDirectory ??= dirname(path);
+                assert.equal(dirname(path), captureDirectory);
+                assert.ok(relative(fixture.sourceRoot, path).startsWith(`..${sep}`));
+                assert.ok(relative(fixture.output, path).startsWith(`..${sep}`));
+                const result = privateResult(scenario);
+                if (scenario === cases[0]) {
+                    result.accepted = false;
+                    result.judge.accepted = false;
+                    result.reasons = ["tenant-judge-rejection-must-not-publish"];
+                }
+                await writeFile(path, JSON.stringify(result));
+                return result.accepted ? 0 : 1;
+            },
+            async () => {},
+            false,
+            0,
+            fixture.options,
+        );
+        assert.equal(verdict.accepted, false);
+        assert.equal(verdict.completed, 20);
+        const retained = JSON.parse(await readFile(
+            join(captureDirectory, `${cases[0].id}.json`), "utf8",
+        ));
+        assert.equal(retained.judge.reason, "tenant-rationale-must-not-publish");
+        assert.equal(retained.reasons[0], "tenant-judge-rejection-must-not-publish");
+        const snapshot = JSON.parse(await readFile(
+            join(captureDirectory, "diagnostics.json"), "utf8",
+        ));
+        assert.equal(snapshot.completed, 20);
+        assert.equal(snapshot.results.length, 1);
+        assert.equal(snapshot.results[0].result.answer, "tenant-answer-must-not-publish");
+        assert.equal(snapshot.results[0].result.failedToolDetails[0].arguments,
+            "tenant-arguments-must-not-publish");
+        assert.deepEqual((await readdir(captureDirectory)).sort(),
+            [`${cases[0].id}.json`, "diagnostics.json"].sort());
+        const published = await readPublished(fixture.output);
+        assert.doesNotMatch(published, /tenant-.*-must-not-publish/);
+        assert.ok(!published.includes(captureDirectory));
+        assert.match(published, /19\/20 accepted/);
+        assert.equal(await readFile(preserved, "utf8"), "preserve existing diagnostics");
+        assert.equal((await stat(captureDirectory)).isDirectory(), true);
+        if (process.platform !== "win32") {
+            assert.equal((await stat(captureDirectory)).mode & 0o777, 0o700);
+            assert.equal((await stat(join(captureDirectory, "diagnostics.json"))).mode & 0o777, 0o600);
+        }
+    } finally {
+        await rm(fixture.directory, { recursive: true, force: true });
+    }
+});
+
+test("interrupted local diagnostics retain unfinished captures but not passing answers without starting more cases", async () => {
+    const fixture = await createDiagnosticsFixture();
+    const signals = new EventEmitter();
+    let executed = 0, captureDirectory;
+    try {
+        await assert.rejects(
+            runCases(
+                cases, fixture.output, sha, suiteHash,
+                async (scenario, path) => {
+                    executed++;
+                    captureDirectory = dirname(path);
+                    if (executed === 1) {
+                        await writeFile(path, JSON.stringify(privateResult(scenario)));
+                        return 0;
+                    }
+                    await writeFile(`${path}.tmp`, JSON.stringify(privateResult(scenario)));
+                    signals.emit("SIGINT");
+                    return -1;
+                },
+                async () => {},
+                false,
+                0,
+                { ...fixture.options, signals },
+            ),
+            /interrupted by SIGINT/,
+        );
+        assert.equal(executed, 2);
+        assert.equal(signals.listenerCount("SIGINT"), 0);
+        assert.equal(signals.listenerCount("SIGTERM"), 0);
+        const snapshot = JSON.parse(await readFile(
+            join(captureDirectory, "diagnostics.json"), "utf8",
+        ));
+        assert.equal(snapshot.completed, 1);
+        assert.equal(snapshot.results.length, 0);
+        await assert.rejects(stat(join(captureDirectory, `${cases[0].id}.json`)), { code: "ENOENT" });
+        assert.match(snapshot.failure, /interrupted by SIGINT/);
+        assert.match(await readFile(
+            join(captureDirectory, `${cases[1].id}.json.tmp`), "utf8",
+        ), /tenant-rationale-must-not-publish/);
+        const published = await readPublished(fixture.output);
+        assert.doesNotMatch(published, /tenant-.*-must-not-publish/);
+        assert.match(published, /"accepted": false/);
+        assert.ok(!(await readdir(fixture.output)).some((name) => name.endsWith(".tmp")));
+    } finally {
+        await rm(fixture.directory, { recursive: true, force: true });
+    }
+});
+
+test("executor exceptions retain their already-written private result without exposing exception text", async () => {
+    const fixture = await createDiagnosticsFixture();
+    let executed = 0, captureDirectory;
+    try {
+        await assert.rejects(
+            runCases(
+                cases, fixture.output, sha, suiteHash,
+                async (scenario, path) => {
+                    executed++;
+                    captureDirectory = dirname(path);
+                    await writeFile(path, JSON.stringify(privateResult(scenario)));
+                    throw new Error("tenant-executor-error-must-not-publish");
+                },
+                async () => {},
+                false,
+                0,
+                fixture.options,
+            ),
+            /Evaluation execution failed/,
+        );
+        assert.equal(executed, 1);
+        assert.match(await readFile(
+            join(captureDirectory, `${cases[0].id}.json`), "utf8",
+        ), /tenant-rationale-must-not-publish/);
+        assert.equal((await stat(join(captureDirectory, "diagnostics.json"))).isFile(), true);
+        assert.doesNotMatch(await readPublished(fixture.output), /tenant-.*-must-not-publish/);
+    } finally {
+        await rm(fixture.directory, { recursive: true, force: true });
+    }
+});
+
+test("retention write failures visibly fail the gate even when all twenty case verdicts passed", async () => {
+    const fixture = await createDiagnosticsFixture();
+    let executed = 0, captureDirectory;
+    try {
+        await assert.rejects(
+            runCases(
+                cases, fixture.output, sha, suiteHash,
+                async (scenario, path) => {
+                    executed++;
+                    captureDirectory = dirname(path);
+                    if (executed === 1)
+                        await mkdir(join(captureDirectory, "diagnostics.json"));
+                    await writeFile(path, JSON.stringify(privateResult(scenario)));
+                    return 0;
+                },
+                async () => {},
+                false,
+                0,
+                fixture.options,
+            ),
+            /Private evaluation diagnostics retention failed/,
+        );
+        assert.equal(executed, 20);
+        const report = JSON.parse(await readFile(join(fixture.output, "results.json"), "utf8"));
+        assert.equal(report.verdict.accepted, false);
+        assert.ok(report.verdict.failures.some((failure) => failure.includes("retention failed")));
+        const published = await readPublished(fixture.output);
+        assert.match(published, /Suite failure:.*retention failed/);
+        assert.doesNotMatch(published, /tenant-.*-must-not-publish/);
+        assert.ok(!published.includes(captureDirectory));
+    } finally {
+        await rm(fixture.directory, { recursive: true, force: true });
+    }
+});
+
+test("private diagnostics reject CI while leaving the disabled default unchanged", async () => {
+    const fixture = await createDiagnosticsFixture();
+    try {
+        for (const environment of [
+            { GITHUB_ACTIONS: "true" }, { CI: "true" }, { CI: "1" }, { TF_BUILD: "True" },
+        ])
+            await assert.rejects(
+                runCases(
+                    cases, fixture.output, sha, suiteHash,
+                    () => assert.fail("No CI case may start with private retention enabled"),
+                    async () => {},
+                    false,
+                    0,
+                    { ...fixture.options, environment },
+                ),
+                /local-only and cannot be enabled in CI/,
+            );
+        assert.deepEqual(await readdir(fixture.diagnostics), []);
+        assert.equal(await preparePrivateDiagnostics(
+            undefined, fixture.output, { CI: "true" }, fixture.sourceRoot,
+        ), null);
+        assert.equal(await preparePrivateDiagnostics(
+            "", fixture.output, { GITHUB_ACTIONS: "true" }, fixture.sourceRoot,
+        ), null);
+    } finally {
+        await rm(fixture.directory, { recursive: true, force: true });
+    }
+});
+
+test("private diagnostics require existing absolute locations disjoint from repository and public output", async () => {
+    const fixture = await createDiagnosticsFixture();
+    try {
+        for (const directory of [
+            fixture.sourceRoot, fixture.output, fixture.directory,
+            join(fixture.sourceRoot, "nested"), join(fixture.output, "nested"),
+        ]) {
+            await mkdir(directory, { recursive: true });
+            await assert.rejects(
+                preparePrivateDiagnostics(directory, fixture.output, {}, fixture.sourceRoot),
+                /must not overlap the repository or published output/,
+            );
+        }
+        await assert.rejects(
+            preparePrivateDiagnostics(fixture.diagnostics, fixture.output, {}),
+            /must not overlap the repository or published output/,
+        );
+        await assert.rejects(
+            preparePrivateDiagnostics("relative-diagnostics", fixture.output, {}, fixture.sourceRoot),
+            /existing absolute directory/,
+        );
+        await assert.rejects(
+            preparePrivateDiagnostics(join(fixture.directory, "absent"), fixture.output, {}, fixture.sourceRoot),
+            /existing, accessible directory/,
+        );
+        const file = join(fixture.directory, "not-a-directory");
+        await writeFile(file, "not a directory");
+        await assert.rejects(
+            preparePrivateDiagnostics(file, fixture.output, {}, fixture.sourceRoot),
+            /existing, accessible directory/,
+        );
+        assert.deepEqual(await readdir(fixture.diagnostics), []);
+    } finally {
+        await rm(fixture.directory, { recursive: true, force: true });
+    }
+});
+
+test("private diagnostics resolve symlinks for destination, repository and public-output boundaries", async () => {
+    const fixture = await createDiagnosticsFixture();
+    try {
+        const sourceAlias = join(fixture.directory, "source-alias");
+        const outputAlias = join(fixture.directory, "output-alias");
+        const privateAlias = join(fixture.directory, "private-alias");
+        const type = process.platform === "win32" ? "junction" : "dir";
+        await Promise.all([
+            symlink(fixture.sourceRoot, sourceAlias, type),
+            symlink(fixture.output, outputAlias, type),
+            symlink(fixture.diagnostics, privateAlias, type),
+        ]);
+        for (const [directory, output, source] of [
+            [sourceAlias, fixture.output, fixture.sourceRoot],
+            [outputAlias, fixture.output, fixture.sourceRoot],
+            [fixture.sourceRoot, fixture.output, sourceAlias],
+            [fixture.output, outputAlias, fixture.sourceRoot],
+        ])
+            await assert.rejects(
+                preparePrivateDiagnostics(directory, output, {}, source),
+                /must not overlap the repository or published output/,
+            );
+        const first = await preparePrivateDiagnostics(
+            privateAlias, outputAlias, {}, sourceAlias,
+        );
+        const second = await preparePrivateDiagnostics(
+            privateAlias, outputAlias, {}, sourceAlias,
+        );
+        assert.notEqual(first, second);
+        assert.equal(dirname(first), await realpath(fixture.diagnostics));
+        assert.equal(dirname(second), await realpath(fixture.diagnostics));
+    } finally {
+        await rm(fixture.directory, { recursive: true, force: true });
+    }
+});
+
 test("executor crashes cannot publish private captures or leave their temporary files behind", async () => {
     const directory = await createDirectory();
     const output = join(directory, "published");
@@ -884,7 +1176,17 @@ test("internal-test publication rejects malformed raw values and retains only sa
     assert.equal(published.errorCount, 1);
     assert.equal(published.reasonCount, 1);
     assert.equal(published.answerWithheld, true);
-    assert.equal(publishableResult(result, true), result);
+    const synthetic = publishableResult(result, true);
+    assert.equal(synthetic.answer, result.answer);
+    assert.deepEqual(synthetic.errors, result.errors);
+    assert.deepEqual(synthetic.reasons, result.reasons);
+    assert.deepEqual(synthetic.judge, result.judge);
+    assert.ok(!("failedToolDetails" in synthetic));
+    assert.ok(!("extra" in synthetic));
+    assert.doesNotMatch(JSON.stringify(synthetic),
+        /tenant-(?:arguments|details|extra|tool-output|success)-must-not-publish/);
+    assert.equal(result.tools[1].arguments, "tenant-arguments-must-not-publish");
+    assert.equal(result.failedToolDetails[0].detail, "tenant-details-must-not-publish");
 });
 
 test("a published directory cannot contain the private capture root", async () => {
@@ -1002,6 +1304,7 @@ test("the real suite entry point exits nonzero on missing configuration and writ
                     EVAL_DATA_CLASSIFICATION: "internal-test",
                     EVAL_MODEL_ENDPOINT: "",
                     EVAL_OUTPUT_DIRECTORY: directory,
+                    EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY: "",
                 },
             },
         );
@@ -1051,11 +1354,46 @@ test("the real suite entry point rejects the wrong candidate revision before any
                     EVAL_DATA_CLASSIFICATION: "internal-test",
                     EVAL_ONLY_IDS: "no-matching-case-never-dispatch",
                     EVAL_OUTPUT_DIRECTORY: directory,
+                    EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY: "",
                 },
             },
         );
         assert.equal(result.status, 1);
         assert.match(result.stderr, /does not match the checked-out git HEAD/);
+        assert.match(
+            await readFile(join(directory, "summary.md"), "utf8"),
+            /\*\*FAIL\*\*/,
+        );
+        assert.deepEqual(await readdir(directory), ["summary.md"]);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("the real suite entry point rejects private diagnostics in CI before credentials or live execution", async () => {
+    const directory = await createDirectory();
+    try {
+        const result = spawnSync(
+            process.execPath,
+            [fileURLToPath(new URL("./suite.mjs", import.meta.url))],
+            {
+                encoding: "utf8",
+                timeout: 10000,
+                env: {
+                    ...process.env,
+                    GITHUB_ACTIONS: "true",
+                    CI: "true",
+                    GITHUB_SHA: sha,
+                    EVAL_EXPECTED_SHA: sha,
+                    EVAL_MODEL_ENDPOINT: "",
+                    EVAL_DATA_CLASSIFICATION: "internal-test",
+                    EVAL_OUTPUT_DIRECTORY: directory,
+                    EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY: directory,
+                },
+            },
+        );
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /local-only and cannot be enabled in CI/);
         assert.match(
             await readFile(join(directory, "summary.md"), "utf8"),
             /\*\*FAIL\*\*/,

@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- State reported UTC retrieval timestamps for inventory and tag snapshots without presenting them as source-data freshness; missing source timestamps and Resource Graph indexing lag remain explicit.
+- Allow opt-in local retention of already-redacted failed evaluation captures outside both the repository and public artifacts, rejecting CI and overlapping symlink targets. Passing captures are removed, retention failures fail the gate, and raw failed-tool details stay private for both data classifications.
+- Install Git in the slim Linux regression container before evaluation source-identity tests; keep every regression enabled instead of skipping tests whose executable prerequisite was missing.
+- Keep Crawl budget-snapshot freshness and unknown anomaly-alert coverage in the rendered score details and answer guidance. Follow-up actions now verify control coverage before proposing changes, rather than asserting that anomaly alerts are missing from generic alert counts.
+- Correct Resource Graph guidance to use `top N by ...` or `order by ... | take N`, and require an explicit requested scope in both single and bulk POSTs instead of implicitly querying every accessible subscription. Live evaluation progress now reports business/tool-result failures, not merely successful SDK callbacks.
+- Accept empty optional projection/grouping maps in retained-result queries and preserve ungrouped aggregates in `totals` even when `limit=0`. This fixes failed tag/summary queries without hiding invalid inputs, combining grouped currencies, or changing original evidence coverage.
 - Fix the Windows live-evaluation entrypoint test path, require persisted replay to match both the question and all completed answer messages, bind the evaluator and application binaries to the candidate commit, and retain execution diagnostics when the judge returns malformed output.
 - Reuse the runtime's reported-tool-failure classifier in the live evaluation gate. Empty results, failed/cancelled operations and failures nested in source metadata cannot pass merely because the SDK and judge report success; truthful unknown or pending evidence still requires task-specific judgment.
 - Allow the live-evaluation job to resolve dedicated credentials from its protected GitHub environment before enforcing the required configuration. Missing credentials still fail the gate explicitly rather than rejecting the reusable workflow before it can report setup diagnostics.

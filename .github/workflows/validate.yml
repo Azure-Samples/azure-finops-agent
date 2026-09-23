@@ -35,6 +35,8 @@ jobs:
         run: |
           docker run --rm --ipc=host -e CI=true -v "$PWD:/workspace" -w /workspace/src/Dashboard/frontend \
             node:26-slim bash -ec '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends git
               node --test ../../../tests/LiveEvaluations/*.test.mjs
               npm ci --no-audit --no-fund
               npm run test

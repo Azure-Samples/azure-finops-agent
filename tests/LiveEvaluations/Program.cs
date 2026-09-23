@@ -170,7 +170,7 @@ internal static class Program
                 var result = new ToolResult(Text(item, "tool"), item.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.True, Text(item, "result"), Text(item, "error"),
                     toolArguments.GetValueOrDefault(id, ""));
                 tools.Add(result);
-                Console.WriteLine(JsonSerializer.Serialize(new { type, result.Name, result.Success, elapsedMs = started.ElapsedMilliseconds }));
+                Console.WriteLine(JsonSerializer.Serialize(new { type, result.Name, Success = EvaluationGate.ToolSucceeded(result), elapsedMs = started.ElapsedMilliseconds }));
             }
         }
         if (pendingTools.Count > 0) errors.Add("One or more tools have no terminal result.");

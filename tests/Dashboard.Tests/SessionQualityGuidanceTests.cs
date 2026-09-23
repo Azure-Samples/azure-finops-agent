@@ -38,6 +38,25 @@ public sealed class SessionQualityGuidanceTests
     }
 
     [Fact]
+    public void CrawlClaimsPreserveFreshnessAndUnverifiedControlCoverage()
+    {
+        Assert.Contains("Do not describe unverified controls as missing", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("periodically evaluated snapshot may lag billing", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("has no source data-as-of timestamp", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
+    public void InventorySnapshotsDistinguishReportedRetrievalTimeFromSourceFreshness()
+    {
+        Assert.Contains("Resource inventory and tag-compliance answers", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("snapshot retrieval date/time (UTC)", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("reported retrieval time from the source data-as-of timestamp", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Resource Graph indexing can lag resource changes", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("unavailable rather than inventing one", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Do not make another API call just for a timestamp", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
     public void GroupedCostReadsUseSequentialBatchesAndPreserveReconciliationEvidence()
     {
         Assert.Contains("ONE `BulkAzureRequest` with parallelism=1", CopilotSessionFactory.SystemPrompt);

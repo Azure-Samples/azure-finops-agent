@@ -15,6 +15,9 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// </summary>
 public sealed class CrawlMaturityTools
 {
+    private const string BudgetSpendFreshness =
+        "Budget currentSpend is evaluated periodically and may lag billing; retrieval time is not data freshness. No source data-as-of timestamp is available, and this is not a finalized bill.";
+
     private readonly UserTokens _tokens;
     private readonly ScoreTools _scoreTools;
 
@@ -27,6 +30,7 @@ public sealed class CrawlMaturityTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides a periodically evaluated MTD snapshot, not real-time or finalized cost.
+EVIDENCE LIMITS: when quoting budget spend, state that the snapshot may lag billing and has no source data-as-of timestamp. Generic alert/scheduled-action counts do not establish anomaly-alert configuration; do not claim anomaly alerts are missing or configured from those counts.
 DATA SCOPING: the declared assessment scope controls the subscription inputs. Include every requested subscription and all seven dimensions; do not shrink a full assessment to top spenders. The host uses scoped Resource Graph aggregates and bounded evidence samples. Reuse those summaries rather than asking QueryAzure for raw inventories. Filtered budgets or sample names do not establish whole-estate spend/counts; retain coverage, unknown and notApplicable states.
     Use exactly once for Crawl/FinOps maturity scoring. Pass the exact `subscriptions` array and optional first management-group id from the connection context. Do NOT supplement it with QueryAzure, ReportMaturityScore, SuggestFollowUp, or any other tool—the score persistence, maturity SSE event, and follow-up buttons are already handled by this result.");
     }
@@ -117,7 +121,7 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
                 currency = currencies.Length == 1 ? currencies[0] : null,
                 totalsByCurrency,
                 dataAsOfUtc = (string?)null,
-                freshness = "Budget currentSpend is evaluated periodically and may lag billing; retrieval time is not data freshness.",
+                freshness = BudgetSpendFreshness,
                 details = budgets
             },
             tagging = taggingTask.Result,
@@ -164,11 +168,10 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
             .SelectMany(r => StringArrayProperty(r, "names"))
             .Take(3)
             .ToArray();
-        var firstActionPrompt =
-            $"Review existing valid CostCenter, Owner, and Environment values, then apply missing tags consistently across {subscriptions.Count} subscriptions; configure missing daily exports and anomaly alerts. Ask before any write, use bulk operations, never invent placeholder tag values, do not delete resources, and summarize changes in one line.";
+        var firstActionPrompt = BuildRemediationPrompt(subscriptions.Count);
         var followUpActions = new[]
         {
-            new { label = "Auto-fix tags + exports + alerts", prompt = firstActionPrompt },
+            new { label = "Review tags + exports + alerts", prompt = firstActionPrompt },
             new { label = "Re-score Crawl maturity", prompt = "Re-score my Crawl FinOps maturity across all connected subscriptions and compare it with the prior score." },
             new
             {
@@ -196,6 +199,9 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
             }
         });
     }
+
+    internal static string BuildRemediationPrompt(int subscriptionCount) =>
+        $"Review valid CostCenter, Owner, and Environment values across {subscriptionCount} subscriptions and verify daily-export schedules and anomaly-alert configuration before proposing changes for confirmed gaps. Require explicit application approval before any write, use bulk operations where appropriate, never invent placeholder tag values, and do not delete resources.";
 
     private async Task<IReadOnlyList<CollectionEvidence>> ReadCollections(
         string token,
@@ -575,19 +581,19 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
         List<MaturityScore> scores =
         [
             new("budgets", "Budgets & thresholds", budgetScore,
-                $"{coveredBudgets}/{subscriptions.Count} subscriptions have budgets; {budgets.Sum(b => b.BudgetCount)} budgets expose {notificationCount} enabled actual/forecast notifications and {spendSummary} from strict unfiltered monthly budgets."),
+                $"{coveredBudgets}/{subscriptions.Count} subscriptions have budgets; {budgets.Sum(b => b.BudgetCount)} budgets expose {notificationCount} enabled actual/forecast notifications and {spendSummary} from strict unfiltered monthly budgets. {BudgetSpendFreshness}"),
             new("tagging", "Tagging for accountability", tagScore,
                 $"Valid CostCenter+Owner+Environment coverage is {Math.Round(tagCoverage, 1)}% across {totalResources} resources ({tagSpread}); exact valid-key counts are CostCenter={costCenter}, Owner={owner}, Environment={environment}, with {placeholderTags} placeholder values excluded."),
             new("exports", "Cost data exports", exportsScore,
                 $"{exportCount} exports cover {exportCoverage}/{subscriptions.Count} subscriptions; {exports.Count(e => e.Status == 200)}/{subscriptions.Count} export-list calls succeeded."),
             new("alerts", "Cost alerts & scheduled actions", alertsScore,
-                $"{alertCount} cost alerts and {actionCount} scheduled actions cover {alertCoverage}/{subscriptions.Count} subscriptions; {alerts.Count(a => a.Status == 200) + scheduledActions.Count(a => a.Status == 200)}/{subscriptions.Count * 2} list calls succeeded."),
+                $"{alertCount} cost alerts and {actionCount} scheduled actions cover {alertCoverage}/{subscriptions.Count} subscriptions; {alerts.Count(a => a.Status == 200) + scheduledActions.Count(a => a.Status == 200)}/{subscriptions.Count * 2} list calls succeeded. These counts do not establish anomaly-alert configuration."),
             new("policy", "Governance guardrails", policyScore,
                 $"{finOpsPolicies} potentially FinOps-related assignments among {totalPolicies} assignments; assignment inventory alone does not verify effective effects, inherited coverage, or compliance."),
             new("waste", "Waste identification & cleanup", wasteScore,
                 $"{commonWaste} potentially billable waste items were found. Separately, {emptyGroups} empty resource groups ({emptyGroupSpread}) are housekeeping only and have no direct resource-group charge."),
             new("visibility", "Cost visibility & ownership", visibilityScore,
-                $"Budget currentSpend provides {spendSummary} across {visibleSubscriptions}/{subscriptions.Count} subscriptions ({spendSpread}); governed ownership-tag coverage is {Math.Round(tagCoverage, 1)}% across {totalResources} resources.")
+                $"Budget currentSpend provides {spendSummary} across {visibleSubscriptions}/{subscriptions.Count} subscriptions ({spendSpread}); governed ownership-tag coverage is {Math.Round(tagCoverage, 1)}% across {totalResources} resources. {BudgetSpendFreshness}")
         ];
         SetEvidenceState(scores, "budgets", allBudgetReadsOk);
         SetEvidenceState(scores, "tagging", ProjectionStatus(taggingProjection) == 200, totalResources == 0);

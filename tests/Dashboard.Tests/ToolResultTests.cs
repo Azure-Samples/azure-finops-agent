@@ -30,6 +30,64 @@ public sealed class ToolResultTests
     private static readonly ToolResultStore.Source Source = new("SyntheticRead", DateTimeOffset.UtcNow, true, false, true, "");
 
     [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(false, 50)]
+    [InlineData(true, 50)]
+    public void EmptyOptionalMapsAndTotalsOnlyQueriesPreserveAllAggregates(bool emptyMaps, int limit)
+    {
+        var entry = new ToolResultStore().Retain(101, "session",
+            """{"data":[{"resourceCount":4,"tagged":2},{"resourceCount":6,"tagged":0}]}""", Source)!;
+        var query = new Dictionary<string, object>
+        {
+            ["path"] = "$.data[*]",
+            ["aggregates"] = new[]
+            {
+                new { op = "sum", path = "$.resourceCount", @as = "resources" },
+                new { op = "sum", path = "$.tagged", @as = "tagged" }
+            },
+            ["limit"] = limit
+        };
+        if (emptyMaps)
+        {
+            query["groupBy"] = new Dictionary<string, string>();
+            query["select"] = new Dictionary<string, string>();
+        }
+
+        using var response = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, JsonSerializer.Serialize(query)));
+        var root = response.RootElement;
+        Assert.Equal(2, root.GetProperty("totalMatches").GetInt32());
+        Assert.Equal(1, root.GetProperty("totalResults").GetInt32());
+        Assert.Equal(10m, root.GetProperty("totals").GetProperty("resources").GetDecimal());
+        Assert.Equal(2m, root.GetProperty("totals").GetProperty("tagged").GetDecimal());
+        Assert.Equal(limit == 0 ? 0 : 1, root.GetProperty("rows").GetArrayLength());
+        Assert.True(root.GetProperty("source").GetProperty("Partial").GetBoolean());
+        Assert.False(root.GetProperty("source").GetProperty("Fresh").GetBoolean());
+    }
+
+    [Fact]
+    public void EmptyOptionalMapsDoNotDiscardRows()
+    {
+        var entry = new ToolResultStore().Retain(101, "session", """{"rows":[{"count":4},{"count":6}]}""", Source)!;
+        using var response = JsonDocument.Parse(ToolResultQueryTools.Execute(entry,
+            """{"path":"$.rows[*]","groupBy":{},"select":{}}"""));
+        Assert.Equal(2, response.RootElement.GetProperty("rows").GetArrayLength());
+        Assert.Equal(4, response.RootElement.GetProperty("rows")[0].GetProperty("count").GetInt32());
+        Assert.Equal(JsonValueKind.Null, response.RootElement.GetProperty("totals").ValueKind);
+    }
+
+    [Fact]
+    public void GroupedAmountsAreNeverCombinedIntoAnUnrequestedGrandTotal()
+    {
+        var entry = new ToolResultStore().Retain(101, "session",
+            """{"rows":[{"currency":"USD","amount":4},{"currency":"EUR","amount":6}]}""", Source)!;
+        using var response = JsonDocument.Parse(ToolResultQueryTools.Execute(entry,
+            """{"path":"$.rows[*]","groupBy":{"currency":"$.currency"},"aggregates":[{"op":"sum","path":"$.amount","as":"total"}]}"""));
+        Assert.Equal(2, response.RootElement.GetProperty("rows").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, response.RootElement.GetProperty("totals").ValueKind);
+    }
+
+    [Theory]
     [InlineData("HTTP 200 OK\n{\"results\":[{\"body\":{\"properties\":{\"rows\":[[1.25,\"a\"],[2.5,\"b\"]]}}}]}")]
     [InlineData("{}")]
     public async Task SmallInlineEvidenceStaysValidJsonAndAggregatesExactly(string text)

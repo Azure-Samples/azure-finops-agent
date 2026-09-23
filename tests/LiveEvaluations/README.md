@@ -73,4 +73,24 @@ For explicitly authorized local maintainer-lab testing, the existing `az login` 
 
 Use the workstation's approved NuGet and Python package sources rather than adding machine-specific feeds to the repository. If report/file helpers use a virtual environment, set `FINOPS_PYTHON` to that environment's absolute Python executable path before starting the evaluator. The child evaluation processes inherit it; selecting an interpreter only in the editor does not configure the helper processes.
 
+### Optional private local diagnostics
+
+For an explicitly authorized local run, set `EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY` to an **existing absolute directory outside the repository and published output**. The paths must not overlap in either direction, including through symlinks or Windows junctions. Relative, missing, inaccessible, repository-contained and artifact-contained destinations fail before any case starts. This option is rejected in CI (`GITHUB_ACTIONS`, `CI` or `TF_BUILD` enabled); do not pass it to workflows.
+
+For example, after configuring the dedicated evaluation identity, candidate revision and binaries:
+
+```powershell
+$diagnostics = Join-Path $env:LOCALAPPDATA 'AzureFinOps\LiveEvaluationDiagnostics'
+New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+$env:EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY = $diagnostics
+$env:EVAL_DATA_CLASSIFICATION = 'internal-test'
+node tests\LiveEvaluations\suite.mjs
+```
+
+Each attempt creates a unique `live-evaluations-*` child directory. It retains the evaluator's **already-redacted failed-case** JSON, including judge rationale, answer/error text and failed-tool details, plus any unfinished `.json.tmp` capture. Passing-case captures are removed. A final `diagnostics.json` records the completed-case count, loaded failed-case results and the host failure, including handled interruption. It does not collect process output, environment values, credentials or CLI token caches. Incomplete captures are diagnostic evidence only, never accepted case results.
+
+Use an access-restricted local folder, not a shared or synchronized directory. New run directories are owner-only on POSIX and inherit the parent directory's access controls on Windows; the final diagnostics file uses owner-only permissions where supported. These files can still contain sensitive tenant names or financial information. **Do not commit, upload, or publish them.** Retained runs are not automatically deleted; review and remove only the diagnostic run directories you own when no longer needed.
+
+Public summaries and artifacts still obey `EVAL_DATA_CLASSIFICATION`: enabling private diagnostics does not publish internal-test answers or rationale. Neither classification publishes raw failed-tool arguments/details or undeclared private fields. Retention setup/write/cleanup failures visibly fail the run, even if all 20 case verdicts passed. The pinned questions, original rubrics, tool/time limits and unanimous acceptance rule are unchanged; this option adds neither retries nor a diagnostic-subset bypass. With the variable unset or empty, the existing disposable-capture cleanup remains unchanged. Clear the option with `Remove-Item Env:EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY` after local diagnosis.
+
 Fix a failed case by inspecting its source evidence and reproduction, repairing the owning code or contract, and rerunning the full candidate suite. Review intentional rubric changes separately. No automatic code rewrite, permission escalation or rubric relaxation occurs in the deployment workflow.

@@ -48,7 +48,7 @@ DETAIL REQUESTS: for costs by resource/model, start with a valid resource/meter 
 
 THROTTLING: the host serializes Cost Management /query and /forecast and automatically retries once after the full service deadline when it is at most five minutes. The UI reports that wait. A returned HTTP 429 means the bounded retry is exhausted or the deadline is longer; do not make another Cost Management call in this turn. Read _finops.retryAtUtc or retryAtUtc, report the exact deadline, and do not offer an immediate retry before it. Other independent read services remain available, but do not present their activity as billing detail.
 
-RESOURCE GRAPH (POST /providers/Microsoft.ResourceGraph/resources): always use 'project' to limit columns and 'top N' to limit rows. Use one pipeline; Azure Resource Graph does not accept multi-statement `let ...; let ...;` queries.
+RESOURCE GRAPH (POST /providers/Microsoft.ResourceGraph/resources): declare exactly one non-empty subscriptions array of GUID strings or managementGroups array of IDs in the JSON body, using the full requested connection-context scope. Never omit scope: the service would otherwise query other accessible subscriptions. Use project to limit columns and aggregate before limiting rows. KQL top REQUIRES a by expression: `top N by count_ desc`; after `order by`, use `take N`, NOT bare `top N`. Preserve full-result pagination and totals. Start with a supported table such as resources, then a single pipeline; not a leading union of parenthesized subqueries or multi-statement `let ...; let ...;`. For overall and resource-group tag percentages, use separate simple aggregate queries, or derive overall counts from complete grouped results with QueryToolResult. Never reference placeholder or undefined columns. Changing table capitalization or API versions does not fix an unsupported query shape.
 
 SPOT QUOTA: Spot/low-priority VM quota is a SINGLE regional bucket called 'lowPriorityCores' (NOT per VM family) — covers ALL spot VMs including H100/A100. Standard quotas are per-family ('standardNDSH100v5Family', 'StandardNCadsH100v5Family'). Microsoft.Quota requires RP registration (PUT /subscriptions/{subId}/providers/Microsoft.Quota/register) — fall back to GET .../Microsoft.Compute/locations/{region}/usages if not registered.
 
@@ -81,7 +81,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
     private async Task<string> QueryAzure(
         [Description("HTTP method: GET, POST, PUT, or PATCH (DELETE is blocked)")] string method,
         [Description("Scoped ARM path starting with / and an api-version. Use $filter/$select/$top only when the endpoint supports them; otherwise choose a narrower endpoint or Resource Graph query. Do not fetch full collections for a summary.")] string path,
-        [Description("Optional JSON request body for POST/PUT/PATCH. For queries, filter and aggregate at the source and limit only after aggregation. Cost Management permits at most two grouping dimensions; use ResourceId plus Meter at subscription scope for resource/model detail. Preserve totals and coverage. Omit for GET.")] string? body = null)
+        [Description("Optional JSON request body for POST/PUT/PATCH. Resource Graph POST requires an explicit subscriptions array of GUID strings or managementGroups array of IDs from the requested connection-context scope, plus query. KQL top requires by; use order by ... | take N rather than bare top N. For queries, filter and aggregate at the source and limit only after aggregation. Cost Management permits at most two grouping dimensions; use ResourceId plus Meter at subscription scope for resource/model detail. Preserve totals and coverage. Omit for GET.")] string? body = null)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("QueryAzure");
         activity?.SetTag("azure.method", method);
@@ -121,7 +121,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
             body = CanonicalJsonBody(body);
             var postError = ValidateReadOnlyPostPath(path, activity);
             if (postError is not null) return postError;
-            var queryError = ValidateCostQueryBody(path, body);
+            var queryError = ValidateQueryBody(path, body);
             if (queryError is not null) return queryError;
         }
 
@@ -850,6 +850,34 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
         }
     }
 
+    internal static string? ValidateQueryBody(string path, string? body)
+    {
+        var queryIndex = path.IndexOf('?');
+        var requestPath = (queryIndex < 0 ? path : path[..queryIndex]).TrimEnd('/');
+        if (!requestPath.Equals("/providers/Microsoft.ResourceGraph/resources", StringComparison.OrdinalIgnoreCase))
+            return ValidateCostQueryBody(path, body);
+
+        const string error = "HTTP 400 BadRequest\nResource Graph queries must declare exactly one non-empty subscriptions array of GUID strings or managementGroups array of ID strings from the requested connection-context scope. Implicit tenant-wide scope is not supported by this tool. No request was sent.";
+        try
+        {
+            using var document = JsonDocument.Parse(body ?? "");
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || root.EnumerateObject().Count(property => property.Name is "subscriptions" or "managementGroups") != 1)
+                return error;
+            var subscriptionScope = root.TryGetProperty("subscriptions", out var scopes);
+            if (!subscriptionScope) scopes = root.GetProperty("managementGroups");
+            if (scopes.ValueKind != JsonValueKind.Array || scopes.GetArrayLength() == 0)
+                return error;
+            foreach (var scope in scopes.EnumerateArray())
+                if (scope.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(scope.GetString())
+                    || subscriptionScope && !Guid.TryParse(scope.GetString(), out _))
+                    return error;
+            return null;
+        }
+        catch (JsonException) { return error; }
+    }
+
     private static string BlockMutatingPost(Activity? activity)
     {
         activity?.SetTag("azure.result", "blocked_mutating_post");
@@ -858,7 +886,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
     }
 
     private async Task<string> BulkAzureRequest(
-        [Description("JSON array of 1-200 {method,path,body?} objects. Each read must filter, aggregate, project, and limit at the source with supported API options. Use exact discovered targets for writes; body is a JSON string. Grouped cost reads across two or more scopes belong in one batch with exact requested scopes, dates, cost type and filters; they execute sequentially and stop after a final cost 429.")] string requestsJson,
+        [Description("JSON array of 1-200 {method,path,body?} objects. Each read must filter, aggregate, project, and limit at the source with supported API options. Resource Graph POST bodies require an explicit subscriptions or managementGroups array covering the requested scope; use top N by field or order by field | take N, never bare top N. Use exact discovered targets for writes; body is a JSON string. Grouped cost reads across two or more scopes belong in one batch with exact requested scopes, dates, cost type and filters; they execute sequentially and stop after a final cost 429.")] string requestsJson,
         [Description("Max parallel requests in flight. Default 20, max 50. Request 1 for Cost Management; any batch containing /query or /forecast is forced to 1 by the host.")] int parallelism = 20,
         [Description("Stop the whole bulk run on the first failure. Default false (continue and report all failures). A final Cost Management 429 always stops the batch regardless of this setting.")] bool stopOnFirstError = false,
         CancellationToken cancellationToken = default)
@@ -897,7 +925,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
             if (ValidateScopePrefix(item.Path) is { } scopeError) return scopeError;
             if (method == HttpMethod.Post && ValidateReadOnlyPostPath(item.Path, activity) is { } postError) return postError;
             var body = method == HttpMethod.Post ? CanonicalJsonBody(item.Body) : item.Body;
-            if (method == HttpMethod.Post && ValidateCostQueryBody(item.Path, body) is { } queryError) return queryError;
+            if (method == HttpMethod.Post && ValidateQueryBody(item.Path, body) is { } queryError) return queryError;
             return await HttpHelper.SendWithRetryAsync($"https://management.azure.com{item.Path}", token, activity, "bulk",
                 method: method, jsonBody: method == HttpMethod.Get ? null : body,
                 cancellationToken: requestToken);
