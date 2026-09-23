@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 
@@ -313,7 +314,7 @@ public static class HttpHelper
 
         var result = $"HTTP {(int)res.StatusCode} {res.StatusCode}\n";
         if (includeTimestamp)
-            result += $"Current UTC time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}\n";
+            result += $"Current UTC time: {DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)}\n";
 
         if (OperationStore.IsArmUrl(url) && (method == HttpMethod.Put || method == HttpMethod.Patch || method == HttpMethod.Post && (int)res.StatusCode == 202)
             && ToolExecutionContext.Current is { UserId: { } owner, SessionId: { } sessionId })

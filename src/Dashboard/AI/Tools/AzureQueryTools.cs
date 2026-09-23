@@ -44,6 +44,8 @@ Never bare /providers/Microsoft.CostManagement/... — that returns 400.
 
 COST MANAGEMENT QUERY: use api-version=2026-08-01 and dataset.aggregation for totals. Add real grouping dimensions (ServiceName, ResourceGroupName, MeterCategory) only for the requested breakdown. Do NOT add 'UsageDate' to the grouping array — it's a response column, not a dimension; use granularity=""Daily"" for per-day. Never request raw cost detail rows for a summary. For totals across all subscriptions, call QueryCostsAcrossSubscriptions exactly once with connection-context scopes; never fan out one query per subscription yourself. For grouped detail across two or more known subscription scopes, use ONE BulkAzureRequest with parallelism=1 and the exact scopes, dates, cost type and filters. The host executes cost reads sequentially; do not spend a model round-trip on every subscription.
 
+FORECASTS AND BUDGETS: For a whole-month chart, a Daily forecast with includeActualCost=true and explicit month bounds can supply both actual and forecast rows. includeActualCost and includeFreshPartialCost are TOP-LEVEL request fields beside type/timeframe/timePeriod/dataset, NEVER under dataset.configuration. Keep dataset.aggregation for Cost/Sum; do not combine aggregation with dataset.configuration (the service rejects that). Shape example (substitute dates and preserve any requested cost type, filters and grouping): {""type"":""Usage"",""timeframe"":""Custom"",""timePeriod"":{""from"":""<requested-start>"",""to"":""<requested-end>""},""includeActualCost"":true,""dataset"":{""granularity"":""Daily"",""aggregation"":{""totalCost"":{""name"":""Cost"",""function"":""Sum""}}}}. Inspect CostStatus, dates and currency before summing nonoverlapping rows. For remaining spend, aggregate only forecast rows in the requested future window. Before comparing with a budget, inspect its timeGrain, filters, currentSpend AND forecastSpend. The budget's forecastSpend is an independent periodically evaluated projection, not the sum of your daily forecast. Explicitly disclose conflicting month-end estimates, especially opposite under/over-budget outcomes, before concluding whether the budget is safe. A generic freshness caveat does not reconcile them. Never mix incompatible scopes, filters, currencies or unknown date coverage.
+
 DETAIL REQUESTS: for costs by resource/model, start with a valid resource/meter breakdown, not a totals-only query followed by another request for the actual question. Cost Management permits at most two grouping dimensions. At subscription scope use ResourceId plus Meter; derive subscription/resource-group from the scope or ResourceId instead of adding third/fourth grouping dimensions. At management-group scope use SubscriptionId plus ResourceId for resource attribution, then a targeted meter query only when still needed. Reuse returned detail to compute totals; follow pagination and disclose partial coverage. Token activity/inventory is not billed resource or model cost.
 
 THROTTLING: the host serializes Cost Management /query and /forecast and automatically retries once after the full service deadline when it is at most five minutes. The UI reports that wait. A returned HTTP 429 means the bounded retry is exhausted or the deadline is longer; do not make another Cost Management call in this turn. Read _finops.retryAtUtc or retryAtUtc, report the exact deadline, and do not offer an immediate retry before it. Other independent read services remain available, but do not present their activity as billing detail.
@@ -65,6 +67,7 @@ For public retail pricing use GetAzureRetailPricing, or GetAzureRetailPricingBat
         yield return AIFunctionFactory.Create(QueryCostsAcrossSubscriptions, "QueryCostsAcrossSubscriptions", @"Gets a reported Cost Management total and per-subscription breakdown in ONE agent tool call. Use this for requested subscription totals, not as a prerequisite for resource/service/model detail. For detailed spending questions use a valid grouped QueryAzure request first and derive totals from the detail when complete. Do not make users repeat the request for detail after a totals-only answer.
 Input subscriptionsJson: the exact `subscriptions` JSON array supplied in the connection context ({id,name,...}). Input managementGroupId: the optional id/name from the context's managementGroups array. Dates are yyyy-MM-dd; `to` is the exclusive end date.
 DATA SCOPING: use only the requested dates and subscriptions, but include every requested subscription for a whole-estate total. Never take a top-N sample of subscriptions or filtered budget snapshots and label it total spend. This tool has no service/resource-group filter; use a scoped QueryAzure aggregate for those breakdowns. Its host-built queries aggregate before returning results; preserve sourceEvidence and all failed/unattempted scope coverage instead of re-querying returned totals.
+Cost-query responses declare costType=ActualCost, timePeriod with an exclusive end, and aggregation=Cost. Reuse those successful results for the same period and scope; do not repeat them through QueryAzure merely to establish the cost type or request PreTaxCost instead. Budget snapshots have costType=null because this response does not establish a comparable query basis. For a matched ActualCost comparison, query only the missing period/basis and reuse any historical ActualCost results already returned.
     For the current calendar month, the tool first reads each subscription's unfiltered monthly budget `currentSpend` in parallel. Budgets are evaluated periodically: report this as a delayed MTD snapshot, not a real-time or finalized bill. For other periods it tries one management-group aggregate query, then the minimum sequential per-subscription fallback. Preserve sourceEvidence cache/freshness metadata. It stops immediately when Cost Management remains throttled and reports completed, failed, and unattempted scopes. Never call this tool twice in one turn after a 429.");
 
 
@@ -261,7 +264,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
                 {
                     var aggregate = ParseAggregateCostResponse(mgResponse, scopes);
                     if (aggregate.Error is null && aggregate.Results.Count == scopes.Count)
-                        return BuildCostResponse("managementGroup", scopes, aggregate.Results, false, sourceEvidence);
+                        return BuildCostResponse("managementGroup", scopes, aggregate.Results, false, sourceEvidence, fromDate, toDate);
 
                     // Keep any requested subscriptions returned by the aggregate
                     // and query only the missing scopes below. Extra management-
@@ -275,6 +278,9 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
                     {
                         complete = false,
                         source = "managementGroup",
+                        costType = "ActualCost",
+                        timePeriod = new { from = fromDate, to = toDate, endExclusive = true },
+                        aggregation = "Cost",
                         throttled = true,
                         attempted = 1,
                         subscriptionCount = scopes.Count,
@@ -334,7 +340,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
         }
 
         var source = reusedAggregateResults ? "managementGroup+subscriptions" : "subscriptions";
-        return BuildCostResponse(source, scopes, resultsById, throttled, sourceEvidence);
+        return BuildCostResponse(source, scopes, resultsById, throttled, sourceEvidence, fromDate, toDate);
     }
 
     private async Task<string?> TryReadCurrentMonthSpendFromBudgets(
@@ -367,6 +373,8 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
         {
             complete = true,
             source = "subscriptionBudgets.currentSpend",
+            costType = (string?)null,
+            timePeriod = new { from = currentMonthStart, to = utcToday.AddDays(1), endExclusive = true },
             _finops = new
             {
                 cacheStatus = "queried",
@@ -577,12 +585,14 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
         return JsonSerializer.SerializeToElement(new { cacheStatus = "unknown", freshness = "unknown", dataAsOfUtc = (DateTimeOffset?)null });
     }
 
-    private static string BuildCostResponse(
+    internal static string BuildCostResponse(
         string source,
         IReadOnlyList<(string Id, string Name)> scopes,
         IReadOnlyDictionary<string, CostScopeResult> resultsById,
         bool throttled,
-        IReadOnlyList<JsonElement> sourceEvidence)
+        IReadOnlyList<JsonElement> sourceEvidence,
+        DateOnly fromDate,
+        DateOnly toDate)
     {
         var orderedResults = scopes.Select(scope =>
             resultsById.TryGetValue(scope.Id, out var result)
@@ -606,6 +616,9 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
         {
             complete,
             source,
+            costType = "ActualCost",
+            timePeriod = new { from = fromDate, to = toDate, endExclusive = true },
+            aggregation = "Cost",
             sourceEvidence,
             throttled,
             subscriptionCount = scopes.Count,
@@ -707,7 +720,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
         string? Currency,
         string? BudgetName);
 
-    private sealed record CostScopeResult(
+    internal sealed record CostScopeResult(
         string SubscriptionId,
         string SubscriptionName,
         int Status,

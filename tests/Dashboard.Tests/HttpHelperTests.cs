@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using AzureFinOps.Dashboard.Infrastructure;
 using Microsoft.AspNetCore.Builder;
@@ -11,6 +12,44 @@ namespace Dashboard.Tests;
 
 public sealed class HttpHelperTests
 {
+    [Theory]
+    [InlineData("application/json", "{\"value\":[{\"consumedUnits\":2}]}")]
+    [InlineData("text/csv", "Report Refresh Date,Activity\n2026-01-14,2\n")]
+    public async Task RetrievalTimestampPreservesProviderJsonAndCsv(string contentType, string body)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var server = builder.Build();
+        server.MapGet("/report", async context =>
+        {
+            context.Response.ContentType = contentType;
+            await context.Response.WriteAsync(body);
+        });
+        await server.StartAsync();
+        var culture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fi-FI");
+            var before = DateTime.UtcNow.AddSeconds(-1);
+            var response = await HttpHelper.SendWithRetryAsync(server.Urls.Single() + "/report",
+                "synthetic-test-only", null, "graph-test", includeTimestamp: true);
+            var lines = response.Split('\n', 3);
+            Assert.Equal("HTTP 200 OK", lines[0]);
+            const string prefix = "Current UTC time: ";
+            Assert.StartsWith(prefix, lines[1]);
+            var retrieved = DateTime.ParseExact(lines[1][prefix.Length..], "yyyy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
+            Assert.InRange(retrieved, before, DateTime.UtcNow);
+            Assert.Equal(body, lines[2]);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = culture;
+            await server.StopAsync();
+        }
+    }
+
     [Theory]
     [InlineData(false, 1, "query")]
     [InlineData(true, 1, "query")]

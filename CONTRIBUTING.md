@@ -23,9 +23,38 @@ New branches must use one of two prefixes (kept simple on purpose):
 | `feature/<short-desc>` | new functionality, refactor, docs, chore |
 | `bug/<short-desc>`     | bug fix or hotfix                        |
 
-When maintainer CI is configured, pushing a non-`main` branch deploys it to the
-test slot selected by the `TEST_*` GitHub Actions variables in `feature.yml`.
-The branch name is shown in the top-right badge of the running app.
+When maintainer CI is configured, an eligible non-`main` branch push runs the
+regression and real AI-evaluation gates before deploying to the existing shared
+test slot selected by the `TEST_*` GitHub Actions variables in
+[feature.yml](.github/workflows/feature.yml). Infrastructure changes also trigger
+this workflow. The slot has its own URL, separate from production; the latest
+successful feature deployment owns that shared preview, not a new slot for every
+branch. The branch name is shown in the running app's top-right badge.
+
+The target slot must already exist. Its explicit subscription, resource group,
+app, slot resource ID and Azure-reported hostname are validated before writes.
+Blank or `production` slot names and production/mismatched verification URLs
+are rejected. The advertised preview URL comes from Azure metadata.
+
+The successful evaluation exports the exact commit, model deployment, reasoning
+effort and a SHA-256 fingerprint of the normalized model endpoint. Deployment
+requires its `AZURE_OPENAI_ENDPOINT` secret to match that fingerprint before
+Azure login; there is no model or endpoint fallback. The evaluation endpoint is
+the `EVAL_MODEL_ENDPOINT` **secret**, preferably in the protected `ai-evaluation`
+environment, not a plain Actions variable.
+
+Settings/image writes are serialized without cancelling an in-flight deployment.
+[feature-slot-model.bicep](infra/feature-slot-model.bicep) makes only the existing
+slot's model-settings update in Incremental mode and preserves unrelated
+settings. The existing deployment identity needs authorized deployment
+validation/execution, slot configuration and registry access; the slot identity
+needs model inference access. The workflow never grants itself permissions,
+creates replacement infrastructure or swaps into production. Effective settings
+and the deployed full SHA, build and branch are checked afterward.
+
+For validation without deployment, use a manual dispatch with `deploy=false`.
+See [live evaluation configuration](tests/LiveEvaluations/README.md) for the
+required protected identity, fixtures and exact-revision gate.
 
 ## Development Setup
 

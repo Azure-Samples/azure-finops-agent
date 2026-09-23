@@ -23,6 +23,7 @@ Create a protected GitHub environment named `ai-evaluation`, limited to trusted 
 | `AZURE_EVAL_CLIENT_ID`       | Dedicated evaluation application identity |
 | `AZURE_EVAL_TENANT_ID`       | Evaluation tenant                         |
 | `AZURE_EVAL_SUBSCRIPTION_ID` | Azure CLI default evaluation subscription |
+| `EVAL_MODEL_ENDPOINT`       | Azure OpenAI-compatible inference endpoint; keep deployment coordinates masked |
 
 Secrets may live on the `ai-evaluation` environment or the repository. They are optional only in the reusable workflow's caller declaration so environment-scoped secrets can resolve on the job. The job's configuration check reports every missing value before login or inference; absence never skips or passes the gate. An unconfigured environment is a setup failure, not evidence that the agent passed or failed its questions.
 
@@ -30,8 +31,8 @@ Configure these environment/repository variables:
 
 | Variable                   | Value                                                                                     |
 | -------------------------- | ----------------------------------------------------------------------------------------- |
-| `EVAL_MODEL_ENDPOINT`      | Azure OpenAI-compatible inference endpoint                                                |
 | `EVAL_MODEL`               | Candidate deployment name, matching the intended production model                         |
+| `EVAL_REASONING_EFFORT`    | Candidate reasoning effort, also applied to the feature slot after successful evaluation |
 | `EVAL_JUDGE_MODEL`         | Deployment for the independent structured-output judge                                    |
 | `EVAL_SUBSCRIPTION_IDS`    | Comma-separated IDs for 1-10 approved test subscriptions                                  |
 | `EVAL_DATA_CLASSIFICATION` | `synthetic` (answers published) or `internal-test` (verdicts only); never customer data   |
@@ -52,6 +53,21 @@ gh workflow run feature.yml --ref YOUR_BRANCH -f deploy=false
 ```
 
 This runs both regression and live-evaluation gates at that branch revision and skips the deployment job regardless of the verdict. Validation-only dispatches use a separate concurrency group so they cannot cancel a test-slot deployment. A manual deployment requires `deploy=true` and both successful gates. Automatic pushes retain their existing deployment behavior; when publishing a candidate solely for a validation-only dispatch, use a `[skip ci]` commit message to prevent the push-triggered deployment workflow, then run the command above. Never interpret the skipped push run as validation.
+
+After a successful run, the reusable workflow exports `model`, `reasoning_effort`,
+`sha` (the full candidate commit), and `endpoint_sha256`. The endpoint hash uses
+UTF-8 WHATWG URL serialization with trailing `/` characters removed: scheme and
+hostname case and default HTTPS port normalize, while path case and non-default
+ports remain significant. Only HTTPS endpoints without credentials, query,
+fragment or whitespace are accepted. No raw endpoint is placed in job outputs.
+
+`EVAL_MODEL_ENDPOINT` is a mandatory runtime **secret**, not a variable; there is
+no plain-variable fallback. The feature deployment consumes the evaluated model
+and effort without substituting defaults and requires the normalized
+`AZURE_OPENAI_ENDPOINT` deployment secret to match `endpoint_sha256` before login
+or writes. A different inference account requires a new evaluation, not a
+silent retarget. See [the shared preview-slot contract](../../CONTRIBUTING.md#branch-naming-convention)
+for existing-slot validation, permissions and post-deployment checks.
 
 ## Workflow Report
 
@@ -87,10 +103,12 @@ $env:EVAL_DATA_CLASSIFICATION = 'internal-test'
 node tests\LiveEvaluations\suite.mjs
 ```
 
-Each attempt creates a unique `live-evaluations-*` child directory. It retains the evaluator's **already-redacted failed-case** JSON, including judge rationale, answer/error text and failed-tool details, plus any unfinished `.json.tmp` capture. Passing-case captures are removed. A final `diagnostics.json` records the completed-case count, loaded failed-case results and the host failure, including handled interruption. It does not collect process output, environment values, credentials or CLI token caches. Incomplete captures are diagnostic evidence only, never accepted case results.
+Each attempt creates a unique `live-evaluations-*` child directory. It retains the evaluator's **already-redacted failed-case** JSON, including judge rationale, answer/error text and failed-tool details, plus any unfinished `.json.tmp` capture. The private `toolDetails` field retains bounded arguments/results for successful as well as failed tools, with an explicit result-truncation flag. A private `failure` field identifies setup, resource-credential, chat, replay, judge or cleanup failures without discarding the execution already captured. Redaction precedes truncation. An authentication exception after a completed answer must not be rewritten as a zero-duration, zero-tool attempt. Such failures still reject the case; diagnostic retention does not repair credentials or make a failed replay pass.
+
+Passing-case captures are removed. A final `diagnostics.json` records the completed-case count, loaded failed-case results and the host failure, including handled interruption. It does not collect process output, environment values, credentials or CLI token caches. Incomplete captures are diagnostic evidence only, never accepted case results.
 
 Use an access-restricted local folder, not a shared or synchronized directory. New run directories are owner-only on POSIX and inherit the parent directory's access controls on Windows; the final diagnostics file uses owner-only permissions where supported. These files can still contain sensitive tenant names or financial information. **Do not commit, upload, or publish them.** Retained runs are not automatically deleted; review and remove only the diagnostic run directories you own when no longer needed.
 
-Public summaries and artifacts still obey `EVAL_DATA_CLASSIFICATION`: enabling private diagnostics does not publish internal-test answers or rationale. Neither classification publishes raw failed-tool arguments/details or undeclared private fields. Retention setup/write/cleanup failures visibly fail the run, even if all 20 case verdicts passed. The pinned questions, original rubrics, tool/time limits and unanimous acceptance rule are unchanged; this option adds neither retries nor a diagnostic-subset bypass. With the variable unset or empty, the existing disposable-capture cleanup remains unchanged. Clear the option with `Remove-Item Env:EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY` after local diagnosis.
+Public summaries and artifacts still obey `EVAL_DATA_CLASSIFICATION`: enabling private diagnostics does not publish internal-test answers or rationale. Neither classification publishes raw failed-tool arguments/details, `toolDetails`, `failure` or undeclared private fields. Retention setup/write/cleanup failures visibly fail the run, even if all 20 case verdicts passed. The pinned questions, original rubrics, tool/time limits and unanimous acceptance rule are unchanged; this option adds neither retries nor a diagnostic-subset bypass. With the variable unset or empty, the existing disposable-capture cleanup remains unchanged. Clear the option with `Remove-Item Env:EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY` after local diagnosis.
 
 Fix a failed case by inspecting its source evidence and reproduction, repairing the owning code or contract, and rerunning the full candidate suite. Review intentional rubric changes separately. No automatic code rewrite, permission escalation or rubric relaxation occurs in the deployment workflow.

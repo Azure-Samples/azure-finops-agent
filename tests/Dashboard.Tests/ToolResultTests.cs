@@ -19,6 +19,9 @@ public sealed class ToolResultTests
             Assert.StartsWith("Error:", (await tool.InvokeAsync(arguments))!.ToString());
         using (new ToolExecutionContext("synthetic-session", 101, CancellationToken.None))
         {
+            arguments["resultId"] = entry.Id[..^1];
+            Assert.StartsWith("Error:", (await tool.InvokeAsync(arguments))!.ToString());
+            arguments["resultId"] = entry.Id;
             using var result = JsonDocument.Parse((await tool.InvokeAsync(arguments))!.ToString()!);
             Assert.Equal(5, result.RootElement.GetProperty("rows")[0].GetProperty("value").GetInt32());
             var evidence = ProtectedTool.InspectEvidence(result.RootElement.GetRawText());
@@ -52,6 +55,8 @@ public sealed class ToolResultTests
         {
             query["groupBy"] = new Dictionary<string, string>();
             query["select"] = new Dictionary<string, string>();
+            query["where"] = Array.Empty<object>();
+            query["sort"] = Array.Empty<object>();
         }
 
         using var response = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, JsonSerializer.Serialize(query)));
@@ -70,10 +75,56 @@ public sealed class ToolResultTests
     {
         var entry = new ToolResultStore().Retain(101, "session", """{"rows":[{"count":4},{"count":6}]}""", Source)!;
         using var response = JsonDocument.Parse(ToolResultQueryTools.Execute(entry,
-            """{"path":"$.rows[*]","groupBy":{},"select":{}}"""));
+            """{"path":"$.rows[*]","groupBy":{},"select":{},"where":[],"sort":[],"aggregates":[]}"""));
         Assert.Equal(2, response.RootElement.GetProperty("rows").GetArrayLength());
         Assert.Equal(4, response.RootElement.GetProperty("rows")[0].GetProperty("count").GetInt32());
         Assert.Equal(JsonValueKind.Null, response.RootElement.GetProperty("totals").ValueKind);
+    }
+
+    [Fact]
+    public void ForecastRowsCanBeProjectedSortedAndTotaledWithAnEmptyFilter()
+    {
+        var entry = new ToolResultStore().Retain(101, "session",
+            """{"properties":{"rows":[[4.25,20260902,"USD"],[6.5,20260901,"USD"]]}}""", Source)!;
+        using var response = JsonDocument.Parse(ToolResultQueryTools.Execute(entry,
+            """{"path":"$.properties.rows[*]","where":[],"groupBy":{},"select":{"date":"$[1]","cost":"$[0]","currency":"$[2]"},"aggregates":[{"op":"sum","path":"$[0]","as":"actualToDate"}],"sort":[{"path":"$.date","direction":"asc"}]}"""));
+
+        var root = response.RootElement;
+        Assert.Equal(2, root.GetProperty("totalMatches").GetInt32());
+        Assert.Equal(10.75m, root.GetProperty("totals").GetProperty("actualToDate").GetDecimal());
+        Assert.Equal(20260901, root.GetProperty("rows")[0].GetProperty("date").GetInt32());
+        Assert.Equal(6.5m, root.GetProperty("rows")[0].GetProperty("cost").GetDecimal());
+        Assert.Equal("USD", root.GetProperty("rows")[1].GetProperty("currency").GetString());
+        Assert.True(root.GetProperty("source").GetProperty("Partial").GetBoolean());
+        Assert.False(root.GetProperty("source").GetProperty("Fresh").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("""{"where":null}""")]
+    [InlineData("""{"where":{}}""")]
+    [InlineData("""{"sort":null}""")]
+    [InlineData("""{"sort":{}}""")]
+    [InlineData("""{"aggregates":null}""")]
+    [InlineData("""{"aggregates":{}}""")]
+    [InlineData("""{"groupBy":{"currency":"$.currency"},"aggregates":[]}""")]
+    public void EmptyArraySupportDoesNotAcceptInvalidOperations(string query)
+    {
+        var entry = new ToolResultStore().Retain(101, "session", """{"currency":"USD","amount":5}""", Source)!;
+        Assert.StartsWith("Error:", ToolResultQueryTools.Execute(entry, query));
+    }
+
+    [Theory]
+    [InlineData("where", 13)]
+    [InlineData("sort", 7)]
+    [InlineData("aggregates", 13)]
+    public void OptionalOperationArraysKeepTheirUpperBounds(string operation, int count)
+    {
+        var entry = new ToolResultStore().Retain(101, "session", """{"amount":5}""", Source)!;
+        var query = JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            [operation] = Enumerable.Repeat(new { path = "$.amount" }, count).ToArray()
+        });
+        Assert.StartsWith("Error:", ToolResultQueryTools.Execute(entry, query));
     }
 
     [Fact]
@@ -89,6 +140,7 @@ public sealed class ToolResultTests
 
     [Theory]
     [InlineData("HTTP 200 OK\n{\"results\":[{\"body\":{\"properties\":{\"rows\":[[1.25,\"a\"],[2.5,\"b\"]]}}}]}")]
+    [InlineData("HTTP 200 OK\nCurrent UTC time: 2026-01-15 12:30:00\n{\"results\":[{\"body\":{\"properties\":{\"rows\":[[1.25,\"a\"],[2.5,\"b\"]]}}}]}")]
     [InlineData("{}")]
     public async Task SmallInlineEvidenceStaysValidJsonAndAggregatesExactly(string text)
     {

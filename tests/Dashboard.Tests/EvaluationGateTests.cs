@@ -51,6 +51,48 @@ public sealed class EvaluationGateTests
     [Fact]
     public void CompleteRunWithValidJudgeVerdictPasses() => Assert.True(EvaluationGate.Assess(Scenario, Success, Accepted).Accepted);
 
+    [Theory]
+    [InlineData("replay", false)]
+    [InlineData("judge", true)]
+    public void BoundaryFailuresKeepCompletedExecutionAndNeverPass(string phase, bool transcriptVerified)
+    {
+        var state = new EvaluationRunState
+        {
+            Phase = phase,
+            Terminal = true,
+            TranscriptVerified = transcriptVerified,
+            DurationMs = 1234,
+            FirstTokenMs = 321
+        };
+        state.Tools.AddRange(Success.Tools);
+        state.Answers.Add("message", Success.Answer);
+        state.VisibleOutputs.Add("{\"type\":\"chart\"}");
+        state.RecordFailure(new HttpRequestException("Synthetic transport failure"));
+
+        var capture = state.Capture();
+        Assert.Equal(Success.Answer, capture.Answer);
+        Assert.Equal(Success.Tools, capture.Tools);
+        Assert.True(capture.Terminal);
+        Assert.Equal(1234, capture.DurationMs);
+        Assert.Equal(321, capture.FirstTokenMs);
+        Assert.Single(capture.VisibleOutputs!);
+        Assert.Equal(transcriptVerified, state.TranscriptVerified);
+        Assert.Equal(phase, state.Failure!.Phase);
+        Assert.Equal(nameof(HttpRequestException), state.Failure.Type);
+        Assert.False(EvaluationGate.Assess(Scenario, capture, Accepted).Accepted);
+    }
+
+    [Fact]
+    public void InterruptedToolsRemainIncompleteWhenTheStreamFails()
+    {
+        var state = new EvaluationRunState { Phase = "chat" };
+        state.PendingTools.Add("synthetic-pending-call");
+        state.RecordFailure(new OperationCanceledException("Synthetic deadline"));
+        Assert.False(state.Capture().Terminal);
+        Assert.Contains("One or more tools have no terminal result.", state.Capture().Errors);
+        Assert.False(EvaluationGate.Assess(Scenario, state.Capture(), Accepted).Accepted);
+    }
+
     [Fact]
     public void CandidateRequiresBothRunnerAndApplicationBuiltAtTheExpectedRevision()
     {

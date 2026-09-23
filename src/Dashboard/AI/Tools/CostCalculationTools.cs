@@ -21,12 +21,13 @@ public static class CostCalculationTools
         yield return AIFunctionFactory.Create(CompareAmounts, "CompareAmounts",
             "Deterministic comparison arithmetic for verified amounts in one unit: difference, percent change versus a baseline, and each item's share of the total. " +
             "Use for month-over-month change, savings percentages, coverage/utilization shares and ranked percentages instead of computing them in prose; quote the returned values exactly. " +
+            "The shared unit must be a short label of at most 40 characters, such as USD. Put dates, cost type and assumptions in the answer, not in unit. " +
             "A zero or missing baseline yields a null percent change, never infinity or 100%. Values are not converted between currencies or units, and the result does not establish source validity or completeness.");
     }
 
     internal static string CompareAmounts(
-        [Description("JSON array of 1-50 items: label, current, optional baseline. Numbers or decimal-point strings. Example: [{\"label\":\"Sub A\",\"current\":2825.36,\"baseline\":74.23}]. Use only verified values from one unit, period basis and currency.")] string itemsJson,
-        [Description("Unit shared by every value, such as USD, EUR, hours or vCPU.")] string unit)
+        [Description("JSON array of 1-50 items: label (1-100 characters), current, optional baseline. Numbers or decimal-point strings. Example: [{\"label\":\"Sub A\",\"current\":2825.36,\"baseline\":74.23}]. Use only verified values from one unit, period basis and currency.")] string itemsJson,
+        [Description("Shared currency or unit label, 1-40 characters, such as USD, EUR, hours or vCPU. Do not include dates, cost type or comparison assumptions; state those in the answer.")] string unit)
     {
         if (string.IsNullOrWhiteSpace(unit) || unit.Length > 40) return "Error: Provide one shared unit of at most 40 characters.";
         if (string.IsNullOrWhiteSpace(itemsJson) || itemsJson.Length > 30_000) return "Error: Provide a bounded JSON array of 1-50 items.";

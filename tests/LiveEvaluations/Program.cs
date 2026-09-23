@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Text.Json;
@@ -26,34 +25,19 @@ internal static class Program
         var root = Path.Combine(Path.GetTempPath(), "finops-live-eval-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("COPILOT_HOME", root);
         Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", null);
-        try { return await RunAsync(); }
+        var state = new EvaluationRunState();
+        try { return await RunAsync(state); }
         catch (Exception exception)
         {
-            Console.Error.WriteLine("Live evaluation failed: " + exception.GetType().Name);
-            await SaveResultAsync(new
-            {
-                id = Environment.GetEnvironmentVariable("EVAL_CASE_ID") ?? "live-probe",
-                question = Environment.GetEnvironmentVariable("EVAL_QUESTION") ?? "",
-                sha = Environment.GetEnvironmentVariable("EVAL_EXPECTED_SHA"),
-                suiteHash = Environment.GetEnvironmentVariable("EVAL_SUITE_HASH"),
-                accepted = false,
-                terminal = false,
-                transcriptVerified = false,
-                durationMs = 0,
-                firstTokenMs = (long?)null,
-                toolCount = 0,
-                tools = Array.Empty<object>(),
-                answer = "",
-                errors = new[] { exception.GetType().Name },
-                reasons = new[] { "Live evaluation did not complete." },
-                judge = (object?)null
-            });
+            state.RecordFailure(exception);
+            Console.Error.WriteLine($"Live evaluation {state.Phase} failed: {exception.GetType().Name}");
+            await SaveCapturedResultAsync(state, new Verdict(false, ["Live evaluation did not complete."]));
             return 1;
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
-    private static async Task<int> RunAsync()
+    private static async Task<int> RunAsync(EvaluationRunState state)
     {
         var expectedSha = Environment.GetEnvironmentVariable("EVAL_EXPECTED_SHA");
         if (expectedSha is not null && !EvaluationGate.MatchesCandidateRevision(expectedSha,
@@ -69,6 +53,7 @@ internal static class Program
         var subscriptions = (Environment.GetEnvironmentVariable("EVAL_SUBSCRIPTION_IDS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (subscriptions.Length is < 1 or > 10 || subscriptions.Any(subscription => !Guid.TryParse(subscription, out _)))
             throw new InvalidOperationException("Provide 1-10 evaluation subscription IDs.");
+        state.Subscriptions = subscriptions;
         var scopes = subscriptions.Select((subscription, index) => new { id = subscription, name = "Evaluation subscription " + (index + 1) }).ToArray();
         var ownerOid = Guid.NewGuid().ToString();
         var tenant = Environment.GetEnvironmentVariable("EVAL_TENANT_ID")?.Trim() ?? "";
@@ -107,12 +92,15 @@ internal static class Program
         {
             context.Session.SetString("user", JsonSerializer.Serialize(new { id = owner, login = "synthetic-live-evaluation" }));
             context.Session.SetString("azure_user", JsonSerializer.Serialize(new { objectId = ownerOid, tenantId = tenant }));
+            var phase = state.Phase;
             foreach (var resource in requestedResources)
             {
+                state.Phase = $"credential:{resource}";
                 var token = await credential.GetTokenAsync(new TokenRequestContext([resourceScopes[resource]]), context.RequestAborted);
                 context.Session.SetString(resource + "_token", token.Token);
                 context.Session.SetString(resource + "_token_expiry", token.ExpiresOn.ToString("o"));
             }
+            state.Phase = phase;
             context.Session.SetString("azure_scope_context", JsonSerializer.Serialize(new
             {
                 ownerObjectId = ownerOid,
@@ -127,30 +115,30 @@ internal static class Program
         using var client = app.GetTestClient();
         client.Timeout = TimeSpan.FromSeconds(maxDurationSeconds);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(maxDurationSeconds));
-        var started = Stopwatch.StartNew();
+        state.Phase = "chat";
+        state.Clock.Restart();
+        var started = state.Clock;
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/chat") { Content = JsonContent.Create(new { prompt = question }) };
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
         response.EnsureSuccessStatusCode();
         using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(deadline.Token));
-        var tools = new List<ToolResult>();
-        var errors = new List<string>();
-        var pendingTools = new HashSet<string>(StringComparer.Ordinal);
+        var tools = state.Tools;
+        var errors = state.Errors;
+        var pendingTools = state.PendingTools;
         var completedTools = new HashSet<string>(StringComparer.Ordinal);
-        var answers = new Dictionary<string, string>();
-        var visible = new List<string>();
+        var answers = state.Answers;
+        var visible = state.VisibleOutputs;
         var toolArguments = new Dictionary<string, string>(StringComparer.Ordinal);
-        long? firstToken = null;
         string? sessionId = null;
-        var terminal = false;
         while (await reader.ReadLineAsync(deadline.Token) is { } line)
         {
             if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
-            if (line == "data: [DONE]") { terminal = true; break; }
+            if (line == "data: [DONE]") { state.Terminal = true; break; }
             using var document = JsonDocument.Parse(line[6..]);
             var item = document.RootElement;
             var type = Text(item, "type");
             if (type == "session") sessionId = Text(item, "id");
-            if (type is "delta" or "message" && Text(item, "content").Length > 0) firstToken ??= started.ElapsedMilliseconds;
+            if (type is "delta" or "message" && Text(item, "content").Length > 0) state.FirstTokenMs ??= started.ElapsedMilliseconds;
             if (type == "message" && !string.IsNullOrWhiteSpace(Text(item, "content"))) answers[Text(item, "messageId")] = Text(item, "content");
             if (type is "error" or "busy") errors.Add(Text(item, "message"));
             if (type is "chart" or "maturity_score" or "follow_up" or "html_ready" or "script_ready" or "approval_required" && visible.Count < 20)
@@ -175,17 +163,17 @@ internal static class Program
         }
         if (pendingTools.Count > 0) errors.Add("One or more tools have no terminal result.");
         var answer = string.Join("\n\n", answers.Values);
-        var durationMs = started.ElapsedMilliseconds;
-        var transcriptVerified = false;
-        if (sessionId is not null && terminal)
+        state.DurationMs = started.ElapsedMilliseconds;
+        state.Phase = "replay";
+        if (sessionId is not null && state.Terminal)
         {
             using var transcript = await client.GetAsync($"/api/sessions/{sessionId}/messages", deadline.Token);
-            transcriptVerified = transcript.IsSuccessStatusCode
+            state.TranscriptVerified = transcript.IsSuccessStatusCode
                 && EvaluationGate.TranscriptMatches(await transcript.Content.ReadAsStringAsync(deadline.Token), question, answer);
         }
-        if (!transcriptVerified) errors.Add("Persisted transcript did not match the completed question and answer.");
-        var capture = new RunCapture(answer, tools.ToArray(), terminal, errors.ToArray(), durationMs, firstToken, visible.ToArray(),
-            $"Connected Azure APIs: {string.Join(", ", requestedResources)}. Connected subscriptions ({scopes.Length}): {JsonSerializer.Serialize(scopes)}. Evaluation run clock UTC (host time only; it is not a source data or budget evaluation timestamp): {DateTimeOffset.UtcNow:O}.");
+        if (!state.TranscriptVerified) errors.Add("Persisted transcript did not match the completed question and answer.");
+        state.HostContext = $"Connected Azure APIs: {string.Join(", ", requestedResources)}. Connected subscriptions ({scopes.Length}): {JsonSerializer.Serialize(scopes)}. Evaluation run clock UTC (host time only; it is not a source data or budget evaluation timestamp): {DateTimeOffset.UtcNow:O}.";
+        var capture = state.Capture();
         using var judgeHttp = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         var scenario = new EvaluationCase(Environment.GetEnvironmentVariable("EVAL_CASE_ID") ?? "live-probe", question,
             Environment.GetEnvironmentVariable("EVAL_RUBRIC") ?? "Fulfil the question using actual tool evidence; preserve full scope and explicit unknowns. Do not confuse pricing with availability, quota with capacity, or tool completion with task success. Match the user's language.",
@@ -193,13 +181,29 @@ internal static class Program
             (Environment.GetEnvironmentVariable("EVAL_FORBIDDEN_TOOLS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries),
             MaxToolCalls: maxToolCalls, MaxDurationSeconds: maxDurationSeconds);
         using var judgeDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        state.Phase = "judge";
         var judgement = await new JudgeClient(judgeHttp, credential, new Uri(endpoint), Environment.GetEnvironmentVariable("EVAL_JUDGE_MODEL") ?? model)
             .AssessAsync(scenario, capture, judgeDeadline.Token);
         var verdict = EvaluationGate.Assess(scenario, capture, judgement);
+        await SaveCapturedResultAsync(state, verdict);
+        state.Phase = "cleanup";
+        return verdict.Accepted && state.TranscriptVerified ? 0 : 1;
+    }
+
+    private static async Task SaveCapturedResultAsync(EvaluationRunState state, Verdict verdict)
+    {
+        var capture = state.Capture();
+        var tools = state.Tools;
+        var subscriptions = state.Subscriptions;
+        string Bounded(string text, int limit)
+        {
+            var redacted = Redact(text, subscriptions);
+            return redacted.Length <= limit ? redacted : redacted[..limit];
+        }
         await SaveResultAsync(new
         {
-            id = scenario.Id,
-            question,
+            id = Environment.GetEnvironmentVariable("EVAL_CASE_ID") ?? "live-probe",
+            question = Environment.GetEnvironmentVariable("EVAL_QUESTION") ?? "",
             sha = Environment.GetEnvironmentVariable("EVAL_EXPECTED_SHA"),
             suiteHash = Environment.GetEnvironmentVariable("EVAL_SUITE_HASH"),
             terminal = capture.Terminal,
@@ -215,11 +219,30 @@ internal static class Program
             failedToolDetails = tools.Where(tool => !EvaluationGate.ToolSucceeded(tool)).Select(tool => new
             {
                 name = tool.Name,
-                arguments = Redact(tool.Arguments.Length <= 6000 ? tool.Arguments : tool.Arguments[..6000], subscriptions),
-                detail = Redact(((tool.Error ?? "") + " " + (tool.Result.Length <= 1500 ? tool.Result : tool.Result[..1500])).Trim(), subscriptions)
+                arguments = Bounded(tool.Arguments, 6000),
+                detail = Bounded(((tool.Error ?? "") + " " + tool.Result).Trim(), 1500)
             }),
-            transcriptVerified,
-            accepted = verdict.Accepted && transcriptVerified,
+            toolDetails = tools.Select(tool =>
+            {
+                var result = Redact(tool.Result, subscriptions);
+                return new
+                {
+                    name = tool.Name,
+                    success = EvaluationGate.ToolSucceeded(tool),
+                    arguments = Bounded(tool.Arguments, 6000),
+                    result = result.Length <= 12000 ? result : result[..12000],
+                    resultTruncated = result.Length > 12000,
+                    error = Bounded(tool.Error ?? "", 4000)
+                };
+            }),
+            failure = state.Failure is { } failure ? new
+            {
+                phase = failure.Phase,
+                type = failure.Type,
+                detail = Bounded(failure.Detail, 4000)
+            } : null,
+            transcriptVerified = state.TranscriptVerified,
+            accepted = verdict.Accepted && state.TranscriptVerified && state.Failure is null,
             reasons = verdict.Reasons.Select(reason => Redact(reason, subscriptions)),
             judge = verdict.Judge is { } judge ? new
             {
@@ -229,9 +252,8 @@ internal static class Program
                 reason = Redact(judge.Reason, subscriptions)
             } : null,
             answer = Redact(capture.Answer, subscriptions),
-            errors = errors.Select(error => Redact(error, subscriptions))
+            errors = capture.Errors.Select(error => Redact(error, subscriptions))
         });
-        return verdict.Accepted && transcriptVerified ? 0 : 1;
     }
 
     private static async Task SaveResultAsync(object result)

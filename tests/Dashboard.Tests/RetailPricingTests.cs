@@ -45,6 +45,49 @@ public sealed class RetailPricingTests
     }
 
     [Fact]
+    public void SourceUrlPreservesFiltersWithoutUnsupportedTop()
+    {
+        const string filter = "serviceName eq 'Synthetic' and contains(skuName, 'model&name')";
+        var uri = new Uri(RetailPricingTools.BuildRetailUrl(filter, "CAD"));
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+
+        Assert.Equal("https", uri.Scheme);
+        Assert.Equal("prices.azure.com", uri.Host);
+        Assert.Equal("2023-01-01-preview", query["api-version"].ToString());
+        Assert.Equal("CAD", query["currencyCode"].ToString());
+        Assert.Equal(filter, query["$filter"].ToString());
+        Assert.Equal(3, query.Count);
+        Assert.False(query.ContainsKey("$top"));
+    }
+
+    [Fact]
+    public void RepeatedCheapRegionsDoNotBuryOtherMeters()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            BillingCurrency = "USD",
+            Items = new[] { "Cached", "Ordinary input", "Ordinary output" }
+                .SelectMany(meter => Enumerable.Range(0, meter == "Cached" ? 220 : 2).Select(index => new
+                {
+                    armRegionName = $"region{index}", armSkuName = "synthetic", skuName = meter,
+                    meterName = meter, productName = "Synthetic", unitOfMeasure = "1K", type = "Consumption",
+                    retailPrice = meter == "Cached" ? 0.001 : 0.01
+                }))
+        });
+
+        var result = RetailPricingTools.CompactBatchResult(json);
+        var resolution = ReadResolution(result);
+        Assert.Equal(224, resolution.GetProperty("fetchedRows").GetInt32());
+        Assert.Equal(200, resolution.GetProperty("deliveredRows").GetInt32());
+        Assert.False(resolution.GetProperty("complete").GetBoolean());
+        Assert.True(resolution.GetProperty("paginationComplete").GetBoolean());
+        Assert.Contains("0.01\tregion0\tsynthetic\tSynthetic\tOrdinary input\t", result);
+        Assert.Contains("0.01\tregion1\tsynthetic\tSynthetic\tOrdinary input\t", result);
+        Assert.Contains("0.01\tregion0\tsynthetic\tSynthetic\tOrdinary output\t", result);
+        Assert.Contains("0.01\tregion1\tsynthetic\tSynthetic\tOrdinary output\t", result);
+    }
+
+    [Fact]
     public void GlobalTopTenIsRankedBeforeOutputLimiting()
     {
         var result = RetailPricingTools.CompactBatchResult(Payload(220), topPerVariant: 10);

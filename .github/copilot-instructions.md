@@ -93,8 +93,12 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 - Prefer string parameters; SDK coercion of numeric arguments can be unreliable.
 - `CalculateCost` requires one explicit top-level source currency. Omitted line currencies inherit it; explicit invalid or different currencies are rejected, never converted. Surface tool `Error:` results as failures even when SDK execution succeeded.
 - Use `CalculateCost` for non-token estimates/run-rates and `EstimateTokenCost` for token math. Keep the source currency, billing unit and scenario assumptions; an annualized exit-month cost is not cumulative annual spend. Calculators establish arithmetic, not price validity or deployability.
+- `CompareAmounts` uses one 1-40-character unit and 1-100-character item labels. Put dates, cost type and assumptions in the answer rather than expanding the unit beyond its validated schema guidance.
 - A nullable C# parameter is not optional in the emitted tool schema. Give documented optional inputs actual defaults and test both schema requiredness and invocation with omitted arguments.
 - Graph query options are endpoint-specific: `subscribedSkus` accepts only `$select`; Copilot usage functions do not accept `$filter`, `$top` or `$select`. Prefer current `/v1.0/copilot/reports/` routes and preserve CSV versus beta JSON, report version/period, source refresh date and licensed-user coverage.
+- Graph retrieval time is culture-independent and does not replace source report dates. Mixed Microsoft 365/Azure licensing assessments require both domains; enabled seats and resource licenseType are not invoices or proof of purchased entitlements.
+- `PublishFAQ` must be explicitly requested, not an automatic background follow-up. This is model-facing intent guidance; preserve the existing host authentication/moderation checks and never describe pending review as publication.
+- Public web reads honor the host cancellation token and one deadline through response-body reading, dispose responses, and report transport failure explicitly. Do not claim that bounded reads fix an unavailable source.
 - Use `GetCopilotUsage` for bounded activity counts and inactive-user lists. Count the full report before host-side filtering/paging, retain unknown activity and report dates, and never subtract current assignments from an older aggregate usage cohort. Per-page responses remain bounded even with long names; follow nextOffset only while the report date and totals agree.
 - Reservation utilization requires a discovered billing-account/profile or reservation-order/reservation scope. Never use tenant-root `reservationSummaries`, cycle versions to repair a missing scope, or call unavailable commitment evidence proof of safe net savings.
 - Reuse one `CosmosClient`/HTTP client/session where applicable; do not create clients per request.
@@ -111,6 +115,8 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 - Cost Management permits at most two grouping dimensions. For resource/model detail, start with ResourceId plus Meter at subscription scope, or SubscriptionId plus ResourceId at management-group scope. Do not issue a preliminary totals-only request or add resource-group as a third grouping. Preserve billed detail versus activity/inventory distinctions.
 - Preserve `_finops`/`sourceEvidence`, full retry deadlines, and explicit partial coverage through projections. The cache is credential/request-bound; never label cached or unknown-age billing data as freshly measured.
 - Reconcile service and resource/meter totals only with matching scope, date boundaries, currency, cost type, filters and compatible source coverage. Disclose a remaining source-data gap; do not invent a cause or drop it from the total.
+- Daily Cost Management forecasts and budget forecastSpend are independent estimates. Inspect currentSpend and forecastSpend before a budget conclusion; disclose conflicting projections, especially opposite budget outcomes, rather than hiding them behind a freshness caveat. Unknown budget-snapshot date coverage cannot establish a full-month actual-plus-forecast total. Forecast includeActualCost/includeFreshPartialCost are top-level request fields, never dataset.configuration; retain Cost/Sum aggregation.
+- Retained-result queries accept empty optional where/sort/aggregates arrays as omitted operations; nonempty grouping still requires aggregates. Sorting uses projected/grouped output fields. Copy opaque result IDs exactly and preserve exact owner/session lookup; never search for a similar ID after a typo.
 - `QueryUploadedFile` uses `jsonPath` for JSON selectors. Preserve structured arrays in `paramsJson`; host `path`, `kind`, and `mode` remain reserved. Query mode supports 1-50 distinct output names in columns[], applied after filtering/aggregation/sorting and before response paging. Retain row counts, totals, null groups and invalid-numeric counts through projection.
 
 ### Cross-subscription cost
@@ -120,6 +126,7 @@ Use `QueryCostsAcrossSubscriptions` exactly once for totals-only all-subscriptio
 - For the current calendar month, it reads unfiltered monthly-budget `currentSpend` concurrently. Strict guards require current-month dates, monthly Cost budgets, empty filters, agreeing duplicate budgets, and one currency.
 - Budget snapshots are evaluated periodically and may lag billing. State that caveat; retrieval time is not a source data timestamp and a reported total is not a finalized bill.
 - For other periods, it tries one management-group aggregate query and then the minimum sequential subscription fallback.
+- Query results retain ActualCost, aggregation and exact requested exclusive date bounds. Budget snapshots retain the bounds but have no verified costType; reuse compatible historical results rather than re-querying to rediscover their cost basis.
 - Do not list subscriptions again; connection status already provides the available scopes.
 
 ### Crawl maturity
@@ -139,6 +146,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - One filter combination: one `GetAzureRetailPricing` call.
 - Two or more independent combinations: one `GetAzureRetailPricingBatch` call.
 - One SKU across regions uses one comma-separated region request.
+- Do not send `$top` to the Retail Prices API: its continuation links can subtract a 1,000-row page from that unsupported value and become invalid. Follow supported pagination; `top` is only the per-variant cheapest-ranking output limit. Ordinary projection is bounded to 200 rows spread across meters, not meter/region pairs.
 - Cheapest-region requests rank all fetched candidates within compatible variants before applying top-N. Preserve rankingComplete versus detailsComplete; incomplete source pagination cannot establish a global winner.
 - Keep tierMinimumUnits and currency in projected retail rows and separate volume bands when ranking. Do not apply a high-volume storage rate to a small dataset or multiply a whole-SKU rate by its included cores again.
 - Reuse returned rows; do not invoke shell tools to reparse usable pricing results.
@@ -147,6 +155,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - `priceType='Consumption'` includes Spot and Low Priority. Comparisons stay within one `meterName`, and answers default to the ordinary on-demand meter unless another variant was requested.
 - Foundry model comparisons must use the intended deployment tier/zone and must not silently choose Batch, cached, or Data Zone rows when Standard Global was requested.
 - Preserve `RESOLUTION` status and coverage. One targeted refinement is allowed for ambiguous/partial results. Missing prices stay unknown; the deterministic calculator rejects ambiguous decimal separators, missing rates and mixed currencies.
+- Answers retain the source's returned UTC retrieval timestamp, including chart-only answers. Retrieval time is not a price-effective date or a source measurement made by the host.
 
 ### Compute and operations
 
@@ -235,6 +244,7 @@ The frontend must be built before backend startup so `wwwroot` exists when ASP.N
 - Explicitly authorized local maintainer-lab evaluations may use the existing Azure CLI user session. Select its cached identity with the first approved evaluation subscription, verify that scope belongs to `EVAL_TENANT_ID`, and use that credential consistently for tools, candidate inference and the judge. Tenant-only CLI selection can target the wrong cached user, and CLI tenant/subscription options are mutually exclusive. Keep coordinates outside tracked files and never copy personal CLI tokens/cache into CI. GitHub evaluations still require their separate read-only OIDC identity; token issuance alone does not establish API access.
 - Frontend: `npm run build` under `src/Dashboard/frontend`
 - Local failed-evaluation diagnostics may be retained only with explicit `EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY` outside the repository and published output (including symlink targets); CI rejects the option. Delete passing captures and never publish raw failed-tool details in either data classification.
+- Preserve captured execution on credential, replay and judge exceptions. Private diagnostics include bounded redacted successful/failed tool details and failure phase, never reset completed work to an empty zero-duration record. Neither synthetic nor internal-test publication includes those private fields.
 - Always verify the rendered UI for UI changes; a successful build is not a browser test.
 - Measure latency from the app's SSE stream, not rendered pixels.
 - Before every send, wait for the composer to be enabled and for the Stop button to be absent.
@@ -254,6 +264,10 @@ Maintainer CI workflows read deployment settings from GitHub repository variable
 - Production variables: `PROD_ACR_NAME`, `PROD_ACR_LOGIN_SERVER`, `PROD_CONTAINER_IMAGE`, `PROD_WEBAPP_NAME`, `PROD_RESOURCE_GROUP`, `PROD_VERIFY_URL`
 - Test variables: corresponding `TEST_*` names plus `TEST_SLOT_NAME`
 - OIDC secrets: `AZURE_*` for test and `AZURE_PROD_*` for production
+
+Feature deployments reuse the configured existing shared TEST slot, never create a slot per branch or swap production. Validate its exact Azure resource ID and actual hostname before writes; reject blank/production slots and mismatched verification URLs. Serialize settings/image writes without cancelling in-flight updates. Apply only `infra/feature-slot-model.bicep` in Incremental mode, preserving unrelated settings, and verify effective model settings plus full SHA/build/branch. Existing authorized deployment/slot/registry permissions and slot inference access are prerequisites, not grants the workflow may add.
+
+The protected evaluation endpoint comes from the `EVAL_MODEL_ENDPOINT` secret, never a plain variable. Successful evaluation exports the model, reasoning effort, full candidate SHA and normalized endpoint SHA-256 fingerprint. Feature deployment uses those values without model defaults and compares its endpoint secret locally before Azure login or writes; never expose raw endpoint coordinates or silently retarget inference.
 
 Production OIDC must be branch-scoped to `main` and least-privileged: `AcrPush` on the target registry and `Website Contributor` on the target web app. App Service pulls images with its own managed identity and `AcrPull`.
 

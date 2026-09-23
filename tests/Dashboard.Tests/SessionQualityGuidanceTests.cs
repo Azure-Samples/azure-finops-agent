@@ -1,5 +1,6 @@
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.AI.Tools;
+using AzureFinOps.Dashboard.Auth;
 
 namespace Dashboard.Tests;
 
@@ -54,6 +55,60 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("Resource Graph indexing can lag resource changes", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("unavailable rather than inventing one", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("Do not make another API call just for a timestamp", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
+    public void PublicPricingAnswersRetainRetrievalEvidenceEvenWithAChart()
+    {
+        Assert.Contains("Public pricing comparisons and estimates also state the source", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("returned retrieval date/time (UTC)", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("even when the numbers appear only in a chart", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("not the host clock or an assumed effective date", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
+    public void PublicFaqSubmissionRequiresAnExplicitUserRequest()
+    {
+        var tool = new FaqTools(new UserTokens { UserId = 101 }).Create().Single();
+        Assert.Contains("only when the user explicitly requests", tool.Description);
+        Assert.Contains("never call automatically", tool.Description);
+        Assert.Contains("Pending review is not publication", tool.Description);
+        Assert.Contains("only when the user explicitly requests", CopilotSessionFactory.SystemPrompt);
+        Assert.DoesNotContain("PublishFAQ is a background SEO side-effect", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
+    public void LicensingScopeDoesNotCollapseToOnlyGraphSeatCounts()
+    {
+        Assert.Contains("failure in one source does not remove independent parts", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("both Graph license inventory and scoped Azure evidence", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("not invoices or proof of purchased entitlements", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("dated public list-price estimates and unknown costs", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
+    public void DailyForecastAndBudgetSnapshotsCannotBeSilentlyInterchanged()
+    {
+        Assert.Contains("Cost Management daily forecast over the requested future dates", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Never derive remaining spend by subtracting a different source", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("nonoverlapping date windows", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("opposite budget outcomes", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("disclose both source estimates and the unreconciled gap", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("do not discard forecastSpend", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("A generic freshness caveat is not reconciliation", CopilotSessionFactory.SystemPrompt);
+        var tool = new AzureQueryTools(new UserTokens { UserId = 101 }).Create().Single(candidate => candidate.Name == "QueryAzure");
+        Assert.Contains("includeActualCost=true", tool.Description);
+        Assert.Contains("TOP-LEVEL request fields", tool.Description);
+        Assert.Contains("NEVER under dataset.configuration", tool.Description);
+        var example = tool.Description.Split("Shape example (substitute dates and preserve any requested cost type, filters and grouping): ", StringSplitOptions.None)[1]
+            .Split(". Inspect CostStatus", StringSplitOptions.None)[0];
+        using var document = System.Text.Json.JsonDocument.Parse(example);
+        Assert.True(document.RootElement.GetProperty("includeActualCost").GetBoolean());
+        var dataset = document.RootElement.GetProperty("dataset");
+        Assert.Equal("Sum", dataset.GetProperty("aggregation").GetProperty("totalCost").GetProperty("function").GetString());
+        Assert.False(dataset.TryGetProperty("configuration", out _));
+        Assert.Contains("currentSpend AND forecastSpend", tool.Description);
+        Assert.Contains("Explicitly disclose conflicting month-end estimates", tool.Description);
     }
 
     [Fact]

@@ -10,7 +10,7 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 
 /// <summary>
 /// Public Azure Retail Prices API wrapper (https://prices.azure.com — no auth required).
-/// Encodes correct OData $filter syntax and enforces $top to keep responses bounded.
+/// Encodes supported OData filters and returns a bounded cross-meter projection.
 /// </summary>
 public static class RetailPricingTools
 {
@@ -38,7 +38,7 @@ public static class RetailPricingTools
         yield return AIFunctionFactory.Create(GetAzureRetailPricing, "GetAzureRetailPricing",
             @"PUBLIC (no auth): Azure Retail Prices API — pay-as-you-go, reservation and savings-plan rates for any Azure service. Use this BEFORE QueryAzure when comparing SKUs or regions, or costing a workload that is not deployed yet.
 
-DATA SCOPING: filter at the Retail Prices API by the requested service, exact ARM SKU, regions and purchase type. Add only vocabulary filters supported by the user's wording or returned FACETS; do not invent meter names. Use the smallest top that still covers every requested meter/region. top is not a guarantee of transfer size or complete coverage, especially for ranking; inspect RESOLUTION and pagination. Preserve an explicit all-regions comparison and compute cheapest only after considering the full filtered candidate set. Do not widen to unrelated products merely to get a price.
+DATA SCOPING: filter at the Retail Prices API by the requested service, exact ARM SKU, regions and purchase type. Add only vocabulary filters supported by the user's wording or returned FACETS; do not invent meter names. The API pages up to 1000 rows and does not support $top. top limits cheapest-ranked regions per compatible variant, not downloaded rows. Ordinary lookups retain up to 200 rows spread across meters; inspect RESOLUTION and pagination. Preserve an explicit all-regions comparison and compute cheapest only after considering the full filtered candidate set. Do not widen to unrelated products merely to get a price.
 
 STRUCTURAL FILTERS (safe to supply from what the user named):
 - serviceName (REQUIRED): e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Load Balancer', 'Foundry Models' (covers ALL Azure OpenAI + open-model inference; the legacy 'Azure OpenAI' serviceName returns 0 rows).
@@ -63,7 +63,7 @@ MONTHLY / VOLUME TOTALS: call EstimateTokenCost with the per-1M rates instead of
         yield return AIFunctionFactory.Create(GetAzureRetailPricingBatch, "GetAzureRetailPricingBatch",
             @"PUBLIC (no auth): Runs 2-8 independent Azure Retail Prices lookups IN PARALLEL inside ONE tool call. Use this whenever a comparison or estimate needs more than one distinct service/SKU filter. Do NOT call GetAzureRetailPricing repeatedly, and do NOT use bash/powershell/rg/grep to parse or combine pricing rows.
 
-        DATA SCOPING: every queriesJson item needs its own narrow service/SKU/region/purchase-type filters and a top sized for the requested comparison. Do not duplicate identical filters or hide a whole-service scan inside the batch. Reuse one section for one SKU across comma-separated regions. Keep each section's FACETS, RESOLUTION and partial coverage; a batch does not make an incomplete price comparison complete.
+        DATA SCOPING: every queriesJson item needs its own narrow service/SKU/region/purchase-type filters. top limits cheapest-ranked regions per variant, not the API's page size. Do not duplicate identical filters or hide a whole-service scan inside the batch. Reuse one section for one SKU across comma-separated regions. Keep each section's FACETS, RESOLUTION and partial coverage; a batch does not make an incomplete price comparison complete.
 
     The tool returns a FACETS block per section with the live distinct field values. If a section's vocabulary filter matched nothing, it is dropped automatically and the wider result set is returned instead — read that section's facets and re-filter from them rather than fetching a pricing web page.
 
@@ -131,7 +131,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
 
         var output = new StringBuilder();
         output.AppendLine($"BATCH RETAIL PRICING RESULTS — {results.Length} queries completed in parallel.");
-        output.AppendLine("AUTHORITATIVE RETAIL API RESULT. Use it directly; do not re-query, invoke shell/search, or fetch a pricing web page when every section has rows.");
+        output.AppendLine("AUTHORITATIVE RETAIL API RESULT. Reuse resolved prices directly without shell/search or a pricing-page fetch. A nonempty section can still be ambiguous or partial: only unresolved requested variants may receive one targeted refinement using its live FACETS and RESOLUTION.");
         foreach (var result in results)
         {
             output.AppendLine().Append("=== ").Append(result.Label).AppendLine(" ===");
@@ -204,7 +204,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                         .Take(Math.Clamp(requestedTop, 1, 100))).ToList()
                 : rows;
             var byMeter = targetRows
-                .GroupBy(row => (row.Meter, row.Region))
+                .GroupBy(row => row.Meter, StringComparer.Ordinal)
                 .Select(group => group.OrderBy(row => row.Price).ToList())
                 .OrderBy(group => group[0].Price)
                 .ToList();
@@ -318,8 +318,8 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         [Description("Substring match on productName, e.g. 'GPT' / 'Llama' / 'Phi' for Foundry Models, or 'Premium SSD' for storage. Foundry productName is a family bucket — use 'GPT' not 'gpt-4'. Empty = no product filter.")] string? productNameContains = null,
         [Description("Substring match on skuName, e.g. '8 vCore', 'RUs', 'GPT-4o Inp Gl'. Use with productNameContains when the product is a broad family. Empty = no SKU-name filter.")] string? skuNameContains = null,
         [Description("Currency code (default 'USD'). Supported: USD, EUR, GBP, JPY, NOK, etc.")] string? currencyCode = null,
-        [Description("Set to 'cheapest' to PREPEND a price-sorted summary of the matching rows (one line per row, lowest retailPrice first). Use this for any 'cheapest/lowest/top N regions' question so a SINGLE call answers it — do NOT call this tool once per region and do NOT sort the rows yourself.")] string? rank = null,
-        [Description("Requested result size, 1-100, default 50. Prefer a small value sufficient for all requested meters/regions; the host may increase it for coverage. Not a hard download limit. Use rank='cheapest' for full filtered ranking and retain RESOLUTION coverage.")] int top = 50)
+        [Description("Set to 'cheapest' to rank all fetched candidates before retaining top regions per compatible price variant. A global ranking requires complete pagination. Empty = a bounded cross-meter projection.")] string? rank = null,
+        [Description("With rank='cheapest', maximum regions per compatible price variant (default 50, max 100). This is an output limit, not a source download limit; the API does not support $top. Ordinary lookups retain up to 200 rows across meters.")] int top = 50)
     {
         if (string.IsNullOrWhiteSpace(serviceName))
             return "Error: serviceName is required (e.g. 'Virtual Machines'). Querying without a service filter would return millions of rows.";
@@ -387,10 +387,6 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             else if (requestedRegions.Count > 1)
                 filters.Add("(" + string.Join(" or ", requestedRegions.Select(r => $"armRegionName eq '{Esc(r)}'")) + ")");
         }
-        // Rows are shared across the requested regions, so the default cap could
-        // truncate a region away entirely and silently skew the comparison.
-        if (regionCount > 1)
-            top = Math.Clamp(Math.Max(top, 25 * regionCount), 1, 100);
         if (!string.IsNullOrWhiteSpace(armSkuName)) filters.Add(SkuFilter(armSkuName, false));
         if (!string.IsNullOrWhiteSpace(priceType)) filters.Add($"priceType eq '{Esc(priceType.Trim())}'");
         if (!string.IsNullOrWhiteSpace(meterNameContains)) filters.Add($"contains(meterName, '{Esc(meterNameContains.Trim())}')");
@@ -402,10 +398,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         var structuralFilters = filters.Take(filters.Count - vocabularyFilterCount).ToList();
 
         var filter = string.Join(" and ", filters);
-        var url = $"https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview" +
-                  $"&currencyCode={Uri.EscapeDataString(currencyCode)}" +
-                  $"&$filter={Uri.EscapeDataString(filter)}" +
-                  $"&$top={top}";
+        var url = BuildRetailUrl(filter, currencyCode);
 
         using var activity = HttpHelper.Telemetry.StartActivity("GetAzureRetailPricing");
         activity?.SetTag("pricing.service", serviceName);
@@ -420,7 +413,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         {
             var alternate = filters.Select(value => value == SkuFilter(armSkuName, false) ? SkuFilter(armSkuName, true) : value).ToList();
             var alternateFilter = string.Join(" and ", alternate);
-            var alternatePage = await FetchRetailPage($"https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview&currencyCode={Uri.EscapeDataString(currencyCode)}&$filter={Uri.EscapeDataString(alternateFilter)}&$top={top}", activity);
+            var alternatePage = await FetchRetailPage(BuildRetailUrl(alternateFilter, currencyCode), activity);
             if (RowCount(alternatePage) > 0)
             {
                 firstPage = alternatePage;
@@ -438,11 +431,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         if (vocabularyFilterCount > 0 && structuralFilters.Count > 0 && RowCount(firstPage) == 0)
         {
             var wideFilter = string.Join(" and ", structuralFilters);
-            var widePage = await FetchRetailPage(
-                $"https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview" +
-                $"&currencyCode={Uri.EscapeDataString(currencyCode)}" +
-                $"&$filter={Uri.EscapeDataString(wideFilter)}" +
-                $"&$top={top}", activity);
+            var widePage = await FetchRetailPage(BuildRetailUrl(wideFilter, currencyCode), activity);
             if (RowCount(widePage) > 0)
             {
                 firstPage = widePage;
@@ -504,7 +493,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                     break;
                 }
 
-                if (allItems.Count > maxItems)
+                if (allItems.Count > maxItems || (allItems.Count == maxItems && !string.IsNullOrWhiteSpace(nextLink)))
                 {
                     allItems = allItems.Take(maxItems).ToList();
                     paginationComplete = false;
@@ -564,7 +553,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         catch (JsonException) { }
         var missingRegions = requestedRegions.Where(region => !foundRegions.Contains(region)).ToArray();
 
-        var header = $"HTTP {firstPage.Status} {firstPage.StatusText}\nQuery: {filter} (top={top}, currency={currencyCode})\nRetrieved UTC: {DateTimeOffset.UtcNow:o}\nPages: {pageCount}; paginationComplete={paginationComplete}; fetchedRows={bodyRowCount}\n";
+        var header = $"HTTP {firstPage.Status} {firstPage.StatusText}\nQuery: {filter} (currency={currencyCode})\nRetrieved UTC: {DateTimeOffset.UtcNow:o}\nPages: {pageCount}; paginationComplete={paginationComplete}; fetchedRows={bodyRowCount}\n";
         if (requestedRegions.Count > 0)
             header += missingRegions.Length == 0
                 ? $"Fetched region coverage: {requestedRegions.Count}/{requestedRegions.Count}; see RESOLUTION for delivered coverage.\n"
@@ -618,6 +607,9 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
     }
 
     internal static string SkuFilter(string value, bool displayName) => $"{(displayName ? "skuName" : "armSkuName")} eq '{Esc(value.Trim())}'";
+
+    internal static string BuildRetailUrl(string filter, string currency) =>
+        $"https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview&currencyCode={Uri.EscapeDataString(currency)}&$filter={Uri.EscapeDataString(filter)}";
 
     // OData single-quote escape: ' → ''
     private static string Esc(string s) => s.Replace("'", "''");

@@ -51,7 +51,7 @@ Returns: HTTP status, final URL (after redirects), content-type, and the body. H
 
 PAYLOAD DISCIPLINE: use the most specific authoritative URL available. On long pages, set grepFor to the exact SKU, model, meter, heading, or phrase needed and lower maxChars; do not fetch a broad page at the maximum cap when a focused request can answer the question. grepFor and maxChars reduce returned model context after downloading, not the upstream response size. Preserve any truncation or missing-match caveat.
 
-Limits: HTTPS only. GET only. No cookies, no auth headers. Per-request cap ~600KB on the wire. 20s timeout.");
+Limits: HTTPS only. GET only. No cookies, no auth headers. Per-request cap ~600KB on the wire. 20s timeout includes response-body reading; host cancellation stops the request.");
     }
 
     private static async Task<string> FetchPublicWebPage(
@@ -62,80 +62,91 @@ Limits: HTTPS only. GET only. No cookies, no auth headers. Per-request cap ~600K
         if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
             return "Error: url must be a valid absolute https:// URL.";
 
-        maxChars = Math.Clamp(maxChars, 1_000, 200_000);
+        return await FetchPageAsync(Http, uri, grepFor, Math.Clamp(maxChars, 1_000, 200_000),
+            ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
+    }
 
+    internal static async Task<string> FetchPageAsync(HttpClient client, Uri uri, string? grepFor,
+        int maxChars, CancellationToken cancellationToken)
+    {
         using var activity = HttpHelper.Telemetry.StartActivity("FetchPublicWebPage");
         activity?.SetTag("fetch.host", uri.Host);
         activity?.SetTag("fetch.path", uri.AbsolutePath);
         activity?.SetTag("fetch.has_grep", !string.IsNullOrWhiteSpace(grepFor));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (client.Timeout != Timeout.InfiniteTimeSpan) deadline.CancelAfter(client.Timeout);
 
-        HttpResponseMessage res;
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, uri);
-            res = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            using var res = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+
+            var contentType = res.Content.Headers.ContentType?.MediaType ?? "unknown";
+            activity?.SetTag("fetch.status_code", (int)res.StatusCode);
+            activity?.SetTag("fetch.content_type", contentType);
+
+            await using var stream = await res.Content.ReadAsStreamAsync(deadline.Token);
+            using var ms = new MemoryStream();
+            var buffer = new byte[16_384];
+            var total = 0;
+            int read;
+            while (total < MaxBytes && (read = await stream.ReadAsync(
+                buffer.AsMemory(0, Math.Min(buffer.Length, MaxBytes - total)), deadline.Token)) > 0)
+            {
+                ms.Write(buffer, 0, read);
+                total += read;
+            }
+            var raw = Encoding.UTF8.GetString(ms.ToArray());
+            activity?.SetTag("fetch.bytes", total);
+
+            var body = contentType.Contains("html", StringComparison.OrdinalIgnoreCase)
+                ? StripHtml(raw)
+                : raw;
+
+            if (!string.IsNullOrWhiteSpace(grepFor))
+            {
+                var needle = grepFor.Trim();
+                var matched = body.Split('\n')
+                    .Where(l => l.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                    .Take(500)
+                    .ToList();
+                body = matched.Count == 0
+                    ? $"[grep '{needle}' returned 0 matches in {body.Length} chars of body]"
+                    : string.Join('\n', matched);
+                activity?.SetTag("fetch.grep_matches", matched.Count);
+            }
+
+            var truncated = false;
+            if (body.Length > maxChars)
+            {
+                body = body[..maxChars];
+                truncated = true;
+            }
+
+            activity?.SetTag("fetch.output_chars", body.Length);
+            activity?.SetTag("fetch.truncated", truncated);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"HTTP {(int)res.StatusCode} {res.StatusCode}");
+            sb.AppendLine($"Final URL: {res.RequestMessage?.RequestUri ?? uri}");
+            sb.AppendLine($"Content-Type: {contentType}");
+            sb.AppendLine($"Bytes on wire: {total}{(total >= MaxBytes ? " (HARD CAP — refine URL)" : "")}");
+            sb.AppendLine($"UTC: {DateTimeOffset.UtcNow:O}");
+            if (truncated) sb.AppendLine($"[TRUNCATED to {maxChars} chars — pass grepFor or a more specific URL to narrow]");
+            sb.AppendLine();
+            sb.Append(body);
+            return sb.ToString();
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException)
         {
             activity?.SetTag("fetch.error", ex.GetType().Name);
-            return $"Error: fetch failed ({ex.GetType().Name}: {ex.Message}). URL={uri}. Try a different URL or escalate to another source per the Persistence rule.";
+            activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
+            return $"Error: public web request failed ({ex.GetType().Name}). The source is unavailable; do not infer missing prices.";
         }
-
-        var contentType = res.Content.Headers.ContentType?.MediaType ?? "unknown";
-        activity?.SetTag("fetch.status_code", (int)res.StatusCode);
-        activity?.SetTag("fetch.content_type", contentType);
-
-        // Read up to MaxBytes only.
-        await using var stream = await res.Content.ReadAsStreamAsync();
-        using var ms = new MemoryStream();
-        var buffer = new byte[16_384];
-        var total = 0;
-        int read;
-        while (total < MaxBytes && (read = await stream.ReadAsync(buffer, 0, Math.Min(buffer.Length, MaxBytes - total))) > 0)
-        {
-            ms.Write(buffer, 0, read);
-            total += read;
-        }
-        var raw = Encoding.UTF8.GetString(ms.ToArray());
-        activity?.SetTag("fetch.bytes", total);
-
-        var body = contentType.Contains("html", StringComparison.OrdinalIgnoreCase)
-            ? StripHtml(raw)
-            : raw;
-
-        if (!string.IsNullOrWhiteSpace(grepFor))
-        {
-            var needle = grepFor.Trim();
-            var matched = body.Split('\n')
-                .Where(l => l.Contains(needle, StringComparison.OrdinalIgnoreCase))
-                .Take(500)
-                .ToList();
-            body = matched.Count == 0
-                ? $"[grep '{needle}' returned 0 matches in {body.Length} chars of body]"
-                : string.Join('\n', matched);
-            activity?.SetTag("fetch.grep_matches", matched.Count);
-        }
-
-        var truncated = false;
-        if (body.Length > maxChars)
-        {
-            body = body[..maxChars];
-            truncated = true;
-        }
-
-        activity?.SetTag("fetch.output_chars", body.Length);
-        activity?.SetTag("fetch.truncated", truncated);
-
-        var sb = new StringBuilder();
-        sb.AppendLine($"HTTP {(int)res.StatusCode} {res.StatusCode}");
-        sb.AppendLine($"Final URL: {res.RequestMessage?.RequestUri ?? uri}");
-        sb.AppendLine($"Content-Type: {contentType}");
-        sb.AppendLine($"Bytes on wire: {total}{(total >= MaxBytes ? " (HARD CAP — refine URL)" : "")}");
-        sb.AppendLine($"UTC: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}");
-        if (truncated) sb.AppendLine($"[TRUNCATED to {maxChars} chars — pass grepFor or a more specific URL to narrow]");
-        sb.AppendLine();
-        sb.Append(body);
-        return sb.ToString();
     }
 
     // Lightweight HTML → text. Drops <script>, <style>, <noscript>, <nav>, <header>, <footer>,

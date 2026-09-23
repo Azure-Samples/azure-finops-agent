@@ -120,6 +120,7 @@ public sealed class ApiQueryContractTests
         Assert.Contains("CSV", graph.Description);
         Assert.DoesNotContain("BETA-ONLY", graph.Description);
         Assert.Contains("supports ONLY $select", graph.Description);
+        Assert.Contains("retrieval timestamp, not the report refresh date", graph.Description);
         Assert.DoesNotContain("GET /providers/Microsoft.Consumption/reservationSummaries", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("commitment impact as UNKNOWN", CopilotSessionFactory.SystemPrompt);
     }

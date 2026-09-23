@@ -97,6 +97,19 @@ const privateResult = (scenario) => {
         arguments: "tenant-arguments-must-not-publish",
         detail: "tenant-details-must-not-publish",
     }];
+    result.toolDetails = [{
+        name: "QueryGraph",
+        success: true,
+        arguments: "tenant-arguments-must-not-publish",
+        result: "tenant-tool-output-must-not-publish",
+        resultTruncated: false,
+        error: "tenant-private-error-must-not-publish",
+    }];
+    result.failure = {
+        phase: "tenant-private-phase-must-not-publish",
+        type: "tenant-private-type-must-not-publish",
+        detail: "tenant-private-error-must-not-publish",
+    };
     result.extra = { context: "tenant-extra-must-not-publish" };
     return result;
 };
@@ -291,6 +304,7 @@ test("both deployment workflows require every live evaluation", async () => {
         "AZURE_EVAL_CLIENT_ID",
         "AZURE_EVAL_TENANT_ID",
         "AZURE_EVAL_SUBSCRIPTION_ID",
+        "EVAL_MODEL_ENDPOINT",
     ])
         assert.match(
             live,
@@ -316,6 +330,33 @@ test("manual feature validation does not deploy unless explicitly requested", as
         /if:.*github\.event_name != 'workflow_dispatch' \|\| inputs\.deploy/,
     );
     assert.match(workflow, /'test-slot-evaluation' \|\| 'test-slot-deploy'/);
+    assert.match(workflow, /cancel-in-progress: false/);
+    assert.match(workflow, /github\.ref_type == 'branch' && github\.ref_name != 'main'/);
+    assert.match(workflow, /- "infra\/\*\*"/);
+});
+
+test("feature deployment consumes only the successful environment-resolved evaluation contract", async () => {
+    const [feature, live] = await Promise.all(["feature", "live-evaluations"].map((name) =>
+        readFile(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), "utf8")));
+    for (const [name, environment] of [
+        ["model", "EVALUATED_MODEL"],
+        ["reasoning_effort", "EVALUATED_REASONING_EFFORT"],
+        ["sha", "EVALUATED_SHA"],
+        ["endpoint_sha256", "EVALUATED_ENDPOINT_SHA256"],
+    ]) {
+        assert.ok(live.includes(`value: \${{ jobs.evaluate.outputs.${name} }}`));
+        assert.ok(live.includes(`${name}: \${{ steps.accepted.outputs.${name} }}`));
+        assert.ok(feature.includes(`${environment}: \${{ needs.live-evaluations.outputs.${name} }}`));
+    }
+    assert.match(live, /EVAL_MODEL: \$\{\{ vars\.EVAL_MODEL \}\}/);
+    assert.match(live, /EVAL_MODEL_ENDPOINT: \$\{\{ secrets\.EVAL_MODEL_ENDPOINT \}\}/);
+    assert.doesNotMatch(live, /vars\.EVAL_MODEL_ENDPOINT/);
+    assert.match(live, /EVAL_REASONING_EFFORT: \$\{\{ vars\.EVAL_REASONING_EFFORT \|\| 'xhigh' \}\}/);
+    assert.match(live, /id: accepted\s+if: success\(\)\s+run: node infra\/scripts\/feature-slot\.mjs evaluation-output/);
+    assert.ok(live.indexOf("run: node tests/LiveEvaluations/suite.mjs") <
+        live.indexOf("id: accepted"));
+    assert.doesNotMatch(feature, /vars\.EVAL_MODEL|gpt-6-luna|EVALUATED_MODEL:.*\|\|/);
+    assert.doesNotMatch(feature, /EVAL_MODEL_ENDPOINT/);
 });
 
 test("full catalog retains every frontend template and both concrete incident cases", () => {
@@ -1182,11 +1223,15 @@ test("internal-test publication rejects malformed raw values and retains only sa
     assert.deepEqual(synthetic.reasons, result.reasons);
     assert.deepEqual(synthetic.judge, result.judge);
     assert.ok(!("failedToolDetails" in synthetic));
+    assert.ok(!("toolDetails" in synthetic));
+    assert.ok(!("failure" in synthetic));
     assert.ok(!("extra" in synthetic));
     assert.doesNotMatch(JSON.stringify(synthetic),
-        /tenant-(?:arguments|details|extra|tool-output|success)-must-not-publish/);
+        /tenant-(?:arguments|details|extra|tool-output|success|private-error|private-phase|private-type)-must-not-publish/);
     assert.equal(result.tools[1].arguments, "tenant-arguments-must-not-publish");
     assert.equal(result.failedToolDetails[0].detail, "tenant-details-must-not-publish");
+    assert.equal(result.toolDetails[0].result, "tenant-tool-output-must-not-publish");
+    assert.equal(result.failure.detail, "tenant-private-error-must-not-publish");
 });
 
 test("a published directory cannot contain the private capture root", async () => {
@@ -1333,7 +1378,7 @@ test("the real suite entry point rejects the wrong candidate revision before any
             cwd: repositoryRoot,
             encoding: "utf8",
         });
-        assert.equal(head.status, 0);
+        assert.equal(head.status, 0, head.stderr || head.error?.message);
         const wrongSha = head.stdout.trim() === sha ? "c".repeat(40) : sha;
         const result = spawnSync(
             process.execPath,

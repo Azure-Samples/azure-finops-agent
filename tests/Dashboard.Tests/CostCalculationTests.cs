@@ -64,6 +64,18 @@ public sealed class CostCalculationTests
         Assert.StartsWith("Error:", CostCalculationTools.CompareAmounts("""[{"label":"A"}]""", "USD"));
     }
 
+    [Fact]
+    public void ComparisonUnitLimitIsDocumentedInTheEmittedSchemaAndEnforced()
+    {
+        var tool = CostCalculationTools.Create().Single(tool => tool.Name == "CompareAmounts");
+        Assert.Contains("at most 40 characters", tool.Description);
+        Assert.Contains("1-40 characters", tool.JsonSchema.GetProperty("properties").GetProperty("unit").GetProperty("description").GetString());
+        const string items = """[{"label":"Synthetic comparison","current":20,"baseline":10}]""";
+        using var result = JsonDocument.Parse(CostCalculationTools.CompareAmounts(items, new string('u', 40)));
+        Assert.Equal(100m, result.RootElement.GetProperty("totalPercentChange").GetDecimal());
+        Assert.StartsWith("Error:", CostCalculationTools.CompareAmounts(items, new string('u', 41)));
+    }
+
     [Theory]
     [InlineData("""[{"label":"Missing rate","quantity":1,"unit":"GB-month","currency":"USD"}]""")]
     [InlineData("""[{"label":"Wrong currency","quantity":1,"unitPrice":2,"unit":"GB-month","currency":"EUR"}]""")]

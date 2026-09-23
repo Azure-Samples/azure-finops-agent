@@ -4,13 +4,28 @@ on:
   workflow_call:
     secrets:
       # Environment-scoped secrets are resolved on the job, not by its caller.
-      # The configuration step below still requires all three values.
+      # The configuration step below still requires every value.
       AZURE_EVAL_CLIENT_ID:
         required: false
       AZURE_EVAL_TENANT_ID:
         required: false
       AZURE_EVAL_SUBSCRIPTION_ID:
         required: false
+      EVAL_MODEL_ENDPOINT:
+        required: false
+    outputs:
+      model:
+        description: Deployment name used by the successfully completed live suite
+        value: ${{ jobs.evaluate.outputs.model }}
+      reasoning_effort:
+        description: Reasoning effort used by the successfully completed live suite
+        value: ${{ jobs.evaluate.outputs.reasoning_effort }}
+      sha:
+        description: Full candidate commit accepted by the live suite
+        value: ${{ jobs.evaluate.outputs.sha }}
+      endpoint_sha256:
+        description: SHA-256 of the normalized successfully evaluated inference endpoint
+        value: ${{ jobs.evaluate.outputs.endpoint_sha256 }}
   workflow_dispatch:
 
 permissions:
@@ -27,13 +42,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     environment: ai-evaluation
+    outputs:
+      model: ${{ steps.accepted.outputs.model }}
+      reasoning_effort: ${{ steps.accepted.outputs.reasoning_effort }}
+      sha: ${{ steps.accepted.outputs.sha }}
+      endpoint_sha256: ${{ steps.accepted.outputs.endpoint_sha256 }}
     env:
       EVAL_CLIENT_ID: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
       EVAL_LOGIN_SUBSCRIPTION: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
-      EVAL_MODEL_ENDPOINT: ${{ vars.EVAL_MODEL_ENDPOINT }}
+      EVAL_MODEL_ENDPOINT: ${{ secrets.EVAL_MODEL_ENDPOINT }}
       EVAL_MODEL: ${{ vars.EVAL_MODEL }}
       EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
-      EVAL_REASONING_EFFORT: xhigh
+      EVAL_REASONING_EFFORT: ${{ vars.EVAL_REASONING_EFFORT || 'xhigh' }}
       EVAL_TENANT_ID: ${{ secrets.AZURE_EVAL_TENANT_ID }}
       EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}
       EVAL_DATA_CLASSIFICATION: ${{ vars.EVAL_DATA_CLASSIFICATION }}
@@ -89,6 +109,11 @@ jobs:
       - name: Execute every live question and require unanimous acceptance
         timeout-minutes: 300
         run: node tests/LiveEvaluations/suite.mjs
+
+      - name: Export successfully evaluated model contract
+        id: accepted
+        if: success()
+        run: node infra/scripts/feature-slot.mjs evaluation-output
 
       - name: Publish question-by-question results
         if: always()

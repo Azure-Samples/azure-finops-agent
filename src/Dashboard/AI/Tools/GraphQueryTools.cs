@@ -21,6 +21,7 @@ public class GraphQueryTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(QueryGraph, "QueryGraph", @"Calls Microsoft Graph API (https://graph.microsoft.com) using the signed-in user's token. Returns the provider response (JSON, or CSV for report endpoints).
+The Current UTC time preamble is the retrieval timestamp, not the report refresh date or proof of current activity. Preserve the provider's report dates and pagination; never invent a source data-as-of timestamp.
 Methods: GET, POST, PUT, PATCH. DELETE is blocked at the code level. NOTE: the standard consent tiers only grant read-only scopes (*.Read.All / Reports.Read.All), so write calls return 403 insufficient privileges unless the tenant has consented to write scopes — surface that to the user rather than retrying.
 DATA SCOPING: use $select for needed fields, $top for a small page, and $filter for the requested scope wherever that Graph endpoint supports them. Prefer supported server-side reports and counts for summaries; do not invent query options on endpoints such as reports or subscribedSkus. Avoid full user objects and broad collections when a narrower request answers the question. Follow @odata.nextLink only while the requested result needs more rows. A limited page is not a tenant-wide count; disclose incomplete pagination and preserve totals.
 For Copilot activity counts and inactive-user lists prefer GetCopilotUsage, which processes the supported report on the host and returns bounded, dated counts/pages instead of an oversized raw report.
@@ -70,7 +71,8 @@ Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant a
             $"https://graph.microsoft.com{path}",
             token, activity, "graph",
             method: httpMethod,
-            jsonBody: hasBody && httpMethod != HttpMethod.Get ? body : null);
+            jsonBody: hasBody && httpMethod != HttpMethod.Get ? body : null,
+            includeTimestamp: true);
     }
 
     private sealed record QueryContract(string[] Endpoints, string[] AllowedOptions, string Guidance);

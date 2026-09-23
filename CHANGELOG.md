@@ -9,6 +9,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Treat empty optional retained-result filter/sort/aggregate arrays as omitted operations while preserving type, size, grouping and exact owner/session-ID checks. Clarify post-projection sorting and require explicit disclosure when daily forecasts and independent budget projections disagree.
+- Bind shared feature-slot deployments to the successful evaluation's exact SHA, model, reasoning effort and normalized endpoint fingerprint. Validate Azure slot identity/hostname before writes, serialize settings/image updates, preserve unrelated settings through narrow Incremental Bicep, and verify the deployed build without swapping into production.
+- Remove unsupported `$top` from Retail Prices API requests: it caused negative continuation-page limits and HTTP 400 after the first 1,000 rows. Keep bounded output, round-robin across meters rather than meter/region pairs, and permit one evidence-based refinement for unresolved variants without hiding partial coverage.
+- Bound public-page response-body reads by the same request deadline and host cancellation as header retrieval, dispose responses on every exit, and report transport failures explicitly without echoing exception details. Source unavailability remains a failure, not an invented price.
+- Preserve captured answers, tools, timing and replay state when live evaluation fails during credentials, replay or judging. Private diagnostics include bounded redacted tool evidence and the failure phase; neither publication classification exposes those private fields.
+- Retain ActualCost basis, aggregation and exact exclusive date bounds in cross-subscription query results; distinguish periodically evaluated budget snapshots instead of triggering redundant billing reads to rediscover the cost basis.
+- Include culture-independent Graph retrieval timestamps without changing JSON/CSV provider bodies or report-refresh dates. Pricing guidance also retains returned retrieval timestamps in chart-only answers.
+- Expose strict comparison-unit and label limits to the model, preserve both Microsoft 365 and Azure licensing scope, and require explicit user intent before suggesting public FAQ submission.
+- Trust only the mounted `/workspace` checkout inside the disposable Linux regression container, fixing Git source-identity checks without skipping tests or changing workstation trust.
 - State reported UTC retrieval timestamps for inventory and tag snapshots without presenting them as source-data freshness; missing source timestamps and Resource Graph indexing lag remain explicit.
 - Allow opt-in local retention of already-redacted failed evaluation captures outside both the repository and public artifacts, rejecting CI and overlapping symlink targets. Passing captures are removed, retention failures fail the gate, and raw failed-tool details stay private for both data classifications.
 - Install Git in the slim Linux regression container before evaluation source-identity tests; keep every regression enabled instead of skipping tests whose executable prerequisite was missing.
