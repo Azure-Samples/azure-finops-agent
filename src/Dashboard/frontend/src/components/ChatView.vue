@@ -1,5 +1,9 @@
 <template>
-  <div class="chat-view" :class="{ 'chat-view--hidden': documentIsHidden }" @keydown.esc="closeMobileSidebar">
+  <div
+    class="chat-view"
+    :class="{ 'chat-view--hidden': documentIsHidden }"
+    @keydown.esc="closeMobileSidebar"
+  >
     <!-- Azure Portal-style top bar -->
     <header class="portal-header">
       <div class="portal-header-left">
@@ -1303,7 +1307,9 @@
             <div
               v-if="sessionNotice"
               class="message-row message-row--system"
-              :style="sessionNotice.progress ? { animation: 'none' } : undefined"
+              :style="
+                sessionNotice.progress ? { animation: 'none' } : undefined
+              "
             >
               <RequestProgressCard
                 v-if="sessionNotice.progress"
@@ -1390,10 +1396,19 @@
             </div>
 
             <!-- Streaming indicator -->
-            <div v-if="streaming && (!streamFailure || streamBuffer || streamCharts.length)" class="message-row message-row--ai">
+            <div
+              v-if="
+                streaming &&
+                (!streamFailure || streamBuffer || streamCharts.length)
+              "
+              class="message-row message-row--ai"
+            >
               <div class="ai-row">
                 <div class="ai-header">
-                  <AssistantAvatar :thinking="!streamFailure" :paused="documentIsHidden" />
+                  <AssistantAvatar
+                    :thinking="!streamFailure"
+                    :paused="documentIsHidden"
+                  />
                   <span v-if="streamIntent" class="stream-intent">
                     {{ streamIntent }}
                   </span>
@@ -1424,7 +1439,10 @@
                       ></div>
                     </div>
                   </div>
-                  <div class="message-text" v-else-if="!streamIntent && !streamFailure">
+                  <div
+                    class="message-text"
+                    v-else-if="!streamIntent && !streamFailure"
+                  >
                     <span class="thinking-dots thinking-dots--lg"
                       ><i></i><i></i><i></i
                     ></span>
@@ -2023,7 +2041,11 @@
                     stroke-width="2"
                   />
                   <path
-                    :d="progressView(tc).phase === 'stopped' ? 'M6 5v6m4-6v6' : 'M8 4v4l3 2'"
+                    :d="
+                      progressView(tc).phase === 'stopped'
+                        ? 'M6 5v6m4-6v6'
+                        : 'M8 4v4l3 2'
+                    "
                     stroke="currentColor"
                     stroke-width="1.5"
                     stroke-linecap="round"
@@ -2039,7 +2061,12 @@
                     <strong>Status:</strong> {{ progressView(tc).badge }}
                   </div>
                   <div class="st-cooler-row">
-                    <strong>Attempt:</strong> {{ tc.attempt > 0 ? tc.attempt : "Waiting for an earlier cooldown" }}
+                    <strong>Attempt:</strong>
+                    {{
+                      tc.attempt > 0
+                        ? tc.attempt
+                        : "Waiting for an earlier cooldown"
+                    }}
                   </div>
                   <div class="st-cooler-row">
                     {{ progressView(tc).detail }}
@@ -2168,6 +2195,13 @@
             </button>
           </div>
           <div class="tools-sidebar-scroll sessions-scroll">
+            <div
+              v-if="sessionDeleteError"
+              class="sessions-delete-error"
+              role="alert"
+            >
+              {{ sessionDeleteError }}
+            </div>
             <div v-if="chatSessions.length === 0" class="sessions-empty">
               {{
                 azureConnected
@@ -2182,40 +2216,80 @@
                 'session-row',
                 { 'session-row--current': s.id === currentSessionId },
                 { 'session-row--running': runningSessions.has(s.id) },
+                { 'session-row--confirming': pendingDeleteSessionId === s.id },
               ]"
               @click="selectSession(s.id)"
               :title="s.summary"
+              :data-session-id="s.id"
+              :aria-busy="deletingSessions.has(s.id)"
             >
-              <span
-                class="tools-sidebar-status-dot"
-                :class="{
-                  'tools-sidebar-status-dot--live': runningSessions.has(s.id),
-                }"
-                :aria-label="
-                  runningSessions.has(s.id) ? 'Conversation is running' : 'Idle'
-                "
-                :title="
-                  runningSessions.has(s.id)
-                    ? 'This conversation is still running'
-                    : ''
-                "
-              ></span>
-              <div class="session-row-main">
-                <span class="session-row-title">{{
-                  s.summary || "Untitled conversation"
-                }}</span>
-                <span class="session-row-time">{{
-                  formatRelativeTime(s.modified)
-                }}</span>
-              </div>
-              <button
-                class="session-row-delete"
-                @click.stop="deleteSession(s.id)"
-                title="Delete this conversation"
-                aria-label="Delete conversation"
+              <div
+                v-if="pendingDeleteSessionId === s.id"
+                class="session-delete-confirm"
+                @click.stop
+                @keydown.esc.stop="cancelDeleteSession(s.id)"
               >
-                ×
-              </button>
+                <span class="session-delete-question"
+                  >Delete conversation?</span
+                >
+                <button
+                  class="session-delete-cancel"
+                  :disabled="deletingSessions.has(s.id)"
+                  @click.stop="cancelDeleteSession(s.id)"
+                >
+                  Cancel
+                </button>
+                <button
+                  class="session-delete-confirm-button"
+                  :disabled="deletingSessions.has(s.id)"
+                  @click.stop="deleteSession(s.id)"
+                >
+                  {{ deletingSessions.has(s.id) ? "Deleting..." : "Delete" }}
+                </button>
+              </div>
+              <template v-else>
+                <span
+                  class="tools-sidebar-status-dot"
+                  :class="{
+                    'tools-sidebar-status-dot--live': runningSessions.has(s.id),
+                  }"
+                  :aria-label="
+                    runningSessions.has(s.id)
+                      ? 'Conversation is running'
+                      : 'Idle'
+                  "
+                  :title="
+                    runningSessions.has(s.id)
+                      ? 'This conversation is still running'
+                      : ''
+                  "
+                ></span>
+                <div class="session-row-main">
+                  <span class="session-row-title">{{
+                    s.summary || "Untitled conversation"
+                  }}</span>
+                  <span class="session-row-time">{{
+                    formatRelativeTime(s.modified)
+                  }}</span>
+                </div>
+                <button
+                  class="session-row-delete session-row-delete--conversation"
+                  :disabled="runningSessions.has(s.id)"
+                  @click.stop="requestDeleteSession(s.id)"
+                  :title="
+                    runningSessions.has(s.id)
+                      ? 'Stop this conversation before deleting it'
+                      : 'Delete this conversation'
+                  "
+                  :aria-label="
+                    runningSessions.has(s.id)
+                      ? 'Conversation is running and cannot be deleted'
+                      : 'Delete conversation'
+                  "
+                >
+                  Delete
+                </button>
+              </template>
             </div>
           </div>
         </div>
@@ -2692,7 +2766,12 @@ import TurnFailureNotice from "./TurnFailureNotice.vue";
 import RequestProgressCard from "./RequestProgressCard.vue";
 import AssistantAvatar from "./AssistantAvatar.vue";
 import { JOB_TEMPLATES } from "../data/jobTemplates.js";
-import { createRequestProgress, describeRequestProgress, toolHttpStatus, toolResultSucceeded } from "../requestProgress.js";
+import {
+  createRequestProgress,
+  describeRequestProgress,
+  toolHttpStatus,
+  toolResultSucceeded,
+} from "../requestProgress.js";
 import {
   maturityCategories,
   pricingCategory,
@@ -3323,7 +3402,8 @@ async function fetchPersistedTail(sid, normPrompt) {
       exactMatch: !normPrompt || u === normPrompt,
       answered,
       ansLen,
-      userMessageCount: msgs.filter((message) => message.role === "user").length,
+      userMessageCount: msgs.filter((message) => message.role === "user")
+        .length,
     };
   } catch {
     return null;
@@ -3338,13 +3418,27 @@ async function fetchTerminalRecoveryState(sid, tail) {
       fetch(`/api/sessions/${encodeURIComponent(sid)}/outcomes`),
     ]);
     if (!activeResponse.ok || !outcomesResponse.ok) {
-      console.warn("Could not verify terminal turn status", activeResponse.status, outcomesResponse.status);
+      console.warn(
+        "Could not verify terminal turn status",
+        activeResponse.status,
+        outcomesResponse.status,
+      );
       return null;
     }
-    const [active, outcomes] = await Promise.all([activeResponse.json(), outcomesResponse.json()]);
-    return terminalRecoveryState(active.active, outcomes.outcomes, tail.userMessageCount);
+    const [active, outcomes] = await Promise.all([
+      activeResponse.json(),
+      outcomesResponse.json(),
+    ]);
+    return terminalRecoveryState(
+      active.active,
+      outcomes.outcomes,
+      tail.userMessageCount,
+    );
   } catch (error) {
-    console.warn("Could not verify terminal turn status", error?.name || "Error");
+    console.warn(
+      "Could not verify terminal turn status",
+      error?.name || "Error",
+    );
     return null;
   }
 }
@@ -3368,12 +3462,15 @@ const sessionNoticeText = computed(() => {
   return `${view.title}. ${view.detail}`;
 });
 watch(
-  () => [...perSessionCoolers.values()].some((items) => items.length > 0)
-    || (sessionNotice.value?.progress?.deadline > progressNow.value),
+  () =>
+    [...perSessionCoolers.values()].some((items) => items.length > 0) ||
+    sessionNotice.value?.progress?.deadline > progressNow.value,
   (active) => {
     if (active && !progressTimer) {
       progressNow.value = Date.now();
-      progressTimer = setInterval(() => { progressNow.value = Date.now(); }, 1000);
+      progressTimer = setInterval(() => {
+        progressNow.value = Date.now();
+      }, 1000);
     } else if (!active && progressTimer) {
       clearInterval(progressTimer);
       progressTimer = null;
@@ -3808,7 +3905,9 @@ const mobileSidebarOpen = ref(false);
 const menuButton = ref(null);
 const navigationMedia = window.matchMedia("(max-width: 900px)");
 const compactLayout = ref(navigationMedia.matches);
-const sidebarVisible = computed(() => compactLayout.value ? mobileSidebarOpen.value : sidebarOpen.value);
+const sidebarVisible = computed(() =>
+  compactLayout.value ? mobileSidebarOpen.value : sidebarOpen.value,
+);
 function updateNavigationLayout(event) {
   compactLayout.value = event.matches;
   mobileSidebarOpen.value = false;
@@ -3826,8 +3925,8 @@ function toggleSidebar() {
   }
 }
 const plusMenuOpen = ref(false);
-const availableModels = ref(["gpt-5.6-luna"]);
-const selectedModel = ref("gpt-5.6-luna");
+const availableModels = ref(["gpt-6-luna"]);
+const selectedModel = ref("gpt-6-luna");
 
 // Auth loading state
 const authLoading = ref(""); // "" | "github" | "azure"
@@ -3857,6 +3956,10 @@ const clearing = ref(false);
 // stay in sync even if the user clicked a row mid-stream.
 const sessions = ref([]);
 const currentSessionId = ref(null);
+const pendingDeleteSessionId = ref(null);
+const deletingSessions = reactive(new Set());
+const sessionDeleteError = ref("");
+const deletedSessionIds = new Set();
 
 async function loadSessions() {
   if (!azureConnected.value) {
@@ -3867,7 +3970,15 @@ async function loadSessions() {
     const res = await fetch("/api/sessions", { credentials: "same-origin" });
     if (!res.ok) return;
     const data = await res.json();
-    sessions.value = Array.isArray(data.sessions) ? data.sessions : [];
+    const refreshed = Array.isArray(data.sessions)
+      ? data.sessions.filter((session) => !deletedSessionIds.has(session.id))
+      : [];
+    const refreshedIds = new Set(refreshed.map((session) => session.id));
+    for (const session of sessions.value) {
+      if (deletingSessions.has(session.id) && !refreshedIds.has(session.id))
+        refreshed.push(session);
+    }
+    sessions.value = refreshed;
     // Only adopt the server's notion of "current" when the client has none.
     // Otherwise a periodic refresh would yank the user out of the session
     // they explicitly selected.
@@ -4522,9 +4633,10 @@ async function reloadSessionTranscript(sessionId) {
             } catch {}
           }
         }
-        const failure = m.terminalStatus && m.terminalStatus !== "stopped"
-          ? describeTurnFailure(m.content, m.terminalStatus)
-          : null;
+        const failure =
+          m.terminalStatus && m.terminalStatus !== "stopped"
+            ? describeTurnFailure(m.content, m.terminalStatus)
+            : null;
         return {
           role: m.role,
           content: failure?.text || m.content || "",
@@ -4740,35 +4852,83 @@ async function attachToServerTurn(sessionId) {
   }
 }
 
-async function deleteSession(sessionId) {
-  // Immediate delete by design — no confirm dialog, and OPTIMISTIC: the row
-  // leaves the list before the server round-trip so the × always feels alive.
-  sessions.value = sessions.value.filter((s) => s.id !== sessionId);
-  if (sessionId === currentSessionId.value) {
-    currentSessionId.value = null;
-    messages.value = [];
-    streamFollowUp.value = null;
-    scriptReady.value = null;
-    htmlReady.value = null;
-    maturityScores.crawl = null;
-    maturityScores.walk = null;
-    maturityScores.run = null;
-    maturityScores.playbook = null;
+function requestDeleteSession(sessionId) {
+  if (!sessionId || runningSessions.has(sessionId)) return;
+  sessionDeleteError.value = "";
+  pendingDeleteSessionId.value = sessionId;
+}
+
+function cancelDeleteSession(sessionId) {
+  if (
+    pendingDeleteSessionId.value === sessionId &&
+    !deletingSessions.has(sessionId)
+  ) {
+    pendingDeleteSessionId.value = null;
+    sessionDeleteError.value = "";
   }
-  // Drop the live-stream buckets for the deleted session regardless of view —
-  // a backgrounded stream may still be writing to it; abandon those writes.
-  perSessionToolCalls.delete(sessionId);
-  perSessionCharts.delete(sessionId);
+}
+
+async function deleteSession(sessionId) {
+  if (
+    !sessionId ||
+    runningSessions.has(sessionId) ||
+    deletingSessions.has(sessionId)
+  )
+    return;
+
+  deletingSessions.add(sessionId);
+  sessionDeleteError.value = "";
   try {
     const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
     });
-    if (!res.ok && res.status !== 404)
+    if (!res.ok && res.status !== 404) {
+      sessionDeleteError.value =
+        res.status === 409
+          ? "Stop the active conversation before deleting it."
+          : "Couldn't delete the conversation. Try again.";
       window.__trackAppInsightsEvent?.("sessions.deleteFailed", {
         status: String(res.status),
       });
-  } catch {}
-  await loadSessions();
+      return;
+    }
+
+    deletedSessionIds.add(sessionId);
+    sessions.value = sessions.value.filter((s) => s.id !== sessionId);
+    pendingDeleteSessionId.value = null;
+    perSessionToolCalls.delete(sessionId);
+    perSessionCharts.delete(sessionId);
+    perSessionCoolers.delete(sessionId);
+    sessionConsentActions.delete(sessionId);
+    sessionChanges.delete(sessionId);
+
+    if (sessionId === currentSessionId.value) {
+      viewEpoch++;
+      serverTurnPollToken++;
+      currentSessionId.value = null;
+      messages.value = [];
+      streamFollowUp.value = null;
+      scriptReady.value = null;
+      htmlReady.value = null;
+      clearNotice();
+      maturityScores.crawl = null;
+      maturityScores.walk = null;
+      maturityScores.run = null;
+      maturityScores.playbook = null;
+      try {
+        if (sessionStorage.getItem("finops_last_session") === sessionId)
+          sessionStorage.removeItem("finops_last_session");
+      } catch {}
+    }
+  } catch {
+    sessionDeleteError.value =
+      "Couldn't reach the server. The conversation was not deleted.";
+    window.__trackAppInsightsEvent?.("sessions.deleteFailed", {
+      status: "network_error",
+    });
+  } finally {
+    deletingSessions.delete(sessionId);
+  }
 }
 
 function formatRelativeTime(iso) {
@@ -5082,14 +5242,18 @@ onMounted(async () => {
         _uid: `c-sim-${Date.now()}`,
         _key: `sim|${Date.now()}`,
         _isCooler: true,
-        ...createRequestProgress({
-          tool: "azure",
-          url: "/synthetic/cost-query",
-          attempt: 1,
-          waitSeconds: wait,
-          status,
-          willRetry: true,
-        }, Date.now(), "Synthetic cost request"),
+        ...createRequestProgress(
+          {
+            tool: "azure",
+            url: "/synthetic/cost-query",
+            attempt: 1,
+            waitSeconds: wait,
+            status,
+            willRetry: true,
+          },
+          Date.now(),
+          "Synthetic cost request",
+        ),
         expanded: false,
         done: false,
       };
@@ -5483,7 +5647,8 @@ function friendlyToolLabel(tc) {
     return "Throttled (HTTP 429)";
   }
   const httpStatus = toolHttpStatus(tc.result);
-  if (tc.done && httpStatus >= 400) return `Request failed (HTTP ${httpStatus})`;
+  if (tc.done && httpStatus >= 400)
+    return `Request failed (HTTP ${httpStatus})`;
   const tool = tc.tool;
   let args = tc.args;
   if (args && typeof args === "string") {
@@ -7436,8 +7601,16 @@ async function sendPrompt(text) {
 }
 
 async function editSavedQuestion(messageIndex) {
-  if (streaming.value || clearing.value || currentJob.value || input.value.trim()) return;
-  const question = messages.value.slice(0, messageIndex).findLast((message) => message.role === "user");
+  if (
+    streaming.value ||
+    clearing.value ||
+    currentJob.value ||
+    input.value.trim()
+  )
+    return;
+  const question = messages.value
+    .slice(0, messageIndex)
+    .findLast((message) => message.role === "user");
   if (!question) return;
   input.value = question.content;
   await nextTick();
@@ -8039,7 +8212,10 @@ async function send() {
                 (item) => item.toolCallId !== data.id,
               ),
             );
-            if (isActiveView() && sessionNotice.value?.progress?.toolCallId === data.id)
+            if (
+              isActiveView() &&
+              sessionNotice.value?.progress?.toolCallId === data.id
+            )
               clearNotice("cost_retry", "request_retry", "request_wait");
             if (
               data.tool === "SuggestFollowUp" &&
@@ -8066,12 +8242,17 @@ async function send() {
           case "cooling_down": {
             progressNow.value = Date.now();
             const pendingTools = toolCalls.filter((tool) => !tool.done);
-            const inFlight = pendingTools.find((tool) => tool.id === data.toolCallId)
-              || (pendingTools.length === 1 ? pendingTools[0] : null);
+            const inFlight =
+              pendingTools.find((tool) => tool.id === data.toolCallId) ||
+              (pendingTools.length === 1 ? pendingTools[0] : null);
             const service = inFlight
               ? friendlyToolLabel({ ...inFlight, cooling: null })
               : data.tool || "Service";
-            const progress = createRequestProgress(data, progressNow.value, service);
+            const progress = createRequestProgress(
+              data,
+              progressNow.value,
+              service,
+            );
             progress.toolCallId ||= inFlight?.id || null;
             const list = perSessionCoolers.get(streamingId) || [];
             const key = `${progress.toolCallId || progress.tool.replace(/ \(slow\)$/, "")}|${progress.url}`;
@@ -8090,7 +8271,15 @@ async function send() {
             }
             perSessionCoolers.set(streamingId, [...list]);
             if (isActiveView())
-              setNotice(progress.status === 0 ? "request_wait" : progress.willRetry ? "cost_retry" : "cost_cooldown", "", progress);
+              setNotice(
+                progress.status === 0
+                  ? "request_wait"
+                  : progress.willRetry
+                    ? "cost_retry"
+                    : "cost_cooldown",
+                "",
+                progress,
+              );
             if (inFlight) {
               inFlight.cooling = progress;
               perSessionToolCalls.set(streamingId, [...toolCalls]);
@@ -8180,7 +8369,10 @@ async function send() {
             break;
 
           case "error":
-            failureForTurn = describeTurnFailure(data.message, data.code === "empty_result" ? "empty" : "error");
+            failureForTurn = describeTurnFailure(
+              data.message,
+              data.code === "empty_result" ? "empty" : "error",
+            );
             if (isActiveView()) {
               flushText();
               streamFailure.value = failureForTurn;
@@ -8250,7 +8442,12 @@ async function send() {
       }
     }
     if (isActiveView()) {
-      if (!hasRenderableAnswer && !failureForTurn && !recoveredEmptyTerminal && !wasBusy) {
+      if (
+        !hasRenderableAnswer &&
+        !failureForTurn &&
+        !recoveredEmptyTerminal &&
+        !wasBusy
+      ) {
         // Turn ended with nothing to render. Pushing the empty bubble here is
         // what makes it look like the app swallowed the question — the single
         // most-reported symptom. Say it plainly instead so the user can retry.
@@ -8286,7 +8483,9 @@ async function send() {
       toolCount: String(toolCalls.length),
       committedToView: String(isActiveView()),
       hadDeltas: String(hasDeltas),
-      renderable: String(hasRenderableAnswer || recoveredEmptyTerminal || !!failureForTurn),
+      renderable: String(
+        hasRenderableAnswer || recoveredEmptyTerminal || !!failureForTurn,
+      ),
     });
   } catch (err) {
     // Was this abort OUR zombie-recovery (frozen background tab) rather than
@@ -11969,6 +12168,68 @@ async function send() {
 .session-row--current:hover {
   background: #f3f2f1;
 }
+.session-row--confirming {
+  background: #fff4f4;
+  border-color: #f1b7bb;
+  cursor: default;
+}
+.session-delete-confirm {
+  min-width: 0;
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 4px 6px;
+}
+.session-delete-question {
+  grid-column: 1 / -1;
+  min-width: 0;
+  color: #5c2b29;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: normal;
+}
+.session-delete-cancel {
+  grid-column: 2;
+}
+.session-delete-confirm-button {
+  grid-column: 3;
+}
+.session-delete-cancel,
+.session-delete-confirm-button {
+  min-height: 26px;
+  border-radius: 4px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.session-delete-cancel {
+  border: 1px solid #c8c6c4;
+  background: #ffffff;
+  color: #323130;
+}
+.session-delete-confirm-button {
+  min-width: 54px;
+  border: 1px solid #a4262c;
+  background: #a4262c;
+  color: #ffffff;
+}
+.session-delete-cancel:disabled,
+.session-delete-confirm-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.sessions-delete-error {
+  margin: 4px 8px 6px;
+  padding: 6px 8px;
+  border-left: 3px solid #a4262c;
+  background: #fde7e9;
+  color: #5c2b29;
+  font-size: 11px;
+  line-height: 1.35;
+}
 .session-row-main {
   flex: 1;
   min-width: 0;
@@ -12009,12 +12270,31 @@ async function send() {
     background 0.12s,
     color 0.12s;
 }
+.session-row-delete--conversation {
+  width: auto;
+  min-width: 42px;
+  height: 24px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
 .session-row:hover .session-row-delete {
   opacity: 1;
 }
-.session-row-delete:hover {
+.session-row:focus-within .session-row-delete {
+  opacity: 1;
+}
+.session-row-delete:hover:not(:disabled) {
   background: #fde7e9;
   color: #a4262c;
+}
+.session-row-delete:disabled {
+  cursor: not-allowed;
+  color: #c8c6c4;
+}
+@media (hover: none), (pointer: coarse) {
+  .session-row-delete {
+    opacity: 1;
+  }
 }
 .st-count {
   font-size: 11px;

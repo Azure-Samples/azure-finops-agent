@@ -13,6 +13,7 @@ on:
       - "tests/**"
       - "global.json"
       - ".github/workflows/validate.yml"
+      - ".github/workflows/live-evaluations.yml"
       - ".github/workflows/feature.yml"
   workflow_dispatch:
 
@@ -40,9 +41,17 @@ jobs:
       contents: read
     uses: ./.github/workflows/validate.yml
 
+  live-evaluations:
+    needs: regressions
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/live-evaluations.yml
+    secrets: inherit
+
   deploy:
     name: Build & Deploy to test slot
-    needs: regressions
+    needs: [regressions, live-evaluations]
     runs-on: ubuntu-latest
     # Dependabot-triggered runs don't get access to repo secrets, so azure/login
     # would fail. Skip — these PRs are reviewed and merged via main.yml.

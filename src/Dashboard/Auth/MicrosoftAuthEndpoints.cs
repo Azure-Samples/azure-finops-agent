@@ -35,14 +35,18 @@ public static class MicrosoftAuthEndpoints
             ctx.Session.SetString("graph_tier", string.IsNullOrEmpty(existing) ? tier : $"{existing},{tier}");
     }
 
-    private static string? CurrentAzureOid(HttpContext ctx)
+    private static string? CurrentAzurePrincipalKey(HttpContext ctx)
     {
         var json = ctx.Session.GetString("azure_user");
         if (string.IsNullOrWhiteSpace(json)) return null;
         try
         {
             var user = JsonSerializer.Deserialize<JsonElement>(json);
-            return user.TryGetProperty("objectId", out var oid) ? oid.GetString() : null;
+            var tenantId = user.TryGetProperty("tenantId", out var tid) ? tid.GetString() : null;
+            var oid = user.TryGetProperty("objectId", out var objectId) ? objectId.GetString() : null;
+            return string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(oid)
+                ? null
+                : PersistentIdentity.PrincipalDirectoryName(tenantId, oid);
         }
         catch
         {
@@ -54,6 +58,7 @@ public static class MicrosoftAuthEndpoints
     {
         ctx.Session.Remove("auth_chain");
         ctx.Session.Remove("auth_chain_oid");
+        ctx.Session.Remove("auth_chain_principal");
         ctx.Session.Remove("auth_silent");
     }
 
@@ -124,13 +129,14 @@ public static class MicrosoftAuthEndpoints
         app.MapPost("/auth/logout", async (HttpContext ctx) =>
         {
             var userJson = ctx.Session.GetString("user");
-            string? oid = null;
+            string? tenantId = null, oid = null;
             var azureUserJson = ctx.Session.GetString("azure_user");
             if (azureUserJson is not null)
             {
                 try
                 {
                     var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("tenantId", out var tenantProp)) tenantId = tenantProp.GetString();
                     if (au.TryGetProperty("objectId", out var oidProp)) oid = oidProp.GetString();
                 }
                 catch { }
@@ -153,7 +159,7 @@ public static class MicrosoftAuthEndpoints
                 telemetry.UserTools.TryRemove(uid, out _);
             }
             ctx.Session.Clear();
-            persistentIdentity.Clear(ctx, oid);
+            persistentIdentity.Clear(ctx, tenantId, oid);
             return Results.Ok(new { ok = true });
         });
 
@@ -207,7 +213,7 @@ public static class MicrosoftAuthEndpoints
                     ctx.Session.SetString("auth_chain", string.Join(",", remaining.Skip(1)));
                 else
                     ctx.Session.Remove("auth_chain");
-                ctx.Session.SetString("auth_chain_oid", CurrentAzureOid(ctx) ?? "");
+                ctx.Session.SetString("auth_chain_principal", CurrentAzurePrincipalKey(ctx) ?? "");
                 ctx.Session.Remove("auth_silent");
             }
 
@@ -216,7 +222,7 @@ public static class MicrosoftAuthEndpoints
             {
                 var chain = new List<string> { "chargeback", "loganalytics", "storage" };
                 ctx.Session.SetString("auth_chain", string.Join(",", chain));
-                ctx.Session.SetString("auth_chain_oid", CurrentAzureOid(ctx) ?? "");
+                ctx.Session.SetString("auth_chain_principal", CurrentAzurePrincipalKey(ctx) ?? "");
                 ctx.Session.SetString("auth_silent", "1");
             }
 
@@ -237,7 +243,7 @@ public static class MicrosoftAuthEndpoints
                 effectiveTenant = options.TenantId;
 
             var redirectUri = $"{MicrosoftOAuthOptions.NormalizeCallbackHost(ctx)}/auth/microsoft/callback";
-            var scope = string.Join(" ", ["openid", "profile", "email", "offline_access", .. MicrosoftOAuthOptions.GetScopesForTier(tier)]);
+            var scope = string.Join(" ", ["openid", "profile", "email", "offline_access", ..MicrosoftOAuthOptions.GetScopesForTier(tier)]);
 
             var forceConsent = ctx.Session.GetString("force_consent") == "1";
             ctx.Session.Remove("force_consent");
@@ -369,7 +375,7 @@ public static class MicrosoftAuthEndpoints
                     $"https://login.microsoftonline.com/{Uri.EscapeDataString(effectiveTenant)}/oauth2/v2.0/token");
 
                 var authTier = ctx.Session.GetString("auth_tier") ?? "base";
-                var tokenExchangeScope = string.Join(" ", ["openid", "profile", "email", "offline_access", .. MicrosoftOAuthOptions.GetScopesForTier(authTier)]);
+                var tokenExchangeScope = string.Join(" ", ["openid", "profile", "email", "offline_access", ..MicrosoftOAuthOptions.GetScopesForTier(authTier)]);
 
                 var pkceVerifier = ctx.Session.GetString("pkce_verifier");
                 ctx.Session.Remove("pkce_verifier");
@@ -471,13 +477,15 @@ public static class MicrosoftAuthEndpoints
                     // Capture the PREVIOUS Entra identity (if any) before overwriting
                     // azure_user — needed below to detect an account switch on this
                     // browser session and isolate the two accounts' state.
-                    string? previousOid = null;
+                    string? previousTenantId = null, previousOid = null;
                     var prevAzureUserJson = ctx.Session.GetString("azure_user");
                     if (prevAzureUserJson is not null)
                     {
                         try
                         {
                             var prev = JsonSerializer.Deserialize<JsonElement>(prevAzureUserJson);
+                            if (prev.TryGetProperty("tenantId", out var prevTenantProp))
+                                previousTenantId = prevTenantProp.GetString();
                             if (prev.TryGetProperty("objectId", out var prevOidProp))
                                 previousOid = prevOidProp.GetString();
                         }
@@ -495,10 +503,10 @@ public static class MicrosoftAuthEndpoints
                     };
                     ctx.Session.Remove("azure_scope_context");
                     ctx.Session.SetString("azure_user", JsonSerializer.Serialize(azureUser));
+                    ctx.Session.SetString("auth_tenant", validated.TenantId);
 
-                    // Promote the random anonymous userId to a deterministic OID-derived id,
-                    // migrating any in-memory per-user state so the current chat doesn't get
-                    // orphaned mid-conversation.
+                    // Promote the random anonymous userId to a deterministic
+                    // tenant-and-object-derived id.
                     var oid = validated.ObjectId;
                     if (!string.IsNullOrEmpty(oid))
                     {
@@ -510,10 +518,11 @@ public static class MicrosoftAuthEndpoints
                         // and (via the migration below) A's live conversation + ARM token
                         // — a cross-tenant data leak observed in production.
                         var accountSwitched = previousOid is not null
-                            && !string.Equals(previousOid, oid, StringComparison.OrdinalIgnoreCase);
+                            && (!string.Equals(previousOid, oid, StringComparison.OrdinalIgnoreCase)
+                                || !string.Equals(previousTenantId, validated.TenantId, StringComparison.OrdinalIgnoreCase));
                         if (accountSwitched)
                         {
-                            logger.LogInformation("Entra account switch detected (oid {PrevOid} → {NewOid}); isolating session state", previousOid, oid);
+                            logger.LogInformation("Entra account switch detected; isolating session state");
                             // Purge every resource token EXCEPT the ones this callback
                             // just minted for the new account (keyed by authTier).
                             string[] keep = authTier switch
@@ -546,7 +555,7 @@ public static class MicrosoftAuthEndpoints
                                 ctx.Session.Remove("azure_refresh_token");
                         }
 
-                        var newUserId = PersistentIdentity.DeriveUserId(oid);
+                        var newUserId = PersistentIdentity.DeriveUserId(validated.TenantId, oid);
                         long? oldUserId = null;
                         var existingUserJson = ctx.Session.GetString("user");
                         if (existingUserJson is not null)
@@ -560,12 +569,9 @@ public static class MicrosoftAuthEndpoints
                         }
                         if (oldUserId.HasValue && oldUserId.Value != newUserId && !accountSwitched)
                         {
-                            // Anonymous → Entra promotion ONLY. Re-key per-user dicts so the
-                            // current chat doesn't get orphaned mid-conversation. Last-write
-                            // wins is fine: a single user can't be in flight under two ids on
-                            // the same browser session. On an Entra→Entra ACCOUNT SWITCH this
-                            // migration must NOT run — it would hand account A's tokens,
-                            // tools, and active conversation to account B.
+                            // Anonymous → Entra promotion ONLY. On an Entra→Entra
+                            // account switch this cleanup must not hand account A's
+                            // tokens or tools to account B.
                             // Tool closures capture the token bag, whose UserId also
                             // determines per-user persistence paths (scores, ledger,
                             // uploads). Never re-key those closures to another user:
@@ -574,10 +580,11 @@ public static class MicrosoftAuthEndpoints
                             if (telemetry.UserTokens.TryRemove(oldUserId.Value, out var oldTokens))
                                 oldTokens.RefreshLock.Dispose();
                             telemetry.UserTools.TryRemove(oldUserId.Value, out _);
-                            if (telemetry.CurrentSessionId.TryRemove(oldUserId.Value, out var sid)) telemetry.CurrentSessionId[newUserId] = sid;
-                            // LiveSessions has init-only UserId; not migrated. Any in-flight CLI
-                            // session under the anon id will be cleaned up by the idle-timeout
-                            // sweep (30 min) and the next prompt creates a fresh one under newUserId.
+                            // Session tools and persisted workdirs are owner-bound,
+                            // so an anonymous session cannot be reassigned safely.
+                            // Leave it under the old id for janitor cleanup; the
+                            // connected principal starts in its own workdir.
+                            telemetry.CurrentSessionId.TryRemove(oldUserId.Value, out _);
                         }
                         ctx.Session.SetString("user", JsonSerializer.Serialize(new
                         {
@@ -611,23 +618,25 @@ public static class MicrosoftAuthEndpoints
                             // Edge case: re-consent without a fresh refresh_token. Update only
                             // the GraphTier so post-restart hydration still reflects the new
                             // add-on without clobbering the existing refresh token.
-                            await persistentIdentity.UpdateGraphTierAsync(oid, ctx.Session.GetString("graph_tier"));
+                            await persistentIdentity.UpdateGraphTierAsync(
+                                validated.TenantId, oid, ctx.Session.GetString("graph_tier"));
                             if (accountSwitched)
                             {
                                 // SaveIdentityAsync (which rewrites the finops_id cookie) did not
                                 // run — the cookie still points at the PREVIOUS account's OID and
                                 // would resurrect that identity on the next hydration. Point it at
                                 // the new account when it has a persisted identity, else drop it.
-                                if (persistentIdentity.LoadByOid(oid) is not null)
-                                    persistentIdentity.SetIdentityCookie(ctx, oid);
+                                if (persistentIdentity.LoadByPrincipal(validated.TenantId, oid) is not null)
+                                    persistentIdentity.SetIdentityCookie(ctx, validated.TenantId, oid);
                                 else
-                                    persistentIdentity.Clear(ctx, null);
+                                    persistentIdentity.Clear(ctx, null, null);
                             }
                         }
 
-                        var chainOwner = ctx.Session.GetString("auth_chain_oid");
+                        var principalKey = PersistentIdentity.PrincipalDirectoryName(validated.TenantId!, oid);
+                        var chainOwner = ctx.Session.GetString("auth_chain_principal");
                         if (chainOwner is not null
-                            && !string.Equals(chainOwner, oid, StringComparison.OrdinalIgnoreCase))
+                            && !string.Equals(chainOwner, principalKey, StringComparison.Ordinal))
                         {
                             // The account selected on an intermediate consent
                             // screen changed. Rebuild the remaining sequence from
@@ -643,7 +652,7 @@ public static class MicrosoftAuthEndpoints
                                 ctx.Session.SetString("auth_chain", string.Join(",", remainingForNewAccount));
                             else
                                 ctx.Session.Remove("auth_chain");
-                            ctx.Session.SetString("auth_chain_oid", oid);
+                            ctx.Session.SetString("auth_chain_principal", principalKey);
                         }
                     }
                 }

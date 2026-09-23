@@ -73,7 +73,7 @@ Use this whenever you would otherwise loop QueryAzure for the same kind of opera
 Input: requestsJson = JSON array of {""method"":""GET|POST|PUT|PATCH"",""path"":""/...?api-version=..."",""body"":""<optional JSON string>""}.
 Optional: parallelism (default 20, max 50), stopOnFirstError (default false).
     PAYLOAD DISCIPLINE: every read in requestsJson must filter, aggregate, project, and limit at the source using only supported API options. Prefer one scoped Resource Graph query over many broad inventory GETs. Never batch unfiltered collections and rely on trimming. Request parallelism=1 for Cost Management /query and /forecast; never fan out separate cost tools in parallel.
-    Returns total, succeeded, failed, pending, unattempted, cancelled, stopped, complete, and indexed results with status, outcome, partial, body, error, and cost sourceEvidence. At most 200 requests, 12000 response characters per item, and a 90000-character batch data budget; omitted bodies are explicitly partial, not complete evidence. Source freshness and retry deadlines survive body omission. Narrow only those indexed reads if further detail is needed.
+    Returns total, succeeded, failed, pending, unattempted, cancelled, stopped, complete, and indexed results with status, outcome, partial, body, error, and cost sourceEvidence. At most 200 requests, 4,000,000 response characters per item and a 12,000,000-character batch data budget; omitted bodies are explicitly partial, not complete evidence. Large complete batches return a queryable_tool_result schema and resultId for QueryToolResult. Source freshness and retry deadlines survive body omission. Narrow only those indexed reads if further detail is needed.
     DELETE and mutating action POSTs remain blocked. PUT/PATCH create exact owner/session-bound proposals requiring explicit UI approval. Accepted, pending, unknown, and awaitingApproval outcomes are not successful writes. Respect all returned retry deadlines; never retry Cost Management after a final 429 in this turn.
 Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or five or more other similar requests. Cost scopes come from connection context; other resource targets come from the prior Resource Graph discovery query in the same turn.");
     }
@@ -118,6 +118,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
         if (methodError is not null) return methodError;
         if (httpMethod == HttpMethod.Post)
         {
+            body = CanonicalJsonBody(body);
             var postError = ValidateReadOnlyPostPath(path, activity);
             if (postError is not null) return postError;
             var queryError = ValidateCostQueryBody(path, body);
@@ -803,6 +804,26 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
         return BlockMutatingPost(activity);
     }
 
+    private static readonly JsonDocumentOptions LenientJson = new() { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip };
+
+    // Model-authored bodies sometimes carry trailing commas or comments; ARM needs strict JSON.
+    internal static string? CanonicalJsonBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return body;
+        try
+        {
+            using var strict = JsonDocument.Parse(body);
+            return body;
+        }
+        catch (JsonException) { }
+        try
+        {
+            using var lenient = JsonDocument.Parse(body, LenientJson);
+            return JsonSerializer.Serialize(lenient.RootElement);
+        }
+        catch (JsonException) { return body; }
+    }
+
     internal static string? ValidateCostQueryBody(string path, string? body)
     {
         var queryIndex = path.IndexOf('?');
@@ -875,9 +896,10 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
                 || item.Path.Contains('#') || item.Path.Contains('\\')) return "HTTP 400 BadRequest\nInvalid ARM path.";
             if (ValidateScopePrefix(item.Path) is { } scopeError) return scopeError;
             if (method == HttpMethod.Post && ValidateReadOnlyPostPath(item.Path, activity) is { } postError) return postError;
-            if (method == HttpMethod.Post && ValidateCostQueryBody(item.Path, item.Body) is { } queryError) return queryError;
+            var body = method == HttpMethod.Post ? CanonicalJsonBody(item.Body) : item.Body;
+            if (method == HttpMethod.Post && ValidateCostQueryBody(item.Path, body) is { } queryError) return queryError;
             return await HttpHelper.SendWithRetryAsync($"https://management.azure.com{item.Path}", token, activity, "bulk",
-                method: method, jsonBody: method == HttpMethod.Get ? null : item.Body,
+                method: method, jsonBody: method == HttpMethod.Get ? null : body,
                 cancellationToken: requestToken);
         }, cancellationToken);
     }
@@ -905,7 +927,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
                     int.TryParse((newline < 0 ? response : response[..newline]).Split(' ').ElementAtOrDefault(1), out var status);
                     var content = newline < 0 ? "" : response[(newline + 1)..];
                     object? body = null;
-                    var partial = content.Length > 12000;
+                    var partial = content.Length > MaxBulkItemCharacters;
                     if (!partial && content.Length > 0)
                     {
                         try { body = JsonSerializer.Deserialize<JsonElement>(content); }
@@ -938,7 +960,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
                     if (stopOnFirstError) Interlocked.Exchange(ref stop, 1);
                 }
             });
-        var budget = 90000;
+        var budget = MaxBulkBatchCharacters;
         for (var index = 0; index < results.Length; index++)
         {
             var item = results[index]!;
@@ -959,6 +981,10 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
             results
         }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
     }
+
+    // Sized below ToolResultStore.MaxResultBytes so a complete batch can be retained and queried.
+    internal const int MaxBulkItemCharacters = 4_000_000;
+    internal const int MaxBulkBatchCharacters = 12_000_000;
 
     internal sealed class BulkRequestItem
     {

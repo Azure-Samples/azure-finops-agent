@@ -9,6 +9,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Accept connection-context subscription objects as well as GUID strings in compute feasibility, preserving strict scope validation. Large JSON evidence no longer becomes an inaccessible SDK temporary-file pointer. Bounded independent quota reads preserve every requested advertised region.
+- Keep answers in the latest user's language unless another language is requested. Substantive reasoning defaults to the verified `xhigh` setting; existing deployment overrides still apply, and this does not guarantee correctness or fixed latency.
+- Make conversation deletion truthful and stable. An inline confirmation keeps the row visible while deletion is pending, active turns must be stopped first, SDK failures surface for retry, and client state is cleared only after the backend confirms deletion instead of disappearing and flickering back.
 - Fix intermittent failures across all protected tools when SDK callbacks overtake queued tool-start events. Callbacks now wait briefly for their exact turn-bound admission instead of failing immediately; owner/session checks, cancellation and duplicate-call rejection remain enforced. Real SDK/CLI regressions cover delayed delivery, resumed sessions and shared-client isolation.
 - Avoid repeated calculator retries when the model supplies the currency once at the required top level. Omitted line currencies inherit that explicit value; mixed, blank or invalid explicit currencies still fail. Tool validation errors no longer appear successful merely because the SDK callback completed.
 - Preserve earlier assistant messages when a later follow-up completes. SSE now carries stable message IDs, and the browser replaces only the corresponding message's partial deltas instead of the whole answer. Regression coverage reproduces a visible cost table disappearing after a follow-up on desktop and mobile.
@@ -20,6 +23,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- Stop silently truncating bulk ARM reads at 12,000 characters per item and 90,000 per batch. Complete bodies up to 4,000,000/12,000,000 characters are kept, and large batches return a queryable schema. Small evidence results carry a `_resultQuery` handle so totals, remainders and rankings are computed exactly with `QueryToolResult`; it also returns rows plus totals, union schemas and typed placeholders for oversized fields.
+- Rewrite nine frontend templates that requested both a chart and a table, which the one-visual answer rule forbids, to request one table with every original field.
+- Let reused inference accounts receive the configured model deployment through Bicep (`deployModelOnExistingAccount` / `AZURE_OPENAI_DEPLOY_ON_EXISTING`), preserving the account and its content-filter policy.
+- Live evaluations support `internal-test` classification for maintainer-owned test tenants: public summaries and artifacts carry per-question pass/fail, tools and timing only. The judge now receives tool arguments, visible charts/score cards/follow-ups and host connection context.
+- Require live AI acceptance before production or test-slot deployment. The suite imports every frontend template plus incident regressions (currently 124 questions), records question/tool counts/timing/answers/structured judgments in the run summary and artifacts, and fails closed on any rejection, missing result, timeout or setup failure. It uses a separately configured OIDC evaluation identity; this is candidate chat/tool coverage, not delegated browser-login or scheduler coverage, and does not claim a production-popularity ranking or an already-passing CI run.
+- Replace the default agent deployment with `gpt-6-luna` version `2026-09-22` across Bicep, backend, UI and evaluation fallbacks. Fresh deployments still require verified regional `GlobalStandard` availability and unallocated model-specific quota; existing-account overrides must provide the matching deployment.
+- Add schema-first large-result querying with `QueryToolResult` and Json.NET 13.0.4. The complete redacted source stays unchanged in an expiring owner/session-bound memory store; model-selected JSONPath filters, projections, groups, aggregates and pages preserve source provenance and explicit partial coverage without filesystem access or code execution. Real SDK regression coverage verifies the source-schema-query round trip.
 - Replace the plain AI badge with a reusable Fluent gradient spark-and-orbit avatar. Completed replies stay still; working replies animate gently, with unique SVG IDs, accessible labels and reduced-motion/background-tab support.
 - Explain cooldowns with an animated billing-service card, a real deadline countdown and a wait-only progress bar. Slow responses and terminal stops remain distinct; no resource savings or request completion is implied, and screen readers are not interrupted every second.
 - Extract message assembly and HTTP-progress presentation into small, data-driven frontend modules using existing libraries. Add a standard local development task and document architecture boundaries and approved-feed configuration without embedding company-specific registry URLs.
@@ -28,6 +38,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Move editable job templates out of the view component. Capacity monitoring preserves unknowns, reservation proposals require configured inputs and explicit application approval, and the one-minute probe reads lightweight metadata rather than repeatedly querying billing. Remove unsupported promises of immediate anomaly detection or sub-minute job completion.
 - Reduce avoidable model round-trips for grouped multi-subscription costs with the existing bulk request tool. Cost-containing batches are host-serialized, stop after a final cost 429, and preserve source metadata through response limits. Nested batch failures and cached evidence are classified explicitly.
 - Deliver completed answers before optional follow-up work; use an inline prompt link for one simple next question rather than requiring another model/tool round-trip. Require matching billing scope and source coverage when reconciling service totals with resource detail.
+
+### Security
+
+- Bind Entra identities, conversations, refresh-token records, approvals, and scheduled jobs to the validated tenant-ID plus object-ID pair instead of OID alone. The same OID in two tenants now receives distinct runtime owner IDs and working directories; every list/read/select/delete/resume/stop path enforces the pair. Existing OID-only conversation history is available only when its encrypted identity record attests the same tenant, and legacy scheduled jobs without a tenant binding are disabled rather than guessed into an owner.
 
 ## [0.3.0] - 2026-09-20
 

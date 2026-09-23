@@ -25,7 +25,7 @@ public static class SessionEndpoints
     {
         app.MapGet("/api/sessions", async (HttpContext ctx) =>
         {
-            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
 
             // Anonymous users get a random userId per browser session, so they
@@ -34,7 +34,8 @@ public static class SessionEndpoints
             if (string.IsNullOrEmpty(entraOid))
                 return Results.Ok(new { sessions = Array.Empty<object>(), currentSessionId = (string?)null });
 
-            var sessions = await copilotFactory.ListUserSessionsAsync(userId, entraOid, ctx.RequestAborted);
+            var sessions = await copilotFactory.ListUserSessionsAsync(
+                userId, entraTenantId, entraOid, ctx.RequestAborted);
             telemetry.CurrentSessionId.TryGetValue(userId, out var currentId);
             var payload = sessions.Select(s => new
             {
@@ -50,10 +51,11 @@ public static class SessionEndpoints
 
         app.MapPost("/api/sessions/new", async (HttpContext ctx) =>
         {
-            if (!TryResolveUser(ctx, out var userId, out var userLogin, out var entraOid))
+            if (!TryResolveUser(ctx, out var userId, out var userLogin, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
 
-            var session = await copilotFactory.CreateNewAsync(userId, userLogin, entraOid);
+            var session = await copilotFactory.CreateNewAsync(
+                userId, userLogin, entraTenantId, entraOid);
             UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
             return Results.Ok(new { sessionId = session.SessionId });
         });
@@ -63,23 +65,25 @@ public static class SessionEndpoints
         // transcript instead of leaving the user staring at dead air.
         app.MapGet("/api/sessions/{sessionId}/active", async (HttpContext ctx, string sessionId) =>
         {
-            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
-            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted))
+            if (!await copilotFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
             return Results.Ok(new { active = AzureFinOps.Dashboard.AI.ChatEndpoints.IsTurnActive(sessionId) });
         });
 
         app.MapGet("/api/sessions/{sessionId}/outcomes", async (HttpContext ctx, string sessionId) =>
         {
-            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid)) return Results.Unauthorized();
-            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted)) return Results.NotFound();
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid)) return Results.Unauthorized();
+            if (!await copilotFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted)) return Results.NotFound();
             return Results.Ok(new { outcomes = TurnOutcomeStore.Default.ForSession(userId, sessionId) });
         });
 
         app.MapPost("/api/sessions/{sessionId}/select", async (HttpContext ctx, string sessionId) =>
         {
-            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
             // No-op for anonymous; they only have one ephemeral session.
             if (string.IsNullOrEmpty(entraOid)) return Results.NoContent();
@@ -87,7 +91,8 @@ public static class SessionEndpoints
             // IDOR guard: a sessionId is a public-ish string (it's emitted to the
             // browser and logged to App Insights). Reject any id that doesn't
             // belong to this user's workdir.
-            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted))
+            if (!await copilotFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
 
             copilotFactory.SetCurrentSession(userId, sessionId);
@@ -98,20 +103,35 @@ public static class SessionEndpoints
 
         app.MapDelete("/api/sessions/{sessionId}", async (HttpContext ctx, string sessionId) =>
         {
-            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
             if (string.IsNullOrEmpty(entraOid)) return Results.NoContent();
 
-            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted))
+            if (!await copilotFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
 
-            await copilotFactory.DeleteUserSessionAsync(userId, sessionId, ctx.RequestAborted);
-            // If this conversation was a job's run log, detach the job so it
-            // behaves as "never ran" (next run creates a fresh session) instead
-            // of pointing at a dead transcript.
-            jobStore.DetachSession(sessionId);
-            logger.LogInformation("User {UserId} deleted session {SessionId}", userId, sessionId);
-            return Results.NoContent();
+            if (!ChatEndpoints.TryBeginTurn(sessionId, userId, null, out var deletionGate))
+                return Results.Conflict(new
+                {
+                    code = "session_active",
+                    error = "Stop the active conversation before deleting it.",
+                });
+
+            try
+            {
+                await copilotFactory.DeleteUserSessionAsync(userId, sessionId, ctx.RequestAborted);
+                // If this conversation was a job's run log, detach the job so it
+                // behaves as "never ran" (next run creates a fresh session) instead
+                // of pointing at a dead transcript.
+                jobStore.DetachSession(sessionId);
+                logger.LogInformation("User {UserId} deleted session {SessionId}", userId, sessionId);
+                return Results.NoContent();
+            }
+            finally
+            {
+                await ChatEndpoints.EndTurnAsync(deletionGate, dispatchAttempted: false);
+            }
         });
 
         // Replay endpoint: returns the persisted user/assistant/tool transcript
@@ -119,7 +139,7 @@ public static class SessionEndpoints
         // was when the user last left it.
         app.MapGet("/api/sessions/{sessionId}/messages", async (HttpContext ctx, string sessionId) =>
         {
-            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
 
             // NB: unlike GET /api/sessions (the sidebar list, which stays hidden
@@ -128,10 +148,11 @@ public static class SessionEndpoints
             // the server persisted while the SSE was frozen or severed — the
             // client still holds the sessionId in memory even though anon convos
             // never appear in the sidebar and can't be re-found after a refresh.
-            // The IDOR guard below (UserOwnsSessionAsync, which scopes to the
-            // caller's /anon/{userId} or /users/{oid} workdir) is the security
-            // boundary for both anon and Entra callers.
-            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted))
+            // The IDOR guard below scopes to the caller's anonymous or
+            // tenant-and-object working directory and is the security boundary
+            // for both anonymous and Entra callers.
+            if (!await copilotFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
 
             UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
@@ -140,7 +161,11 @@ public static class SessionEndpoints
             // current and does NOT bump the ActiveSessions gauge. Just viewing
             // a past conversation must not switch the user's active thread.
             IReadOnlyList<GitHub.Copilot.SessionEvent> events;
-            try { events = await copilotFactory.LoadTranscriptAsync(sessionId, userId, entraOid, ctx.RequestAborted); }
+            try
+            {
+                events = await copilotFactory.LoadTranscriptAsync(
+                    sessionId, userId, entraTenantId, entraOid, ctx.RequestAborted);
+            }
             catch (CopilotSessionFactory.HistoryUnavailableException)
             {
                 return Results.NotFound(new { code = "history_unavailable", error = "The retained conversation history is unavailable. Start a new conversation to continue." });
@@ -364,10 +389,13 @@ public static class SessionEndpoints
         return s;
     }
 
-    private static bool TryResolveUser(HttpContext ctx, out long userId, out string userLogin, out string? entraOid)
+    private static bool TryResolveUser(
+        HttpContext ctx, out long userId, out string userLogin,
+        out string? entraTenantId, out string? entraOid)
     {
         userId = 0;
         userLogin = "";
+        entraTenantId = null;
         entraOid = null;
 
         var userJson = ctx.Session.GetString("user");
@@ -387,6 +415,8 @@ public static class SessionEndpoints
             try
             {
                 var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                if (au.TryGetProperty("tenantId", out var tenantProp))
+                    entraTenantId = tenantProp.GetString();
                 if (au.TryGetProperty("objectId", out var oidProp))
                     entraOid = oidProp.GetString();
             }

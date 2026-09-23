@@ -15,6 +15,7 @@ internal static class RuntimePolicy
         config.AvailableTools = toolNames.Select(name => $"custom:{name}").ToList();
         config.ExcludedTools = ["builtin:*", "mcp:*"];
         config.ToolSearch = new ToolSearchConfig { Enabled = false };
+        config.LargeOutput = new LargeToolOutputConfig { Enabled = false };
         config.EnableSessionStore = false;
         config.Memory = new MemoryConfiguration { Enabled = false };
         config.ManagedSettings = new ManagedSettings

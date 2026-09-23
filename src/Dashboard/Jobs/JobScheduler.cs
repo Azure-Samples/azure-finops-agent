@@ -131,21 +131,21 @@ public sealed class JobScheduler : BackgroundService
         job.NextRunUtc = DateTimeOffset.UtcNow.AddMinutes(job.IntervalMinutes);
         _store.Save();
 
-        // 1) Hydrate delegated tokens from the persisted refresh token.
-        // OID-FIRST: the Entra OID is the tenant-scoped identity a job was
-        // created under — load exactly that record. The userId-hash lookup is
-        // only a legacy fallback, and the loaded record must AGREE with the
-        // job's OID: these jobs can perform ARM writes, so hydrating another
-        // user's tokens (however unlikely) must be structurally impossible.
-        var record = string.IsNullOrEmpty(job.EntraOid)
-            ? _identity.LoadByUserId(job.UserId)
-            : _identity.LoadByOid(job.EntraOid);
-        if (record is not null
-            && !string.IsNullOrEmpty(job.EntraOid)
-            && !string.Equals(record.Oid, job.EntraOid, StringComparison.OrdinalIgnoreCase))
+        // 1) Hydrate delegated tokens from the exact tenant-and-object-bound
+        // identity the job was created under. Legacy OID-only jobs fail closed.
+        if (string.IsNullOrEmpty(job.EntraOid) || string.IsNullOrEmpty(job.EntraTenantId))
         {
-            _logger.LogError("Job {JobId}: identity record OID mismatch (job={JobOid}, record={RecordOid}) — refusing to run",
-                job.Id, job.EntraOid, record.Oid);
+            job.Enabled = false;
+            MarkFailure(job, "auth_expired", "Reconnect Azure and recreate this job to restore tenant-bound ownership.");
+            return;
+        }
+
+        var record = _identity.LoadByPrincipal(job.EntraTenantId, job.EntraOid);
+        if (record is not null
+            && (!string.Equals(record.Oid, job.EntraOid, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(record.TenantId, job.EntraTenantId, StringComparison.OrdinalIgnoreCase)))
+        {
+            _logger.LogError("Job {JobId}: identity record mismatch — refusing to run", job.Id);
             MarkFailure(job, "auth_expired", "Identity mismatch — reconnect Azure to resume this job.");
             return;
         }
@@ -197,17 +197,21 @@ public sealed class JobScheduler : BackgroundService
             {
                 try
                 {
-                    session = await _factory.GetOrResumeAsync(job.UserId, job.SessionId, job.UserLogin, job.EntraOid);
+                    session = await _factory.GetOrResumeAsync(
+                        job.UserId, job.SessionId, job.UserLogin,
+                        job.EntraTenantId, job.EntraOid);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Job {JobId}: resume of session {SessionId} failed; creating fresh", job.Id, job.SessionId);
-                    session = await _factory.CreateNewAsync(job.UserId, job.UserLogin, job.EntraOid);
+                    session = await _factory.CreateNewAsync(
+                        job.UserId, job.UserLogin, job.EntraTenantId, job.EntraOid);
                 }
             }
             else
             {
-                session = await _factory.CreateNewAsync(job.UserId, job.UserLogin, job.EntraOid);
+                session = await _factory.CreateNewAsync(
+                    job.UserId, job.UserLogin, job.EntraTenantId, job.EntraOid);
             }
         }
         finally
@@ -368,7 +372,8 @@ public sealed class JobScheduler : BackgroundService
             apply((result.Value.Token, result.Value.Expiry));
             if (!string.IsNullOrEmpty(result.Value.RotatedRefreshToken) && result.Value.RotatedRefreshToken != record.RefreshToken)
             {
-                await _identity.UpdateRefreshTokenAsync(record.Oid, result.Value.RotatedRefreshToken);
+                await _identity.UpdateRefreshTokenAsync(
+                    record.TenantId, record.Oid, result.Value.RotatedRefreshToken);
                 record.RefreshToken = result.Value.RotatedRefreshToken;
             }
             return true;

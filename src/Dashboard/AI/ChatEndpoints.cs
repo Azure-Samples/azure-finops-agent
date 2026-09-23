@@ -82,7 +82,14 @@ public static class ChatEndpoints
 
     private static readonly HashSet<string> StandaloneGreetings = new(StringComparer.OrdinalIgnoreCase)
     {
-        "hi", "hello", "hey", "good morning", "good afternoon", "good evening", "bonjour", "hej"
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "bonjour",
+        "hej"
     };
 
     internal static bool IsTrivialPrompt(string prompt) =>
@@ -133,8 +140,8 @@ public static class ChatEndpoints
             var userId = user.GetProperty("id").GetInt64();
             var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
 
-            // Entra-connected users get persistent per-oid session storage; anonymous
-            // users get an ephemeral working dir that won't appear in any list.
+            // Entra-connected users get persistent tenant-and-object scoped
+            // session storage; anonymous users get an ephemeral working dir.
             string? entraOid = null;
             string? azureTenantId = null;
             var azureUserJson = ctx.Session.GetString("azure_user");
@@ -360,25 +367,29 @@ public static class ChatEndpoints
                 if (!string.IsNullOrEmpty(requestedSessionId))
                 {
                     // IDOR guard: a requested sessionId must belong to this
-                    // user's persistent workdir (Entra OID workdir or anon-userId workdir).
+                    // user's principal-owned workdir or anonymous user-id workdir.
                     // If it doesn't (stale localStorage after a redeploy, or a forged id),
                     // silently fall through to the user's current/new session so the
                     // UX doesn't dead-end &#8212; we never resume someone else's session.
-                    if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, requestedSessionId, ctx.RequestAborted))
+                    if (!await copilotFactory.UserOwnsSessionAsync(
+                        userId, azureTenantId, entraOid, requestedSessionId, ctx.RequestAborted))
                     {
                         logger.LogInformation("Requested sessionId {Sid} not owned by user {Uid}; falling back to current session", requestedSessionId, userId);
-                        session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
+                        session = await copilotFactory.GetCurrentOrCreateAsync(
+                            userId, userLogin!, azureTenantId, entraOid);
                         sessionAcquireMode = "fallback_current";
                     }
                     else
                     {
-                        session = await copilotFactory.GetOrResumeAsync(userId, requestedSessionId, userLogin!, entraOid);
+                        session = await copilotFactory.GetOrResumeAsync(
+                            userId, requestedSessionId, userLogin!, azureTenantId, entraOid);
                         sessionAcquireMode = "resume";
                     }
                 }
                 else
                 {
-                    session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
+                    session = await copilotFactory.GetCurrentOrCreateAsync(
+                        userId, userLogin!, azureTenantId, entraOid);
                     sessionAcquireMode = "current_or_new";
                 }
                 sessionSw.Stop();
@@ -428,7 +439,8 @@ public static class ChatEndpoints
                         // dead handle and nothing would stream (the SendAsync recycle
                         // path can't rebind them). Move the turn gate to the new id.
                         logger.LogWarning("Effort switch found stale session {SessionId}; recycling before streaming", activeSessionId);
-                        session = await copilotFactory.RecycleSessionAsync(userId, activeSessionId, userLogin!, entraOid);
+                        session = await copilotFactory.RecycleSessionAsync(
+                            userId, activeSessionId, userLogin!, azureTenantId, entraOid);
                         if (turnGateSessionId is null
                             || turnState is null
                             || !MoveTurn(turnGateSessionId, session.SessionId, turnState, session))
@@ -686,7 +698,8 @@ public static class ChatEndpoints
                     // them to the live session — otherwise the recycled session's
                     // events never reach the SSE stream and the turn hangs silently.
                     handlers?.Dispose();
-                    session = await copilotFactory.RecycleSessionAsync(userId, activeSessionId, userLogin!, entraOid);
+                    session = await copilotFactory.RecycleSessionAsync(
+                        userId, activeSessionId, userLogin!, azureTenantId, entraOid);
                     if (turnGateSessionId is not null && turnGateSessionId != session.SessionId)
                     {
                         if (turnState is null
@@ -904,13 +917,15 @@ public static class ChatEndpoints
             var userId = user.GetProperty("id").GetInt64();
             var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
 
-            string? entraOid = null;
+            string? entraTenantId = null, entraOid = null;
             var azureUserJson = ctx.Session.GetString("azure_user");
             if (azureUserJson is not null)
             {
                 try
                 {
                     var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("tenantId", out var tenantProp))
+                        entraTenantId = tenantProp.GetString();
                     if (au.TryGetProperty("objectId", out var oidProp))
                         entraOid = oidProp.GetString();
                 }
@@ -919,7 +934,8 @@ public static class ChatEndpoints
 
             // "Reset" semantics: start a brand-new conversation. The previous one
             // remains on disk and can be resumed via the Conversations sidebar.
-            var fresh = await copilotFactory.CreateNewAsync(userId, userLogin!, entraOid);
+            var fresh = await copilotFactory.CreateNewAsync(
+                userId, userLogin!, entraTenantId, entraOid);
             logger.LogInformation("Started new conversation for user {UserId} sessionId={SessionId}", userId, fresh.SessionId);
             await ctx.Response.WriteAsJsonAsync(new { sessionId = fresh.SessionId });
         });
@@ -941,13 +957,15 @@ public static class ChatEndpoints
             var userId = user.GetProperty("id").GetInt64();
             var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
 
-            string? entraOid = null;
+            string? entraTenantId = null, entraOid = null;
             var azureUserJson = ctx.Session.GetString("azure_user");
             if (azureUserJson is not null)
             {
                 try
                 {
                     var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("tenantId", out var tenantProp))
+                        entraTenantId = tenantProp.GetString();
                     if (au.TryGetProperty("objectId", out var oidProp))
                         entraOid = oidProp.GetString();
                 }
@@ -956,7 +974,11 @@ public static class ChatEndpoints
 
             _ = Task.Run(async () =>
             {
-                try { await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid); }
+                try
+                {
+                    await copilotFactory.GetCurrentOrCreateAsync(
+                        userId, userLogin!, entraTenantId, entraOid);
+                }
                 catch (Exception ex) { logger.LogWarning(ex, "Session warm-up failed for user {UserId}", userId); }
             });
             ctx.Response.StatusCode = 202;
@@ -978,13 +1000,15 @@ public static class ChatEndpoints
             var user = JsonSerializer.Deserialize<JsonElement>(userJson);
             var userId = user.GetProperty("id").GetInt64();
 
-            string? entraOid = null;
+            string? entraTenantId = null, entraOid = null;
             var azureUserJson = ctx.Session.GetString("azure_user");
             if (azureUserJson is not null)
             {
                 try
                 {
                     var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("tenantId", out var tenantProp))
+                        entraTenantId = tenantProp.GetString();
                     if (au.TryGetProperty("objectId", out var oidProp))
                         entraOid = oidProp.GetString();
                 }
@@ -1001,7 +1025,8 @@ public static class ChatEndpoints
 
             if (string.IsNullOrWhiteSpace(sessionId)) { ctx.Response.StatusCode = 400; return; }
 
-            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted))
+            if (!await copilotFactory.UserOwnsSessionAsync(
+                    userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
             {
                 ctx.Response.StatusCode = 404;
                 return;

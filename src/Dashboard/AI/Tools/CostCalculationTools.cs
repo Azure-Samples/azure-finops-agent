@@ -18,6 +18,62 @@ public static class CostCalculationTools
             "For growth, calculate each requested period with its own explicit quantities; an exit-month annualization is not cumulative annual spend. " +
             "Preserve decimal TB/GB versus binary TiB/GiB and the provider's billing unit. Lines inherit the explicitly supplied currency; any explicit line currency must match it. " +
             "Line amounts retain precision; subtotal, discount and tax are rounded to cents, and displayed components reconcile to total. This is an estimate, not measured billing.");
+        yield return AIFunctionFactory.Create(CompareAmounts, "CompareAmounts",
+            "Deterministic comparison arithmetic for verified amounts in one unit: difference, percent change versus a baseline, and each item's share of the total. " +
+            "Use for month-over-month change, savings percentages, coverage/utilization shares and ranked percentages instead of computing them in prose; quote the returned values exactly. " +
+            "A zero or missing baseline yields a null percent change, never infinity or 100%. Values are not converted between currencies or units, and the result does not establish source validity or completeness.");
+    }
+
+    internal static string CompareAmounts(
+        [Description("JSON array of 1-50 items: label, current, optional baseline. Numbers or decimal-point strings. Example: [{\"label\":\"Sub A\",\"current\":2825.36,\"baseline\":74.23}]. Use only verified values from one unit, period basis and currency.")] string itemsJson,
+        [Description("Unit shared by every value, such as USD, EUR, hours or vCPU.")] string unit)
+    {
+        if (string.IsNullOrWhiteSpace(unit) || unit.Length > 40) return "Error: Provide one shared unit of at most 40 characters.";
+        if (string.IsNullOrWhiteSpace(itemsJson) || itemsJson.Length > 30_000) return "Error: Provide a bounded JSON array of 1-50 items.";
+        try
+        {
+            using var document = JsonDocument.Parse(itemsJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() is < 1 or > 50)
+                return "Error: Provide 1-50 items.";
+            var items = new List<(string Label, decimal Current, decimal? Baseline)>();
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                var label = item.ValueKind == JsonValueKind.Object ? Text(item, "label") : null;
+                if (string.IsNullOrWhiteSpace(label) || label.Length > 100 || !Number(item, "current", out var current))
+                    return "Error: Every item requires a label and a numeric current value.";
+                decimal? baseline = null;
+                if (item.TryGetProperty("baseline", out var baselineValue) && baselineValue.ValueKind != JsonValueKind.Null)
+                {
+                    if (!Number(item, "baseline", out var parsed)) return "Error: baseline must be numeric when supplied.";
+                    baseline = parsed;
+                }
+                items.Add((label, current, baseline));
+            }
+            var total = items.Sum(item => item.Current);
+            var baselineTotal = items.All(item => item.Baseline is not null) ? items.Sum(item => item.Baseline!.Value) : (decimal?)null;
+            decimal? Percent(decimal current, decimal? baseline) =>
+                baseline is null or 0 ? null : Math.Round((current - baseline.Value) / Math.Abs(baseline.Value) * 100m, 2, MidpointRounding.AwayFromZero);
+            return JsonSerializer.Serialize(new
+            {
+                unit,
+                total,
+                baselineTotal,
+                totalDifference = baselineTotal is null ? (decimal?)null : total - baselineTotal.Value,
+                totalPercentChange = Percent(total, baselineTotal),
+                items = items.Select(item => new
+                {
+                    label = item.Label,
+                    current = item.Current,
+                    baseline = item.Baseline,
+                    difference = item.Baseline is null ? (decimal?)null : item.Current - item.Baseline.Value,
+                    percentChange = Percent(item.Current, item.Baseline),
+                    sharePercent = total == 0 ? (decimal?)null : Math.Round(item.Current / total * 100m, 2, MidpointRounding.AwayFromZero)
+                }),
+                instructions = "Quote these exact values. percentChange is null when the baseline is zero or missing; say the change is not meaningful rather than inventing a percentage."
+            });
+        }
+        catch (JsonException) { return "Error: Items must be valid JSON with decimal-point numeric values."; }
+        catch (OverflowException) { return "Error: The requested arithmetic exceeds the supported decimal range."; }
     }
 
     internal static string CalculateCost(

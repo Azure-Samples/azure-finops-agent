@@ -1,0 +1,103 @@
+name: Live AI evaluation gate
+
+on:
+  workflow_call:
+    secrets:
+      AZURE_EVAL_CLIENT_ID:
+        required: true
+      AZURE_EVAL_TENANT_ID:
+        required: true
+      AZURE_EVAL_SUBSCRIPTION_ID:
+        required: true
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: live-ai-evaluation-subscription
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    name: All live AI scenarios must pass
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    environment: ai-evaluation
+    env:
+      EVAL_CLIENT_ID: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
+      EVAL_LOGIN_SUBSCRIPTION: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
+      EVAL_MODEL_ENDPOINT: ${{ vars.EVAL_MODEL_ENDPOINT }}
+      EVAL_MODEL: ${{ vars.EVAL_MODEL }}
+      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+      EVAL_REASONING_EFFORT: xhigh
+      EVAL_TENANT_ID: ${{ secrets.AZURE_EVAL_TENANT_ID }}
+      EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}
+      EVAL_DATA_CLASSIFICATION: ${{ vars.EVAL_DATA_CLASSIFICATION }}
+      EVAL_TOKEN_RESOURCES: ${{ vars.EVAL_TOKEN_RESOURCES }}
+      EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
+      EVAL_RUNNER_DLL: tests/LiveEvaluations/bin/Release/net10.0/LiveEvaluations.dll
+      FINOPS_PYTHON: /usr/bin/python3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate required evaluation configuration
+        run: |
+          for name in EVAL_CLIENT_ID EVAL_TENANT_ID EVAL_LOGIN_SUBSCRIPTION EVAL_SUBSCRIPTION_IDS EVAL_MODEL_ENDPOINT EVAL_MODEL EVAL_JUDGE_MODEL; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required live evaluation configuration: $name"
+              exit 1
+            fi
+          done
+          if [[ "$EVAL_DATA_CLASSIFICATION" != "synthetic" && "$EVAL_DATA_CLASSIFICATION" != "internal-test" ]]; then
+            echo "::error::Set EVAL_DATA_CLASSIFICATION to synthetic (answers published) or internal-test (verdicts only). Customer responses must not be published."
+            exit 1
+          fi
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Azure evaluation login (read-only OIDC identity)
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_EVAL_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
+
+      - name: Install report helper prerequisites
+        run: |
+          sudo -n apt-get update -qq
+          sudo -n apt-get install -y --no-install-recommends python3-pandas python3-openpyxl
+
+      - name: Build candidate evaluator and validate gate behavior
+        run: |
+          dotnet build tests/LiveEvaluations/LiveEvaluations.csproj --configuration Release --nologo
+          node --test tests/LiveEvaluations/suite.test.mjs
+
+      - name: Execute every live question and require unanimous acceptance
+        timeout-minutes: 300
+        run: node tests/LiveEvaluations/suite.mjs
+
+      - name: Publish question-by-question results
+        if: always()
+        run: |
+          if [[ -f TestResults/live-evaluations/summary.md ]]; then
+            cat TestResults/live-evaluations/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '## Live AI Deployment Gate\n\n**FAIL: evaluations did not complete setup. Deployment is blocked.** See the failed step above.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Retain structured results and full redacted report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-ai-evaluations-${{ github.sha }}-${{ github.run_attempt }}
+          path: TestResults/live-evaluations/
+          if-no-files-found: warn
+          retention-days: 7

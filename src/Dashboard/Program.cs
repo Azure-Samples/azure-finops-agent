@@ -31,20 +31,13 @@ if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
         "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-RESOURCE.openai.azure.com/\" " +
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
-var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.6-luna";
+var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-6-luna";
 // Optional: pin the BYOK credential to the AOAI resource's tenant. Needed for
 // local dev when the az CLI's DEFAULT account lives in a different tenant than
 // the AOAI resource (DefaultAzureCredential would mint a token for the wrong
 // tenant → "Token tenant does not match resource tenant" 400s on every turn).
 var azureOpenAITenantId = builder.Configuration["AzureOpenAI:TenantId"];
-// Default reasoning effort (low|medium|high|xhigh) for reasoning-capable
-// models. `medium` is the sweet spot for GPT-5.6 on this workload: it roughly
-// halves time-to-first-token vs `high` (the dominant first-response latency)
-// while keeping tool-orchestration + format-following quality. Trivial turns
-// are still auto-routed to `low` per request. Override with
-// AzureOpenAI__ReasoningEffort=high for a max-depth demo, or `xhigh`
-// (measured 8+ min per LLM round-trip in production — opt-in only).
-var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "medium";
+var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "xhigh";
 var appInsightsCs = builder.Configuration["ApplicationInsights:ConnectionString"];
 // Canonical public hostname (bare, no scheme/www) for the owner deployment, e.g.
 // "azure-finops-agent.com". The app is reachable on its *.azurewebsites.net host
@@ -130,7 +123,9 @@ AzureFinOps.Dashboard.Infrastructure.HttpHelper.Logger =
     loggerFactory.CreateLogger("AzureFinOps.AI.HttpHelper");
 
 await using var copilotFactory = await CopilotSessionFactory.CreateAsync(
-    telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort, loggerFactory, azureOpenAITenantId);
+    telemetry, app.Services.GetRequiredService<PersistentIdentity>(), oauthOptions,
+    azureOpenAIEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort,
+    loggerFactory, azureOpenAITenantId);
 
 // Start the janitor now that the factory exists; tie its lifecycle to the host.
 var janitor = new UserStateJanitor(telemetry, copilotFactory, loggerFactory.CreateLogger<UserStateJanitor>());

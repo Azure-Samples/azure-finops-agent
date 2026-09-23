@@ -52,6 +52,18 @@ public sealed class CostCalculationTests
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("annualizedTotal").ValueKind);
     }
 
+    [Fact]
+    public void CompareAmountsReturnsExactChangeAndSharesAndNullForZeroBaseline()
+    {
+        using var document = JsonDocument.Parse(CostCalculationTools.CompareAmounts(
+            """[{"label":"A","current":2825.36,"baseline":74.23},{"label":"B","current":"10","baseline":0}]""", "USD"));
+        var items = document.RootElement.GetProperty("items");
+        Assert.Equal(3706.22m, items[0].GetProperty("percentChange").GetDecimal());
+        Assert.Equal(JsonValueKind.Null, items[1].GetProperty("percentChange").ValueKind);
+        Assert.Equal(99.65m, items[0].GetProperty("sharePercent").GetDecimal());
+        Assert.StartsWith("Error:", CostCalculationTools.CompareAmounts("""[{"label":"A"}]""", "USD"));
+    }
+
     [Theory]
     [InlineData("""[{"label":"Missing rate","quantity":1,"unit":"GB-month","currency":"USD"}]""")]
     [InlineData("""[{"label":"Wrong currency","quantity":1,"unitPrice":2,"unit":"GB-month","currency":"EUR"}]""")]

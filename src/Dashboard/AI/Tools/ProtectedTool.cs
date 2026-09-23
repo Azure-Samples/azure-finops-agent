@@ -43,20 +43,49 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
             var identifier = resultText.Split(':').ElementAtOrDefault(1);
             if (owner is not null && identifier is not null && ArtifactStore.Default.Find(identifier, owner.Value) is not null) turn?.ArtifactIds.Enqueue(identifier);
         }
-        if (result is string text) return SensitiveContent.Redact(text);
+        if (result is string text) return PrepareResult(text, evidence);
         if (result is JsonElement { ValueKind: JsonValueKind.String } scalar)
-            return JsonSerializer.SerializeToElement(SensitiveContent.Redact(scalar.GetString() ?? ""));
+            return JsonSerializer.SerializeToElement(PrepareResult(scalar.GetString() ?? "", evidence));
         if (result is JsonElement element)
-            return JsonSerializer.Deserialize<JsonElement>(SensitiveContent.Redact(element.GetRawText()));
+            return JsonSerializer.Deserialize<JsonElement>(PrepareResult(element.GetRawText(), evidence));
         return result;
     }
 
-    private static readonly HashSet<string> EvidenceTools = new(StringComparer.Ordinal)
+    private string PrepareResult(string text, (bool Success, bool Fresh, bool Partial) evidence)
     {
-        "QueryAzure", "QueryGraph", "GetCopilotUsage", "QueryLogAnalytics", "QueryCostsAcrossSubscriptions", "GetCrawlMaturityEvidence",
-        "BulkAzureRequest", "FindIdleResources", "DetectCostAnomalies", "GetAzureRetailPricing", "GetAzureRetailPricingBatch",
-        "QueryUploadedFile", "ReadCostExportBlob", "ListCostExportBlobs", "FetchPublicWebPage", "CheckComputeFeasibility", "CheckVmConnectivity", "GetOperationStatus"
-    };
+        var redacted = SensitiveContent.Redact(text);
+        if (owner is null || sessionId is null || !evidence.Success || !EvidenceTools.Contains(Name)
+            || Name is "GetCrawlMaturityEvidence"
+            || redacted.Contains("__HTML_READY__:", StringComparison.Ordinal) || redacted.Contains("__SCRIPT_READY__:", StringComparison.Ordinal)) return redacted;
+        var large = System.Text.Encoding.UTF8.GetByteCount(redacted) > ToolResultStore.InlineBytes;
+        if (Name == "BulkAzureRequest" && large && redacted.Contains("\"operationId\"", StringComparison.Ordinal)) return redacted;
+        var entry = ToolResultStore.Default.Retain(owner.Value, sessionId, redacted,
+            new(Name, DateTimeOffset.UtcNow, evidence.Success, evidence.Fresh, evidence.Partial, ""));
+        if (entry is null) return redacted;
+        return large ? JsonSerializer.Serialize(ToolResultStore.Describe(entry)) : ToolResultStore.AnnotateInline(redacted, entry);
+    }
+
+    private static readonly HashSet<string> EvidenceTools = new(StringComparer.Ordinal)
+{
+    "QueryAzure",
+    "QueryGraph",
+    "GetCopilotUsage",
+    "QueryLogAnalytics",
+    "QueryCostsAcrossSubscriptions",
+    "GetCrawlMaturityEvidence",
+    "BulkAzureRequest",
+    "FindIdleResources",
+    "DetectCostAnomalies",
+    "GetAzureRetailPricing",
+    "GetAzureRetailPricingBatch",
+    "QueryUploadedFile",
+    "ReadCostExportBlob",
+    "ListCostExportBlobs",
+    "FetchPublicWebPage",
+    "CheckComputeFeasibility",
+    "CheckVmConnectivity",
+    "GetOperationStatus"
+};
 
     internal static (bool Success, bool Fresh, bool Partial) InspectEvidence(string text)
     {
@@ -80,6 +109,12 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
                 if (property.Name is "error" && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)) success = false;
                 if (property.Name is "complete" && value.ValueKind == JsonValueKind.False) partial = true;
                 if (property.Name is "partial" && value.ValueKind == JsonValueKind.True) partial = true;
+                if (property.Name == "source" && value.ValueKind == JsonValueKind.Object && value.TryGetProperty("Tool", out _))
+                {
+                    if (value.TryGetProperty("Success", out var sourceSuccess) && sourceSuccess.ValueKind == JsonValueKind.False) success = false;
+                    if (value.TryGetProperty("Fresh", out var sourceFresh) && sourceFresh.ValueKind == JsonValueKind.False) fresh = false;
+                    if (value.TryGetProperty("Partial", out var sourcePartial) && sourcePartial.ValueKind == JsonValueKind.True) partial = true;
+                }
                 if (property.Name is "cacheStatus" && value.ValueKind == JsonValueKind.String && value.GetString() is not "queried") fresh = false;
                 if (property.Name is "freshness" && value.ValueKind == JsonValueKind.String && value.GetString() is "unknown" or "periodic") fresh = false;
                 if (property.Name is "skuStatus" or "quotaStatus" && value.ValueKind == JsonValueKind.String && value.GetString() == "unknown") partial = true;

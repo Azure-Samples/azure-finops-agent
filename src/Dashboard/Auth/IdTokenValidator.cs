@@ -47,7 +47,7 @@ public sealed class IdTokenValidator
             return null;
         }
 
-        if (string.IsNullOrEmpty(tenantFromToken) || !MicrosoftOAuthOptions.IsValidTenantId(tenantFromToken))
+        if (!Guid.TryParse(tenantFromToken, out _))
         {
             _logger.LogWarning("id_token has missing/invalid tid claim");
             return null;
@@ -103,9 +103,9 @@ public sealed class IdTokenValidator
         }
 
         var oid = claims.TryGetValue("oid", out var oObj) ? oObj?.ToString() : null;
-        if (string.IsNullOrEmpty(oid))
+        if (!Guid.TryParse(oid, out _))
         {
-            _logger.LogWarning("id_token missing oid claim");
+            _logger.LogWarning("id_token has missing/invalid oid claim");
             return null;
         }
 

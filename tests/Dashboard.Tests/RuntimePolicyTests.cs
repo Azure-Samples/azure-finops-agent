@@ -46,6 +46,16 @@ public sealed class RuntimePolicyTests
     }
 
     [Fact]
+    public void LenientPostBodiesAreForwardedAsStrictJson()
+    {
+        var canonical = AzureQueryTools.CanonicalJsonBody("{\"type\":\"ActualCost\", // cost type\n\"dataset\":{\"granularity\":\"None\",},}");
+        using var document = JsonDocument.Parse(canonical!);
+        Assert.Equal("ActualCost", document.RootElement.GetProperty("type").GetString());
+        Assert.Null(AzureQueryTools.ValidateCostQueryBody("/providers/Microsoft.CostManagement/query", canonical));
+        Assert.Equal("{not json", AzureQueryTools.CanonicalJsonBody("{not json"));
+    }
+
+    [Fact]
     public async Task NullBatchItemsAreRejectedBeforeDispatch()
     {
         var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create()

@@ -228,20 +228,20 @@ public static class AzureSessionEndpoints
             // to it. Otherwise the hydration middleware restores azure_user +
             // refresh token on the very next request and "Disconnect" is a
             // no-op from the user's perspective.
-            persistentIdentity.Clear(ctx, oid: null);
+            persistentIdentity.Clear(ctx, tenantId: null, oid: null);
             return Results.Ok(new { ok = true });
         });
 
         app.MapPost("/auth/azure/revoke", (HttpContext ctx) =>
         {
-            var oid = ResolveAzureOid(ctx);
+            var (tenantId, oid) = ResolveAzurePrincipal(ctx);
             ClearTokensForUser(ctx, telemetry, logger, fullClear: true);
             ClearSessionTokenKeys(ctx, includeForceConsent: true);
             // Revoke means no silent restoration: remove both the cookie and
             // encrypted refresh-token record. Entra grants themselves remain
             // user-manageable at myapps.microsoft.com; force_consent ensures
             // the next explicit connection displays a fresh consent screen.
-            persistentIdentity.Clear(ctx, oid);
+            persistentIdentity.Clear(ctx, tenantId, oid);
             return Results.Ok(new { ok = true });
         });
     }
@@ -314,18 +314,20 @@ public static class AzureSessionEndpoints
             ctx.Session.SetString("force_consent", "1");
     }
 
-    private static string? ResolveAzureOid(HttpContext ctx)
+    private static (string? TenantId, string? Oid) ResolveAzurePrincipal(HttpContext ctx)
     {
         var json = ctx.Session.GetString("azure_user");
-        if (string.IsNullOrWhiteSpace(json)) return null;
+        if (string.IsNullOrWhiteSpace(json)) return (null, null);
         try
         {
             var user = JsonSerializer.Deserialize<JsonElement>(json);
-            return user.TryGetProperty("objectId", out var oid) ? oid.GetString() : null;
+            return (
+                user.TryGetProperty("tenantId", out var tenant) ? tenant.GetString() : null,
+                user.TryGetProperty("objectId", out var oid) ? oid.GetString() : null);
         }
         catch
         {
-            return null;
+            return (null, null);
         }
     }
 }

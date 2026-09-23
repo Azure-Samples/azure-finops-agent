@@ -11,6 +11,7 @@ param aoaiModelVersion string
 param aoaiDeploymentName string
 param aoaiModelCapacity int
 param existingAoaiResourceId string
+param deployModelOnExistingAccount bool
 param entraAppId string
 @secure()
 param entraClientSecret string
@@ -24,9 +25,7 @@ var containerImageName = 'finops-agent:latest'
 // Prefer the custom domain for the synthetic probe when there is one — that is
 // the hostname real users hit, and probing it also exercises DNS and the
 // custom-domain certificate, which the *.azurewebsites.net host would not.
-var publicUrl = empty(customDomainName)
-  ? 'https://${appservice.outputs.hostname}'
-  : 'https://${customDomainName}'
+var publicUrl = empty(customDomainName) ? 'https://${appservice.outputs.hostname}' : 'https://${customDomainName}'
 
 module monitoring 'modules/monitoring.bicep' = {
   name: 'monitoring'
@@ -57,6 +56,7 @@ module aoai 'modules/aoai.bicep' = {
     deploymentName: aoaiDeploymentName
     modelCapacity: aoaiModelCapacity
     existingAoaiResourceId: existingAoaiResourceId
+    deployModelOnExistingAccount: deployModelOnExistingAccount
   }
 }
 

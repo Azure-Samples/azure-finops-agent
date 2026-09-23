@@ -13,7 +13,12 @@ const change = {
     "Review the configuration and potential charges before approving.",
 };
 
-async function arrange(page, chatEvents, history = { messages: [] }) {
+async function arrange(
+  page,
+  chatEvents,
+  history = { messages: [] },
+  options = {},
+) {
   const requests = [];
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -25,9 +30,21 @@ async function arrange(page, chatEvents, history = { messages: [] }) {
       json: { id: 101, login: "synthetic-user", name: "Synthetic user" },
     }),
   );
-  await page.route("**/auth/azure/**", (route) =>
-    route.fulfill({ json: { connected: false, tenants: [] } }),
-  );
+  await page.route("**/auth/azure/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/auth/azure/status" && options.azureConnected) {
+      return route.fulfill({
+        json: {
+          connected: true,
+          user: { email: "synthetic@example.test" },
+          subscriptions: [],
+          managementGroups: [],
+          apis: [],
+        },
+      });
+    }
+    return route.fulfill({ json: { connected: false, tenants: [] } });
+  });
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/chat") {
@@ -50,9 +67,18 @@ async function arrange(page, chatEvents, history = { messages: [] }) {
       return route.fulfill({ json: { models: [], defaultModel: "synthetic" } });
     if (path === "/api/sessions/new")
       return route.fulfill({ json: { sessionId } });
+    if (
+      route.request().method() === "DELETE" &&
+      path.startsWith("/api/sessions/") &&
+      options.deleteSession
+    )
+      return options.deleteSession(route);
     if (path === "/api/sessions")
       return route.fulfill({
-        json: { sessions: [], currentSessionId: sessionId },
+        json: {
+          sessions: options.sessions || [],
+          currentSessionId: options.currentSessionId || sessionId,
+        },
       });
     if (path.endsWith("/messages")) return route.fulfill({ json: history });
     if (path.endsWith("/active"))
@@ -111,6 +137,73 @@ test("top bar links to the owner LinkedIn profile", async ({ page }) => {
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBeTruthy();
+  expect(errors).toEqual([]);
+});
+
+test("conversation deletion stays stable until the server confirms it", async ({
+  page,
+}, testInfo) => {
+  let deleteAttempts = 0;
+  let releaseFailedDelete;
+  const failedDelete = new Promise((resolve) => {
+    releaseFailedDelete = resolve;
+  });
+  const conversation = {
+    id: "conversation-to-delete",
+    summary: "Quarterly cost review",
+    modified: "2026-09-22T12:00:00Z",
+    started: "2026-09-22T11:00:00Z",
+  };
+  const { errors } = await arrange(
+    page,
+    [],
+    { messages: [] },
+    {
+      azureConnected: true,
+      sessions: [conversation],
+      currentSessionId: conversation.id,
+      deleteSession: async (route) => {
+        deleteAttempts++;
+        if (deleteAttempts === 1) {
+          await failedDelete;
+          return route.fulfill({ status: 500, json: { error: "synthetic" } });
+        }
+        return route.fulfill({ status: 204 });
+      },
+    },
+  );
+
+  if (testInfo.project.name === "mobile") {
+    await expect(page.locator(".tools-sidebar")).toBeHidden();
+    expect(errors).toEqual([]);
+    return;
+  }
+
+  const row = page.locator(
+    `.session-row[data-session-id="${conversation.id}"]`,
+  );
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "Delete conversation" }).click();
+  await expect(
+    row.getByText("Delete conversation?", { exact: true }),
+  ).toBeVisible();
+  await row.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(row.getByRole("button", { name: "Deleting..." })).toBeDisabled();
+  await expect(row).toHaveCount(1);
+
+  releaseFailedDelete();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Couldn't delete the conversation. Try again.",
+  );
+  await expect(row).toHaveCount(1);
+  await page.screenshot({
+    path: testInfo.outputPath("conversation-delete-error.png"),
+    animations: "disabled",
+  });
+  await row.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByText("0 saved", { exact: true })).toBeVisible();
+  expect(deleteAttempts).toBe(2);
   expect(errors).toEqual([]);
 });
 
@@ -180,22 +273,45 @@ test("complete final message replaces partial deltas after a throttled detail qu
   });
 });
 
-test("tool validation errors remain failures when the SDK callback succeeded", async ({ page }) => {
+test("tool validation errors remain failures when the SDK callback succeeded", async ({
+  page,
+}) => {
   const { requests, errors } = await arrange(page, [
-    { type: "tool_start", tool: "CalculateCost", id: "invalid-calculation", args: "{}" },
-    { type: "tool_done", tool: "CalculateCost", id: "invalid-calculation", success: true, result: "Error: Every line requires label and unit." },
+    {
+      type: "tool_start",
+      tool: "CalculateCost",
+      id: "invalid-calculation",
+      args: "{}",
+    },
+    {
+      type: "tool_done",
+      tool: "CalculateCost",
+      id: "invalid-calculation",
+      success: true,
+      result: "Error: Every line requires label and unit.",
+    },
     { type: "message", content: "The calculation input was rejected." },
   ]);
   await send(page, "Calculate the monthly estimate");
-  await expect(page.getByText("The calculation input was rejected.", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("The calculation input was rejected.", { exact: true }),
+  ).toBeVisible();
   await expect(page.locator(".st-icon--ok")).toHaveCount(0);
   await expect(page.locator(".st-icon--fail")).toHaveCount(1);
   expect(requests).toHaveLength(1);
   expect(errors).toEqual([]);
 });
 
-for (const outcome of ["failed", "cancelled", "accepted", "partial", "succeeded"]) {
-  test(`bulk request ${outcome} is not confused with SDK success`, async ({ page }, testInfo) => {
+for (const outcome of [
+  "failed",
+  "cancelled",
+  "accepted",
+  "partial",
+  "succeeded",
+]) {
+  test(`bulk request ${outcome} is not confused with SDK success`, async ({
+    page,
+  }, testInfo) => {
     const complete = outcome === "succeeded";
     const result = {
       total: 2,
@@ -207,19 +323,45 @@ for (const outcome of ["failed", "cancelled", "accepted", "partial", "succeeded"
       stopped: outcome === "failed",
       complete,
       results: [
-        { index: 0, status: 200, outcome: "succeeded", partial: false, body: { cost: 12 } },
+        {
+          index: 0,
+          status: 200,
+          outcome: "succeeded",
+          partial: false,
+          body: { cost: 12 },
+        },
         {
           index: 1,
-          status: outcome === "failed" ? 429 : outcome === "cancelled" ? 0 : outcome === "accepted" ? 202 : 200,
+          status:
+            outcome === "failed"
+              ? 429
+              : outcome === "cancelled"
+                ? 0
+                : outcome === "accepted"
+                  ? 202
+                  : 200,
           outcome: outcome === "partial" ? "succeeded" : outcome,
           partial: outcome === "partial",
         },
       ],
     };
-    const answer = complete ? "Both scoped reads completed." : "The batch did not fully complete.";
+    const answer = complete
+      ? "Both scoped reads completed."
+      : "The batch did not fully complete.";
     const { requests, errors } = await arrange(page, [
-      { type: "tool_start", tool: "BulkAzureRequest", id: "synthetic-bulk", args: '{"requests":[{},{}]}' },
-      { type: "tool_done", tool: "BulkAzureRequest", id: "synthetic-bulk", success: true, result: JSON.stringify(result) },
+      {
+        type: "tool_start",
+        tool: "BulkAzureRequest",
+        id: "synthetic-bulk",
+        args: '{"requests":[{},{}]}',
+      },
+      {
+        type: "tool_done",
+        tool: "BulkAzureRequest",
+        id: "synthetic-bulk",
+        success: true,
+        result: JSON.stringify(result),
+      },
       { type: "message", content: answer },
     ]);
     await send(page, "Read both cost scopes");
@@ -227,7 +369,9 @@ for (const outcome of ["failed", "cancelled", "accepted", "partial", "succeeded"
     await expect(page.locator(".st-icon--ok")).toHaveCount(complete ? 1 : 0);
     await expect(page.locator(".st-icon--fail")).toHaveCount(complete ? 0 : 1);
     if (testInfo.project.name === "desktop")
-      await expect(page.locator(complete ? ".st-icon--ok" : ".st-icon--fail")).toBeVisible();
+      await expect(
+        page.locator(complete ? ".st-icon--ok" : ".st-icon--fail"),
+      ).toBeVisible();
     expect(requests).toHaveLength(1);
     expect(errors).toEqual([]);
   });
@@ -357,28 +501,68 @@ test("an empty model result is visibly recoverable rather than silent success", 
   });
 });
 
-test("reloading a failed terminal turn does not claim the answer is still generating", async ({ page }) => {
+test("reloading a failed terminal turn does not claim the answer is still generating", async ({
+  page,
+}) => {
   await arrange(page, []);
-  await page.route("**/auth/azure/status", route => route.fulfill({
-    json: { connected: true, tenants: [], subscriptions: [] },
-  }));
-  await page.route("**/api/sessions", route => route.fulfill({
-    json: { sessions: [{ id: sessionId, summary: "Synthetic failed request", modified: new Date().toISOString() }], currentSessionId: sessionId },
-  }));
-  await page.route(`**/api/sessions/${sessionId}/messages`, route => route.fulfill({
-    json: { messages: [{ role: "user", content: "Synthetic failed request" }] },
-  }));
-  await page.route(`**/api/sessions/${sessionId}/outcomes`, route => route.fulfill({
-    json: { outcomes: [{ status: "error", startedUtc: "2026-01-01T00:00:00Z", completedUtc: "2026-01-01T00:00:05Z" }] },
-  }));
-  await page.evaluate(session => sessionStorage.setItem("finops_last_session", session), sessionId);
+  await page.route("**/auth/azure/status", (route) =>
+    route.fulfill({
+      json: { connected: true, tenants: [], subscriptions: [] },
+    }),
+  );
+  await page.route("**/api/sessions", (route) =>
+    route.fulfill({
+      json: {
+        sessions: [
+          {
+            id: sessionId,
+            summary: "Synthetic failed request",
+            modified: new Date().toISOString(),
+          },
+        ],
+        currentSessionId: sessionId,
+      },
+    }),
+  );
+  await page.route(`**/api/sessions/${sessionId}/messages`, (route) =>
+    route.fulfill({
+      json: {
+        messages: [{ role: "user", content: "Synthetic failed request" }],
+      },
+    }),
+  );
+  await page.route(`**/api/sessions/${sessionId}/outcomes`, (route) =>
+    route.fulfill({
+      json: {
+        outcomes: [
+          {
+            status: "error",
+            startedUtc: "2026-01-01T00:00:00Z",
+            completedUtc: "2026-01-01T00:00:05Z",
+          },
+        ],
+      },
+    }),
+  );
+  await page.evaluate(
+    (session) => sessionStorage.setItem("finops_last_session", session),
+    sessionId,
+  );
   await page.reload({ waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("alert")).toContainText("This turn has ended and is no longer generating.");
-  await expect(page.getByText("Reconnecting — your last answer is still being generated", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("alert")).toContainText(
+    "This turn has ended and is no longer generating.",
+  );
+  await expect(
+    page.getByText("Reconnecting — your last answer is still being generated", {
+      exact: false,
+    }),
+  ).toHaveCount(0);
   await expect(page.locator("textarea")).toBeEnabled();
 });
 
-test("a restored model failure keeps its reason and lets the user edit without resending", async ({ page }, testInfo) => {
+test("a restored model failure keeps its reason and lets the user edit without resending", async ({
+  page,
+}, testInfo) => {
   const prompt = "Show spending for the last seven days";
   const { requests, errors } = await arrange(page, [], {
     messages: [
@@ -386,17 +570,34 @@ test("a restored model failure keeps its reason and lets the user edit without r
       {
         role: "system",
         terminalStatus: "error",
-        content: "Authentication failed with provider at https://synthetic.invalid/openai/v1/ (HTTP 401). Check your COPILOT_PROVIDER_API_KEY.",
+        content:
+          "Authentication failed with provider at https://synthetic.invalid/openai/v1/ (HTTP 401). Check your COPILOT_PROVIDER_API_KEY.",
       },
     ],
   });
-  await page.route("**/auth/azure/status", route => route.fulfill({
-    json: { connected: true, tenants: [], subscriptions: [] },
-  }));
-  await page.route("**/api/sessions", route => route.fulfill({
-    json: { sessions: [{ id: sessionId, summary: prompt, modified: new Date().toISOString() }], currentSessionId: sessionId },
-  }));
-  await page.evaluate(session => sessionStorage.setItem("finops_last_session", session), sessionId);
+  await page.route("**/auth/azure/status", (route) =>
+    route.fulfill({
+      json: { connected: true, tenants: [], subscriptions: [] },
+    }),
+  );
+  await page.route("**/api/sessions", (route) =>
+    route.fulfill({
+      json: {
+        sessions: [
+          {
+            id: sessionId,
+            summary: prompt,
+            modified: new Date().toISOString(),
+          },
+        ],
+        currentSessionId: sessionId,
+      },
+    }),
+  );
+  await page.evaluate(
+    (session) => sessionStorage.setItem("finops_last_session", session),
+    sessionId,
+  );
   await page.reload({ waitUntil: "domcontentloaded" });
 
   const failure = page.getByRole("alert");
@@ -412,15 +613,22 @@ test("a restored model failure keeps its reason and lets the user edit without r
   await expect(page.locator("textarea")).toBeFocused();
   expect(requests).toHaveLength(0);
   expect(errors).toEqual([]);
-  await page.screenshot({ path: testInfo.outputPath("restored-model-failure.png") });
+  await page.screenshot({
+    path: testInfo.outputPath("restored-model-failure.png"),
+  });
 });
 
-test("a live failure preserves partial answers and never overwrites a new draft", async ({ page }) => {
+test("a live failure preserves partial answers and never overwrites a new draft", async ({
+  page,
+}) => {
   const prompt = "Explain the synthetic costs";
   const table = "| Service | Cost |\n|---|---|\n| Synthetic compute | USD 25 |";
   const { requests, errors } = await arrange(page, [
     { type: "message", messageId: "partial-answer", content: table },
-    { type: "error", message: "Authentication failed with provider (HTTP 401)" },
+    {
+      type: "error",
+      message: "Authentication failed with provider (HTTP 401)",
+    },
   ]);
   await send(page, prompt);
   await expect(page.locator(".message-text table")).toContainText("USD 25");
@@ -428,7 +636,9 @@ test("a live failure preserves partial answers and never overwrites a new draft"
   await expect(failure).toContainText("AI model access is blocked");
   await expect(page.locator(".streaming-cursor")).toHaveCount(0);
   await page.locator("textarea").fill("Keep my new draft");
-  await expect(failure.getByRole("button", { name: "Edit saved question" })).toBeDisabled();
+  await expect(
+    failure.getByRole("button", { name: "Edit saved question" }),
+  ).toBeDisabled();
   await expect(page.locator("textarea")).toHaveValue("Keep my new draft");
   await page.locator("textarea").fill("");
   await failure.getByRole("button", { name: "Edit saved question" }).click();
@@ -437,7 +647,9 @@ test("a live failure preserves partial answers and never overwrites a new draft"
   expect(errors).toEqual([]);
 });
 
-test("compact navigation is fully hidden when closed and aligned below the header when open", async ({ page }) => {
+test("compact navigation is fully hidden when closed and aligned below the header when open", async ({
+  page,
+}) => {
   const { errors } = await arrange(page, []);
   await page.setViewportSize({ width: 855, height: 700 });
   const navigation = page.locator(".sidebar");
@@ -470,7 +682,8 @@ async function arrangeRequestProgress(page, event = {}) {
             .pathname !== "/api/chat"
         )
           return originalFetch(input, options);
-        window.__progressRequestCount = (window.__progressRequestCount || 0) + 1;
+        window.__progressRequestCount =
+          (window.__progressRequestCount || 0) + 1;
         const encoder = new TextEncoder();
         return Promise.resolve(
           new Response(
@@ -485,7 +698,9 @@ async function arrangeRequestProgress(page, event = {}) {
                   type: "tool_start",
                   tool: "QueryAzure",
                   id: "synthetic-cost-query",
-                  args: JSON.stringify({ path: "/providers/Microsoft.CostManagement/query" }),
+                  args: JSON.stringify({
+                    path: "/providers/Microsoft.CostManagement/query",
+                  }),
                 });
                 const progress = {
                   type: "cooling_down",
@@ -497,11 +712,16 @@ async function arrangeRequestProgress(page, event = {}) {
                   waitSeconds: 37,
                   willRetry: true,
                   ...event,
-                  retryAtUtc: event.retryAtUtc || new Date(Date.now() + (event.waitSeconds ?? 37) * 1000).toISOString(),
+                  retryAtUtc:
+                    event.retryAtUtc ||
+                    new Date(
+                      Date.now() + (event.waitSeconds ?? 37) * 1000,
+                    ).toISOString(),
                 };
                 window.__progressDeadline = progress.retryAtUtc;
                 emit(progress);
-                window.__emitRequestProgress = (update) => emit({ ...progress, ...update });
+                window.__emitRequestProgress = (update) =>
+                  emit({ ...progress, ...update });
                 window.__finishCostRetry = (status = 200) => {
                   emit({
                     type: "tool_done",
@@ -512,9 +732,10 @@ async function arrangeRequestProgress(page, event = {}) {
                   });
                   emit({
                     type: "message",
-                    content: status === 200
-                      ? "The resource breakdown is available after retrying."
-                      : "The requested resource costs are still unavailable; no detail amounts were inferred.",
+                    content:
+                      status === 200
+                        ? "The resource breakdown is available after retrying."
+                        : "The requested resource costs are still unavailable; no detail amounts were inferred.",
                   });
                   controller.enqueue(encoder.encode("data: [DONE]\n\n"));
                   controller.close();
@@ -536,22 +757,39 @@ async function startRequestProgress(page) {
   await expect(page.locator(".action-btn--stop")).toHaveCount(0);
   await page.locator("textarea").fill("I need detailed breakdown");
   await page.locator("textarea").press("Enter");
-  await expect(page.getByRole("group", { name: "Request progress", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Request progress", exact: true }),
+  ).toBeVisible();
 }
 
-test("assistant avatar mark replaces both AI circles and keeps completed replies static", async ({ page }, testInfo) => {
+test("assistant avatar mark replaces both AI circles and keeps completed replies static", async ({
+  page,
+}, testInfo) => {
   const browserErrors = [];
-  page.on("console", (message) => { if (message.type() === "error") browserErrors.push(message.text()); });
-  page.on("requestfailed", (request) => browserErrors.push(request.failure()?.errorText));
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("requestfailed", (request) =>
+    browserErrors.push(request.failure()?.errorText),
+  );
   await page.emulateMedia({ reducedMotion: "no-preference" });
   const { errors } = await arrangeRequestProgress(page);
   await startRequestProgress(page);
-  const active = page.getByRole("img", { name: "Azure FinOps assistant, working", exact: true });
-  const historical = page.getByRole("img", { name: "Azure FinOps assistant", exact: true });
+  const active = page.getByRole("img", {
+    name: "Azure FinOps assistant, working",
+    exact: true,
+  });
+  const historical = page.getByRole("img", {
+    name: "Azure FinOps assistant",
+    exact: true,
+  });
   await expect(active).toBeVisible();
   await expect(active.locator("svg")).toHaveAttribute("aria-hidden", "true");
   await expect(active.locator("svg")).toHaveAttribute("focusable", "false");
-  await expect(active.locator(".assistant-avatar-orbit")).not.toHaveCSS("animation-name", "none");
+  await expect(active.locator(".assistant-avatar-orbit")).not.toHaveCSS(
+    "animation-name",
+    "none",
+  );
   await expect(active).toHaveCSS("width", "32px");
   await expect(active).toHaveCSS("height", "32px");
   await expect(page.locator(".ai-avatar")).toHaveCount(0);
@@ -559,40 +797,74 @@ test("assistant avatar mark replaces both AI circles and keeps completed replies
   await page.evaluate(() => window.__finishCostRetry());
   await expect(active).toHaveCount(0);
   await expect(historical).toHaveCount(1);
-  await expect(historical.locator(".assistant-avatar-orbit")).toHaveCSS("animation-name", "none");
-  expect(await historical.evaluate((element) => element.getAnimations({ subtree: true }).length)).toBe(0);
+  await expect(historical.locator(".assistant-avatar-orbit")).toHaveCSS(
+    "animation-name",
+    "none",
+  );
+  expect(
+    await historical.evaluate(
+      (element) => element.getAnimations({ subtree: true }).length,
+    ),
+  ).toBe(0);
   await startRequestProgress(page);
   await expect(historical).toHaveCount(1);
   await expect(active).toBeVisible();
-  await expect(historical.locator(".assistant-avatar-orbit")).toHaveCSS("animation-name", "none");
-  await expect(active.locator(".assistant-avatar-orbit")).not.toHaveCSS("animation-name", "none");
-  const gradients = await page.locator(".assistant-avatar linearGradient").evaluateAll((elements) => elements.map((element) => element.id));
+  await expect(historical.locator(".assistant-avatar-orbit")).toHaveCSS(
+    "animation-name",
+    "none",
+  );
+  await expect(active.locator(".assistant-avatar-orbit")).not.toHaveCSS(
+    "animation-name",
+    "none",
+  );
+  const gradients = await page
+    .locator(".assistant-avatar linearGradient")
+    .evaluateAll((elements) => elements.map((element) => element.id));
   expect(gradients).toHaveLength(4);
   expect(new Set(gradients).size).toBe(gradients.length);
   await page.screenshot({
     path: testInfo.outputPath("assistant-avatar-history-and-thinking.png"),
     animations: "disabled",
   });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBeTruthy();
   await page.evaluate(() => window.__finishCostRetry());
   await expect(active).toHaveCount(0);
   await expect(historical).toHaveCount(2);
-  expect(await historical.evaluateAll((elements) => elements.every((element) => element.getAnimations({ subtree: true }).length === 0))).toBeTruthy();
+  expect(
+    await historical.evaluateAll((elements) =>
+      elements.every(
+        (element) => element.getAnimations({ subtree: true }).length === 0,
+      ),
+    ),
+  ).toBeTruthy();
   expect(errors).toEqual([]);
   expect(browserErrors).toEqual([]);
 });
 
-test("assistant avatar thinking motion respects reduced motion and hidden tabs", async ({ page }, testInfo) => {
+test("assistant avatar thinking motion respects reduced motion and hidden tabs", async ({
+  page,
+}, testInfo) => {
   await page.clock.install();
   await page.emulateMedia({ reducedMotion: "reduce" });
   const { errors } = await arrangeRequestProgress(page);
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   await startRequestProgress(page);
-  const avatar = page.getByRole("img", { name: "Azure FinOps assistant, working", exact: true });
+  const avatar = page.getByRole("img", {
+    name: "Azure FinOps assistant, working",
+    exact: true,
+  });
   const orbit = avatar.locator(".assistant-avatar-orbit");
   await expect(avatar).toBeVisible();
   await expect(orbit).toHaveCSS("animation-name", "none");
-  expect(await avatar.evaluate((element) => element.getAnimations({ subtree: true }).length)).toBe(0);
+  expect(
+    await avatar.evaluate(
+      (element) => element.getAnimations({ subtree: true }).length,
+    ),
+  ).toBe(0);
   await page.screenshot({
     path: testInfo.outputPath("assistant-avatar-reduced-motion.png"),
     animations: "disabled",
@@ -602,18 +874,30 @@ test("assistant avatar thinking motion respects reduced motion and hidden tabs",
   await expect(orbit).toHaveCSS("animation-duration", "12s");
   await expect(orbit).toHaveCSS("animation-play-state", "running");
   await page.evaluate(() => {
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => true,
+    });
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect(avatar).toHaveClass(/assistant-avatar--paused/);
   await expect(orbit).toHaveCSS("animation-play-state", "paused");
   await expect(orbit).toHaveCSS("transition-duration", "0s");
-  expect(await avatar.evaluate((element) => element.getAnimations({ subtree: true }).every((animation) => animation.playState === "paused"))).toBeTruthy();
+  expect(
+    await avatar.evaluate((element) =>
+      element
+        .getAnimations({ subtree: true })
+        .every((animation) => animation.playState === "paused"),
+    ),
+  ).toBeTruthy();
   await page.clock.runFor(2000);
   await expect(avatar).toHaveCSS("width", "32px");
   await expect(avatar).toHaveCSS("height", "32px");
   await page.evaluate(() => {
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => false,
+    });
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect(avatar).not.toHaveClass(/assistant-avatar--paused/);
@@ -623,8 +907,15 @@ test("assistant avatar thinking motion respects reduced motion and hidden tabs",
   await page.evaluate(() => window.__finishCostRetry());
   await expect(avatar).toHaveCount(0);
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await expect(page.locator(".assistant-avatar-orbit")).toHaveCSS("animation-name", "none");
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await expect(page.locator(".assistant-avatar-orbit")).toHaveCSS(
+    "animation-name",
+    "none",
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBeTruthy();
   expect(errors).toEqual([]);
 });
 
@@ -639,7 +930,9 @@ test("cost cooldown remains visible after automatic retries are exhausted", asyn
       type: "tool_start",
       tool: "QueryAzure",
       id: "synthetic-cost-query",
-      args: JSON.stringify({ path: "/providers/Microsoft.CostManagement/query" }),
+      args: JSON.stringify({
+        path: "/providers/Microsoft.CostManagement/query",
+      }),
     },
     {
       type: "cooling_down",
@@ -662,14 +955,25 @@ test("cost cooldown remains visible after automatic retries are exhausted", asyn
   ]);
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   await send(page, "I need detailed breakdown");
-  const card = page.getByRole("group", { name: "Request progress", exact: true });
+  const card = page.getByRole("group", {
+    name: "Request progress",
+    exact: true,
+  });
   await expect(page.getByText(answer, { exact: true })).toBeVisible();
   await expect(card).toBeVisible();
   await expect(card).toHaveAttribute("data-phase", "stopped");
-  await expect(card).toContainText("No further automatic retries for this turn. Retry after");
-  await expect(card.locator("time")).toHaveAttribute("datetime", "2026-01-01T00:05:00.000Z");
+  await expect(card).toContainText(
+    "No further automatic retries for this turn. Retry after",
+  );
+  await expect(card.locator("time")).toHaveAttribute(
+    "datetime",
+    "2026-01-01T00:05:00.000Z",
+  );
   await expect(card.getByRole("progressbar")).toHaveCount(0);
-  await expect(card.locator(".request-progress-cloud")).toHaveCSS("animation-name", "none");
+  await expect(card.locator(".request-progress-cloud")).toHaveCSS(
+    "animation-name",
+    "none",
+  );
   await expect(page.locator("textarea")).toBeEnabled();
   if (testInfo.project.name === "desktop") {
     await expect(
@@ -683,11 +987,17 @@ test("cost cooldown remains visible after automatic retries are exhausted", asyn
   });
   await page.clock.fastForward(300000);
   await expect(card).toHaveAttribute("data-phase", "stopped");
-  await expect(card).toContainText("You can submit a new request when this turn finishes.");
+  await expect(card).toContainText(
+    "You can submit a new request when this turn finishes.",
+  );
   await expect(card.locator(".request-progress-countdown")).toHaveCount(0);
   await expect(card).not.toContainText("retrying automatically");
   await expect(card).not.toContainText("Waiting for the retry response");
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBeTruthy();
   expect(errors).toEqual([]);
 });
 
@@ -698,25 +1008,48 @@ test("cost retry shows its deadline while waiting and clears after the final ans
   const { errors } = await arrangeRequestProgress(page);
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   await startRequestProgress(page);
-  const card = page.getByRole("group", { name: "Request progress", exact: true });
+  const card = page.getByRole("group", {
+    name: "Request progress",
+    exact: true,
+  });
   const announcement = card.getByRole("status");
   const deadline = await page.evaluate(() => window.__progressDeadline);
   await expect(card).toContainText("then retrying automatically");
-  await expect(card).toContainText("Azure rate-limits its shared billing service. We honor its retry deadline.");
+  await expect(card).toContainText(
+    "Azure rate-limits its shared billing service. We honor its retry deadline.",
+  );
   await expect(card.locator("time")).toHaveAttribute("datetime", deadline);
-  await expect(card.locator(".request-progress-countdown-value")).toHaveText("37s");
-  await expect(card.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
+  await expect(card.locator(".request-progress-countdown-value")).toHaveText(
+    "37s",
+  );
+  await expect(card.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "0",
+  );
   const initialAnnouncement = await announcement.textContent();
   await page.clock.runFor(2000);
-  await expect(card.locator(".request-progress-countdown-value")).toHaveText("35s");
-  await expect(card.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "5");
+  await expect(card.locator(".request-progress-countdown-value")).toHaveText(
+    "35s",
+  );
+  await expect(card.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "5",
+  );
   await expect(announcement).toHaveText(initialAnnouncement);
-  await expect(card.locator(".request-progress-timing")).toHaveAttribute("aria-live", "off");
+  await expect(card.locator(".request-progress-timing")).toHaveAttribute(
+    "aria-live",
+    "off",
+  );
   await expect(page.locator(".action-btn--stop")).toBeVisible();
   if (testInfo.project.name === "desktop") {
     await expect(page.locator(".st-row--cooler .st-time")).toHaveText("35s");
-    await expect(page.locator(".st-row--cooler")).toHaveCSS("animation-name", "none");
-    await expect(page.locator(".st-row--cooler animateTransform")).toHaveCount(0);
+    await expect(page.locator(".st-row--cooler")).toHaveCSS(
+      "animation-name",
+      "none",
+    );
+    await expect(page.locator(".st-row--cooler animateTransform")).toHaveCount(
+      0,
+    );
   }
   await page.screenshot({
     path: testInfo.outputPath("cost-retry-waiting.png"),
@@ -725,13 +1058,21 @@ test("cost retry shows its deadline while waiting and clears after the final ans
   await page.clock.runFor(35000);
   await expect(card).toHaveAttribute("data-phase", "retry-wait");
   await expect(announcement).toHaveText("Waiting for the retry response");
-  await expect(card.locator(".request-progress-countdown-value")).toHaveText("0s");
+  await expect(card.locator(".request-progress-countdown-value")).toHaveText(
+    "0s",
+  );
   await expect(card.getByRole("progressbar")).toHaveCount(0);
   await expect(page.locator(".st-icon--ok")).toHaveCount(0);
   await expect(page.locator(".action-btn--stop")).toBeVisible();
   if (testInfo.project.name === "desktop")
-    await expect(page.locator(".st-row--cooler .st-time")).toHaveText("Waiting");
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    await expect(page.locator(".st-row--cooler .st-time")).toHaveText(
+      "Waiting",
+    );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBeTruthy();
   await page.screenshot({
     path: testInfo.outputPath("cost-retry-response-pending.png"),
     animations: "disabled",
@@ -749,17 +1090,26 @@ test("cost retry shows its deadline while waiting and clears after the final ans
   expect(errors).toEqual([]);
 });
 
-test("cost retry countdown advances with the real shared clock", async ({ page }) => {
+test("cost retry countdown advances with the real shared clock", async ({
+  page,
+}) => {
   const { errors } = await arrangeRequestProgress(page);
   await startRequestProgress(page);
-  const card = page.getByRole("group", { name: "Request progress", exact: true });
+  const card = page.getByRole("group", {
+    name: "Request progress",
+    exact: true,
+  });
   const countdown = card.locator(".request-progress-countdown-value");
   const initial = Number.parseInt(await countdown.textContent(), 10);
   const deadline = await card.locator("time").getAttribute("datetime");
   expect(initial).toBeGreaterThan(30);
-  await expect.poll(async () => Number.parseInt(await countdown.textContent(), 10)).toBeLessThan(initial);
+  await expect
+    .poll(async () => Number.parseInt(await countdown.textContent(), 10))
+    .toBeLessThan(initial);
   await expect(card.locator("time")).toHaveAttribute("datetime", deadline);
-  expect(Number(await card.getByRole("progressbar").getAttribute("aria-valuenow"))).toBeGreaterThan(0);
+  expect(
+    Number(await card.getByRole("progressbar").getAttribute("aria-valuenow")),
+  ).toBeGreaterThan(0);
   expect(await page.evaluate(() => window.__progressRequestCount)).toBe(1);
   await page.evaluate(() => window.__finishCostRetry());
   await expect(card).toHaveCount(0);
@@ -767,11 +1117,22 @@ test("cost retry countdown advances with the real shared clock", async ({ page }
 });
 
 for (const status of [503, 0]) {
-  test(`request progress distinguishes HTTP ${status || "no status"} from billing throttling`, async ({ page }, testInfo) => {
-    const { errors } = await arrangeRequestProgress(page, { status, waitSeconds: 20 });
+  test(`request progress distinguishes HTTP ${status || "no status"} from billing throttling`, async ({
+    page,
+  }, testInfo) => {
+    const { errors } = await arrangeRequestProgress(page, {
+      status,
+      waitSeconds: 20,
+    });
     await startRequestProgress(page);
-    const card = page.getByRole("group", { name: "Request progress", exact: true });
-    await expect(card).toHaveAttribute("data-phase", status ? "cooldown" : "slow");
+    const card = page.getByRole("group", {
+      name: "Request progress",
+      exact: true,
+    });
+    await expect(card).toHaveAttribute(
+      "data-phase",
+      status ? "cooldown" : "slow",
+    );
     await expect(card).not.toContainText("Azure rate-limits");
     await expect(card).not.toContainText("HTTP 0");
     if (status) {
@@ -781,24 +1142,36 @@ for (const status of [503, 0]) {
       await expect(card).toContainText("The request is still running.");
       await expect(card).toContainText("No retry countdown has been supplied");
       await expect(card.getByRole("progressbar")).toHaveCount(0);
-      await expect(card.locator(".request-progress-countdown, time")).toHaveCount(0);
+      await expect(
+        card.locator(".request-progress-countdown, time"),
+      ).toHaveCount(0);
       if (testInfo.project.name === "desktop")
-        await expect(page.locator(".st-row--cooler .st-time")).toHaveText("Waiting");
+        await expect(page.locator(".st-row--cooler .st-time")).toHaveText(
+          "Waiting",
+        );
     }
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBeTruthy();
     await page.screenshot({
       path: testInfo.outputPath(`request-progress-${status}.png`),
       animations: "disabled",
     });
-    await page.evaluate((status) => window.__finishCostRetry(status || 200), status);
+    await page.evaluate(
+      (status) => window.__finishCostRetry(status || 200),
+      status,
+    );
     await expect(card).toHaveCount(0);
-    if (status)
-      await expect(page.locator(".st-icon--ok")).toHaveCount(0);
+    if (status) await expect(page.locator(".st-icon--ok")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 }
 
-test("request progress honors an extended deadline without restarting requests", async ({ page }) => {
+test("request progress honors an extended deadline without restarting requests", async ({
+  page,
+}) => {
   await page.clock.install();
   const { errors } = await arrangeRequestProgress(page);
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
@@ -809,12 +1182,22 @@ test("request progress honors an extended deadline without restarting requests",
     window.__emitRequestProgress({ retryAtUtc, waitSeconds: 1 });
     return retryAtUtc;
   });
-  const card = page.getByRole("group", { name: "Request progress", exact: true });
+  const card = page.getByRole("group", {
+    name: "Request progress",
+    exact: true,
+  });
   await expect(card.locator("time")).toHaveAttribute("datetime", deadline);
-  await expect(card.locator(".request-progress-countdown-value")).toHaveText("2m 00s");
-  await expect(card.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
+  await expect(card.locator(".request-progress-countdown-value")).toHaveText(
+    "2m 00s",
+  );
+  await expect(card.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "0",
+  );
   await page.clock.runFor(2000);
-  await expect(card.locator(".request-progress-countdown-value")).toHaveText("1m 58s");
+  await expect(card.locator(".request-progress-countdown-value")).toHaveText(
+    "1m 58s",
+  );
   await expect(card.locator("time")).toHaveAttribute("datetime", deadline);
   expect(await page.evaluate(() => window.__progressRequestCount)).toBe(1);
   await page.evaluate(() => window.__finishCostRetry());
@@ -822,13 +1205,18 @@ test("request progress honors an extended deadline without restarting requests",
   expect(errors).toEqual([]);
 });
 
-test("request progress disables reduced motion and pauses in hidden tabs", async ({ page }, testInfo) => {
+test("request progress disables reduced motion and pauses in hidden tabs", async ({
+  page,
+}, testInfo) => {
   await page.clock.install();
   await page.emulateMedia({ reducedMotion: "no-preference" });
   const { errors } = await arrangeRequestProgress(page);
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   await startRequestProgress(page);
-  const card = page.getByRole("group", { name: "Request progress", exact: true });
+  const card = page.getByRole("group", {
+    name: "Request progress",
+    exact: true,
+  });
   const cloud = card.locator(".request-progress-cloud");
   const fill = card.locator(".request-progress-fill");
   const deadline = await card.locator("time").getAttribute("datetime");
@@ -838,29 +1226,47 @@ test("request progress disables reduced motion and pauses in hidden tabs", async
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(cloud).toHaveCSS("animation-name", "none");
   await expect(fill).toHaveCSS("transition-duration", "0s");
-  expect(await card.evaluate((element) => element.getAnimations({ subtree: true }).length)).toBe(0);
+  expect(
+    await card.evaluate(
+      (element) => element.getAnimations({ subtree: true }).length,
+    ),
+  ).toBe(0);
   await page.screenshot({
     path: testInfo.outputPath("request-progress-reduced-motion.png"),
     animations: "disabled",
   });
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.evaluate(() => {
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => true,
+    });
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect(card).toHaveClass(/request-progress--paused/);
   await expect(cloud).toHaveCSS("animation-play-state", "paused");
   await expect(fill).toHaveCSS("transition-duration", "0s");
-  expect(await card.evaluate((element) => element.getAnimations({ subtree: true }).every((animation) => animation.playState === "paused"))).toBeTruthy();
+  expect(
+    await card.evaluate((element) =>
+      element
+        .getAnimations({ subtree: true })
+        .every((animation) => animation.playState === "paused"),
+    ),
+  ).toBeTruthy();
   await page.clock.setSystemTime(await page.evaluate(() => Date.now() + 60000));
   await page.evaluate(() => {
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => false,
+    });
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect(card).not.toHaveClass(/request-progress--paused/);
   await expect(cloud).toHaveCSS("animation-play-state", "running");
   await expect(card).toHaveAttribute("data-phase", "retry-wait");
-  await expect(card.locator(".request-progress-countdown-value")).toHaveText("0s");
+  await expect(card.locator(".request-progress-countdown-value")).toHaveText(
+    "0s",
+  );
   await expect(card.locator("time")).toHaveAttribute("datetime", deadline);
   await expect(card.getByRole("progressbar")).toHaveCount(0);
   expect(await page.evaluate(() => window.__progressRequestCount)).toBe(1);
@@ -869,17 +1275,31 @@ test("request progress disables reduced motion and pauses in hidden tabs", async
   expect(errors).toEqual([]);
 });
 
-test("request progress terminal stop stays still while the tool completes", async ({ page }, testInfo) => {
+test("request progress terminal stop stays still while the tool completes", async ({
+  page,
+}, testInfo) => {
   await page.clock.install();
-  const { errors } = await arrangeRequestProgress(page, { status: 503, willRetry: false, waitSeconds: 5 });
+  const { errors } = await arrangeRequestProgress(page, {
+    status: 503,
+    willRetry: false,
+    waitSeconds: 5,
+  });
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   await startRequestProgress(page);
-  const card = page.getByRole("group", { name: "Request progress", exact: true });
+  const card = page.getByRole("group", {
+    name: "Request progress",
+    exact: true,
+  });
   await expect(card).toHaveAttribute("data-phase", "stopped");
   await expect(card.getByRole("progressbar")).toHaveCount(0);
-  await expect(card.locator(".request-progress-cloud")).toHaveCSS("animation-name", "none");
+  await expect(card.locator(".request-progress-cloud")).toHaveCSS(
+    "animation-name",
+    "none",
+  );
   if (testInfo.project.name === "desktop")
-    await expect(page.locator(".st-row--cooler .st-time")).toHaveText("Stopped");
+    await expect(page.locator(".st-row--cooler .st-time")).toHaveText(
+      "Stopped",
+    );
   await page.clock.runFor(6000);
   await expect(card).toHaveAttribute("data-phase", "stopped");
   await expect(card).not.toContainText("retrying automatically");
@@ -888,23 +1308,46 @@ test("request progress terminal stop stays still while the tool completes", asyn
   await page.evaluate(() => window.__finishCostRetry(503));
   await expect(page.locator(".action-btn--stop")).toHaveCount(0);
   await expect(card).toHaveAttribute("data-phase", "stopped");
-  await expect(page.getByText("The requested resource costs are still unavailable; no detail amounts were inferred.", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      "The requested resource costs are still unavailable; no detail amounts were inferred.",
+      { exact: true },
+    ),
+  ).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test("request progress safely renders service text without HTML", async ({ page }) => {
+test("request progress safely renders service text without HTML", async ({
+  page,
+}) => {
   const { errors } = await arrange(page, []);
-  await page.route("**/api/chat", (route) => route.fulfill({
-    contentType: "text/event-stream",
-    body: [
-      { type: "session", id: sessionId },
-      { type: "cooling_down", status: 503, waitSeconds: 20, willRetry: false, tool: '<img src=x onerror="window.__progressInjected=true">' },
-      { type: "message", content: "The request could not complete." },
-    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n",
-  }));
+  await page.route("**/api/chat", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body:
+        [
+          { type: "session", id: sessionId },
+          {
+            type: "cooling_down",
+            status: 503,
+            waitSeconds: 20,
+            willRetry: false,
+            tool: '<img src=x onerror="window.__progressInjected=true">',
+          },
+          { type: "message", content: "The request could not complete." },
+        ]
+          .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+          .join("") + "data: [DONE]\n\n",
+    }),
+  );
   await send(page, "Read the request status");
-  const card = page.getByRole("group", { name: "Request progress", exact: true });
-  await expect(card).toContainText('<img src=x onerror="window.__progressInjected=true">');
+  const card = page.getByRole("group", {
+    name: "Request progress",
+    exact: true,
+  });
+  await expect(card).toContainText(
+    '<img src=x onerror="window.__progressInjected=true">',
+  );
   await expect(card.locator("img")).toHaveCount(0);
   expect(await page.evaluate(() => window.__progressInjected)).toBeUndefined();
   expect(errors).toEqual([]);

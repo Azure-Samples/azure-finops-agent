@@ -18,10 +18,12 @@ namespace Dashboard.Tests;
 public sealed class RuntimeProtocolTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task RuntimeCallsOnlyRegisteredToolsAndSupportsAbort(bool abort)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task RuntimeCallsOnlyRegisteredToolsAndSupportsAbort(bool abort, bool largeResult)
     {
+        var evidence = largeResult ? "synthetic evidence " + new string('x', 60000) + " end-of-full-evidence" : "synthetic evidence";
         var root = Path.Combine(Path.GetTempPath(), "finops-runtime-test-" + Guid.NewGuid().ToString("N"));
         var requests = new ConcurrentQueue<JsonElement>();
         var called = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -78,7 +80,7 @@ public sealed class RuntimeProtocolTests
                     HttpMethod.Post, "{}", includeTimestamp: true, cancellationToken: cancellationToken);
                 Assert.StartsWith("HTTP 200", costResponse);
                 Assert.Contains("\"cacheStatus\":\"queried\"", costResponse);
-                return "synthetic evidence";
+                return evidence;
             }
             var config = new SessionConfig
             {
@@ -157,7 +159,9 @@ public sealed class RuntimeProtocolTests
                 Assert.Equal((false, false), Assert.Single(retryTurnStates));
                 var events = await session.GetEventsAsync();
                 Assert.Contains(events.OfType<AssistantMessageEvent>(), item => item.Data.Content.Contains("Synthetic result"));
-                Assert.Contains(events.OfType<ToolExecutionCompleteEvent>(), item => item.Data.Result?.Content == "synthetic evidence");
+                Assert.Contains(events.OfType<ToolExecutionCompleteEvent>(), item => item.Data.Result?.Content == evidence);
+                Assert.Contains(evidence, requests.ElementAt(1).GetRawText());
+                Assert.DoesNotContain("Output too large to read at once", requests.ElementAt(1).GetRawText());
                 var compacted = await session.Rpc.History.CompactAsync(new GitHub.Copilot.Rpc.SessionHistoryCompactRequest()).WaitAsync(TimeSpan.FromSeconds(30));
                 Assert.True(compacted.Success);
                 Assert.True(compacted.MessagesRemoved > 0);
@@ -183,7 +187,11 @@ public sealed class RuntimeProtocolTests
             await session.DisposeAsync();
             var resumeConfig = new ResumeSessionConfig
             {
-                Model = config.Model, Provider = config.Provider, Streaming = true, Tools = config.Tools, WorkingDirectory = root
+                Model = config.Model,
+                Provider = config.Provider,
+                Streaming = true,
+                Tools = config.Tools,
+                WorkingDirectory = root
             };
             RuntimePolicy.Apply(resumeConfig);
             await using var resumed = await client.ResumeSessionAsync(config.SessionId, resumeConfig);
@@ -228,119 +236,208 @@ public sealed class RuntimeProtocolTests
             {
                 Mode = CopilotClientMode.Empty, BaseDirectory = root, UseLoggedInUser = false
             });
-            await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(30));
-            var config = new SessionConfig
-            {
-                SessionId = Guid.NewGuid().ToString(), Model = "synthetic-test-model", Streaming = true, WorkingDirectory = root,
-                Provider = new ProviderConfig { Type = "openai", BaseUrl = server.Urls.Single() + "/v1/", ApiKey = "synthetic-test-only", WireApi = "responses" }
-            };
-            config.Tools = [new ProtectedTool(ChartTools.Create().Single(tool => tool.Name == "RenderChart"), 101, config.SessionId)];
-            RuntimePolicy.Apply(config);
-            var created = await client.CreateSessionAsync(config);
-            var resumeConfig = new ResumeSessionConfig
-            {
-                Model = config.Model, Provider = config.Provider, Streaming = true, Tools = config.Tools, WorkingDirectory = root
-            };
-            RuntimePolicy.Apply(resumeConfig);
-            if (resume)
-            {
-                Interlocked.Exchange(ref calls, 1);
-                var seeded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                using var seededSubscription = created.On<SessionIdleEvent>(_ => seeded.TrySetResult());
-                await created.SendAsync(new MessageOptions { Prompt = "Store this synthetic context for a resumed tool call." });
-                await seeded.Task.WaitAsync(TimeSpan.FromSeconds(30));
-                await created.DisposeAsync();
-                Interlocked.Exchange(ref calls, 0);
-            }
-            await using var session = resume ? await client.ResumeSessionAsync(config.SessionId, resumeConfig) : created;
-            var otherConfig = new SessionConfig
-            {
-                SessionId = Guid.NewGuid().ToString(), Model = config.Model, Provider = config.Provider,
-                Streaming = true, WorkingDirectory = root
-            };
-            otherConfig.Tools = [new ProtectedTool(ChartTools.Create().Single(tool => tool.Name == "RenderChart"), 202, otherConfig.SessionId)];
-            RuntimePolicy.Apply(otherConfig);
-            await using var other = otherSession ? await client.CreateSessionAsync(otherConfig) : null;
-            using var delayedEvents = session.On<AssistantMessageEvent>(_ =>
-            {
-                if (delayedEventDelivery) Task.Delay(TimeSpan.FromMilliseconds(250)).GetAwaiter().GetResult();
-            });
-            Assert.True(TurnExecution.TryBegin(session.SessionId, 101, session, out var turn));
-            try
-            {
-                await session.SendAsync(new MessageOptions { Prompt = "Render the two synthetic counts." });
-                await turn.Terminal.Task.WaitAsync(TimeSpan.FromSeconds(30));
-                var completed = Assert.Single((await session.GetEventsAsync()).OfType<ToolExecutionCompleteEvent>());
-                Assert.True(completed.Data.Success);
-                using var chart = JsonDocument.Parse(completed.Data.Result!.Content!);
-                Assert.Equal("bar", chart.RootElement.GetProperty("type").GetString());
-                Assert.Equal(0, turn.ToolsFailed);
-                Assert.True(turn.HasUserOutput);
-            }
-            finally { await turn.FinishAsync(); }
+await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(30));
+var config = new SessionConfig
+{
+    SessionId = Guid.NewGuid().ToString(),
+    Model = "synthetic-test-model",
+    Streaming = true,
+    WorkingDirectory = root,
+    Provider = new ProviderConfig { Type = "openai", BaseUrl = server.Urls.Single() + "/v1/", ApiKey = "synthetic-test-only", WireApi = "responses" }
+};
+config.Tools = [new ProtectedTool(ChartTools.Create().Single(tool => tool.Name == "RenderChart"), 101, config.SessionId)];
+RuntimePolicy.Apply(config);
+var created = await client.CreateSessionAsync(config);
+var resumeConfig = new ResumeSessionConfig
+{
+    Model = config.Model,
+    Provider = config.Provider,
+    Streaming = true,
+    Tools = config.Tools,
+    WorkingDirectory = root
+};
+RuntimePolicy.Apply(resumeConfig);
+if (resume)
+{
+    Interlocked.Exchange(ref calls, 1);
+    var seeded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    using var seededSubscription = created.On<SessionIdleEvent>(_ => seeded.TrySetResult());
+    await created.SendAsync(new MessageOptions { Prompt = "Store this synthetic context for a resumed tool call." });
+    await seeded.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    await created.DisposeAsync();
+    Interlocked.Exchange(ref calls, 0);
+}
+await using var session = resume ? await client.ResumeSessionAsync(config.SessionId, resumeConfig) : created;
+var otherConfig = new SessionConfig
+{
+    SessionId = Guid.NewGuid().ToString(),
+    Model = config.Model,
+    Provider = config.Provider,
+    Streaming = true,
+    WorkingDirectory = root
+};
+otherConfig.Tools = [new ProtectedTool(ChartTools.Create().Single(tool => tool.Name == "RenderChart"), 202, otherConfig.SessionId)];
+RuntimePolicy.Apply(otherConfig);
+await using var other = otherSession ? await client.CreateSessionAsync(otherConfig) : null;
+using var delayedEvents = session.On<AssistantMessageEvent>(_ =>
+{
+    if (delayedEventDelivery) Task.Delay(TimeSpan.FromMilliseconds(250)).GetAwaiter().GetResult();
+});
+Assert.True(TurnExecution.TryBegin(session.SessionId, 101, session, out var turn));
+try
+{
+    await session.SendAsync(new MessageOptions { Prompt = "Render the two synthetic counts." });
+    await turn.Terminal.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    var completed = Assert.Single((await session.GetEventsAsync()).OfType<ToolExecutionCompleteEvent>());
+    Assert.True(completed.Data.Success);
+    using var chart = JsonDocument.Parse(completed.Data.Result!.Content!);
+    Assert.Equal("bar", chart.RootElement.GetProperty("type").GetString());
+    Assert.Equal(0, turn.ToolsFailed);
+    Assert.True(turn.HasUserOutput);
+}
+finally { await turn.FinishAsync(); }
         }
         finally
-        {
-            await server.StopAsync();
-            if (Directory.Exists(root)) Directory.Delete(root, true);
-        }
+{
+    await server.StopAsync();
+    if (Directory.Exists(root)) Directory.Delete(root, true);
+}
     }
 
-    private sealed class InvocationProbe(AIFunction inner) : DelegatingAIFunction(inner)
+    [Fact]
+public async Task RuntimeQueriesLargeSourceAfterDiscoveringItsSchema()
+{
+    var root = Path.Combine(Path.GetTempPath(), "finops-query-protocol-" + Guid.NewGuid().ToString("N"));
+    var calls = 0;
+    var observedResults = new ConcurrentQueue<JsonElement>();
+    var source = JsonSerializer.Serialize(new
+    {
+        complete = false,
+        rows = Enumerable.Range(0, 1000).Select(index => new { region = "region" + index, value = index, detail = new string('x', 100) })
+    });
+    var builder = WebApplication.CreateBuilder();
+    builder.Logging.ClearProviders();
+    builder.WebHost.UseUrls("http://127.0.0.1:0");
+    await using var server = builder.Build();
+    server.MapPost("/v1/responses", async context =>
+    {
+        using var request = await JsonDocument.ParseAsync(context.Request.Body);
+        var streaming = request.RootElement.TryGetProperty("stream", out var stream) && stream.ValueKind == JsonValueKind.True;
+        var stage = Interlocked.Increment(ref calls);
+        if (stage == 1) { await WriteResponse(context.Response, true, streaming, "QueryAzure"); return; }
+        var output = request.RootElement.GetProperty("input").EnumerateArray()
+            .Last(item => item.GetProperty("type").GetString() == "function_call_output").GetProperty("output").GetString()!;
+        using var result = JsonDocument.Parse(output);
+        observedResults.Enqueue(result.RootElement.Clone());
+        if (stage == 2)
+        {
+            var resultId = result.RootElement.GetProperty("resultId").GetString();
+            var queryJson = JsonSerializer.Serialize(new { path = "$.rows[?(@.value == 999)]", select = new { region = "$.region", value = "$.value" } });
+            await WriteResponse(context.Response, true, streaming, "QueryToolResult", JsonSerializer.Serialize(new { resultId, queryJson }), "call_query");
+        }
+        else await WriteResponse(context.Response, false, streaming);
+    });
+    await server.StartAsync();
+    try
+    {
+        await using var client = new CopilotClient(new CopilotClientOptions { Mode = CopilotClientMode.Empty, BaseDirectory = root, UseLoggedInUser = false });
+        await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        var config = new SessionConfig
+        {
+            SessionId = Guid.NewGuid().ToString(),
+            Model = "synthetic-test-model",
+            Streaming = true,
+            WorkingDirectory = root,
+            Provider = new ProviderConfig { Type = "openai", BaseUrl = server.Urls.Single() + "/v1/", ApiKey = "synthetic-test-only", WireApi = "responses" }
+        };
+        config.Tools = [new ProtectedTool(AIFunctionFactory.Create(() => source, "QueryAzure"), 101, config.SessionId),
+            new ProtectedTool(new ToolResultQueryTools(101).Create().Single(), 101, config.SessionId)];
+        RuntimePolicy.Apply(config);
+        await using var session = await client.CreateSessionAsync(config);
+        Assert.True(TurnExecution.TryBegin(session.SessionId, 101, session, out var turn));
+        try
+        {
+            await session.SendAsync(new MessageOptions { Prompt = "Read the last synthetic region using the source schema." });
+            await turn.Terminal.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            var events = await session.GetEventsAsync();
+            var completed = events.OfType<ToolExecutionCompleteEvent>().ToArray();
+            Assert.Equal(2, completed.Length);
+            Assert.All(completed, item => Assert.True(item.Data.Success));
+            Assert.Equal(0, turn.ToolsFailed);
+            var responses = observedResults.ToArray();
+            Assert.Equal(2, responses.Length);
+            Assert.Equal("queryable_tool_result", responses[0].GetProperty("kind").GetString());
+            Assert.Contains(responses[0].GetProperty("schema").GetProperty("fields").EnumerateArray(), field => field.GetProperty("path").GetString()!.EndsWith("[\"region\"]"));
+            Assert.Equal(999, responses[1].GetProperty("rows")[0].GetProperty("value").GetInt32());
+            Assert.True(responses[1].GetProperty("source").GetProperty("Partial").GetBoolean());
+            Assert.True(responses[1].GetProperty("complete").GetBoolean());
+            Assert.DoesNotContain("Output too large", string.Join("", completed.Select(item => item.Data.Result?.Content)));
+        }
+        finally { await turn.FinishAsync(); }
+    }
+    finally
+    {
+        await server.StopAsync();
+        if (Directory.Exists(root)) Directory.Delete(root, true);
+    }
+}
+
+private sealed class InvocationProbe(AIFunction inner) : DelegatingAIFunction(inner)
     {
         protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
-        {
-            var invocation = arguments.Services?.GetService(typeof(ToolInvocation)) as ToolInvocation
-                ?? arguments.Context?.Values.OfType<ToolInvocation>().FirstOrDefault();
-            Assert.NotNull(invocation);
-            Assert.Equal("call_synthetic", invocation.ToolCallId);
-            Assert.Equal("ApprovedRead", invocation.ToolName);
-            return base.InvokeCoreAsync(arguments, cancellationToken);
-        }
+{
+    var invocation = arguments.Services?.GetService(typeof(ToolInvocation)) as ToolInvocation
+        ?? arguments.Context?.Values.OfType<ToolInvocation>().FirstOrDefault();
+    Assert.NotNull(invocation);
+    Assert.Equal("call_synthetic", invocation.ToolCallId);
+    Assert.Equal("ApprovedRead", invocation.ToolName);
+    return base.InvokeCoreAsync(arguments, cancellationToken);
+}
     }
 
-    private static async Task WriteResponse(HttpResponse response, bool toolCall, bool streaming, string toolName = "ApprovedRead", string arguments = "{}")
+    private static async Task WriteResponse(HttpResponse response, bool toolCall, bool streaming, string toolName = "ApprovedRead", string arguments = "{}", string callId = "call_synthetic")
+{
+    const string responseId = "resp_synthetic";
+    var functionId = "fc_" + callId;
+    object item = toolCall
+        ? new { id = functionId, type = "function_call", call_id = callId, name = toolName, arguments, status = "completed" }
+        : new { id = "msg_synthetic", type = "message", role = "assistant", status = "completed", content = new[] { new { type = "output_text", text = "Synthetic result", annotations = Array.Empty<object>() } } };
+    if (!streaming)
     {
-        const string responseId = "resp_synthetic";
-        object item = toolCall
-            ? new { id = "fc_synthetic", type = "function_call", call_id = "call_synthetic", name = toolName, arguments, status = "completed" }
-            : new { id = "msg_synthetic", type = "message", role = "assistant", status = "completed", content = new[] { new { type = "output_text", text = "Synthetic result", annotations = Array.Empty<object>() } } };
-        if (!streaming)
+        await response.WriteAsJsonAsync(new
         {
-            await response.WriteAsJsonAsync(new
-            {
-                id = responseId,
-                @object = "response",
-                created_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                status = "completed",
-                model = "synthetic-test-model",
-                output = new[] { item },
-                usage = new { input_tokens = 10, output_tokens = 5, total_tokens = 15 }
-            });
-            return;
-        }
-        response.ContentType = "text/event-stream";
-        await Event(response, "response.created", new { type = "response.created", response = new { id = responseId, status = "in_progress", output = Array.Empty<object>() } });
-        await Event(response, "response.output_item.added", new { type = "response.output_item.added", output_index = 0, item });
-        if (toolCall)
-            await Event(response, "response.function_call_arguments.done", new { type = "response.function_call_arguments.done", item_id = "fc_synthetic", output_index = 0, arguments });
-        else
-        {
-            await Event(response, "response.content_part.added", new { type = "response.content_part.added", item_id = "msg_synthetic", output_index = 0, content_index = 0, part = new { type = "output_text", text = "", annotations = Array.Empty<object>() } });
-            await Event(response, "response.output_text.delta", new { type = "response.output_text.delta", item_id = "msg_synthetic", output_index = 0, content_index = 0, delta = "Synthetic result" });
-            await Event(response, "response.output_text.done", new { type = "response.output_text.done", item_id = "msg_synthetic", output_index = 0, content_index = 0, text = "Synthetic result" });
-        }
-        await Event(response, "response.output_item.done", new { type = "response.output_item.done", output_index = 0, item });
-        await Event(response, "response.completed", new
-        {
-            type = "response.completed",
-            response = new { id = responseId, status = "completed", model = "synthetic-test-model", output = new[] { item }, usage = new { input_tokens = 10, output_tokens = 5, total_tokens = 15 } }
+            id = responseId,
+            @object = "response",
+            created_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            status = "completed",
+            model = "synthetic-test-model",
+            output = new[] { item },
+            usage = new { input_tokens = 10, output_tokens = 5, total_tokens = 15 }
         });
+        return;
     }
-
-    private static async Task Event(HttpResponse response, string name, object payload)
+    response.ContentType = "text/event-stream";
+    await Event(response, "response.created", new { type = "response.created", response = new { id = responseId, status = "in_progress", output = Array.Empty<object>() } });
+    await Event(response, "response.output_item.added", new { type = "response.output_item.added", output_index = 0, item });
+    if (toolCall)
+        await Event(response, "response.function_call_arguments.done", new { type = "response.function_call_arguments.done", item_id = functionId, output_index = 0, arguments });
+    else
     {
-        await response.WriteAsync($"event: {name}\ndata: {JsonSerializer.Serialize(payload)}\n\n");
-        await response.Body.FlushAsync();
+        await Event(response, "response.content_part.added", new { type = "response.content_part.added", item_id = "msg_synthetic", output_index = 0, content_index = 0, part = new { type = "output_text", text = "", annotations = Array.Empty<object>() } });
+        await Event(response, "response.output_text.delta", new { type = "response.output_text.delta", item_id = "msg_synthetic", output_index = 0, content_index = 0, delta = "Synthetic result" });
+        await Event(response, "response.output_text.done", new { type = "response.output_text.done", item_id = "msg_synthetic", output_index = 0, content_index = 0, text = "Synthetic result" });
     }
+    await Event(response, "response.output_item.done", new { type = "response.output_item.done", output_index = 0, item });
+    await Event(response, "response.completed", new
+    {
+        type = "response.completed",
+        response = new { id = responseId, status = "completed", model = "synthetic-test-model", output = new[] { item }, usage = new { input_tokens = 10, output_tokens = 5, total_tokens = 15 } }
+    });
+}
+
+private static async Task Event(HttpResponse response, string name, object payload)
+{
+    await response.WriteAsync($"event: {name}\ndata: {JsonSerializer.Serialize(payload)}\n\n");
+    await response.Body.FlushAsync();
+}
 }

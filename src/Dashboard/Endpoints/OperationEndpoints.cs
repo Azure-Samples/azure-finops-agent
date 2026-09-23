@@ -11,10 +11,11 @@ public static class OperationEndpoints
     {
         app.MapPost("/api/changes/{id}/approve", async (HttpContext context, string id, IHttpClientFactory httpFactory) =>
         {
-            if (!TryUser(context, out var userId, out var oid)) return Results.Unauthorized();
-            if (string.IsNullOrEmpty(oid)) return Results.Unauthorized();
+            if (!TryUser(context, out var userId, out var tenantId, out var oid)) return Results.Unauthorized();
+            if (string.IsNullOrEmpty(tenantId) || string.IsNullOrEmpty(oid)) return Results.Unauthorized();
             var proposal = OperationStore.Default.Find(id, userId);
-            if (proposal is null || !await factory.UserOwnsSessionAsync(userId, oid, proposal.SessionId, context.RequestAborted)) return Results.NotFound();
+            if (proposal is null || !await factory.UserOwnsSessionAsync(
+                userId, tenantId, oid, proposal.SessionId, context.RequestAborted)) return Results.NotFound();
             JsonElement approval;
             try { approval = await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body, cancellationToken: context.RequestAborted); }
             catch (JsonException) { return Results.BadRequest(new { error = "Explicit review acknowledgement is required." }); }
@@ -39,20 +40,23 @@ public static class OperationEndpoints
 
         app.MapPost("/api/changes/{id}/reject", (HttpContext context, string id) =>
         {
-            if (!TryUser(context, out var userId, out _)) return Results.Unauthorized();
+            if (!TryUser(context, out var userId, out _, out _)) return Results.Unauthorized();
             return OperationStore.Default.Reject(id, userId) ? Results.Ok(new { rejected = true }) : Results.NotFound();
         });
     }
 
-    private static bool TryUser(HttpContext context, out long userId, out string? oid)
+    private static bool TryUser(
+        HttpContext context, out long userId, out string? tenantId, out string? oid)
     {
         userId = 0;
+        tenantId = null;
         oid = null;
         try
         {
             using var user = JsonDocument.Parse(context.Session.GetString("user") ?? "{}");
             if (!user.RootElement.TryGetProperty("id", out var id) || !id.TryGetInt64(out userId)) return false;
             using var azure = JsonDocument.Parse(context.Session.GetString("azure_user") ?? "{}");
+            if (azure.RootElement.TryGetProperty("tenantId", out var tenant)) tenantId = tenant.GetString();
             if (azure.RootElement.TryGetProperty("objectId", out var identifier)) oid = identifier.GetString();
             return true;
         }

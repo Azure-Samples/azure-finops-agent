@@ -79,20 +79,23 @@ param aoaiLocation string = 'swedencentral'
 @description('App Service Plan SKU. B1 (~$13/mo) is the recommended evaluation default; P0V3 matches production.')
 param appServicePlanSku string = 'B1'
 
-@description('Azure OpenAI model name to deploy. The default gpt-5.6-luna supports the Responses API used by this agent; verify availability in aoaiLocation.')
-param aoaiModelName string = 'gpt-5.6-luna'
+@description('Azure OpenAI model name to deploy. The default gpt-6-luna supports the Responses API used by this agent; verify availability in aoaiLocation.')
+param aoaiModelName string = 'gpt-6-luna'
 
-@description('Azure OpenAI model version. Must match the model name: gpt-5.6-luna = 2026-07-09.')
-param aoaiModelVersion string = '2026-07-09'
+@description('Azure OpenAI model version. Must match the model name: gpt-6-luna = 2026-09-22.')
+param aoaiModelVersion string = '2026-09-22'
 
 @description('Azure OpenAI deployment name surfaced as `AzureOpenAI__DeploymentName` to the app.')
-param aoaiDeploymentName string = 'gpt-5.6-luna'
+param aoaiDeploymentName string = 'gpt-6-luna'
 
-@description('Azure OpenAI GlobalStandard deployment capacity in model-specific quota units. For gpt-5.6-luna, 1000 units corresponds to 1M tokens/minute. Verify unallocated quota for the model, SKU and region; quota already assigned to other deployments is not available. Lower this value when needed. The service is billed by usage, not reserved throughput.')
+@description('Azure OpenAI GlobalStandard deployment capacity in model-specific quota units. For gpt-6-luna, 1000 units corresponds to 1M tokens/minute. Verify unallocated quota for the model, SKU and region; quota already assigned to other deployments is not available. Lower this value when needed. The service is billed by usage, not reserved throughput.')
 param aoaiModelCapacity int = 1000
 
-@description('Optional resource ID of an existing Azure OpenAI account to reuse instead of creating a new one. When set, `aoaiLocation`/`aoaiModelName`/`aoaiModelVersion` are ignored — the deployment must already exist on the existing account.')
+@description('Optional resource ID of an existing Azure OpenAI account to reuse instead of creating a new one. When set, `aoaiLocation` is ignored. The model deployment must already exist unless `deployModelOnExistingAccount` is true.')
 param existingAoaiResourceId string = ''
+
+@description('When reusing an existing account, create or update the configured model deployment on it. Requires deployment rights and unallocated model-specific quota on that account.')
+param deployModelOnExistingAccount bool = false
 
 @description('Entra ID multi-tenant app registration client ID. Created automatically by the preprovision hook if empty.')
 param entraAppId string = ''
@@ -145,6 +148,7 @@ module resources 'main-resources.bicep' = {
     aoaiDeploymentName: aoaiDeploymentName
     aoaiModelCapacity: aoaiModelCapacity
     existingAoaiResourceId: existingAoaiResourceId
+    deployModelOnExistingAccount: deployModelOnExistingAccount
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId

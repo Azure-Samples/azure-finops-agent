@@ -26,20 +26,20 @@ public static class JobEndpoints
     {
         app.MapGet("/api/jobs", (HttpContext ctx) =>
         {
-            if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
-            if (string.IsNullOrEmpty(entraOid))
+            if (string.IsNullOrEmpty(entraTenantId) || string.IsNullOrEmpty(entraOid))
                 return Results.Ok(new { jobs = Array.Empty<object>(), entraRequired = true });
 
-            var jobs = store.ForUser(userId, entraOid).Select(ToDto);
+            var jobs = store.ForUser(userId, entraTenantId, entraOid).Select(ToDto);
             return Results.Ok(new { jobs, entraRequired = false });
         });
 
         app.MapPost("/api/jobs", async (HttpContext ctx) =>
         {
-            if (!TryResolveUser(ctx, out var userId, out var userLogin, out var entraOid))
+            if (!TryResolveUser(ctx, out var userId, out var userLogin, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
-            if (string.IsNullOrEmpty(entraOid))
+            if (string.IsNullOrEmpty(entraTenantId) || string.IsNullOrEmpty(entraOid))
                 return Results.BadRequest(new { error = "Connect Azure first — scheduled jobs run in the background on your behalf and need a signed-in Azure connection." });
 
             using var body = await JsonDocument.ParseAsync(ctx.Request.Body);
@@ -59,12 +59,13 @@ public static class JobEndpoints
                 return Results.BadRequest(new { error = "prompt too long (max 2000 chars)" });
             if (interval < MinIntervalMinutes || interval > MaxIntervalMinutes)
                 return Results.BadRequest(new { error = $"intervalMinutes must be between {MinIntervalMinutes} and {MaxIntervalMinutes}" });
-            if (store.EnabledCountForUser(userId, entraOid) >= MaxEnabledJobsPerUser)
+            if (store.EnabledCountForUser(userId, entraTenantId, entraOid) >= MaxEnabledJobsPerUser)
                 return Results.BadRequest(new { error = $"Limit reached — max {MaxEnabledJobsPerUser} active jobs. Pause or delete one first." });
 
             var job = new ScheduledJob
             {
                 UserId = userId,
+                EntraTenantId = entraTenantId,
                 EntraOid = entraOid,
                 UserLogin = userLogin,
                 Name = string.IsNullOrWhiteSpace(name) ? Autoname(prompt) : name[..Math.Min(name.Length, 60)],
@@ -141,7 +142,8 @@ public static class JobEndpoints
             // Re-enabling a paused job counts against the same active cap as
             // creating one — otherwise pause+create×3+resume yields 4 active,
             // contradicting the "max N active" guarantee the UI shows.
-            if (!job!.Enabled && store.EnabledCountForUser(job.UserId, job.EntraOid) >= MaxEnabledJobsPerUser)
+            if (!job!.Enabled && store.EnabledCountForUser(
+                job.UserId, job.EntraTenantId, job.EntraOid) >= MaxEnabledJobsPerUser)
                 return Results.BadRequest(new { error = $"Limit reached — max {MaxEnabledJobsPerUser} active jobs. Pause or delete one first." });
             job.Enabled = !job.Enabled;
             if (job.Enabled)
@@ -180,14 +182,15 @@ public static class JobEndpoints
 
     private static (ScheduledJob? Job, IResult? Error) ResolveOwnedJob(HttpContext ctx, JobStore store, string id)
     {
-        if (!TryResolveUser(ctx, out var userId, out _, out var entraOid))
+        if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
             return (null, Results.Unauthorized());
         var job = store.Get(id);
         if (job is null) return (null, Results.NotFound());
-        // Jobs are Entra-only, so the OID is the identity — exact match required.
-        // (No userId-hash fallback: OIDs are the tenant-scoped source of truth,
-        // and these jobs can perform ARM writes on the owner's subscriptions.)
-        var owned = !string.IsNullOrEmpty(entraOid) && job.EntraOid == entraOid;
+        var owned = job.UserId == userId
+            && !string.IsNullOrEmpty(entraTenantId)
+            && !string.IsNullOrEmpty(entraOid)
+            && string.Equals(job.EntraTenantId, entraTenantId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(job.EntraOid, entraOid, StringComparison.OrdinalIgnoreCase);
         if (!owned) return (null, Results.NotFound()); // no ownership oracle
         return (job, null);
     }
@@ -217,10 +220,13 @@ public static class JobEndpoints
         return s.Length <= 40 ? s : s[..40] + "…";
     }
 
-    private static bool TryResolveUser(HttpContext ctx, out long userId, out string userLogin, out string? entraOid)
+    private static bool TryResolveUser(
+        HttpContext ctx, out long userId, out string userLogin,
+        out string? entraTenantId, out string? entraOid)
     {
         userId = 0;
         userLogin = "";
+        entraTenantId = null;
         entraOid = null;
         var userJson = ctx.Session.GetString("user");
         if (userJson is null) return false;
@@ -237,6 +243,7 @@ public static class JobEndpoints
             try
             {
                 var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                if (au.TryGetProperty("tenantId", out var tenantProp)) entraTenantId = tenantProp.GetString();
                 if (au.TryGetProperty("objectId", out var oidProp)) entraOid = oidProp.GetString();
             }
             catch { /* ignore malformed */ }

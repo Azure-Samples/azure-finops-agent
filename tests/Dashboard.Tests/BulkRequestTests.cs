@@ -52,7 +52,7 @@ public sealed class BulkRequestTests
     public async Task OversizedBodiesAreExplicitlyPartial()
     {
         var result = await AzureQueryTools.ExecuteBulkAsync([new()], 1, false,
-            (item, token) => Task.FromResult("HTTP 200 OK\n" + JsonSerializer.Serialize(new { text = new string('x', 13000) })), default);
+            (item, token) => Task.FromResult("HTTP 200 OK\n" + JsonSerializer.Serialize(new { text = new string('x', AzureQueryTools.MaxBulkItemCharacters + 1) })), default);
         using var document = JsonDocument.Parse(result);
         Assert.False(document.RootElement.GetProperty("complete").GetBoolean());
         Assert.True(document.RootElement.GetProperty("results")[0].GetProperty("partial").GetBoolean());
@@ -132,7 +132,7 @@ public sealed class BulkRequestTests
             [new() { Method = "POST", Path = "/subscriptions/one/providers/Microsoft.CostManagement/query" }],
             1, false, (item, token) => Task.FromResult("HTTP 200 OK\n" + JsonSerializer.Serialize(new
             {
-                padding = new string('x', 13000),
+                padding = new string('x', AzureQueryTools.MaxBulkItemCharacters + 1),
                 _finops = new { cacheStatus = "stale_during_cooldown", retryAtUtc = retryAt }
             })), default);
 
@@ -167,7 +167,7 @@ public sealed class BulkRequestTests
         var result = await AzureQueryTools.ExecuteBulkAsync(items, 20, false,
             (item, token) => Task.FromResult("HTTP 200 OK\n" + JsonSerializer.Serialize(new
             {
-                padding = new string('x', 11000),
+                padding = new string('x', AzureQueryTools.MaxBulkBatchCharacters / 8),
                 _finops = new { cacheStatus = "cached", retrievedAtUtc = retrievedAt }
             })), default);
 

@@ -1,4 +1,4 @@
-<!-- last refreshed: 2026-09-15 -->
+<!-- last refreshed: 2026-09-22 -->
 
 # Azure FinOps Agent — Copilot Instructions
 
@@ -13,7 +13,7 @@ It is designed for customers to deploy into **their own tenant and subscription*
 - Backend: .NET 10 minimal API in `src/Dashboard`
 - Frontend: Vue 3 + Vite + ECharts in `src/Dashboard/frontend`
 - Agent runtime: GitHub Copilot SDK with Azure OpenAI BYOK
-- Default model: `gpt-5.6-luna`, version `2026-07-09`, using the Responses API. Existing-account reuse requires that deployment to exist and the app identity to have account-scoped inference access. Verify available model-specific quota; deleting a different model does not free Luna quota.
+- Default model: `gpt-6-luna`, version `2026-09-22`, using the Responses API. Existing-account reuse requires that deployment to exist and the app identity to have account-scoped inference access. Verify available model-specific quota; deleting a different model does not free Luna quota.
 - Authentication: anonymous chat plus optional multi-tenant Entra OAuth
 - Hosting: Linux container on Azure App Service
 - Infrastructure: `azure.yaml` + Bicep under `infra`
@@ -24,7 +24,7 @@ The SDK and bundled Copilot CLI are one compatibility unit. Let the installed `G
 ## Core architecture
 
 - A shared `CopilotClient` manages per-user `CopilotSession` instances.
-- Session state is persisted under `COPILOT_HOME`; Entra users are isolated by OID and anonymous users by generated user ID.
+- Session state is persisted under `COPILOT_HOME`; Entra users are isolated by the validated `tid + oid` pair and anonymous users by generated user ID. Never treat OID alone as globally unique. An OID-only legacy workdir is admissible only when its encrypted identity record attests the same pair.
 - One `SemaphoreSlim` gate per user serializes session create/resume/replay. Do not bypass it: warmup and transcript replay otherwise race into `Session ... is already tracked`.
 - One active turn per session is enforced by `ChatEndpoints`; scheduled jobs use the same turn gate.
 - SSE streams deltas, reasoning, timing, tools, charts, generated files, scores, cooldowns, busy/errors, and completion.
@@ -34,6 +34,7 @@ The SDK and bundled Copilot CLI are one compatibility unit. Let the installed `G
 - `RuntimePolicy` applies custom-tool allowlists on create and resume. Built-ins, MCP, tool search, cross-session memory, and logged-in CLI credentials are disabled; never reintroduce `ApproveAll`.
 - `ProtectedTool` binds owner, session, and admitted SDK tool-call id inside the callback. Host cancellation and tool leases keep the gate held until execution actually stops. Only provably undispatched input failures release without an SDK terminal event.
 - SDK tool callbacks can overtake queued session events. Await exact call-id admission with bounded cancellation-aware waiting; never assume `ToolExecutionStart` handlers have run before the callback, bypass admission, or re-admit a consumed call id.
+- SDK large-output file substitution stays disabled. Large read-only JSON may use `ToolResultStore` and `QueryToolResult`: retain the complete redacted source, discover schema dynamically, and enforce exact owner/session lookup. IDs expire after 30 minutes/restart. Smaller successful evidence objects stay inline with a root `_resultQuery` annotation so exact totals and comparisons use `QueryToolResult`; keep that annotation additive so existing parsers still read the JSON. Query paging never upgrades source freshness or coverage, and local queries never count as fresh scheduled-job evidence. Keep approval/chart/score/artifact control messages inline; never expose host paths or evaluate model code.
 - Gates, cooldowns, and registries are process-local. Run one active app instance; shared files are persistence, not distributed coordination.
 
 ## Security invariants
@@ -167,7 +168,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - Jobs are Entra-only and use delegated refresh tokens.
 - Every run must report `ReportJobOutcome`. Success requires host-observed complete fresh evidence for every cited request scope, plus a nonempty answer. SDK idle alone is not business success; store the validated outcome, not the model's claim.
 - Compact model context after every 20 completed runs while preserving the durable transcript. Pause on unverifiable compaction or a verified `goal_achieved`. Scheduled ARM changes still require explicit UI approval; no unattended capacity purchase.
-- Ownership is exact OID match; never fall back to a derived user-ID match.
+- Ownership is an exact tenant-ID, object-ID, and pair-derived user-ID match. Legacy jobs without a tenant binding stay disabled; never fall back to OID-only or user-ID-only ownership.
 - Limits: 3 active jobs per user; custom cadence 1–43200 minutes; sub-daily expiry 7 days; daily or slower expiry 90 days; 5 consecutive failures auto-pause.
 - Resume is cap-checked exactly like create.
 - Every job owns one dedicated run-log session; it is hidden from Conversations while the job exists and reappears when the job is deleted.
@@ -178,6 +179,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 ## Frontend invariants
 
 - At 900px and below, the left navigation is an overlay and the right execution sidebar is hidden.
+- Conversation deletion keeps the row visible through inline confirmation and the server response. Only confirmed SDK deletion clears client state; active turns return a conflict and failures remain visible for retry.
 - Closed navigation must be invisible and inert. Keep the compact overlay aligned to the actual header, dismissible with Escape/backdrop, and return focus to its toggle.
 - Auto-scroll follows only while near the bottom. User scroll-up must never be overridden.
 - Hidden browser tabs suspend ResizeObserver, animation frames, transitions, and smooth scrolling. Keep reactive watcher fallbacks.
@@ -224,6 +226,7 @@ The frontend must be built before backend startup so `wwwroot` exists when ASP.N
 - Backend: `dotnet build src/Dashboard/Dashboard.csproj --no-restore`
 - Regressions: `dotnet test tests/Dashboard.Tests/Dashboard.Tests.csproj`; Python `python -m unittest discover -s tests -p "test_*.py"`; frontend `npm run test` and `npm run test:browser`.
 - `validate.yml` runs credential-free regressions, desktop/mobile browsers and Linux image smoke checks before either deployment workflow can run. Exact SDK/CLI protocol tests must not be skipped on Linux.
+- Both deployment workflows also require `live-evaluations.yml`. It runs all exported frontend templates plus incident cases (at least 100 distinct questions) against real inference and Azure tools before deployment; any failed, missing, timed-out, wrong-revision or invalid verdict blocks deployment. Use only the dedicated evaluation identity/environment, never production credentials or customer data. `EVAL_DATA_CLASSIFICATION=synthetic` publishes answers; `internal-test` (maintainer-owned test tenants) publishes only questions, tool outcomes, timings and pass/fail, withholding answers, error text and judge rationale from summaries and artifacts. The judge sees tool arguments, visible structured outputs and the host's connection context alongside the answer. See `tests/LiveEvaluations/README.md` for configuration and test-host versus delegated-browser coverage. Do not skip unavailable prerequisites or relax rubrics to make a run pass.
 - Frontend: `npm run build` under `src/Dashboard/frontend`
 - Always verify the rendered UI for UI changes; a successful build is not a browser test.
 - Measure latency from the app's SSE stream, not rendered pixels.

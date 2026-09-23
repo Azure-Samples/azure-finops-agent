@@ -22,16 +22,16 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 
 # Install Python 3 + CLI tools (plain RUN — classic-builder compatible, no BuildKit).
 RUN apt-get update -qq && \
-    apt-get install -y --no-install-recommends \
-      python3 python3-pip \
-      jq sqlite3 && \
-    ln -sf /usr/bin/python3 /usr/bin/python && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y --no-install-recommends \
+  python3 python3-pip \
+  jq sqlite3 && \
+  ln -sf /usr/bin/python3 /usr/bin/python && \
+  rm -rf /var/lib/apt/lists/*
 
 # Pip packages for the file-analysis tool (plain RUN — classic-builder compatible).
 RUN pip3 install --break-system-packages \
-      requests pandas numpy openpyxl tabulate python-dateutil \
-      "pdfminer.six>=20240706" "pyarrow>=17.0"
+  requests pandas numpy openpyxl tabulate python-dateutil \
+  "pdfminer.six>=20240706" "pyarrow>=17.0"
 
 # OpenTelemetry Collector (contrib build — needed for the azuremonitor exporter).
 # Bridges OTLP from the Copilot CLI subprocess into Azure Application Insights.
@@ -64,9 +64,9 @@ ENV OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 # COPILOT_HOME is read by CopilotSessionFactory and passed to the SDK via
 # CopilotClientOptions.CopilotHome (1.0-beta.3+) — the CLI then writes session
 # state under /home/copilot/.copilot/session-state/. /home is the persistent
-# Azure Files mount on App Service Linux. Per-user sessions are isolated under
-# /home/copilot/users/{oid} via SessionConfig.WorkingDirectory (filtered at
-# list time via SessionListFilter.Cwd).
+# Azure Files mount on App Service Linux. Entra sessions are isolated under a
+# versioned hash of the validated tenant/object pair; anonymous sessions use a
+# generated user id. SessionConfig.WorkingDirectory is the ownership marker.
 ENV COPILOT_HOME=/home/copilot
 EXPOSE 8080
 

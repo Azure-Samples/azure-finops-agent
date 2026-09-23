@@ -8,6 +8,7 @@ on:
       - "tests/**"
       - "global.json"
       - ".github/workflows/validate.yml"
+      - ".github/workflows/live-evaluations.yml"
       - ".github/workflows/main.yml"
   workflow_dispatch:
 
@@ -34,9 +35,17 @@ jobs:
       contents: read
     uses: ./.github/workflows/validate.yml
 
+  live-evaluations:
+    needs: regressions
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/live-evaluations.yml
+    secrets: inherit
+
   deploy:
     name: Build & Deploy
-    needs: regressions
+    needs: [regressions, live-evaluations]
     runs-on: ubuntu-latest
     steps:
       # Shallow checkout — build number now comes from github.run_number,
