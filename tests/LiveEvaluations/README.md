@@ -12,6 +12,8 @@ Each case uses a fresh process and synthetic conversation, the candidate's real 
 
 The evaluator shares the application's reported-tool-failure classifier rather than treating SDK callback completion as success. Empty payloads and explicit failure/cancellation in nested evidence fail deterministically. Unknown, partial or awaiting-approval evidence is not automatically a tool execution failure: the judge must still establish whether the answer satisfies the requested task and accurately states those limitations.
 
+A well-formed negative judge verdict is reported as a rejected answer, not missing or malformed output. Every judge flag must still be a boolean, all three flags must be true, and the reason must be nonempty to pass. This diagnostic distinction does not relax acceptance or publish private judge rationale.
+
 The test-only in-memory host supplies tokens from the dedicated CI identity; it is **not** a deployed-browser OAuth or delegated-consent test. No evaluation authentication endpoint is added to the production app. Job-template cases test chat/tool routing, not timer execution. Follow-up/upload templates that lack an actual prior conversation or fixture can only test honest clarification, not execution of the missing scenario. Image startup, browser UI and delegated sign-in need their separate regression coverage.
 
 ## Required GitHub Configuration

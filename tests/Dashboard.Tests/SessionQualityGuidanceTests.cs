@@ -80,6 +80,17 @@ public sealed class SessionQualityGuidanceTests
     }
 
     [Fact]
+    public void PricingClarifiesMaterialInputsAndLabelsVariantsBeforeOneFinalVisual()
+    {
+        Assert.Contains("clarify missing material region or service-tier inputs", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Example filters are not defaults", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Explicit cross-region rankings and global rate-card comparisons", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("OS/license basis, tier and purchase type in answer headlines and chart labels", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Calculate the requested period before rendering exactly one final visual", CopilotSessionFactory.SystemPrompt);
+        Assert.DoesNotContain("Use simple arithmetic directly", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
     public void PublicFaqSubmissionRequiresAnExplicitUserRequest()
     {
         var tool = new FaqTools(new UserTokens { UserId = 101 }).Create().Single();

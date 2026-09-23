@@ -219,6 +219,8 @@ Every registered tool is covered below. A scoped request can still need substant
 
 For retail `rank=cheapest`, `top` limits the returned cheapest regions per compatible price variant after source pagination. `rankingComplete` distinguishes a complete top-N calculation from `detailsComplete` (all fetched rows delivered). Facets retain filterable price vocabulary, not every identifier in the provider payload.
 
+Pricing guidance clarifies missing material region/tier inputs before fixed-region quotes unless the user established them or authorized assumptions. Examples are filter syntax, not default configurations; cross-region rankings and global rate cards remain valid. Headlines and chart labels retain the selected product's OS/license, tier and purchase type, even when products share a meter name. Requested-period calculations precede one final visual. Complete source coverage within chosen filters is not proof those filters match the intended scenario.
+
 Retail rows also retain `tierMinimumUnits` and currency. Volume bands are separate variants: a high-volume discount cannot become the default rate for a small dataset. `CalculateCost` consumes only selected, verified quantities and rates; it cannot recover missing price or capacity evidence. Report month/year/scenario changes explicitly and recalculate rather than reusing an incompatible total.
 
 `RenderChart` keeps `type` as the canonical schema field. A deliberate compatibility adapter accepts the observed legacy `chart` key only when it is unambiguous; conflicting kinds return an actionable error. Optional axes remain genuinely optional.

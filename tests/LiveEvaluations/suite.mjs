@@ -243,13 +243,19 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
     if (!Array.isArray(result.reasons) || result.reasons.length)
         failures.push("Judge or deterministic checks rejected the answer.");
     if (
-        result.judge?.accepted !== true ||
-        result.judge?.grounded !== true ||
-        result.judge?.complete !== true ||
+        typeof result.judge?.accepted !== "boolean" ||
+        typeof result.judge?.grounded !== "boolean" ||
+        typeof result.judge?.complete !== "boolean" ||
         typeof result.judge?.reason !== "string" ||
         !result.judge.reason.trim()
     )
         failures.push("Missing or invalid structured judge verdict.");
+    else if (
+        !result.judge.accepted ||
+        !result.judge.grounded ||
+        !result.judge.complete
+    )
+        failures.push("Structured judge rejected the answer.");
     return failures;
 }
 

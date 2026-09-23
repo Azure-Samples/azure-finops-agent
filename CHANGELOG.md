@@ -9,6 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Clarify missing material region/tier inputs before fixed-region price quotes instead of treating example filters as defaults. Keep selected OS/license and purchase variants visible in price headlines/charts, and calculate requested-period values before one final visual. Preserve independent variant rankings and existing source coverage.
+- Report valid negative live-evaluation judgments as rejected answers rather than malformed verdicts, retaining every fail-closed acceptance check and private-rationale withholding.
 - Include scoped, paged Azure Advisor Cost recommendations in the single Crawl assessment so savings requests receive ranked annual estimates rather than governance tasks alone. Preserve currencies, terms, source update dates, unknown amounts and overlap/commitment caveats; do not sum alternatives or relabel bundle generation as inventory freshness.
 - Preserve per-variant observed price/region counts and source-completeness evidence in retail projections. Reuse already-returned requested rates instead of repeating a batch solely because the wider catalogue is partial.
 - Deliver a requested idle-sweep script even when no billable candidates are found, using scoped read-only revalidation/no-op code. Keep unknown money/currency and source coverage explicit, use culture-independent timestamps, and reject malformed inventory responses instead of treating them as zero matches. Generated Resource Graph script guidance separates KQL from JMESPath and requires explicit failures instead of missing-output zero defaults; packaging does not execute or validate commands.

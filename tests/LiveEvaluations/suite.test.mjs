@@ -509,6 +509,25 @@ test("malformed verdicts, missing results, timeouts and failed tools fail closed
         validateResult(scenario, pass(scenario), 1, sha, suiteHash).length > 0,
     );
 });
+test("valid negative judge criteria reject the gate without claiming malformed output", () => {
+    for (const criterion of ["accepted", "grounded", "complete"]) {
+        const results = rows();
+        results[0].result.judge[criterion] = false;
+        const failures = validateResult(cases[0], results[0].result, 0, sha, suiteHash);
+        assert.ok(failures.includes("Structured judge rejected the answer."));
+        assert.ok(!failures.includes("Missing or invalid structured judge verdict."));
+        assert.equal(evaluateSuite(cases, results, sha, suiteHash).accepted, false);
+    }
+});
+test("judge criteria must be booleans and include a nonempty reason", () => {
+    for (const criterion of ["accepted", "grounded", "complete", "reason"]) {
+        const result = pass(cases[0]);
+        result.judge[criterion] = criterion === "reason" ? " " : "true";
+        const failures = validateResult(cases[0], result, 0, sha, suiteHash);
+        assert.ok(failures.includes("Missing or invalid structured judge verdict."));
+        assert.ok(!failures.includes("Structured judge rejected the answer."));
+    }
+});
 test("summary escapes model HTML and shows question, count and verdict", () => {
     const results = rows();
     results[0].result.answer = "<script>alert(1)</script>";

@@ -147,6 +147,8 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 
 ### Retail pricing
 
+- Clarify missing material region/service-tier inputs before fixed-region quotes unless established or assumptions were explicitly authorized. Example filters are not defaults. Explicit cross-region rankings and global rate cards remain supported without choosing a single region.
+- Preserve the selected product's OS/license, tier and purchase-type qualifiers in headlines and chart labels; a shared ARM SKU or meter name does not prove equivalent pricing. Calculate the requested period before rendering one final visual, never an intermediate hourly chart for a monthly comparison.
 - One filter combination: one `GetAzureRetailPricing` call.
 - Two or more independent combinations: one `GetAzureRetailPricingBatch` call.
 - One SKU across regions uses one comma-separated region request.
@@ -249,6 +251,7 @@ The frontend must be built before backend startup so `wwwroot` exists when ASP.N
 - Frontend: `npm run build` under `src/Dashboard/frontend`
 - Local failed-evaluation diagnostics may be retained only with explicit `EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY` outside the repository and published output (including symlink targets); CI rejects the option. Delete passing captures and never publish raw failed-tool details in either data classification.
 - Preserve captured execution on credential, replay and judge exceptions. Private diagnostics include bounded redacted successful/failed tool details and failure phase, never reset completed work to an empty zero-duration record. Neither synthetic nor internal-test publication includes those private fields.
+- Distinguish a valid negative judge verdict from malformed/missing judge output in gate diagnostics. Both fail the gate; acceptance still requires all three boolean judge flags to be true and a nonempty reason, without publishing private rationale.
 - Always verify the rendered UI for UI changes; a successful build is not a browser test.
 - Measure latency from the app's SSE stream, not rendered pixels.
 - Before every send, wait for the composer to be enabled and for the Stop button to be absent.

@@ -19,9 +19,16 @@ public static class RetailPricingTools
 
     private const int MaxProjectedRows = 200;
     private const int MaxFacetValues = 25;
+    private const string QuoteInputGuidance =
+        "QUOTE INPUTS: For a fixed-region estimate or comparison, establish the region and material service tier/hardware inputs from the user or prior context. "
+        + "If missing, ask a concise clarification before pricing, calculation or charting unless the user explicitly authorized an assumed scenario. "
+        + "Example filters are not defaults; a vCore count alone does not establish a database tier. "
+        + "An explicit cross-region ranking or global rate-card comparison does not require choosing a single region.";
     private const string ReturnedRateGuidance =
         "QUOTE COVERAGE: RESOLUTION describes the whole filtered catalogue, not whether each returned price is usable. "
+        + "Returned rates do not establish missing user quote inputs. "
         + "Match every requested model/SKU, input/output direction, deployment tier, residency, cache qualifier, unit and currency to the returned live fields. "
+        + "Carry the selected product's material qualifiers (OS/license, tier and purchase type) into answer headlines and chart labels; a shared meterName or ARM SKU alone does not identify the price variant. "
         + "When all requested rates are present, answer from this result; do not refine merely because status is ambiguous or partial. "
         + "A row with variantSourceComplete=true and observedVariantPrices=1 has one retailPrice across that exact variant's fetched regions, even when catalogue details are capped. "
         + "Otherwise a valid returned rate quotes only the row's named region; do not infer a uniform price or fill a missing/invalid price. "
@@ -61,13 +68,13 @@ EVERY RESPONSE INCLUDES A `FACETS` BLOCK giving the live distinct values of each
 
 READING THE ROWS: they arrive grouped by meterName, cheapest-first within each meter. Spot, Low Priority, Windows, Reservation, cached-input and regional/zonal variants are all present and are distinguishable via meterName / skuName / type. Never treat different meters as interchangeable. A model/SKU comparison must match the requested pricing variant in each section, not select a minimum across incompatible meters.
 
-DEFAULT INTERPRETATION: unless the user explicitly asked for Spot, Low Priority, Windows, reserved or zone-redundant pricing, answer with the ordinary on-demand meter — the meterName carrying no such qualifier — and name the meter you used. A 'cheapest region' question means cheapest on-demand region, not cheapest Spot region.
+DEFAULT INTERPRETATION: unless the user explicitly asked for Spot, Low Priority, Windows, reserved or zone-redundant pricing, answer with the ordinary on-demand product/meter and state its OS/license basis. productName can distinguish Windows from non-Windows even when meterName is identical. A 'cheapest region' question means cheapest on-demand region, not cheapest Spot region.
 
 UNIT SEMANTICS: retailPrice is the price for ONE `unitOfMeasure` of the WHOLE SKU in armSkuName/skuName. Never multiply it by a core/vCore/GPU/node count that is already part of that SKU name — e.g. armSkuName 'SQLDB_GP_Compute_Gen5_4' / skuName '4 vCore' at 1 Hour is the total hourly price for all 4 vCores, not per vCore. Multiply only by quantity the user asked for (number of instances) and by hours.
 VOLUME BANDS: retain tierMinimumUnits and currencyCode. A cheaper high-volume band is not the price for a small dataset. Match the requested quantity to the documented tier rules; split graduated tiers into separate CalculateCost lines instead of applying the cheapest band to every unit.
 
 MONTHLY / VOLUME TOTALS: call EstimateTokenCost with the per-1M rates instead of doing token arithmetic in prose."
-            + "\n\n" + ReturnedRateGuidance);
+            + "\n\n" + QuoteInputGuidance + "\n\n" + ReturnedRateGuidance);
 
         yield return AIFunctionFactory.Create(GetAzureRetailPricingBatch, "GetAzureRetailPricingBatch",
             @"PUBLIC (no auth): Runs 2-8 independent Azure Retail Prices lookups IN PARALLEL inside ONE tool call. Use this whenever a comparison or estimate needs more than one distinct service/SKU filter. Do NOT call GetAzureRetailPricing repeatedly, and do NOT use bash/powershell/rg/grep to parse or combine pricing rows.
@@ -85,7 +92,7 @@ Example — named Foundry models (go straight to this batch; NEVER run a broad G
 [{""label"":""GPT-4o"",""serviceName"":""Foundry Models"",""productNameContains"":""Azure OpenAI"",""skuNameContains"":""4o"",""priceType"":""Consumption"",""top"":50},{""label"":""GPT-4o-mini"",""serviceName"":""Foundry Models"",""productNameContains"":""Azure OpenAI"",""skuNameContains"":""4o-mini"",""priceType"":""Consumption"",""top"":50},{""label"":""GPT-4.1"",""serviceName"":""Foundry Models"",""productNameContains"":""Azure OpenAI"",""skuNameContains"":""4.1"",""priceType"":""Consumption"",""top"":50}]
 Foundry sections mix deployment types and residency zones in one result set. Read the returned skuName/meterName rows and quote the variant asked for — real-time Standard Global unless stated otherwise — rather than the cheapest row. For a model input/output comparison, identify both rates for each requested model in this first batch. Do not issue another batch merely to isolate exact names already returned. The capped FACETS list is vocabulary guidance, not a list of every delivered row.
 
-Known-good database filters (East US example):
+Known-good database filters (East US example, not default quote inputs):
 - SQL GP Gen5 compute: serviceName='SQL Database', armSkuName='SQLDB_GP_Compute_Gen5_8', productNameContains='Single/Elastic Pool General Purpose - Compute Gen5', meterNameContains='vCore'. Choose the ordinary `vCore` row, not `Zone Redundancy vCore`.
 - SQL GP storage: serviceName='SQL Database', productNameContains='Single/Elastic Pool General Purpose - Storage', skuNameContains='General Purpose', meterNameContains='Data Stored'. Choose the non-Free paid row.
 - Cosmos provisioned throughput: serviceName='Azure Cosmos DB', productNameContains='Azure Cosmos DB', skuNameContains='RUs', meterNameContains='100 RU/s'.
@@ -93,11 +100,11 @@ Known-good database filters (East US example):
 - PostgreSQL Flexible 8-vCore: serviceName='Azure Database for PostgreSQL', armSkuName='Standard_D8ds_v5'. Storage: productNameContains='Flex Server Storage', meterNameContains='Storage Data Stored'.
 
 For one SKU across several regions, use ONE GetAzureRetailPricing call with comma-separated armRegionName instead. For storage tiers sharing one service/region, use ONE broad GetAzureRetailPricing call (for example meterNameContains='LRS'). Never re-query a batch result in the same turn unless a requested rate remains missing or unresolved."
-            + "\n\n" + ReturnedRateGuidance);
+            + "\n\n" + QuoteInputGuidance + "\n\n" + ReturnedRateGuidance);
     }
 
     private static async Task<string> GetAzureRetailPricingBatch(
-        [Description("JSON array of 2-8 independently filtered pricing queries. Each object: label, serviceName, and optional armRegionName, armSkuName, priceType, meterNameContains, productNameContains, skuNameContains, currencyCode, rank, top. Supply only requested service/SKU/region filters, deduplicate identical combinations, and keep enough rows for every required meter. Reuse matching returned rates; catalogue-level partial/ambiguous status alone does not require another batch.")] string queriesJson)
+        [Description("JSON array of 2-8 independently filtered pricing queries. Each object: label, serviceName, and optional armRegionName, armSkuName, priceType, meterNameContains, productNameContains, skuNameContains, currencyCode, rank, top. Supply only requested service/SKU/region filters, deduplicate identical combinations, and keep enough rows for every required meter. Reuse matching returned rates; catalogue-level partial/ambiguous status alone does not require another batch. " + QuoteInputGuidance)] string queriesJson)
     {
         using var doc = JsonDocument.Parse(queriesJson);
         if (doc.RootElement.ValueKind != JsonValueKind.Array)
@@ -339,7 +346,7 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
 
     private static async Task<string> GetAzureRetailPricing(
         [Description("Required service filter, e.g. 'Virtual Machines', 'Storage', 'SQL Database', 'Foundry Models'. Combine with the requested SKU, region and purchase-type filters instead of retrieving an entire service catalogue.")] string serviceName,
-        [Description("ARM region (lowercase, no spaces), e.g. 'eastus', 'westeurope'. Pass a COMMA-SEPARATED LIST to compare regions in ONE call, e.g. 'eastus,westeurope,swedencentral' — always do this instead of calling the tool once per region. Empty = all regions.")] string? armRegionName = null,
+        [Description("ARM region (lowercase, no spaces), e.g. 'eastus', 'westeurope'. Pass a COMMA-SEPARATED LIST to compare regions in ONE call, e.g. 'eastus,westeurope,swedencentral' — always do this instead of calling the tool once per region. Empty = all regions. For a fixed-region quote, clarify a missing region rather than choosing an example region.")] string? armRegionName = null,
         [Description("Exact ARM SKU filter, e.g. 'Standard_D4s_v5'. Supply the requested SKU when known; omit only for a requested cross-SKU comparison or a service without ARM SKU identifiers.")] string? armSkuName = null,
         [Description("Price type: 'Consumption' (PAYG), 'Reservation' (1y/3y RI), 'DevTestConsumption'. Empty = all.")] string? priceType = null,
         [Description("Substring match on meterName, e.g. 'Spot' or 'LRS'. Empty = no meter filter.")] string? meterNameContains = null,

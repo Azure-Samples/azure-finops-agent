@@ -313,6 +313,73 @@ public sealed class RetailPricingTests
             batch.JsonSchema.GetProperty("properties").GetProperty("queriesJson").GetProperty("description").GetString());
     }
 
+    [Fact]
+    public void PricingMetadataRequiresEstablishedQuoteInputsWithoutBlockingCrossRegionOrGlobalComparisons()
+    {
+        var tools = RetailPricingTools.Create().ToArray();
+        Assert.All(tools, tool =>
+        {
+            Assert.Contains("establish the region and material service tier/hardware inputs from the user or prior context",
+                tool.Description);
+            Assert.Contains("ask a concise clarification before pricing, calculation or charting", tool.Description);
+            Assert.Contains("unless the user explicitly authorized an assumed scenario", tool.Description);
+            Assert.Contains("Example filters are not defaults", tool.Description);
+            Assert.Contains("a vCore count alone does not establish a database tier", tool.Description);
+            Assert.Contains("cross-region ranking or global rate-card comparison does not require choosing a single region",
+                tool.Description);
+        });
+
+        var single = tools.Single(tool => tool.Name == "GetAzureRetailPricing");
+        Assert.Contains("clarify a missing region rather than choosing an example region",
+            single.JsonSchema.GetProperty("properties").GetProperty("armRegionName").GetProperty("description").GetString());
+        var batch = tools.Single(tool => tool.Name == "GetAzureRetailPricingBatch");
+        Assert.Contains("East US example, not default quote inputs", batch.Description);
+        Assert.Contains("ask a concise clarification before pricing, calculation or charting",
+            batch.JsonSchema.GetProperty("properties").GetProperty("queriesJson").GetProperty("description").GetString());
+    }
+
+    [Fact]
+    public void SharedMeterProductsKeepSeparateRankingsAndRequireVisibleVariantQualifiers()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            BillingCurrency = "USD",
+            Items = new[] { (Product: "Synthetic compute", Price: 0.2), (Product: "Synthetic compute Windows", Price: 0.4) }
+                .SelectMany(product => Enumerable.Range(0, 3).Select(region => new
+                {
+                    armRegionName = $"region{region}", armSkuName = "synthetic", skuName = "synthetic",
+                    meterName = "Ordinary", productName = product.Product, unitOfMeasure = "1 Hour",
+                    type = "Consumption", retailPrice = product.Price + region / 100d
+                }))
+        });
+
+        var result = RetailPricingTools.CompactBatchResult(json, topPerVariant: 1);
+        var resolution = ReadResolution(result);
+        Assert.True(resolution.GetProperty("complete").GetBoolean());
+        Assert.True(resolution.GetProperty("rankingComplete").GetBoolean());
+        Assert.True(resolution.GetProperty("paginationComplete").GetBoolean());
+        Assert.False(resolution.GetProperty("detailsComplete").GetBoolean());
+        Assert.Equal(2, resolution.GetProperty("variants").GetInt32());
+        var rows = ReadRows(result);
+        Assert.Equal(2, rows.Length);
+        Assert.Equal("0.2", Assert.Single(rows, row => row["productName"] == "Synthetic compute")["retailPrice"]);
+        Assert.Equal("0.4", Assert.Single(rows, row => row["productName"] == "Synthetic compute Windows")["retailPrice"]);
+        Assert.All(rows, row =>
+        {
+            Assert.Equal("Ordinary", row["meterName"]);
+            Assert.Equal("3", row["observedVariantPrices"]);
+            Assert.Equal("true", row["variantSourceComplete"]);
+        });
+
+        var guidance = resolution.GetProperty("instruction").GetString();
+        Assert.Contains("Returned rates do not establish missing user quote inputs", guidance);
+        Assert.Contains("OS/license, tier and purchase type", guidance);
+        Assert.Contains("answer headlines and chart labels", guidance);
+        Assert.Contains("a shared meterName or ARM SKU alone does not identify the price variant", guidance);
+        Assert.All(RetailPricingTools.Create(), tool =>
+            Assert.Contains("answer headlines and chart labels", tool.Description));
+    }
+
     private static string ModelRatesPayload(string model)
     {
         var variants = new[]
