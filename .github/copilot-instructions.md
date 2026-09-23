@@ -88,12 +88,13 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 
 - `GenerateScript` is always loaded. When the user requests Azure CLI or PowerShell code, call it directly with the complete executable code in `scriptContent`; it packages an owner-bound artifact and never executes the code. Tenant-specific scripts require scoped evidence first.
 - Script delivery is a proposed savings action, never an executed change. Generic code examples do not create ledger entries. See [the tool and prompt catalog](../docs/tool-catalog.md) for registration flags, inputs, limits and prompt sources; update it when these contracts change.
+- Generated `az graph query` commands use `--graph-query`/`-q` for KQL and `--query` only for JMESPath output selection. Failed queries and invalid/missing counts remain explicit errors, not zero results. Artifact packaging never validates or executes the script.
 - Tools fetch data and return compact raw API JSON unless a bounded projection is explicitly required for performance.
 - XLSX `workbook` inspection returns every sheet's shape, columns, and bounded numeric summaries in one call; reuse it instead of making a second aggregate call when the requested metric is already present.
 - Prefer string parameters; SDK coercion of numeric arguments can be unreliable.
 - `CalculateCost` requires one explicit top-level source currency. Omitted line currencies inherit it; explicit invalid or different currencies are rejected, never converted. Surface tool `Error:` results as failures even when SDK execution succeeded.
 - Use `CalculateCost` for non-token estimates/run-rates and `EstimateTokenCost` for token math. Keep the source currency, billing unit and scenario assumptions; an annualized exit-month cost is not cumulative annual spend. Calculators establish arithmetic, not price validity or deployability.
-- `CompareAmounts` uses one 1-40-character unit and 1-100-character item labels. Put dates, cost type and assumptions in the answer rather than expanding the unit beyond its validated schema guidance.
+- `CompareAmounts` uses one 1-40-character unit and 1-100-character item labels. Copy complete verified decimal-point strings, never ellipses or unfinished expressions; obtain missing source digits with `QueryToolResult`, not input repair. Put dates, cost type and assumptions in the answer rather than expanding the unit beyond its validated schema guidance.
 - A nullable C# parameter is not optional in the emitted tool schema. Give documented optional inputs actual defaults and test both schema requiredness and invocation with omitted arguments.
 - Graph query options are endpoint-specific: `subscribedSkus` accepts only `$select`; Copilot usage functions do not accept `$filter`, `$top` or `$select`. Prefer current `/v1.0/copilot/reports/` routes and preserve CSV versus beta JSON, report version/period, source refresh date and licensed-user coverage.
 - Graph retrieval time is culture-independent and does not replace source report dates. Mixed Microsoft 365/Azure licensing assessments require both domains; enabled seats and resource licenseType are not invoices or proof of purchased entitlements.
@@ -133,6 +134,9 @@ Use `QueryCostsAcrossSubscriptions` exactly once for totals-only all-subscriptio
 
 Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 
+- It includes cached Advisor Cost recommendations across the same scopes, ranked by reported annual estimates within each currency after collection paging. Preserve terms, quantities, source update dates and unknown/partial coverage; overlapping alternatives are not additive or proof of realizable net savings.
+- Biggest-savings requests use that evidence, not generic governance tasks. Keep all seven score formulas unchanged; a zero common-waste count does not exclude other savings opportunities.
+- Bundle `generatedUtc` is not an inventory timestamp. Source projections expose retrieval time separately from unknown source freshness/indexing delay.
 - It runs budget/current-spend, required-tag, exports, alert/scheduled-action, policy, common-waste, and empty-resource-group checks concurrently.
 - It computes and persists all seven scores and returns follow-up actions.
 - Rendered score details and answers preserve budget-snapshot lag, unknown source timestamps, and non-final billing status. Generic alert counts cannot prove anomaly-alert configuration; follow-ups verify coverage before proposing approved changes for confirmed gaps.
@@ -154,7 +158,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 - Meter, product and SKU names are not derivable from the ARM SKU (`Standard_ND96asr_v4` meters as `ND96asr_A100_v4`). When such a filter matches zero rows the tool drops it, re-queries on the structural filter alone, and says so — it must never return an empty table.
 - `priceType='Consumption'` includes Spot and Low Priority. Comparisons stay within one `meterName`, and answers default to the ordinary on-demand meter unless another variant was requested.
 - Foundry model comparisons must use the intended deployment tier/zone and must not silently choose Batch, cached, or Data Zone rows when Standard Global was requested.
-- Preserve `RESOLUTION` status and coverage. One targeted refinement is allowed for ambiguous/partial results. Missing prices stay unknown; the deterministic calculator rejects ambiguous decimal separators, missing rates and mixed currencies.
+- Preserve `RESOLUTION` status and coverage. Per-variant observed price/region counts and `variantSourceComplete` do not upgrade catalogue coverage. Reuse matching requested rates already returned; a partial catalogue alone does not justify another batch. One targeted refinement is allowed for genuinely unresolved requested rates within the user's call limit. Missing prices stay unknown; the deterministic calculator rejects ambiguous decimal separators, missing rates and mixed currencies.
 - Answers retain the source's returned UTC retrieval timestamp, including chart-only answers. Retrieval time is not a price-effective date or a source measurement made by the host.
 
 ### Compute and operations

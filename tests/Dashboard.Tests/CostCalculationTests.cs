@@ -76,6 +76,22 @@ public sealed class CostCalculationTests
         Assert.StartsWith("Error:", CostCalculationTools.CompareAmounts(items, new string('u', 41)));
     }
 
+    [Fact]
+    public void ComparisonsPreserveCompleteDecimalStringsAndRejectTruncatedPlaceholders()
+    {
+        var tool = CostCalculationTools.Create().Single(tool => tool.Name == "CompareAmounts");
+        Assert.Contains("Never send ellipses", tool.Description);
+        Assert.Contains("No ellipses", tool.JsonSchema.GetProperty("properties").GetProperty("itemsJson")
+            .GetProperty("description").GetString());
+        const string complete = """[{"label":"Synthetic amount","current":"1234.123456789012345","baseline":"12.3456789012345"}]""";
+        using var result = JsonDocument.Parse(CostCalculationTools.CompareAmounts(complete, "USD"));
+        Assert.Equal(1234.123456789012345m, result.RootElement.GetProperty("items")[0].GetProperty("current").GetDecimal());
+        Assert.StartsWith("Error:", CostCalculationTools.CompareAmounts(
+            """[{"label":"Incomplete","current":1234.123...?}]""", "USD"));
+        Assert.StartsWith("Error:", CostCalculationTools.CompareAmounts(
+            """[{"label":"Incomplete","current":"1234.123...?"}]""", "USD"));
+    }
+
     [Theory]
     [InlineData("""[{"label":"Missing rate","quantity":1,"unit":"GB-month","currency":"USD"}]""")]
     [InlineData("""[{"label":"Wrong currency","quantity":1,"unitPrice":2,"unit":"GB-month","currency":"EUR"}]""")]

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 
@@ -33,7 +34,9 @@ public class IdleResourceTools
 
 DATA SCOPING: pass only the subscription IDs in the user's requested scope; omit them only for an explicitly all-accessible scan. Each pattern filters and projects at Resource Graph before applying topPerPattern (1-200). Use a small topPerPattern for a quick scan, not an estate-wide total; a limited pattern count is not the full count of matching resources. The tool always scans all eight patterns and has no resource-group, region or pattern selector. For one named pattern/resource group, use one scoped QueryAzure Resource Graph query with where, summarize/project and a result limit. Preserve all requested scope and disclose limited coverage; empty resource groups alone are not billable waste.
 
-Use for 'find waste', 'orphaned resources', 'quick cost wins'. After calling, suggest GenerateScript for cleanup.");
+EVIDENCE LIMITS: inventory does not establish a monetary amount or billing currency. Do not turn zero matching candidates into an invented 0 USD/month estate-wide estimate. Empty resource groups and unused NICs are not billable on their own. Retain source freshness, requested scope and per-pattern limits.
+SCRIPT DELIVERY: when the user explicitly requests a cleanup script, call GenerateScript in this turn rather than merely offering a future script. If no billable targets were found, still deliver a scoped, read-only revalidation/no-op script for review, with no mutation or invented resource targets. Never execute it.
+Use for 'find waste', 'orphaned resources', 'quick cost wins'.");
     }
 
     private async Task<string> FindIdleResources(
@@ -91,22 +94,32 @@ Use for 'find waste', 'orphaned resources', 'quick cost wins'. After calling, su
         var completed = await Task.WhenAll(queryTasks);
         var results = completed.ToDictionary(x => x.Label, x => x.Result);
 
-        var summary = new
-        {
-            generated_utc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
-            subscriptions_scoped = subs is null ? "all accessible" : string.Join(",", subs),
-            note = "Estimated monthly waste is NOT included — call GetAzureRetailPricing for each SKU type to compute exact $ savings, then GenerateScript for a cleanup script.",
-            patterns = results,
-        };
-
-        return JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
+        return JsonSerializer.Serialize(BuildReport(subs, topPerPattern, results),
+            new JsonSerializerOptions { WriteIndented = true });
     }
+
+    internal static object BuildReport(string[]? subscriptions, int topPerPattern, IReadOnlyDictionary<string, object> results) => new
+    {
+        generated_utc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+        retrievedAtUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+        dataAsOfUtc = (string?)null,
+        freshness = "Resource Graph is an indexed inventory and may lag resource changes. Its source timestamp and indexing delay are unknown; retrievedAtUtc records completion of the scan, not source freshness.",
+        subscriptions_scoped = subscriptions is null ? "all accessible" : string.Join(",", subscriptions),
+        limitPerPattern = topPerPattern,
+        countsAreEstateTotals = false,
+        monthlyWaste = (decimal?)null,
+        currency = (string?)null,
+        note = "Monthly waste and currency are not provided by inventory. Price only matched billable candidates using their actual SKU, region, billing unit and commitment coverage; retail estimates are not verified net savings. With no candidates, say no waste was identified by these filters, not that the estate costs 0 USD/month. Empty resource groups and unused NICs alone are not billable waste.",
+        scriptGuidance = "If a script was requested, call GenerateScript now. With no billable candidates, deliver a scoped read-only revalidation/no-op script, without mutations or invented targets. A follow-up link is not the requested artifact. Never execute the script.",
+        patterns = results
+    };
 
     private static async Task<object> RunResourceGraphQuery(string token, string kql, string[]? subs, System.Diagnostics.Activity? activity)
     {
+        var options = new Dictionary<string, object> { ["resultFormat"] = "objectArray", ["$top"] = 1000 };
         var bodyObj = subs is null
-            ? (object)new { query = kql, options = new { resultFormat = "objectArray", top = 1000 } }
-            : new { subscriptions = subs, query = kql, options = new { resultFormat = "objectArray", top = 1000 } };
+            ? (object)new { query = kql, options }
+            : new { subscriptions = subs, query = kql, options };
         var body = JsonSerializer.Serialize(bodyObj);
 
         var resp = await HttpHelper.SendWithRetryAsync(
@@ -114,25 +127,38 @@ Use for 'find waste', 'orphaned resources', 'quick cost wins'. After calling, su
             token, activity, "idle.rg",
             method: HttpMethod.Post, jsonBody: body);
 
-        if (!resp.StartsWith("HTTP 200"))
-            return new { error = "query failed", detail = resp[..Math.Min(resp.Length, 400)] };
+        return ParseResourceGraphResponse(resp);
+    }
 
-        var json = resp[(resp.IndexOf('\n') + 1)..];
+    internal static object ParseResourceGraphResponse(string response)
+    {
+        if (!response.StartsWith("HTTP 200 ", StringComparison.Ordinal))
+            return new { error = "query failed", detail = response[..Math.Min(response.Length, 400)] };
+
+        var json = response[(response.IndexOf('\n') + 1)..];
         if (json.StartsWith("Current UTC time:")) json = json[(json.IndexOf('\n') + 1)..];
 
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("data", out var data))
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array
+                && data.EnumerateArray().All(item => item.ValueKind == JsonValueKind.Object))
             {
-                var count = data.ValueKind == JsonValueKind.Array ? data.GetArrayLength() : 0;
-                return new { count, items = JsonSerializer.Deserialize<JsonElement>(data.GetRawText()) };
+                var count = data.GetArrayLength();
+                var hasTruncation = doc.RootElement.TryGetProperty("resultTruncated", out var truncation)
+                    && bool.TryParse(truncation.ToString(), out _);
+                var truncated = hasTruncation && string.Equals(truncation.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+                var hasContinuation = doc.RootElement.TryGetProperty("$skipToken", out var continuation)
+                    && continuation.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(continuation.GetString());
+                bool? complete = truncated || hasContinuation ? false : hasTruncation ? true : null;
+                return new { count, items = data.Clone(), complete };
             }
-            return new { count = 0, items = Array.Empty<object>() };
+            return new { error = "invalid inventory response", detail = "Resource Graph did not return an object-array data set; matching resources are unknown." };
         }
-        catch (Exception ex)
+        catch (JsonException)
         {
-            return new { error = "parse failed", detail = ex.Message };
+            return new { error = "parse failed", detail = "Resource Graph returned invalid JSON; matching resources are unknown." };
         }
     }
 }

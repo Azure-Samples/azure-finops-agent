@@ -62,6 +62,20 @@ public sealed class ToolSchemaContractTests
     }
 
     [Fact]
+    public void ScriptContractSeparatesKqlFromOutputSelectionAndPreservesFailures()
+    {
+        var tool = GetTool("GenerateScript");
+        Assert.Contains("az graph query --graph-query (or -q) for KQL", tool.Description);
+        Assert.Contains("--query is only the JMESPath selector", tool.Description);
+        Assert.Contains("a missing count is unknown, never zero", tool.Description);
+
+        var content = tool.JsonSchema.GetProperty("properties").GetProperty("scriptContent")
+            .GetProperty("description").GetString();
+        Assert.Contains("KQL goes in --graph-query/-q", content);
+        Assert.Contains("never replace failed queries or invalid/missing counts with zero", content);
+    }
+
+    [Fact]
     public async Task ParameterlessUploadModeReachesTheOwnerCheckedReader()
     {
         var result = await GetTool("QueryUploadedFile").InvokeAsync(new AIFunctionArguments

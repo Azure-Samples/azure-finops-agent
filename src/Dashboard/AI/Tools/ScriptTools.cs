@@ -25,6 +25,8 @@ Call this tool in the same response whenever the user explicitly requests code, 
 
 If the requested tenant-specific script depends on targets that have not been identified yet, query only the filtered evidence needed to identify them before calling this tool.
 
+For Azure Resource Graph, use az graph query --graph-query (or -q) for KQL; --query is only the JMESPath selector for the returned JSON, not the KQL argument. Never emit duplicate --query flags. Keep command failures and invalid/missing output as explicit errors: a missing count is unknown, never zero.
+
 For scripts that change resources, default to dry-run and require explicit local confirmation. Use only preview flags supported by the chosen commands; do not invent a universal --what-if flag. Never embed credentials; use the user's own login, managed identity, or local secret input. Query scripts must filter and aggregate at the source with supported API options instead of downloading full collections for a summary. Prefer Azure CLI (`az`) unless user asks for PowerShell.");
     }
 
@@ -34,8 +36,9 @@ For scripts that change resources, default to dry-run and require explicit local
 - For changes: dry-run by default and local confirmation, using only supported preview flags
 - No embedded credentials; use the user's login, managed identity, or local secret input
 - For queries: source-side filtering and aggregation with supported API options
+- For az graph query: KQL goes in --graph-query/-q; --query only selects the returned JSON with JMESPath
 - Clear comments for each logical section
-- Error handling for critical operations
+- Error handling for critical operations; never replace failed queries or invalid/missing counts with zero
 Example header:
 #!/bin/bash
 # FinOps Remediation Script: Delete Orphaned Disks

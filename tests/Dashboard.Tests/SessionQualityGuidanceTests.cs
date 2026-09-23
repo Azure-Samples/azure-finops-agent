@@ -44,6 +44,10 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("Do not describe unverified controls as missing", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("periodically evaluated snapshot may lag billing", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("has no source data-as-of timestamp", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("evidence.savings annual rankings within each currency", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Governance fixes are not substitutes", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("generatedUtc is bundle generation time", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("not a combined savings total", CopilotSessionFactory.SystemPrompt);
     }
 
     [Fact]
@@ -67,6 +71,15 @@ public sealed class SessionQualityGuidanceTests
     }
 
     [Fact]
+    public void CompleteRequestedRatesDoNotTriggerUnnecessaryCatalogueRefinement()
+    {
+        Assert.Contains("Catalogue-level partial/ambiguous status alone does not require another lookup", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("variantSourceComplete", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("within any explicit user call limit", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("do not repeat the batch merely because unrequested catalogue variants were omitted", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
     public void PublicFaqSubmissionRequiresAnExplicitUserRequest()
     {
         var tool = new FaqTools(new UserTokens { UserId = 101 }).Create().Single();
@@ -84,6 +97,30 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("both Graph license inventory and scoped Azure evidence", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("not invoices or proof of purchased entitlements", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("dated public list-price estimates and unknown costs", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("not purchased/paid seats", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("request the customer's invoice/pricesheet", CopilotSessionFactory.SystemPrompt);
+        var graph = new GraphQueryTools(new UserTokens { UserId = 101 }).Create().Single();
+        Assert.Contains("never as verified purchased or paid seats", graph.Description);
+        Assert.Contains("Fetch public pricing only for an explicitly requested", graph.Description);
+    }
+
+    [Fact]
+    public void UnavailableCopilotReportsStayBlockedRatherThanRepeatedOrZeroed()
+    {
+        Assert.Contains("do not repeat the same report through QueryGraph", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("does not prove zero historical activity", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("unfulfilled parts explicitly", CopilotSessionFactory.SystemPrompt);
+    }
+
+    [Fact]
+    public void CalculatorInputsAndRequestedScriptsMustBeComplete()
+    {
+        Assert.Contains("Never send ellipses, question marks, comments or unfinished numeric expressions", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("retrieve its full value through QueryToolResult first", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Call GenerateScript with complete review-only code even when", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("no invented targets or mutations", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("pass KQL through --graph-query or -q", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("invalid/missing counts as explicit errors", CopilotSessionFactory.SystemPrompt);
     }
 
     [Fact]

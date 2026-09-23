@@ -153,6 +153,208 @@ public sealed class RetailPricingTests
         Assert.Contains("\t0\tCAD", result);
     }
 
+    [Fact]
+    public void FirstBatchExposesSixStandardGlobalRatesWithoutResolvingTheWholeCatalogue()
+    {
+        var results = new[] { "Synthetic model A", "Synthetic model A-mini", "Synthetic model B" }
+            .Select(model => (Model: model, Result: RetailPricingTools.CompactBatchResult(ModelRatesPayload(model))))
+            .ToArray();
+
+        foreach (var (model, result) in results)
+        {
+            var resolution = ReadResolution(result);
+            Assert.False(resolution.GetProperty("complete").GetBoolean());
+            Assert.False(resolution.GetProperty("detailsComplete").GetBoolean());
+            Assert.True(resolution.GetProperty("paginationComplete").GetBoolean());
+            Assert.Equal(200, resolution.GetProperty("deliveredRows").GetInt32());
+            Assert.Equal(3_012, resolution.GetProperty("fetchedRows").GetInt32());
+            Assert.Equal(251, resolution.GetProperty("variants").GetInt32());
+
+            var rows = ReadRows(result);
+            Assert.Equal(200, rows.Length);
+            Assert.True(result.Length < 60_000);
+            foreach (var (direction, price) in new[] { ("Inp", "0.002"), ("Outp", "0.008") })
+            {
+                var row = Assert.Single(rows, row => row["skuName"] == $"{model} {direction} glbl");
+                Assert.Equal(price, row["retailPrice"]);
+                Assert.Equal("1K", row["unitOfMeasure"]);
+                Assert.Equal("USD", row["currencyCode"]);
+                Assert.Equal("1", row["observedVariantPrices"]);
+                Assert.Equal("12", row["observedVariantRegions"]);
+                Assert.Equal("true", row["variantSourceComplete"]);
+            }
+
+            Assert.Contains(rows, row => row["skuName"] == $"{model} Batch Inp glbl");
+            Assert.Contains(rows, row => row["skuName"] == $"{model} Inp Data Zone");
+            Assert.Contains(rows, row => row["skuName"] == $"{model} Inp regional");
+            Assert.Contains(rows, row => row["skuName"] == $"{model} cached Inp glbl");
+            Assert.Contains("do not refine merely because status is ambiguous or partial",
+                resolution.GetProperty("instruction").GetString());
+        }
+    }
+
+    [Fact]
+    public void VariantCoverageNeverHidesRegionalPriceDifferencesOrUnfinishedPagination()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            BillingCurrency = "USD",
+            Items = Enumerable.Range(0, 220).Select(index => new
+            {
+                armRegionName = $"region{index}", armSkuName = "synthetic", skuName = "Synthetic Inp glbl",
+                meterName = "Synthetic Inp glbl Tokens", productName = "Synthetic", unitOfMeasure = "1K",
+                type = "Consumption", retailPrice = index == 219 ? 0.02 : 0.01
+            })
+        });
+
+        var completeSource = RetailPricingTools.CompactBatchResult(json);
+        var partialSource = RetailPricingTools.CompactBatchResult(json, paginationComplete: false);
+        foreach (var (result, expectedComplete) in new[] { (completeSource, "true"), (partialSource, "false") })
+        {
+            var resolution = ReadResolution(result);
+            Assert.False(resolution.GetProperty("complete").GetBoolean());
+            Assert.False(resolution.GetProperty("detailsComplete").GetBoolean());
+            Assert.Equal(200, resolution.GetProperty("deliveredRows").GetInt32());
+            Assert.All(ReadRows(result), row =>
+            {
+                Assert.Equal("0.01", row["retailPrice"]);
+                Assert.Equal("2", row["observedVariantPrices"]);
+                Assert.Equal("220", row["observedVariantRegions"]);
+                Assert.Equal(expectedComplete, row["variantSourceComplete"]);
+            });
+        }
+        Assert.False(ReadResolution(partialSource).GetProperty("paginationComplete").GetBoolean());
+    }
+
+    [Fact]
+    public void VariantCoverageSeparatesSkusProductsUnitsPurchaseTypesCurrenciesAndVolumeBands()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            BillingCurrency = "USD",
+            Items = Enumerable.Range(0, 8).Select(index => new
+            {
+                armRegionName = "synthetic", armSkuName = index == 7 ? "other-sku" : "synthetic", skuName = "Synthetic input",
+                meterName = "Synthetic input", productName = index == 1 ? "Other product" : "Synthetic",
+                unitOfMeasure = index == 2 ? "1M" : "1K",
+                type = index == 3 ? "Reservation" : "Consumption",
+                reservationTerm = index == 4 ? "1 Year" : "",
+                currencyCode = index == 5 ? "CAD" : "USD",
+                tierMinimumUnits = index == 6 ? 50_000 : 0,
+                retailPrice = index + 1d
+            })
+        });
+
+        var result = RetailPricingTools.CompactBatchResult(json);
+        Assert.Equal(8, ReadResolution(result).GetProperty("variants").GetInt32());
+        Assert.All(ReadRows(result), row =>
+        {
+            Assert.Equal("1", row["observedVariantPrices"]);
+            Assert.Equal("1", row["observedVariantRegions"]);
+            Assert.Equal("true", row["variantSourceComplete"]);
+        });
+    }
+
+    [Fact]
+    public void UniformObservedRatesPreserveMissingPageWideningAndRegionCaveats()
+    {
+        var result = RetailPricingTools.CompactBatchResult(ModelRatesPayload("Synthetic"), paginationComplete: false,
+            widened: true, requestedRegions: ["missing"]);
+        var resolution = ReadResolution(result);
+
+        Assert.Equal("partial", resolution.GetProperty("status").GetString());
+        Assert.False(resolution.GetProperty("complete").GetBoolean());
+        Assert.False(resolution.GetProperty("paginationComplete").GetBoolean());
+        Assert.True(resolution.GetProperty("vocabularyWidened").GetBoolean());
+        Assert.Equal("missing", resolution.GetProperty("missingRequestedRegions")[0].GetString());
+        Assert.All(ReadRows(result), row =>
+        {
+            Assert.Equal("1", row["observedVariantPrices"]);
+            Assert.Equal("false", row["variantSourceComplete"]);
+        });
+    }
+
+    [Fact]
+    public void MissingPricePreventsCompleteVariantCoverage()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            BillingCurrency = "USD",
+            Items = new object[]
+            {
+                new { armRegionName = "first", skuName = "Synthetic", meterName = "Input", retailPrice = 0.01 },
+                new { armRegionName = "second", skuName = "Synthetic", meterName = "Input" }
+            }
+        });
+
+        Assert.All(ReadRows(RetailPricingTools.CompactBatchResult(json)), row =>
+        {
+            Assert.Equal("1", row["observedVariantPrices"]);
+            Assert.Equal("2", row["observedVariantRegions"]);
+            Assert.Equal("false", row["variantSourceComplete"]);
+        });
+    }
+
+    [Fact]
+    public void PricingToolMetadataRequiresReuseOfResolvedRequestedRates()
+    {
+        var tools = RetailPricingTools.Create().ToArray();
+        Assert.All(tools, tool =>
+        {
+            Assert.Contains("RESOLUTION describes the whole filtered catalogue", tool.Description);
+            Assert.Contains("do not refine merely because status is ambiguous or partial", tool.Description);
+            Assert.Contains("Only a missing or unresolved requested rate permits one targeted refinement", tool.Description);
+        });
+        var batch = tools.Single(tool => tool.Name == "GetAzureRetailPricingBatch");
+        Assert.Contains("identify both rates for each requested model in this first batch", batch.Description);
+        Assert.Contains("do not issue another batch merely to isolate exact names already returned",
+            batch.Description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("catalogue-level partial/ambiguous status alone does not require another batch",
+            batch.JsonSchema.GetProperty("properties").GetProperty("queriesJson").GetProperty("description").GetString());
+    }
+
+    private static string ModelRatesPayload(string model)
+    {
+        var variants = new[]
+        {
+            (Sku: $"{model} Inp glbl", Price: 0.002),
+            (Sku: $"{model} Outp glbl", Price: 0.008),
+            (Sku: $"{model} Batch Inp glbl", Price: 0.001),
+            (Sku: $"{model} Batch Outp glbl", Price: 0.004),
+            (Sku: $"{model} Inp Data Zone", Price: 0.003),
+            (Sku: $"{model} Outp Data Zone", Price: 0.012),
+            (Sku: $"{model} Inp regional", Price: 0.004),
+            (Sku: $"{model} Outp regional", Price: 0.016),
+            (Sku: $"{model} cached Inp glbl", Price: 0.0001),
+            (Sku: $"{model} cached Inp Data Zone", Price: 0.0002)
+        }.Concat(Enumerable.Range(0, 241).Select(index => (Sku: $"{model} alternate {index}", Price: (index + 1) / 20_000d)));
+
+        return JsonSerializer.Serialize(new
+        {
+            BillingCurrency = "USD",
+            Items = variants.SelectMany(variant => Enumerable.Range(0, 12).Select(region => new
+            {
+                armRegionName = $"region{region}", armSkuName = variant.Sku, skuName = variant.Sku,
+                meterName = $"{variant.Sku} Tokens", productName = "Synthetic models", unitOfMeasure = "1K",
+                type = "Consumption", tierMinimumUnits = 0, retailPrice = variant.Price
+            }))
+        });
+    }
+
+    private static Dictionary<string, string>[] ReadRows(string result)
+    {
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var header = Array.FindIndex(lines, line => line.StartsWith("retailPrice\t", StringComparison.Ordinal));
+        Assert.True(header >= 0);
+        var columns = lines[header].TrimEnd('\r').Split('\t');
+        return lines.Skip(header + 1).Select(line =>
+        {
+            var cells = line.TrimEnd('\r').Split('\t');
+            Assert.Equal(columns.Length, cells.Length);
+            return columns.Zip(cells).ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal);
+        }).ToArray();
+    }
+
     private static JsonElement ReadResolution(string result) => JsonSerializer.Deserialize<JsonElement>(
         result.Split('\n').Single(line => line.StartsWith("RESOLUTION "))["RESOLUTION ".Length..]);
 }

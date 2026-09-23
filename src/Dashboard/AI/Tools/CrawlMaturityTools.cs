@@ -18,6 +18,9 @@ public sealed class CrawlMaturityTools
     private const string BudgetSpendFreshness =
         "Budget currentSpend is evaluated periodically and may lag billing; retrieval time is not data freshness. No source data-as-of timestamp is available, and this is not a finalized bill.";
 
+    private const string ResourceGraphFreshness =
+        "Resource Graph is an indexed inventory and may lag resource changes. Its source data-as-of timestamp and indexing delay are unknown; retrievedAtUtc records completion of this inventory read, not source freshness.";
+
     private readonly UserTokens _tokens;
     private readonly ScoreTools _scoreTools;
 
@@ -29,8 +32,9 @@ public sealed class CrawlMaturityTools
 
     public IEnumerable<AIFunction> Create()
     {
-        yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides a periodically evaluated MTD snapshot, not real-time or finalized cost.
-EVIDENCE LIMITS: when quoting budget spend, state that the snapshot may lag billing and has no source data-as-of timestamp. Generic alert/scheduled-action counts do not establish anomaly-alert configuration; do not claim anomaly alerts are missing or configured from those counts.
+        yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also reads cached Azure Advisor Cost recommendations for the same scopes, ranks reported annual estimates within each currency, and returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides a periodically evaluated MTD snapshot, not real-time or finalized cost.
+SAVINGS: when asked for the biggest savings opportunities, use evidence.savings, not governance scores or generic tag/export tasks. Ranking is over reported annualSavingsAmount within one currency; retain the recommendation's term, scope, SKU, quantity, lastUpdated and coverage. These are potentially overlapping Advisor estimates, not verified net or realized savings: do not add them together, recommend a commitment purchase without eligibility/utilization evidence, or confuse savingsAmount of unspecified period with annualSavingsAmount. Unknown amounts stay unranked, not zero. A zero common-waste count does not mean there are no savings opportunities.
+EVIDENCE LIMITS: generatedUtc is bundle generation time, not an inventory retrieval time. Use each source's returned retrievedAtUtc and lastUpdated when available; source freshness and unmeasured indexing delay remain unknown. When quoting budget spend, state that the snapshot may lag billing and has no source data-as-of timestamp. Generic alert/scheduled-action counts do not establish anomaly-alert configuration; do not claim anomaly alerts are missing or configured from those counts.
 DATA SCOPING: the declared assessment scope controls the subscription inputs. Include every requested subscription and all seven dimensions; do not shrink a full assessment to top spenders. The host uses scoped Resource Graph aggregates and bounded evidence samples. Reuse those summaries rather than asking QueryAzure for raw inventories. Filtered budgets or sample names do not establish whole-estate spend/counts; retain coverage, unknown and notApplicable states.
     Use exactly once for Crawl/FinOps maturity scoring. Pass the exact `subscriptions` array and optional first management-group id from the connection context. Do NOT supplement it with QueryAzure, ReportMaturityScore, SuggestFollowUp, or any other tool—the score persistence, maturity SSE event, and follow-up buttons are already handled by this result.");
     }
@@ -79,9 +83,10 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
         // API version; ARM returns UnsupportedApiVersion for 2026-08-01.
         var actionsTask = ReadCollections(token, subscriptions, "scheduledActions", "crawl.scheduled_actions", requestLimiter, "2025-03-01");
         var alertsTask = ReadCollections(token, subscriptions, "alerts", "crawl.alerts", requestLimiter);
+        var savingsTask = ReadAdvisorSavings(token, subscriptions, requestLimiter);
 
         await Task.WhenAll(taggingTask, policyTask, wasteTask, emptyGroupsTask,
-            budgetTask, exportsTask, actionsTask, alertsTask);
+            budgetTask, exportsTask, actionsTask, alertsTask, savingsTask);
         var apiMs = totalSw.ElapsedMilliseconds;
 
         var budgets = budgetTask.Result
@@ -111,6 +116,7 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
             generatedUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
             subscriptionCount = subscriptions.Count,
             subscriptions,
+            savings = savingsTask.Result,
             budgets = new
             {
                 subscriptionsWithBudgets = budgets.Count(b => b.BudgetCount > 0),
@@ -202,6 +208,131 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
 
     internal static string BuildRemediationPrompt(int subscriptionCount) =>
         $"Review valid CostCenter, Owner, and Environment values across {subscriptionCount} subscriptions and verify daily-export schedules and anomaly-alert configuration before proposing changes for confirmed gaps. Require explicit application approval before any write, use bulk operations where appropriate, never invent placeholder tag values, and do not delete resources.";
+
+    private static async Task<object> ReadAdvisorSavings(
+        string token,
+        IReadOnlyList<SubscriptionScope> subscriptions,
+        SemaphoreSlim requestLimiter)
+    {
+        var responses = await Task.WhenAll(subscriptions.Select(async scope =>
+            (Scope: scope, Response: await ReadArmCollection(
+                token, AdvisorCostPath(scope.Id), "crawl.advisor_cost", requestLimiter))));
+        return BuildAdvisorSavings(responses);
+    }
+
+    internal static string AdvisorCostPath(string subscriptionId) =>
+        $"/subscriptions/{subscriptionId}/providers/Microsoft.Advisor/recommendations?api-version=2025-01-01&$filter=Category%20eq%20%27Cost%27&$top=100";
+
+    internal static object BuildAdvisorSavings(
+        IReadOnlyList<(SubscriptionScope Scope, string Response)> responses)
+    {
+        const int detailsPerCurrency = 5;
+        var sources = responses.Select(item => ReadAdvisorSource(item.Scope, item.Response)).ToArray();
+        var complete = sources.Length > 0 && sources.All(source => source.Status == 200 && source.Error is null);
+        var candidates = sources.SelectMany(source => source.Candidates).ToArray();
+        var quantified = candidates.Where(candidate => candidate.AnnualSavings is not null && candidate.Currency is not null).ToArray();
+        var unranked = candidates.Where(candidate => candidate.AnnualSavings is null || candidate.Currency is null).ToArray();
+        var rankings = quantified
+            .GroupBy(candidate => candidate.Currency!, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                currency = group.Key,
+                period = "year",
+                recommendationCount = group.Count(),
+                recommendations = group.OrderByDescending(candidate => candidate.AnnualSavings)
+                    .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
+                    .Take(detailsPerCurrency)
+                    .Select(candidate => candidate.Data)
+                    .ToArray(),
+                detailsComplete = group.Count() <= detailsPerCurrency
+            }).ToArray();
+        return new
+        {
+            source = "Azure Advisor cached Cost recommendations",
+            retrievedAtUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            complete,
+            requestedSubscriptionCount = responses.Count,
+            successfulSubscriptionCount = sources.Count(source => source.Status == 200 && source.Error is null),
+            observedRecommendationCount = candidates.Length,
+            recommendationCount = complete ? (int?)candidates.Length : null,
+            rankingComplete = complete && unranked.Length == 0,
+            rankings,
+            unrankedRecommendationCount = unranked.Length,
+            unrankedRecommendations = unranked.Take(detailsPerCurrency).Select(candidate => candidate.Data).ToArray(),
+            detailsComplete = complete && rankings.All(group => group.detailsComplete) && unranked.Length <= detailsPerCurrency,
+            sources = sources.Select(source => new
+            {
+                subscriptionId = source.Scope.Id,
+                subscriptionName = source.Scope.Name,
+                status = source.Status,
+                recommendationCount = source.Status == 200 && source.Error is null ? (int?)source.Candidates.Count : null,
+                error = source.Error
+            }),
+            limitations = "Rankings compare only reported annualSavingsAmount in the same currency, after reading every available page in each requested scope. Missing amounts/currencies are unknown. Cached recommendations can overlap or be alternatives; do not sum them. Preserve term, quantity, scope and lastUpdated. These estimates do not validate applicability, suppression status, existing commitment utilization or realizable net savings. Governance improvements and empty resource groups are not quantified savings."
+        };
+    }
+
+    private static AdvisorSource ReadAdvisorSource(SubscriptionScope scope, string response)
+    {
+        var status = ParseStatus(response);
+        if (status != 200)
+            return new(scope, status, [], "Advisor Cost recommendations could not be read completely.");
+
+        try
+        {
+            using var document = JsonDocument.Parse(ResponseBody(response));
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("value", out var values) || values.ValueKind != JsonValueKind.Array)
+                return new(scope, 0, [], "Advisor Cost response did not contain a recommendation array.");
+            List<AdvisorCandidate> candidates = [];
+            foreach (var item in values.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object
+                    || !item.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object
+                    || !string.Equals(AdvisorText(properties, "category"), "Cost", StringComparison.OrdinalIgnoreCase))
+                    return new(scope, 0, [], "Advisor Cost response contained an invalid recommendation.");
+
+                var extended = properties.TryGetProperty("extendedProperties", out var metadata)
+                    && metadata.ValueKind == JsonValueKind.Object ? metadata : default;
+                var currency = AdvisorText(extended, "savingsCurrency");
+                if (string.IsNullOrWhiteSpace(currency)) currency = null;
+                decimal? annual = extended.ValueKind == JsonValueKind.Object
+                    && extended.TryGetProperty("annualSavingsAmount", out var amount)
+                    && amount.ValueKind is JsonValueKind.String or JsonValueKind.Number
+                    && decimal.TryParse(amount.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+                    && parsed >= 0 ? parsed : null;
+                var id = AdvisorText(item, "id");
+                var data = JsonSerializer.SerializeToElement(new
+                {
+                    id,
+                    subscriptionId = scope.Id,
+                    subscriptionName = scope.Name,
+                    resourceMetadata = properties.TryGetProperty("resourceMetadata", out var resource) ? (JsonElement?)resource : null,
+                    impact = AdvisorText(properties, "impact"),
+                    recommendationTypeId = AdvisorText(properties, "recommendationTypeId"),
+                    shortDescription = properties.TryGetProperty("shortDescription", out var description) ? (JsonElement?)description : null,
+                    lastUpdated = AdvisorText(properties, "lastUpdated"),
+                    annualSavingsAmount = annual,
+                    savingsCurrency = currency,
+                    extendedProperties = extended.ValueKind == JsonValueKind.Object ? (JsonElement?)extended : null
+                });
+                candidates.Add(new(id, annual, currency, data));
+            }
+            return new(scope, status, candidates, null);
+        }
+        catch (JsonException)
+        {
+            return new(scope, 0, [], "Advisor Cost response was not valid JSON.");
+        }
+    }
+
+    private static string? AdvisorText(JsonElement item, string name) =>
+        item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private sealed record AdvisorCandidate(string? Id, decimal? AnnualSavings, string? Currency, JsonElement Data);
+    private sealed record AdvisorSource(SubscriptionScope Scope, int Status, IReadOnlyList<AdvisorCandidate> Candidates, string? Error);
 
     private async Task<IReadOnlyList<CollectionEvidence>> ReadCollections(
         string token,
@@ -364,7 +495,14 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
                 if (string.IsNullOrWhiteSpace(skipToken))
                 {
                     var serializedRows = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(rows));
-                    return new { status = 200, data = serializedRows };
+                    return new
+                    {
+                        status = 200,
+                        retrievedAtUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+                        dataAsOfUtc = (string?)null,
+                        freshness = ResourceGraphFreshness,
+                        data = serializedRows
+                    };
                 }
             }
             catch (JsonException ex)
