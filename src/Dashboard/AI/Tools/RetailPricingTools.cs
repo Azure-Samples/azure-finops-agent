@@ -36,6 +36,7 @@ public static class RetailPricingTools
         + "Match every requested model/SKU, input/output direction, deployment tier, residency, cache qualifier, unit and currency to the returned live fields. "
         + "Carry the selected product's material qualifiers (OS/license, tier and purchase type) into answer headlines and chart labels; a shared meterName or ARM SKU alone does not identify the price variant. "
         + "When all requested rates are present, answer from this result; do not refine merely because status is ambiguous or partial. "
+        + "If RESOLUTION.complete is false, the answer still states in one short sentence that the requested rates were returned but the wider filtered result was capped (deliveredRows of fetchedRows). "
         + "A row with variantSourceComplete=true and observedVariantPrices=1 has one retailPrice across that exact variant's fetched regions, even when catalogue details are capped. "
         + "Otherwise a valid returned rate quotes only the row's named region; do not infer a uniform price or fill a missing/invalid price. "
         + "Keep pagination, missing-region and widening caveats; quoting a row does not establish full coverage, a global cheapest price or deployment availability. "
@@ -72,12 +73,12 @@ VOCABULARY FILTERS (meterNameContains / productNameContains / skuNameContains) �
 
 EVERY RESPONSE INCLUDES A `FACETS` BLOCK giving the live distinct values of each field. That is the authoritative vocabulary — use it to identify the requested rows already returned. Refine with those exact strings only if a requested rate is missing or unresolved, not simply because multiple variants are present. It reflects the API right now, so prefer it over anything you remember.
 
-READING THE ROWS: they arrive grouped by meterName, cheapest-first within each meter. Spot, Low Priority, Windows, Reservation, cached-input and regional/zonal variants are all present and are distinguishable via meterName / skuName / type. Never treat different meters as interchangeable. A model/SKU comparison must match the requested pricing variant in each section, not select a minimum across incompatible meters.
+READING THE ROWS: they arrive grouped by productName then meterName; within each group the lowest volume band (tierMinimumUnits) comes first, then cheapest-first. The same meterName can exist in several products at different rates (for example flat Blob Storage versus a hierarchical-namespace/Data Lake product); take every compared rate from the same productName and name that product. Spot, Low Priority, Windows, Reservation, cached-input and regional/zonal variants are all present and are distinguishable via productName / meterName / skuName / type. Never treat different meters or products as interchangeable. A model/SKU comparison must match the requested pricing variant in each section, not select a minimum across incompatible meters.
 
 DEFAULT INTERPRETATION: use standard on-demand purchase pricing unless other purchase variants are explicitly requested. This does not choose an OS/license or service tier; clarify missing material product configuration, except that an explicit cross-region VM ranking with no OS/license stated ranks the Linux and Windows variants separately instead of asking. Preserve comparisons of explicitly named variants. productName can distinguish Windows from non-Windows even when meterName is identical. State the established OS/license basis. A 'cheapest region' question means cheapest on-demand region, not cheapest Spot region.
 
 UNIT SEMANTICS: retailPrice is the price for ONE `unitOfMeasure` of the WHOLE SKU in armSkuName/skuName. Never multiply it by a core/vCore/GPU/node count that is already part of that SKU name — e.g. armSkuName 'SQLDB_GP_Compute_Gen5_4' / skuName '4 vCore' at 1 Hour is the total hourly price for all 4 vCores, not per vCore. Multiply only by quantity the user asked for (number of instances) and by hours.
-VOLUME BANDS: retain tierMinimumUnits and currencyCode. A cheaper high-volume band is not the price for a small dataset. Match the requested quantity to the documented tier rules; split graduated tiers into separate CalculateCost lines instead of applying the cheapest band to every unit.
+VOLUME BANDS: retain tierMinimumUnits and currencyCode. A cheaper high-volume band is not the price for a small dataset: a row whose tierMinimumUnits exceeds the requested quantity is unusable for it, and if no returned row covers the quantity the rate is missing. Match the requested quantity to the documented tier rules; split graduated tiers into separate CalculateCost lines instead of applying the cheapest band to every unit.
 
 MONTHLY / VOLUME TOTALS: call EstimateTokenCost with the per-1M rates instead of doing token arithmetic in prose."
             + "\n\n" + QuoteInputGuidance + "\n\n" + ReturnedRateGuidance);
@@ -213,7 +214,8 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                     Clean(Str(item, "type")), Clean(Str(item, "reservationTerm")), Clean(savings), Tier(item), Clean(Currency(item)));
                 var variant = string.Join('\t', Str(item, "armSkuName"), Str(item, "productName"), Str(item, "skuName"), Str(item, "meterName"),
                     Str(item, "unitOfMeasure"), Str(item, "type"), Str(item, "reservationTerm"), Tier(item), Currency(item));
-                return (Price: price, Meter: Clean(Str(item, "meterName")), Region: Clean(Str(item, "armRegionName")), Variant: variant, Line: line);
+                var band = item.TryGetProperty("tierMinimumUnits", out var tierValue) && tierValue.TryGetDouble(out var tierMinimum) ? tierMinimum : 0d;
+                return (Price: price, Band: band, Meter: Clean(Str(item, "productName")) + "\t" + Clean(Str(item, "meterName")), Region: Clean(Str(item, "armRegionName")), Variant: variant, Line: line);
             })
             .GroupBy(row => row.Line, StringComparer.Ordinal)
             .Select(group => group.First())
@@ -229,9 +231,11 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                     SourceComplete = paginationComplete && group.All(row => HasPrice(row.Price))
                 }, StringComparer.Ordinal);
 
-            // Round-robin across meterName groups. A flat cheapest-first cut buries
+            // Round-robin across productName+meterName groups. A flat cheapest-first cut buries
             // the ordinary on-demand meter under every Spot/Low-Priority row and the
-            // model then quotes Spot as the headline price.
+            // model then quotes Spot as the headline price. Products are kept apart
+            // because one meterName can exist in several products at different rates, and
+            // the base volume band leads each group so a capped projection keeps a small-quantity rate.
             var targetRows = topPerVariant is { } requestedTop
                 ? rows.GroupBy(row => row.Variant, StringComparer.Ordinal)
                     .SelectMany(group => group.OrderBy(row => row.Price).ThenBy(row => row.Region, StringComparer.Ordinal)
@@ -240,10 +244,10 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
                 : rows;
             var byMeter = targetRows
                 .GroupBy(row => row.Meter, StringComparer.Ordinal)
-                .Select(group => group.OrderBy(row => row.Price).ToList())
+                .Select(group => group.OrderBy(row => row.Band).ThenBy(row => row.Price).ToList())
                 .OrderBy(group => group[0].Price)
                 .ToList();
-            var selected = new List<(double Price, string Meter, string Region, string Variant, string Line)>();
+            var selected = new List<(double Price, double Band, string Meter, string Region, string Variant, string Line)>();
             for (var depth = 0; selected.Count < MaxProjectedRows; depth++)
             {
                 var added = false;
@@ -298,11 +302,14 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
             output.AppendLine(topPerVariant is { } topCount
                 ? $"{rows.Count} distinct candidates; showing up to {topCount} cheapest regions per matching price variant. Ranking is global only when paginationComplete and rankingComplete are true."
                 : rows.Count <= selected.Count
-                ? $"{rows.Count} distinct row(s), cheapest first within each meter."
-                : $"{rows.Count} distinct rows; showing {selected.Count} spread across meters, cheapest first within each. Reuse matching requested rates; narrow only missing or unresolved rates using live facets.");
+                ? $"{rows.Count} distinct row(s), grouped by productName then meterName, lowest volume band then cheapest first within each."
+                : $"{rows.Count} distinct rows; showing {selected.Count} spread across product/meter groups, lowest volume band then cheapest first within each. Reuse matching requested rates; narrow only missing or unresolved rates using live facets.");
+            var deliveredGroups = selected.Select(row => row.Meter).Distinct(StringComparer.Ordinal).Count();
+            if (deliveredGroups < byMeter.Count)
+                output.AppendLine($"Only {deliveredGroups} of {byMeter.Count} product/meter groups are shown. A requested product or meter absent from the rows is missing, not substituted by another product; refine once with its exact FACETS productName/meterName.");
             output.AppendLine("Variant coverage uses all fetched rows before projection: observedVariantPrices counts retailPrice values, not savings-plan rates. observedVariantRegions counts fetched regions. variantSourceComplete=false means missing pages or invalid prices; never infer uniform pricing from it.");
             output.AppendLine("retailPrice\tarmRegionName\tarmSkuName\tproductName\tskuName\tmeterName\tunitOfMeasure\ttype\treservationTerm\tsavingsPlan(term:price)\ttierMinimumUnits\tcurrencyCode\tobservedVariantPrices\tobservedVariantRegions\tvariantSourceComplete");
-            foreach (var row in selected.OrderBy(r => r.Meter, StringComparer.Ordinal).ThenBy(r => r.Price))
+            foreach (var row in selected.OrderBy(r => r.Meter, StringComparer.Ordinal).ThenBy(r => r.Band).ThenBy(r => r.Price))
             {
                 var coverage = variantCoverage[row.Variant];
                 output.Append(row.Line).Append('\t').Append(coverage.Prices).Append('\t').Append(coverage.Regions)

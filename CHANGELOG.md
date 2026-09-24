@@ -22,6 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Group retail pricing rows by product and then meter. The same meter name (for example `Cool LRS Data Stored`) exists in several storage products at different rates, and meter-only grouping put the cheaper hierarchical-namespace row next to the flat Blob Storage row, so tier comparisons mixed products. Guidance now requires every compared rate to come from one named product. Each group also leads with its base volume band (lowest `tierMinimumUnits`). Before this, a capped projection could keep only the 512,000 GB band, and a 10 TB estimate used it. A capped result now reports how many product/meter groups it omitted, and treats an absent requested product as missing rather than substituting another. The chart rule also warns that a second, corrected chart leaves two conflicting charts on screen.
 - Send the last included day to Cost Management from `QueryCostsAcrossSubscriptions`. Cost Management treats `timePeriod.to` as inclusive, so the tool's exclusive end previously added the next day's cost to past-period totals. Tool and system guidance now state that raw query/forecast bodies use an inclusive last day.
 - Report malformed Resource Graph request JSON as malformed instead of as a missing scope, so the model can correct the body.
 - Return `AvailableQuotaVcpus` from `CheckComputeFeasibility` so answers do not present the requested vCPU demand as a quota balance.

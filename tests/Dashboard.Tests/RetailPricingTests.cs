@@ -37,6 +37,45 @@ public sealed class RetailPricingTests
     }
 
     [Fact]
+    public void SameMeterInDifferentProductsIsNotInterleaved()
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            BillingCurrency = "USD",
+            Items = new[]
+            {
+                new { armRegionName = "eastus", armSkuName = "", skuName = "Cool LRS", meterName = "Cool LRS Data Stored", productName = "Product B", unitOfMeasure = "1 GB/Month", type = "Consumption", retailPrice = 0.015d },
+                new { armRegionName = "eastus", armSkuName = "", skuName = "Hot LRS", meterName = "Hot LRS Data Stored", productName = "Product A", unitOfMeasure = "1 GB/Month", type = "Consumption", retailPrice = 0.0208d },
+                new { armRegionName = "eastus", armSkuName = "", skuName = "Cool LRS", meterName = "Cool LRS Data Stored", productName = "Product A", unitOfMeasure = "1 GB/Month", type = "Consumption", retailPrice = 0.0152d },
+                new { armRegionName = "eastus", armSkuName = "", skuName = "Hot LRS", meterName = "Hot LRS Data Stored", productName = "Product B", unitOfMeasure = "1 GB/Month", type = "Consumption", retailPrice = 0.0208d }
+            }
+        });
+        var dataRows = RetailPricingTools.CompactBatchResult(payload).Split('\n')
+            .Where(line => line.StartsWith("0.0", StringComparison.Ordinal))
+            .Select(line => line.Split('\t')[3] + "|" + line.Split('\t')[5])
+            .ToArray();
+        Assert.Equal(
+            ["Product A|Cool LRS Data Stored", "Product A|Hot LRS Data Stored", "Product B|Cool LRS Data Stored", "Product B|Hot LRS Data Stored"],
+            dataRows);
+    }
+
+    [Fact]
+    public void CappedProjectionKeepsBaseVolumeBandOfEachGroup()
+    {
+        var items = Enumerable.Range(0, 250).SelectMany(index => new object[]
+        {
+            new { armRegionName = "eastus", armSkuName = "", skuName = $"S{index}", meterName = $"Meter {index:D3}", productName = "Product", unitOfMeasure = "1 GB/Month", type = "Consumption", retailPrice = 0.02d, tierMinimumUnits = 0d },
+            new { armRegionName = "eastus", armSkuName = "", skuName = $"S{index}", meterName = $"Meter {index:D3}", productName = "Product", unitOfMeasure = "1 GB/Month", type = "Consumption", retailPrice = 0.01d, tierMinimumUnits = 512000d }
+        });
+        var result = RetailPricingTools.CompactBatchResult(JsonSerializer.Serialize(new { BillingCurrency = "USD", Items = items }));
+        var bands = result.Split('\n').Where(line => line.StartsWith("0.0", StringComparison.Ordinal))
+            .Select(line => line.Split('\t')[10]).ToArray();
+        Assert.Equal(200, bands.Length);
+        Assert.All(bands, band => Assert.Equal("0", band));
+        Assert.Contains("Only 200 of 250 product/meter groups are shown", result);
+    }
+
+    [Fact]
     public void SkuFieldFallbackRetainsExactValueAndEscapesOData()
     {
         Assert.Equal("armSkuName eq 'B1'", RetailPricingTools.SkuFilter("B1", false));
