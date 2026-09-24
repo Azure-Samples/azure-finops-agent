@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- Delete a conversation with one click instead of an inline confirmation step. The row stays visible and disabled while the server responds, running conversations still must be stopped first, and failures remain visible for retry.
+
 ### Fixed
 
 - Preserve inclusive/exclusive date labels when translating cost-query boundaries into prose; a converted last included day must not retain an exclusive-end label.

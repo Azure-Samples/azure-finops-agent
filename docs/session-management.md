@@ -149,7 +149,7 @@ The chat SSE endpoint (`AI/ChatEndpoints.cs`) accepts an optional `sessionId` to
 
 ## 10. Frontend (`ChatView.vue`)
 
-The Vue chat UI now has a vertical-split right sidebar: tool calls on top, Conversations list on bottom. Deletion uses an inline confirmation and keeps the row stable while the server responds. A failed delete remains visible with an error; only a confirmed `204`/`404` removes the row and current transcript state. Running conversations must be stopped first.
+The Vue chat UI now has a vertical-split right sidebar: tool calls on top, Conversations list on bottom. Deletion is a single click without a confirmation step and keeps the row stable while the server responds. A failed delete remains visible with an error; only a confirmed `204`/`404` removes the row and current transcript state. Running conversations must be stopped first.
 
 ## 11. End-to-end flow after these changes
 

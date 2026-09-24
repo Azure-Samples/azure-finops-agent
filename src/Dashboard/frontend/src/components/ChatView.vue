@@ -2216,80 +2216,55 @@
                 'session-row',
                 { 'session-row--current': s.id === currentSessionId },
                 { 'session-row--running': runningSessions.has(s.id) },
-                { 'session-row--confirming': pendingDeleteSessionId === s.id },
               ]"
               @click="selectSession(s.id)"
               :title="s.summary"
               :data-session-id="s.id"
               :aria-busy="deletingSessions.has(s.id)"
             >
-              <div
-                v-if="pendingDeleteSessionId === s.id"
-                class="session-delete-confirm"
-                @click.stop
-                @keydown.esc.stop="cancelDeleteSession(s.id)"
-              >
-                <span class="session-delete-question"
-                  >Delete conversation?</span
-                >
-                <button
-                  class="session-delete-cancel"
-                  :disabled="deletingSessions.has(s.id)"
-                  @click.stop="cancelDeleteSession(s.id)"
-                >
-                  Cancel
-                </button>
-                <button
-                  class="session-delete-confirm-button"
-                  :disabled="deletingSessions.has(s.id)"
-                  @click.stop="deleteSession(s.id)"
-                >
-                  {{ deletingSessions.has(s.id) ? "Deleting..." : "Delete" }}
-                </button>
+              <span
+                class="tools-sidebar-status-dot"
+                :class="{
+                  'tools-sidebar-status-dot--live': runningSessions.has(s.id),
+                }"
+                :aria-label="
+                  runningSessions.has(s.id) ? 'Conversation is running' : 'Idle'
+                "
+                :title="
+                  runningSessions.has(s.id)
+                    ? 'This conversation is still running'
+                    : ''
+                "
+              ></span>
+              <div class="session-row-main">
+                <span class="session-row-title">{{
+                  s.summary || "Untitled conversation"
+                }}</span>
+                <span class="session-row-time">{{
+                  formatRelativeTime(s.modified)
+                }}</span>
               </div>
-              <template v-else>
-                <span
-                  class="tools-sidebar-status-dot"
-                  :class="{
-                    'tools-sidebar-status-dot--live': runningSessions.has(s.id),
-                  }"
-                  :aria-label="
-                    runningSessions.has(s.id)
-                      ? 'Conversation is running'
-                      : 'Idle'
-                  "
-                  :title="
-                    runningSessions.has(s.id)
-                      ? 'This conversation is still running'
-                      : ''
-                  "
-                ></span>
-                <div class="session-row-main">
-                  <span class="session-row-title">{{
-                    s.summary || "Untitled conversation"
-                  }}</span>
-                  <span class="session-row-time">{{
-                    formatRelativeTime(s.modified)
-                  }}</span>
-                </div>
-                <button
-                  class="session-row-delete session-row-delete--conversation"
-                  :disabled="runningSessions.has(s.id)"
-                  @click.stop="requestDeleteSession(s.id)"
-                  :title="
-                    runningSessions.has(s.id)
-                      ? 'Stop this conversation before deleting it'
-                      : 'Delete this conversation'
-                  "
-                  :aria-label="
-                    runningSessions.has(s.id)
-                      ? 'Conversation is running and cannot be deleted'
+              <button
+                class="session-row-delete session-row-delete--conversation"
+                :disabled="
+                  runningSessions.has(s.id) || deletingSessions.has(s.id)
+                "
+                @click.stop="deleteSession(s.id)"
+                :title="
+                  runningSessions.has(s.id)
+                    ? 'Stop this conversation before deleting it'
+                    : 'Delete this conversation'
+                "
+                :aria-label="
+                  runningSessions.has(s.id)
+                    ? 'Conversation is running and cannot be deleted'
+                    : deletingSessions.has(s.id)
+                      ? 'Deleting conversation'
                       : 'Delete conversation'
-                  "
-                >
-                  Delete
-                </button>
-              </template>
+                "
+              >
+                {{ deletingSessions.has(s.id) ? "Deleting..." : "Delete" }}
+              </button>
             </div>
           </div>
         </div>
@@ -3956,7 +3931,6 @@ const clearing = ref(false);
 // stay in sync even if the user clicked a row mid-stream.
 const sessions = ref([]);
 const currentSessionId = ref(null);
-const pendingDeleteSessionId = ref(null);
 const deletingSessions = reactive(new Set());
 const sessionDeleteError = ref("");
 const deletedSessionIds = new Set();
@@ -4852,22 +4826,6 @@ async function attachToServerTurn(sessionId) {
   }
 }
 
-function requestDeleteSession(sessionId) {
-  if (!sessionId || runningSessions.has(sessionId)) return;
-  sessionDeleteError.value = "";
-  pendingDeleteSessionId.value = sessionId;
-}
-
-function cancelDeleteSession(sessionId) {
-  if (
-    pendingDeleteSessionId.value === sessionId &&
-    !deletingSessions.has(sessionId)
-  ) {
-    pendingDeleteSessionId.value = null;
-    sessionDeleteError.value = "";
-  }
-}
-
 async function deleteSession(sessionId) {
   if (
     !sessionId ||
@@ -4895,7 +4853,6 @@ async function deleteSession(sessionId) {
 
     deletedSessionIds.add(sessionId);
     sessions.value = sessions.value.filter((s) => s.id !== sessionId);
-    pendingDeleteSessionId.value = null;
     perSessionToolCalls.delete(sessionId);
     perSessionCharts.delete(sessionId);
     perSessionCoolers.delete(sessionId);
@@ -12167,59 +12124,6 @@ async function send() {
 }
 .session-row--current:hover {
   background: #f3f2f1;
-}
-.session-row--confirming {
-  background: #fff4f4;
-  border-color: #f1b7bb;
-  cursor: default;
-}
-.session-delete-confirm {
-  min-width: 0;
-  width: 100%;
-  min-height: 52px;
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  align-items: center;
-  gap: 4px 6px;
-}
-.session-delete-question {
-  grid-column: 1 / -1;
-  min-width: 0;
-  color: #5c2b29;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: normal;
-}
-.session-delete-cancel {
-  grid-column: 2;
-}
-.session-delete-confirm-button {
-  grid-column: 3;
-}
-.session-delete-cancel,
-.session-delete-confirm-button {
-  min-height: 26px;
-  border-radius: 4px;
-  padding: 3px 7px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.session-delete-cancel {
-  border: 1px solid #c8c6c4;
-  background: #ffffff;
-  color: #323130;
-}
-.session-delete-confirm-button {
-  min-width: 54px;
-  border: 1px solid #a4262c;
-  background: #a4262c;
-  color: #ffffff;
-}
-.session-delete-cancel:disabled,
-.session-delete-confirm-button:disabled {
-  cursor: wait;
-  opacity: 0.65;
 }
 .sessions-delete-error {
   margin: 4px 8px 6px;

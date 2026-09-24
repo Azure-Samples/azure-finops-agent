@@ -185,10 +185,8 @@ test("conversation deletion stays stable until the server confirms it", async ({
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Delete conversation" }).click();
   await expect(
-    row.getByText("Delete conversation?", { exact: true }),
-  ).toBeVisible();
-  await row.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(row.getByRole("button", { name: "Deleting..." })).toBeDisabled();
+    row.getByRole("button", { name: "Deleting conversation" }),
+  ).toBeDisabled();
   await expect(row).toHaveCount(1);
 
   releaseFailedDelete();
@@ -200,7 +198,7 @@ test("conversation deletion stays stable until the server confirms it", async ({
     path: testInfo.outputPath("conversation-delete-error.png"),
     animations: "disabled",
   });
-  await row.getByRole("button", { name: "Delete", exact: true }).click();
+  await row.getByRole("button", { name: "Delete conversation" }).click();
   await expect(row).toHaveCount(0);
   await expect(page.getByText("0 saved", { exact: true })).toBeVisible();
   expect(deleteAttempts).toBe(2);

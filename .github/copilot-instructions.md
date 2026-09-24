@@ -200,7 +200,7 @@ Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 ## Frontend invariants
 
 - At 900px and below, the left navigation is an overlay and the right execution sidebar is hidden.
-- Conversation deletion keeps the row visible through inline confirmation and the server response. Only confirmed SDK deletion clears client state; active turns return a conflict and failures remain visible for retry.
+- Conversation deletion is one click with no confirmation step. The row stays visible and disabled while the server responds. Only confirmed SDK deletion clears client state; active turns return a conflict and failures remain visible for retry.
 - Closed navigation must be invisible and inert. Keep the compact overlay aligned to the actual header, dismissible with Escape/backdrop, and return focus to its toggle.
 - Auto-scroll follows only while near the bottom. User scroll-up must never be overridden.
 - Hidden browser tabs suspend ResizeObserver, animation frames, transitions, and smooth scrolling. Keep reactive watcher fallbacks.
