@@ -127,18 +127,14 @@ export function validateFeatureTarget(config, parent, slot) {
     return slotUrl;
 }
 
-export function modelParameters(config) {
-    return {
-        $schema: "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
-        contentVersion: "1.0.0.0",
-        parameters: {
-            webAppName: { value: config.webAppName },
-            slotName: { value: config.slotName },
-            endpoint: { value: config.endpoint },
-            deploymentName: { value: config.model },
-            reasoningEffort: { value: config.reasoningEffort },
-        },
-    };
+// `az webapp config appsettings set` merges these keys into the existing dictionary,
+// so only App Service configuration rights (Website Contributor) are required.
+export function modelSettings(config) {
+    return [
+        { name: "AzureOpenAI__Endpoint", value: config.endpoint, slotSetting: false },
+        { name: "AzureOpenAI__DeploymentName", value: config.model, slotSetting: false },
+        { name: "AzureOpenAI__ReasoningEffort", value: config.reasoningEffort, slotSetting: false },
+    ];
 }
 
 export function verifyModelSettings(settings, config) {
@@ -192,11 +188,7 @@ async function main() {
         readProductionConfiguration(environment);
     } else if (command === "production-settings" && paths.length === 1) {
         const config = readProductionConfiguration(environment);
-        await writeFile(paths[0], JSON.stringify([
-            { name: "AzureOpenAI__Endpoint", value: config.endpoint, slotSetting: false },
-            { name: "AzureOpenAI__DeploymentName", value: config.model, slotSetting: false },
-            { name: "AzureOpenAI__ReasoningEffort", value: config.reasoningEffort, slotSetting: false },
-        ]), { mode: 0o600, flag: "wx" });
+        await writeFile(paths[0], JSON.stringify(modelSettings(config)), { mode: 0o600, flag: "wx" });
     } else if (command === "check-production-settings" && paths.length === 1) {
         verifyModelSettings(await readJson(paths[0]), readProductionConfiguration(environment));
     } else {
@@ -205,8 +197,8 @@ async function main() {
         if (command === "check-target" && paths.length === 2) {
             const slotUrl = validateFeatureTarget(config, await readJson(paths[0]), await readJson(paths[1]));
             await appendFile(environment.GITHUB_OUTPUT, `slot_url=${slotUrl}\n`);
-        } else if (command === "parameters" && paths.length === 1) {
-            await writeFile(paths[0], JSON.stringify(modelParameters(config)), { mode: 0o600, flag: "wx" });
+        } else if (command === "settings" && paths.length === 1) {
+            await writeFile(paths[0], JSON.stringify(modelSettings(config)), { mode: 0o600, flag: "wx" });
         } else if (command === "check-settings" && paths.length === 1) {
             verifyModelSettings(await readJson(paths[0]), config);
         } else {

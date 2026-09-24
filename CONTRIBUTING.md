@@ -44,11 +44,12 @@ the `EVAL_MODEL_ENDPOINT` **secret**, preferably in the protected `ai-evaluation
 environment, not a plain Actions variable.
 
 Settings/image writes are serialized without cancelling an in-flight deployment.
-[feature-slot-model.bicep](infra/feature-slot-model.bicep) makes only the existing
-slot's model-settings update in Incremental mode and preserves unrelated
-settings. The existing deployment identity needs authorized deployment
-validation/execution, slot configuration and registry access; the slot identity
-needs model inference access. The workflow never grants itself permissions,
+The workflow merges only the three evaluated model settings into the existing
+slot with `az webapp config appsettings set`, preserving unrelated settings, the
+same pattern production uses. The existing deployment identity needs only slot
+configuration (for example, Website Contributor) and registry push access; no
+ARM deployment permission is required. The slot identity needs model inference
+access. The workflow never grants itself permissions,
 creates replacement infrastructure or swaps into production. Effective settings
 and the deployed full SHA, build and branch are checked afterward.
 

@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
     endpointFingerprint,
-    modelParameters,
+    modelSettings,
     readFeatureConfiguration,
     readProductionConfiguration,
     validateFeatureTarget,
@@ -179,7 +179,7 @@ test("deployment requires the successful endpoint fingerprint and retains the or
     const original = "HTTPS://SYNTHETIC-MODEL.OPENAI.AZURE.COM:443///";
     const matching = readFeatureConfiguration({ ...environment, AOAI_ENDPOINT: original });
     assert.equal(matching.endpoint, original);
-    assert.equal(modelParameters(matching).parameters.endpoint.value, original);
+    assert.equal(modelSettings(matching)[0].value, original);
 });
 
 test("the exact successful evaluation contract is mandatory and has no model fallback", () => {
@@ -202,14 +202,12 @@ test("the exact successful evaluation contract is mandatory and has no model fal
         assert.throws(() => readFeatureConfiguration({ ...environment, [key]: value }));
 });
 
-test("parameters override only the three model settings on the configured existing slot", () => {
-    assert.deepEqual(modelParameters(config).parameters, {
-        webAppName: { value: "synthetic-app" },
-        slotName: { value: "test" },
-        endpoint: { value: environment.AOAI_ENDPOINT },
-        deploymentName: { value: environment.EVALUATED_MODEL },
-        reasoningEffort: { value: environment.EVALUATED_REASONING_EFFORT },
-    });
+test("settings override only the three model keys and never mark them slot-sticky", () => {
+    assert.deepEqual(modelSettings(config), [
+        { name: "AzureOpenAI__Endpoint", value: environment.AOAI_ENDPOINT, slotSetting: false },
+        { name: "AzureOpenAI__DeploymentName", value: environment.EVALUATED_MODEL, slotSetting: false },
+        { name: "AzureOpenAI__ReasoningEffort", value: environment.EVALUATED_REASONING_EFFORT, slotSetting: false },
+    ]);
 });
 
 test("effective settings must contain exactly one matching value for all three keys", () => {
@@ -271,11 +269,11 @@ test("CLI exports only the successful model contract and endpoint fingerprint wi
     });
 });
 
-test("CLI blocks a same-model different-endpoint deployment before creating parameters", async () => {
+test("CLI blocks a same-model different-endpoint deployment before creating settings", async () => {
     await fixture(async (directory) => {
-        const parameters = join(directory, "parameters.json");
+        const parameters = join(directory, "settings.json");
         const mismatched = { AOAI_ENDPOINT: "https://private-mismatched-account.example.test/" };
-        for (const [command, paths] of [["check-config", []], ["parameters", [parameters]]]) {
+        for (const [command, paths] of [["check-config", []], ["settings", [parameters]]]) {
             const result = invoke(command, paths, mismatched);
             assert.equal(result.status, 1);
             assert.equal(result.stdout, "");
@@ -292,17 +290,17 @@ test("CLI blocks a same-model different-endpoint deployment before creating para
     });
 });
 
-test("CLI writes private parameters without overwriting an existing file or printing settings", async () => {
+test("CLI writes private settings without overwriting an existing file or printing them", async () => {
     await fixture(async (directory) => {
-        const path = join(directory, "parameters.json");
-        const result = invoke("parameters", [path]);
+        const path = join(directory, "settings.json");
+        const result = invoke("settings", [path]);
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stdout, "");
         const content = await readFile(path, "utf8");
-        assert.deepEqual(JSON.parse(content), modelParameters(config));
+        assert.deepEqual(JSON.parse(content), modelSettings(config));
         if (process.platform !== "win32")
             assert.equal((await stat(path)).mode & 0o777, 0o600);
-        const second = invoke("parameters", [path]);
+        const second = invoke("settings", [path]);
         assert.equal(second.status, 1);
         assert.equal(await readFile(path, "utf8"), content);
         assert.doesNotMatch(second.stderr, /synthetic-model|evaluated-deployment/);
@@ -328,27 +326,25 @@ test("CLI emits only the Azure preview URL and fails safely on malformed private
     });
 });
 
-test("workflow validates the target before writes and uses only serialized Incremental Bicep settings updates", async () => {
+test("workflow validates the target before writes and merges only serialized model settings", async () => {
     const workflow = await readFile(new URL("../../.github/workflows/feature.yml", import.meta.url), "utf8");
     assert.ok(workflow.indexOf("feature-slot.mjs check-config") < workflow.indexOf("uses: azure/login"));
     assert.ok(workflow.indexOf("feature-slot.mjs check-target") < workflow.indexOf("push: true"));
-    assert.ok(workflow.indexOf("az deployment group validate") < workflow.indexOf("az deployment group create"));
-    assert.ok(workflow.indexOf("az deployment group create") < workflow.indexOf("az webapp config container set"));
+    assert.ok(workflow.indexOf("feature-slot.mjs check-target") < workflow.indexOf("feature-slot.mjs settings"));
+    assert.ok(workflow.indexOf("feature-slot.mjs settings") < workflow.indexOf("az webapp config appsettings set"));
+    assert.ok(workflow.indexOf("az webapp config appsettings set") < workflow.indexOf("az webapp config container set"));
     assert.ok(workflow.indexOf("az webapp config container set") < workflow.indexOf("feature-slot.mjs check-settings"));
     assert.match(workflow, /cancel-in-progress: false/);
-    assert.equal((workflow.match(/--mode Incremental/g) ?? []).length, 2);
-    assert.match(workflow, /--validation-level Provider\b/);
-    assert.equal((workflow.match(/--template-file infra\/feature-slot-model\.bicep/g) ?? []).length, 2);
-    assert.equal((workflow.match(/--parameters "@\$work\/parameters\.json"/g) ?? []).length, 2);
+    assert.equal((workflow.match(/az webapp config appsettings set/g) ?? []).length, 1);
+    assert.equal((workflow.match(/--settings "@\$work\/settings\.json"/g) ?? []).length, 1);
     assert.match(workflow, /umask 077/);
-    assert.match(workflow, /trap 'rm -f "\$work\/parameters\.json"; rmdir "\$work"' EXIT/);
-    assert.match(workflow, /--query properties\.outputs\.slotUrl\.value --output tsv/);
-    assert.match(workflow, /"\$slot_url" != "\$PREVIEW_URL"/);
+    assert.match(workflow, /trap 'rm -f "\$work\/settings\.json"; rmdir "\$work"' EXIT/);
     assert.match(workflow, /--slot "\$SLOT_NAME"/);
+    // Website Contributor must be sufficient: no ARM deployments, role or account writes.
     assert.doesNotMatch(workflow,
-        /infra\/main\.bicep|--mode Complete|appsettings set|--enable-immutable|az role|az cognitiveservices|slot (?:create|swap)|az webapp create|az account set/);
+        /az deployment|\.bicep|--mode Complete|appsettings delete|--enable-immutable|az role|az cognitiveservices|slot (?:create|swap)|az webapp create|az account set/);
     for (const command of workflow.replace(/\\\r?\n\s*/g, " ").split(/\r?\n/)
-        .filter((line) => !line.trimStart().startsWith("#") && /az (?:webapp|deployment|acr) /.test(line)))
+        .filter((line) => !line.trimStart().startsWith("#") && /az (?:webapp|acr) /.test(line)))
         assert.match(command, /--subscription "\$TARGET_SUBSCRIPTION"/);
     for (const match of workflow.matchAll(/uses: (?!\.\/)([^\n]+)/g))
         assert.match(match[1], /@[a-f0-9]{40} # v\d/);
@@ -374,18 +370,6 @@ test("workflow uses Azure preview metadata and passes branch text as data, never
     assert.match(workflow, /"\$PREVIEW_URL\/api\/version"/);
     assert.match(workflow, /'- \*\*Preview URL:\*\* %s\\n' "\$PREVIEW_URL"/);
     assert.doesNotMatch(runLines.join("\n"), /\$\{?VERIFY_URL|curl .*(?:--location| -L\b)/);
-});
-
-test("Bicep changes only existing slot settings and preserves the full existing dictionary", async () => {
-    const bicep = await readFile(new URL("../../infra/feature-slot-model.bicep", import.meta.url), "utf8");
-    assert.equal((bicep.match(/^resource .+ existing =/gm) ?? []).length, 2);
-    assert.equal((bicep.match(/^resource .+(?<! existing) =/gm) ?? []).length, 1);
-    assert.match(bicep, /Microsoft\.Web\/sites\/slots\/config@2024-04-01/);
-    assert.match(bicep, /properties: union\(list\('\$\{slot\.id\}\/config\/appsettings', '2024-04-01'\)\.properties,/);
-    assert.match(bicep, /@secure\(\)[\s\S]+?param endpoint string/);
-    assert.match(bicep, /output slotUrl string = 'https:\/\/\$\{slot\.properties\.defaultHostName\}'/);
-    assert.equal((bicep.match(/^output /gm) ?? []).length, 1);
-    assert.doesNotMatch(bicep, /Microsoft\.CognitiveServices|Microsoft\.Authorization/);
 });
 
 test("production deployment applies and verifies only the evaluated model contract", async () => {

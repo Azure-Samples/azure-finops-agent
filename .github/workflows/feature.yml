@@ -155,30 +155,18 @@ jobs:
             type=registry,ref=${{ env.IMAGE }}:buildcache-main
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
 
-      - name: Validate and apply only the evaluated feature-slot model settings
-        env:
-          PREVIEW_URL: ${{ steps.target.outputs.slot_url }}
+      # Standard App Service settings write: merges only these three keys into the
+      # existing slot dictionary and needs no ARM deployment permission.
+      - name: Apply only the evaluated feature-slot model settings
         shell: bash
         run: |
           umask 077
           work=$(mktemp -d "$RUNNER_TEMP/feature-model.XXXXXX")
-          trap 'rm -f "$work/parameters.json"; rmdir "$work"' EXIT
-          node infra/scripts/feature-slot.mjs parameters "$work/parameters.json"
-          az deployment group validate --subscription "$TARGET_SUBSCRIPTION" \
-            --resource-group "$RESOURCE_GROUP" --mode Incremental \
-            --validation-level Provider \
-            --template-file infra/feature-slot-model.bicep \
-            --parameters "@$work/parameters.json" --output none
-          slot_url=$(az deployment group create --subscription "$TARGET_SUBSCRIPTION" \
-            --resource-group "$RESOURCE_GROUP" --mode Incremental \
-            --name "feature-model-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --template-file infra/feature-slot-model.bicep \
-            --parameters "@$work/parameters.json" \
-            --query properties.outputs.slotUrl.value --output tsv)
-          if [[ "$slot_url" != "$PREVIEW_URL" ]]; then
-            echo "::error::The deployed slot hostname differs from the verified Azure target."
-            exit 1
-          fi
+          trap 'rm -f "$work/settings.json"; rmdir "$work"' EXIT
+          node infra/scripts/feature-slot.mjs settings "$work/settings.json"
+          az webapp config appsettings set --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+            --settings "@$work/settings.json" --output none
 
       # `az webapp config container set` triggers App Service to re-pull and
       # restart the slot, so an explicit `webapp restart` is redundant.
