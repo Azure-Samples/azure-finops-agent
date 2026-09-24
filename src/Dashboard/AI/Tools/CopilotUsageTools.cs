@@ -21,7 +21,8 @@ public sealed class CopilotUsageTools(UserTokens tokens)
             "This is periodically refreshed licensed-user activity, not current assignment inventory, unlicensed Copilot Chat usage, or proof of financial ROI. " +
             "Never subtract current subscribedSkus assignments from a differently dated active-user report. Preserve unknown activity and anonymized identities. " +
             "Follow nextOffset only for requested detail; each call reads the report again, so combine pages only when refresh dates and totals agree. " +
-            "When the tenant has no usage reports (reportAvailable=false), the host reads current subscribedSkus: zero assigned Copilot seats yields determinate zero counts and zero waste; otherwise counts stay unknown.");
+            "When the tenant has no usage reports (reportAvailable=false), the host reads current subscribedSkus and returns enabled-inventory and assigned Copilot seats: zero assigned seats yields determinate zero activity counts and zero inactive-license waste; otherwise counts stay unknown. " +
+            "In that case the inventory is already included, so do not query subscribedSkus again for Copilot seats.");
     }
 
     private async Task<string> GetCopilotUsage(
@@ -49,10 +50,10 @@ public sealed class CopilotUsageTools(UserTokens tokens)
         if (IsTenantWithoutUsageReports(response))
         {
             var inventory = await HttpHelper.SendWithRetryAsync(
-                "https://graph.microsoft.com/v1.0/subscribedSkus?$select=skuPartNumber,consumedUnits,servicePlans",
+                "https://graph.microsoft.com/v1.0/subscribedSkus?$select=skuPartNumber,consumedUnits,prepaidUnits,servicePlans",
                 token, span, "graph.subscribed_skus", maxResponseChars: 2_000_000);
             return ReportUnavailable(days, activity, inventory.StartsWith("HTTP 200 ", StringComparison.Ordinal)
-                ? CountAssignedCopilotSeats(inventory[(inventory.IndexOf('\n') + 1)..])
+                ? ReadCopilotInventory(inventory[(inventory.IndexOf('\n') + 1)..])
                 : null);
         }
         if (!response.StartsWith("HTTP 200 ", StringComparison.Ordinal)) return response;
@@ -180,16 +181,21 @@ public sealed class CopilotUsageTools(UserTokens tokens)
         response.StartsWith("HTTP 404 ", StringComparison.Ordinal)
         && response.Contains("UnknownTenantId", StringComparison.Ordinal);
 
-    // Returns the assigned Microsoft 365 Copilot seat count from subscribedSkus, or null when the
-    // inventory cannot be read reliably. A SKU counts as Copilot when its part number or any of its
-    // service plans names Copilot, so bundles that carry a Copilot plan are never mistaken for zero seats.
-    internal static int? CountAssignedCopilotSeats(string subscribedSkusJson)
+    // Current Microsoft 365 Copilot license inventory from subscribedSkus. Assigned is consumedUnits; Enabled is
+    // prepaidUnits.enabled plus warning (grace-period) units, or null when not returned. Enabled inventory is not an
+    // invoice-verified purchase quantity.
+    internal sealed record CopilotInventory(int CopilotSkus, int Assigned, int? Enabled);
+
+    // Returns null when the inventory cannot be read reliably. A SKU counts as Copilot when its part number
+    // or any of its service plans names Copilot, so bundles that carry a Copilot plan are never mistaken for zero seats.
+    internal static CopilotInventory? ReadCopilotInventory(string subscribedSkusJson)
     {
         try
         {
             using var document = JsonDocument.Parse(subscribedSkusJson);
             if (!document.RootElement.TryGetProperty("value", out var skus) || skus.ValueKind != JsonValueKind.Array) return null;
-            var seats = 0;
+            int count = 0, assigned = 0, enabledSeats = 0;
+            var enabledKnown = true;
             foreach (var sku in skus.EnumerateArray())
             {
                 var copilot = sku.TryGetProperty("skuPartNumber", out var part) && part.ValueKind == JsonValueKind.String
@@ -199,9 +205,18 @@ public sealed class CopilotUsageTools(UserTokens tokens)
                         && name.ValueKind == JsonValueKind.String && name.GetString()!.Contains("Copilot", StringComparison.OrdinalIgnoreCase));
                 if (!copilot) continue;
                 if (!sku.TryGetProperty("consumedUnits", out var consumed) || !consumed.TryGetInt32(out var units) || units < 0) return null;
-                seats += units;
+                count++;
+                assigned += units;
+                if (sku.TryGetProperty("prepaidUnits", out var prepaid) && prepaid.ValueKind == JsonValueKind.Object
+                    && prepaid.TryGetProperty("enabled", out var enabled) && enabled.TryGetInt32(out var enabledUnits) && enabledUnits >= 0)
+                {
+                    enabledSeats += enabledUnits;
+                    if (prepaid.TryGetProperty("warning", out var warning) && warning.TryGetInt32(out var warningUnits) && warningUnits > 0)
+                        enabledSeats += warningUnits;
+                }
+                else enabledKnown = false;
             }
-            return seats;
+            return new CopilotInventory(count, assigned, enabledKnown ? enabledSeats : null);
         }
         catch (JsonException)
         {
@@ -209,26 +224,31 @@ public sealed class CopilotUsageTools(UserTokens tokens)
         }
     }
 
-    internal static string ReportUnavailable(int days, string activity, int? assignedCopilotSeats)
+    internal static string ReportUnavailable(int days, string activity, CopilotInventory? inventory)
     {
-        var noSeats = assignedCopilotSeats == 0;
+        var noSeats = inventory?.Assigned == 0;
+        int? unassigned = noSeats ? inventory!.Enabled : null;
+        const string unknownTenant = "The Microsoft 365 reporting service does not recognize this tenant (UnknownTenantId), so it has no Copilot activity report.";
         return JsonSerializer.Serialize(new
         {
             source = "Microsoft Graph Copilot licensed-user usage report",
             period = "D" + days.ToString(CultureInfo.InvariantCulture),
             reportAvailable = false,
             reason = noSeats
-                ? "The Microsoft 365 reporting service does not recognize this tenant (UnknownTenantId), so it has no Copilot activity report. None is needed: current inventory shows zero assigned Copilot seats, so there are no licensed users whose activity could be measured."
-                : "The Microsoft 365 reporting service does not recognize this tenant (UnknownTenantId), so no licensed-user Copilot activity report exists for it.",
+                ? unknownTenant + " It is not needed for the licensed-user metrics: that report lists only users with an assigned Copilot license, and current subscribedSkus shows 0 assigned Copilot seats, so its population is empty."
+                : unknownTenant,
             activityReportRequired = !noSeats,
             sourceEvidence = noSeats
-                ? (object)new { freshness = "fresh", basis = "current subscribedSkus assignments", retrievedAtUtc = DateTimeOffset.UtcNow }
+                ? (object)new { freshness = "fresh", basis = "current subscribedSkus consumedUnits (assignments) and prepaidUnits (enabled inventory)", retrievedAtUtc = DateTimeOffset.UtcNow }
                 : new { freshness = "unavailable", retrievedAtUtc = DateTimeOffset.UtcNow },
             licenseInventory = new
             {
-                source = "Microsoft Graph subscribedSkus (current assignments)",
-                read = assignedCopilotSeats is not null,
-                assignedCopilotSeats
+                source = "Microsoft Graph subscribedSkus (current enabled inventory and assignments; not invoice-verified purchases)",
+                read = inventory is not null,
+                copilotSkus = inventory?.CopilotSkus,
+                enabledCopilotSeats = inventory?.Enabled,
+                assignedCopilotSeats = inventory?.Assigned,
+                unassignedEnabledCopilotSeats = unassigned
             },
             licensedUsersOnly = true,
             totalReportedUsers = noSeats ? 0 : (int?)null,
@@ -240,10 +260,15 @@ public sealed class CopilotUsageTools(UserTokens tokens)
             users = Array.Empty<object>(),
             inactiveLicenseMonthlyWaste = noSeats ? 0 : (int?)null,
             interpretation = noSeats
-                ? "Determinate answer, not unknown: 0 Copilot seats assigned, 0 seats actively used, 0 inactive licensed users (none to list) and zero monthly inactive-license waste in any currency, because an empty licensed-user population has nothing to measure or price. State these as zeros; the only uncovered area is unlicensed Copilot Chat activity, which is not license waste."
-                : "Activity counts are unknown, not zero, and inactive-license waste cannot be calculated until the tenant produces usage reports. Report assigned Copilot seats from subscribedSkus consumedUnits."
+                ? "Determinate by counting, not an unknown: actively used seats can never exceed assigned seats, and assigned Copilot seats are 0, so actively used seats are 0, inactive licensed users are 0 (none to list) and inactive-license waste is 0 in any currency because there is no inactive assigned license to price. State the enabled-inventory and assigned counts and explain this reasoning; do not call these metrics unverifiable. " +
+                  (unassigned is > 0
+                      ? "Separately report unassignedEnabledCopilotSeats as enabled-but-unassigned inventory; its cost needs the tenant's contract price, so leave that cost unknown unless supplied."
+                      : unassigned is null
+                          ? "Enabled inventory was not returned, so enabled-but-unassigned seats are unknown."
+                          : "There is also no enabled-but-unassigned Copilot inventory.") +
+                  " Paid or invoiced quantities are not established by this inventory. Not covered: unlicensed Copilot Chat activity, which this licensed-user report never includes."
+                : "Activity counts are unknown, not zero, and inactive-license waste cannot be calculated until the tenant produces usage reports. Report enabled and assigned Copilot seats from licenseInventory."
         });
     }
-
     private static string InvalidReport(string detail) => "HTTP 502 BadGateway\n" + detail;
 }

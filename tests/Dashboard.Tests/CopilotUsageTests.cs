@@ -17,7 +17,7 @@ public sealed class CopilotUsageTests
         Assert.False(CopilotUsageTools.IsTenantWithoutUsageReports("HTTP 404 NotFound\n{\"error\":{\"code\":\"ResourceNotFound\"}}"));
         Assert.False(CopilotUsageTools.IsTenantWithoutUsageReports("HTTP 403 Forbidden\nUnknownTenantId"));
 
-        using var document = JsonDocument.Parse(CopilotUsageTools.ReportUnavailable(30, "inactive", 3));
+        using var document = JsonDocument.Parse(CopilotUsageTools.ReportUnavailable(30, "inactive", new(1, 3, 5)));
         var body = document.RootElement;
         Assert.False(body.GetProperty("reportAvailable").GetBoolean());
         Assert.False(body.GetProperty("totalsComplete").GetBoolean());
@@ -34,15 +34,19 @@ public sealed class CopilotUsageTests
     [Fact]
     public void UnprovisionedReportingTenantWithoutCopilotSeatsHasDeterminateZeros()
     {
-        const string skus = "{\"value\":[{\"skuPartNumber\":\"Microsoft_365_E5_(no_Teams)\",\"consumedUnits\":2,\"servicePlans\":[{\"servicePlanName\":\"EXCHANGE_S_ENTERPRISE\"}]}," +
-            "{\"skuPartNumber\":\"Microsoft_365_Copilot\",\"consumedUnits\":0,\"servicePlans\":[]}]}";
-        Assert.Equal(0, CopilotUsageTools.CountAssignedCopilotSeats(skus));
-        Assert.Equal(4, CopilotUsageTools.CountAssignedCopilotSeats(
-            "{\"value\":[{\"skuPartNumber\":\"BUNDLE\",\"consumedUnits\":4,\"servicePlans\":[{\"servicePlanName\":\"M365_COPILOT_APPS\"}]}]}"));
-        Assert.Null(CopilotUsageTools.CountAssignedCopilotSeats("{\"value\":[{\"skuPartNumber\":\"Microsoft_365_Copilot\"}]}"));
-        Assert.Null(CopilotUsageTools.CountAssignedCopilotSeats("not json"));
+        const string skus = "{\"value\":[{\"skuPartNumber\":\"Microsoft_365_E5_(no_Teams)\",\"consumedUnits\":2,\"prepaidUnits\":{\"enabled\":50},\"servicePlans\":[{\"servicePlanName\":\"EXCHANGE_S_ENTERPRISE\"}]}," +
+            "{\"skuPartNumber\":\"Microsoft_365_Copilot\",\"consumedUnits\":0,\"prepaidUnits\":{\"enabled\":0,\"warning\":0},\"servicePlans\":[]}]}";
+        Assert.Equal(new CopilotUsageTools.CopilotInventory(1, 0, 0), CopilotUsageTools.ReadCopilotInventory(skus));
+        Assert.Equal(new CopilotUsageTools.CopilotInventory(0, 0, 0), CopilotUsageTools.ReadCopilotInventory(
+            "{\"value\":[{\"skuPartNumber\":\"Microsoft_365_E5_(no_Teams)\",\"consumedUnits\":2,\"prepaidUnits\":{\"enabled\":50},\"servicePlans\":[]}]}"));
+        Assert.Equal(new CopilotUsageTools.CopilotInventory(1, 4, 7), CopilotUsageTools.ReadCopilotInventory(
+            "{\"value\":[{\"skuPartNumber\":\"BUNDLE\",\"consumedUnits\":4,\"prepaidUnits\":{\"enabled\":5,\"warning\":2},\"servicePlans\":[{\"servicePlanName\":\"M365_COPILOT_APPS\"}]}]}"));
+        Assert.Equal(new CopilotUsageTools.CopilotInventory(1, 0, null), CopilotUsageTools.ReadCopilotInventory(
+            "{\"value\":[{\"skuPartNumber\":\"Microsoft_365_Copilot\",\"consumedUnits\":0}]}"));
+        Assert.Null(CopilotUsageTools.ReadCopilotInventory("{\"value\":[{\"skuPartNumber\":\"Microsoft_365_Copilot\"}]}"));
+        Assert.Null(CopilotUsageTools.ReadCopilotInventory("not json"));
 
-        using var document = JsonDocument.Parse(CopilotUsageTools.ReportUnavailable(30, "inactive", 0));
+        using var document = JsonDocument.Parse(CopilotUsageTools.ReportUnavailable(30, "inactive", new(1, 0, 0)));
         var body = document.RootElement;
         Assert.False(body.GetProperty("reportAvailable").GetBoolean());
         Assert.True(body.GetProperty("totalsComplete").GetBoolean());
@@ -50,6 +54,14 @@ public sealed class CopilotUsageTests
         Assert.Equal(0, body.GetProperty("activeUsers").GetInt32());
         Assert.Equal(0, body.GetProperty("inactiveLicenseMonthlyWaste").GetInt32());
         Assert.Equal(0, body.GetProperty("licenseInventory").GetProperty("assignedCopilotSeats").GetInt32());
+        Assert.Equal(0, body.GetProperty("licenseInventory").GetProperty("enabledCopilotSeats").GetInt32());
+        Assert.Contains("0 assigned Copilot seats", body.GetProperty("reason").GetString());
+        Assert.DoesNotContain("purchase", body.GetProperty("interpretation").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        using var idle = JsonDocument.Parse(CopilotUsageTools.ReportUnavailable(30, "inactive", new(1, 0, 10)));
+        Assert.Equal(10, idle.RootElement.GetProperty("licenseInventory").GetProperty("unassignedEnabledCopilotSeats").GetInt32());
+        Assert.Equal(0, idle.RootElement.GetProperty("inactiveUsers").GetInt32());
+        Assert.Contains("contract price", idle.RootElement.GetProperty("interpretation").GetString());
     }
 
     [Fact]
