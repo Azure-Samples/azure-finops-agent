@@ -201,11 +201,12 @@ private async Task<string> CheckComputeFeasibility(
             + "Catalogue permission, advertised Spot capability, quota, policy, historical deployments, prices, eviction history and current placement are distinct. "
             + "LowPriorityCapable is catalogue metadata, not proof about existing Spot VMs. A past deployment does not guarantee a new allocation. "
             + "No result guarantees placement or uninterrupted runtime. Spot scores are point-in-time recommendations, cached for 15 minutes; DataNotFound, DataNotFoundOrStale and absent scores mean placement evidence is unknown, never that regional placement is unavailable. "
+            + "RequiredVcpus is the requested demand (vCPUs per VM times count), not a quota balance. AvailableQuotaVcpus is the smallest remaining checked quota counter; state a quota amount only from it, and when it is null say only sufficient/insufficient/unknown. "
             + "RestrictedSkuNotAvailable applies to the exact requested configuration now, not to past deployments. Policy was not validated."
     });
 }
 
-internal sealed record Feasibility(string SkuStatus, string QuotaStatus, int? RequiredVcpus, string[] EligibleZones, bool? LowPriorityCapable = null);
+internal sealed record Feasibility(string SkuStatus, string QuotaStatus, int? RequiredVcpus, string[] EligibleZones, bool? LowPriorityCapable = null, int? AvailableQuotaVcpus = null);
 
 internal sealed record PlacementCoverage(bool Complete, string Status, int ExpectedScores, int ReportedScores);
 
@@ -293,17 +294,28 @@ internal static Feasibility Evaluate(JsonElement sku, string region, string? zon
     int? required = int.TryParse(Text(capability, "value"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var cores) && cores is > 0 and < 100000 ? cores * count : null;
     var quotaNames = priority == "spot" ? new[] { "lowPriorityCores" } : ["cores", Text(sku, "family")];
     var quotaStatus = required is null ? "unknown" : "sufficient";
+    double? available = null;
+    var allBalancesKnown = true;
     foreach (var name in quotaNames)
     {
         var quota = usages.FirstOrDefault(item => item.TryGetProperty("name", out var field) && Text(field, "value").Equals(name, StringComparison.OrdinalIgnoreCase));
         if (quota.ValueKind != JsonValueKind.Object || !quota.TryGetProperty("limit", out var limit) || !limit.TryGetDouble(out var maximum)
             || !quota.TryGetProperty("currentValue", out var current) || !current.TryGetDouble(out var used))
-        { if (quotaStatus != "insufficient") quotaStatus = "unknown"; }
-        else if (required is not null && maximum - used < required.Value) quotaStatus = "insufficient";
+        {
+            allBalancesKnown = false;
+            if (quotaStatus != "insufficient") quotaStatus = "unknown";
+        }
+        else
+        {
+            available = available is null ? maximum - used : Math.Min(available.Value, maximum - used);
+            if (required is not null && maximum - used < required.Value) quotaStatus = "insufficient";
+        }
     }
+    // The binding balance is the smallest remaining counter (regional and family).
+    int? availableVcpus = allBalancesKnown && available is >= int.MinValue and <= int.MaxValue ? (int)Math.Floor(available.Value) : null;
     var spotCapability = Array(sku, "capabilities").FirstOrDefault(item => Text(item, "name").Equals("LowPriorityCapable", StringComparison.OrdinalIgnoreCase));
     bool? lowPriorityCapable = bool.TryParse(Text(spotCapability, "value"), out var supported) ? supported : null;
-    return new(blocked ? "blocked" : "permitted", quotaStatus, required, zones.Order().ToArray(), lowPriorityCapable);
+    return new(blocked ? "blocked" : "permitted", quotaStatus, required, zones.Order().ToArray(), lowPriorityCapable, availableVcpus);
 }
 
 private async Task<string> CheckVmConnectivity(

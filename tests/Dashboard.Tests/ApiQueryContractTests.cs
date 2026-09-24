@@ -12,7 +12,6 @@ public sealed class ApiQueryContractTests
 
     [Theory]
     [InlineData(null)]
-    [InlineData("{not json")]
     [InlineData("[]")]
     [InlineData("{\"query\":\"resources | summarize count()\"}")]
     [InlineData("{\"subscriptions\":[]}")]
@@ -28,6 +27,17 @@ public sealed class ApiQueryContractTests
         var error = AzureQueryTools.ValidateQueryBody(ResourceGraphPath, body);
         Assert.NotNull(error);
         Assert.Contains("Implicit tenant-wide scope is not supported", error);
+        Assert.Contains("No request was sent", error);
+    }
+
+    [Theory]
+    [InlineData("{not json")]
+    [InlineData("{\"subscriptions\":[\"11111111-1111-1111-1111-111111111111\"],\"query\":\"resources | take 200\"")]
+    public void ResourceGraphReportsMalformedJsonAsMalformed(string body)
+    {
+        var error = AzureQueryTools.ValidateQueryBody(ResourceGraphPath, body);
+        Assert.NotNull(error);
+        Assert.Contains("must be one complete valid JSON object", error);
         Assert.Contains("No request was sent", error);
     }
 

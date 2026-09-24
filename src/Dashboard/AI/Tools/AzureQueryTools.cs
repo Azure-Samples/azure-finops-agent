@@ -44,7 +44,7 @@ Never bare /providers/Microsoft.CostManagement/... — that returns 400.
 
 COST MANAGEMENT QUERY: use api-version=2026-08-01 and dataset.aggregation for totals. Add real grouping dimensions (ServiceName, ResourceGroupName, MeterCategory) only for the requested breakdown. Do NOT add 'UsageDate' to the grouping array — it's a response column, not a dimension; use granularity=""Daily"" for per-day. Never request raw cost detail rows for a summary. For totals across all subscriptions, call QueryCostsAcrossSubscriptions exactly once with connection-context scopes; never fan out one query per subscription yourself. For grouped detail across two or more known subscription scopes, use ONE BulkAzureRequest with parallelism=1 and the exact scopes, dates, cost type and filters. The host executes cost reads sequentially; do not spend a model round-trip on every subscription.
 
-FORECASTS AND BUDGETS: For a whole-month chart, a Daily forecast with includeActualCost=true and explicit month bounds can supply both actual and forecast rows. includeActualCost and includeFreshPartialCost are TOP-LEVEL request fields beside type/timeframe/timePeriod/dataset, NEVER under dataset.configuration. Keep dataset.aggregation for Cost/Sum; do not combine aggregation with dataset.configuration (the service rejects that). Shape example (substitute dates and preserve any requested cost type, filters and grouping): {""type"":""Usage"",""timeframe"":""Custom"",""timePeriod"":{""from"":""<requested-start>"",""to"":""<requested-end>""},""includeActualCost"":true,""dataset"":{""granularity"":""Daily"",""aggregation"":{""totalCost"":{""name"":""Cost"",""function"":""Sum""}}}}. Inspect CostStatus, dates and currency before summing nonoverlapping rows. For remaining spend, aggregate only forecast rows in the requested future window. Before comparing with a budget, inspect its timeGrain, filters, currentSpend AND forecastSpend. The budget's forecastSpend is an independent periodically evaluated projection, not the sum of your daily forecast. Explicitly disclose conflicting month-end estimates, especially opposite under/over-budget outcomes, before concluding whether the budget is safe. A generic freshness caveat does not reconcile them. Never mix incompatible scopes, filters, currencies or unknown date coverage.
+FORECASTS AND BUDGETS: In raw Cost Management /query and /forecast bodies, timePeriod.to is the INCLUSIVE last day: a whole-month window for September 2026 is from=2026-09-01, to=2026-09-30; never pass the next month's first day, which adds an extra day of rows. For a whole-month chart, a Daily forecast with includeActualCost=true and explicit month bounds can supply both actual and forecast rows. includeActualCost and includeFreshPartialCost are TOP-LEVEL request fields beside type/timeframe/timePeriod/dataset, NEVER under dataset.configuration. Keep dataset.aggregation for Cost/Sum; do not combine aggregation with dataset.configuration (the service rejects that). Shape example (substitute dates and preserve any requested cost type, filters and grouping): {""type"":""Usage"",""timeframe"":""Custom"",""timePeriod"":{""from"":""<requested-start>"",""to"":""<requested-end>""},""includeActualCost"":true,""dataset"":{""granularity"":""Daily"",""aggregation"":{""totalCost"":{""name"":""Cost"",""function"":""Sum""}}}}. Inspect CostStatus, dates and currency before summing nonoverlapping rows. For remaining spend, aggregate only forecast rows in the requested future window. Before comparing with a budget, inspect its timeGrain, filters, currentSpend AND forecastSpend. The budget's forecastSpend is an independent periodically evaluated projection, not the sum of your daily forecast. Explicitly disclose conflicting month-end estimates, especially opposite under/over-budget outcomes, before concluding whether the budget is safe. A generic freshness caveat does not reconcile them. Never mix incompatible scopes, filters, currencies or unknown date coverage.
 
 DETAIL REQUESTS: for costs by resource/model, start with a valid resource/meter breakdown, not a totals-only query followed by another request for the actual question. Cost Management permits at most two grouping dimensions. At subscription scope use ResourceId plus Meter; derive subscription/resource-group from the scope or ResourceId instead of adding third/fourth grouping dimensions. At management-group scope use SubscriptionId plus ResourceId for resource attribution, then a targeted meter query only when still needed. Reuse returned detail to compute totals; follow pagination and disclose partial coverage. Token activity/inventory is not billed resource or model cost.
 
@@ -137,6 +137,14 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
             includeTimestamp: true);
     }
 
+    // Cost Management treats timePeriod.to as an inclusive day, whereas this
+    // tool's contract is an exclusive end, so send the last included day.
+    internal static object CostQueryTimePeriod(DateOnly fromDate, DateOnly toExclusive) => new
+    {
+        from = fromDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        to = toExclusive.AddDays(-1).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
+    };
+
     private async Task<string> QueryCostsAcrossSubscriptions(
         [Description("JSON array of all subscription objects in the requested scope, from connection context, with id and name fields. Never sample the array for an all-subscription total.")] string subscriptionsJson,
         [Description("Inclusive start date in yyyy-MM-dd format. Bound to the requested period; the full date range must not exceed 366 days.")] string from,
@@ -212,11 +220,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
         {
             type = "ActualCost",
             timeframe = "Custom",
-            timePeriod = new
-            {
-                from = fromDate.ToString("yyyy-MM-dd"),
-                to = toDate.ToString("yyyy-MM-dd")
-            },
+            timePeriod = CostQueryTimePeriod(fromDate, toDate),
             dataset = new
             {
                 granularity = "None",
@@ -239,11 +243,7 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
                 {
                     type = "ActualCost",
                     timeframe = "Custom",
-                    timePeriod = new
-                    {
-                        from = fromDate.ToString("yyyy-MM-dd"),
-                        to = toDate.ToString("yyyy-MM-dd")
-                    },
+                    timePeriod = CostQueryTimePeriod(fromDate, toDate),
                     dataset = new
                     {
                         granularity = "None",
@@ -871,9 +871,10 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
             return ValidateCostQueryBody(path, body);
 
         const string error = "HTTP 400 BadRequest\nResource Graph queries must declare exactly one non-empty subscriptions array of GUID strings or managementGroups array of ID strings from the requested connection-context scope. Implicit tenant-wide scope is not supported by this tool. No request was sent.";
+        if (string.IsNullOrWhiteSpace(body)) return error;
         try
         {
-            using var document = JsonDocument.Parse(body ?? "");
+            using var document = JsonDocument.Parse(body);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object
                 || root.EnumerateObject().Count(property => property.Name is "subscriptions" or "managementGroups") != 1)
@@ -888,7 +889,10 @@ Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or fi
                     return error;
             return null;
         }
-        catch (JsonException) { return error; }
+        catch (JsonException)
+        {
+            return "HTTP 400 BadRequest\nResource Graph query body must be one complete valid JSON object (check closing quotes and braces), with an explicit subscriptions or managementGroups array and a query string. No request was sent.";
+        }
     }
 
     private static string BlockMutatingPost(Activity? activity)

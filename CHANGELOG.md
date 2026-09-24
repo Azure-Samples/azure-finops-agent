@@ -13,6 +13,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Send the last included day to Cost Management from `QueryCostsAcrossSubscriptions`. Cost Management treats `timePeriod.to` as inclusive, so the tool's exclusive end previously added the next day's cost to past-period totals. Tool and system guidance now state that raw query/forecast bodies use an inclusive last day.
+- Report malformed Resource Graph request JSON as malformed instead of as a missing scope, so the model can correct the body.
+- Return `AvailableQuotaVcpus` from `CheckComputeFeasibility` so answers do not present the requested vCPU demand as a quota balance.
+- Allow 60 seconds for Azure CLI token acquisition in the live-evaluation host; the 13-second default failed complete runs on slower hosts.
+- Log model calls that end with a non-normal finish reason or a content-filter trigger (token counts only, never content) so truncated answers can be diagnosed.
 - Preserve inclusive/exclusive date labels when translating cost-query boundaries into prose; a converted last included day must not retain an exclusive-end label.
 - Judge requested metrics across the entire answer without conflating enabled license inventory, verified paid quantities and activity. Keep available counts and supplied billing evidence mandatory, reject unsupported paid/waste claims, and retain failure for unavailable required activity reports. Questions, rubrics and fail-closed acceptance are unchanged.
 - Clarify missing material product configuration, including VM OS/license and service tier, before price quotes or rankings instead of treating example filters as defaults. Cross-region comparisons waive only a single-region choice; the ordinary on-demand default does not choose an OS. Keep selected variants visible in price headlines/charts and calculate requested-period values before one final visual. Preserve independent variant rankings and existing source coverage.

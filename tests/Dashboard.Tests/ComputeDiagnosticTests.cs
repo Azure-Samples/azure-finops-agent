@@ -37,6 +37,17 @@ public sealed class ComputeDiagnosticTests
     }
 
     [Fact]
+    public void QuotaBalanceIsReportedSeparatelyFromRequiredDemand()
+    {
+        var usages = new[] { Usage("cores", 100, 10), Usage("testFamily", 64, 24), Usage("lowPriorityCores", 500, 20) };
+        var standard = ComputeDiagnosticTools.Evaluate(Sku([]), "testregion", null, usages, 1, "standard");
+        Assert.Equal(40, standard.AvailableQuotaVcpus);
+        Assert.NotEqual(standard.RequiredVcpus, standard.AvailableQuotaVcpus);
+        Assert.Equal(480, ComputeDiagnosticTools.Evaluate(Sku([]), "testregion", null, usages, 1, "spot").AvailableQuotaVcpus);
+        Assert.Null(ComputeDiagnosticTools.Evaluate(Sku([]), "testregion", null, [Usage("cores", 100)], 1, "standard").AvailableQuotaVcpus);
+    }
+
+    [Fact]
     public void ZoneAndMissingQuotaAreNotAssumedAvailable()
     {
         var result = ComputeDiagnosticTools.Evaluate(Sku([new { type = "Zone", restrictionInfo = new { locations = new[] { "testregion" }, zones = new[] { "2" } } }]), "testregion", "2", [], 1, "standard");

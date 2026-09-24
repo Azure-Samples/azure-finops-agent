@@ -1102,6 +1102,17 @@ public static class ChatEndpoints
         {
             sseData = JsonSerializer.Serialize(new { type = "message", messageId = msg.Data.MessageId, content = msg.Data.Content });
         }
+        else if (evt is AssistantUsageEvent usage)
+        {
+            var finish = usage.Data.FinishReason;
+            if ((!string.IsNullOrEmpty(finish) && finish is not "stop" and not "tool_calls" and not "completed")
+                || usage.Data.ContentFilterTriggered == true)
+            {
+                logger.LogWarning(
+                    "Model call ended without a normal finish (finish={FinishReason}, contentFilter={ContentFilter}, outputTokens={OutputTokens}, maxOutputTokens={MaxOutputTokens})",
+                    finish, usage.Data.ContentFilterTriggered, usage.Data.OutputTokens, usage.Data.MaxOutputTokens);
+            }
+        }
         else if (evt is ToolExecutionStartEvent toolStart)
         {
             var toolId = toolStart.Data.ToolCallId ?? Guid.NewGuid().ToString();

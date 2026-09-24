@@ -41,4 +41,18 @@ public sealed class CrossSubscriptionCostTests
         Assert.Equal(scopes.Count, body.GetProperty("results").GetArrayLength());
         if (partial) Assert.Equal(JsonValueKind.Null, body.GetProperty("totalCost").ValueKind);
     }
+
+    [Fact]
+    public void CostManagementRequestsSendTheLastIncludedDayForAnExclusiveEnd()
+    {
+        var period = JsonSerializer.SerializeToElement(
+            AzureQueryTools.CostQueryTimePeriod(new DateOnly(2026, 8, 1), new DateOnly(2026, 9, 1)));
+        Assert.Equal("2026-08-01", period.GetProperty("from").GetString());
+        Assert.Equal("2026-08-31", period.GetProperty("to").GetString());
+
+        var singleDay = JsonSerializer.SerializeToElement(
+            AzureQueryTools.CostQueryTimePeriod(new DateOnly(2026, 9, 24), new DateOnly(2026, 9, 25)));
+        Assert.Equal("2026-09-24", singleDay.GetProperty("from").GetString());
+        Assert.Equal("2026-09-24", singleDay.GetProperty("to").GetString());
+    }
 }

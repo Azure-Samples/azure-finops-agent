@@ -123,7 +123,7 @@ Before manually testing a fresh consent flow, revoke existing grants for the tes
 
 ### Cross-subscription cost
 
-Use `QueryCostsAcrossSubscriptions` exactly once for totals-only all-subscription questions. Detailed resource/model questions start with valid grouped detail; derive totals from those rows when coverage is complete.
+Use `QueryCostsAcrossSubscriptions` exactly once for totals-only all-subscription questions. Its `to` is exclusive and it sends Cost Management the inclusive last day; raw Cost Management query/forecast `timePeriod.to` is always inclusive. Detailed resource/model questions start with valid grouped detail; derive totals from those rows when coverage is complete.
 
 - For the current calendar month, it reads unfiltered monthly-budget `currentSpend` concurrently. Strict guards require current-month dates, monthly Cost budgets, empty filters, agreeing duplicate budgets, and one currency.
 - Budget snapshots are evaluated periodically and may lag billing. State that caveat; retrieval time is not a source data timestamp and a reported total is not a finalized bill.
