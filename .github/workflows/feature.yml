@@ -22,6 +22,10 @@ on:
         description: Deploy to the test slot after every validation gate passes
         type: boolean
         default: false
+      preflight:
+        description: Only verify read-only test-slot access and model prerequisites (no build, evaluation or deployment)
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -43,6 +47,7 @@ concurrency:
 
 jobs:
   regressions:
+    if: github.event_name != 'workflow_dispatch' || !inputs.preflight
     permissions:
       contents: read
     uses: ./.github/workflows/validate.yml
@@ -238,3 +243,46 @@ jobs:
             printf -- '- **Image:** `%s:test-%s`\n- **Model:** `%s` (%s)\n' "$IMAGE" "$DEPLOYED_SHA" "$EVALUATED_MODEL" "$EVALUATED_REASONING_EFFORT"
             printf -- '- **Preview URL:** %s\n' "$PREVIEW_URL"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  preflight:
+    name: Read-only test-slot preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AOAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Reports only booleans, model metadata and a one-way endpoint fingerprint.
+      - name: Inspect target prerequisites
+        shell: bash
+        run: |
+          report() { printf -- '- %s: `%s`\n' "$1" "$2" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          printf '### Test-slot preflight\n\n' >> "$GITHUB_STEP_SUMMARY"
+          report "OIDC login" "ok"
+          normalized="${AOAI_ENDPOINT%/}"
+          report "Target endpoint SHA-256" "$(printf '%s' "$normalized" | sha256sum | cut -d' ' -f1)"
+          az webapp show --subscription "$TARGET_SUBSCRIPTION" --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" --query id --output none 2>/dev/null \
+            && report "Slot readable" "yes" || report "Slot readable" "no"
+          deployment=$(az webapp config appsettings list --subscription "$TARGET_SUBSCRIPTION" --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+            --query "[?name=='AzureOpenAI__DeploymentName'].value | [0]" --output tsv 2>/dev/null || true)
+          report "Slot deployment setting" "${deployment:-unset}"
+          account=$(az graph query --first 1 --query "resources | where type =~ 'microsoft.cognitiveservices/accounts' | where tolower(trim_end('/', tostring(properties.endpoint))) == tolower('$normalized') or tolower(trim_end('/', tostring(properties.endpoints['OpenAI Language Model Instance API']))) == tolower('$normalized') | project id" \
+            --query "data[0].id" --output tsv 2>/dev/null || true)
+          report "Endpoint account visible" "$([[ -n "$account" ]] && echo yes || echo no)"
+          if [[ -n "$account" ]]; then
+            models=$(az rest --method get --url "https://management.azure.com${account}/deployments?api-version=2024-10-01" \
+              --query "value[].[name,properties.model.name,properties.model.version,sku.name]" --output tsv 2>/dev/null | tr '\t' '/' | paste -sd ',' - || true)
+            report "Endpoint deployments" "${models:-unreadable}"
+          fi
+          az acr show --subscription "$TARGET_SUBSCRIPTION" --name "$ACR_NAME" --query id --output none 2>/dev/null \
+            && report "Registry readable" "yes" || report "Registry readable" "no"
