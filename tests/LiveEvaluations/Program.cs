@@ -60,7 +60,13 @@ internal static class Program
         if (!Guid.TryParse(tenant, out _)) throw new InvalidOperationException("Provide the evaluation tenant ID.");
         var owner = PersistentIdentity.DeriveUserId(tenant, ownerOid);
         // The subscription selects its cached CLI user; tenant-only selection uses the default CLI user.
-        TokenCredential credential = new AzureCliCredential(new AzureCliCredentialOptions { Subscription = subscriptions[0] });
+        // The default 13-second CLI timeout is shorter than a slow az startup on some hosts and
+        // turned transient CLI latency into failed evaluations.
+        TokenCredential credential = new AzureCliCredential(new AzureCliCredentialOptions
+        {
+            Subscription = subscriptions[0],
+            ProcessTimeout = TimeSpan.FromSeconds(60)
+        });
         var resourceScopes = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["azure"] = "https://management.azure.com/.default",
