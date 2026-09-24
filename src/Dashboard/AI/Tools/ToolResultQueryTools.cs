@@ -288,14 +288,30 @@ public sealed class ToolResultQueryTools(long owner)
     {
         Require(path.Length is > 0 and <= 1024 && path[0] == '$', "JSONPath must start with $ and contain at most 1024 characters.");
         Require(!path.Contains("..", StringComparison.Ordinal) && !path.Contains("=~", StringComparison.Ordinal), "Use explicit schema paths; recursive descent and regex predicates are not supported. Filter rows with where, e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\",\"managedClusters\"]}].");
-        var count = 0;
-        foreach (var value in root.SelectTokens(path, new JsonSelectSettings { RegexMatchTimeout = TimeSpan.FromMilliseconds(100), ErrorWhenNoMatch = false }))
+        // Newtonsoft JSONPath accepts only single-quoted bracket names; ["name"] is common standard JSONPath.
+        path = DoubleQuotedName.Replace(path, "['$1']");
+        IEnumerator<JToken> tokens;
+        try { tokens = root.SelectTokens(path, new JsonSelectSettings { RegexMatchTimeout = TimeSpan.FromMilliseconds(100), ErrorWhenNoMatch = false }).GetEnumerator(); }
+        catch (Newtonsoft.Json.JsonException) { throw InvalidPath(); }
+        using (tokens)
         {
-            check();
-            Require(++count <= 100000, "Selection exceeds 100000 matches; narrow the selector.");
-            yield return value;
+            var count = 0;
+            while (true)
+            {
+                try { if (!tokens.MoveNext()) yield break; }
+                catch (Newtonsoft.Json.JsonException) { throw InvalidPath(); }
+                check();
+                Require(++count <= 100000, "Selection exceeds 100000 matches; narrow the selector.");
+                yield return tokens.Current;
+            }
         }
     }
+
+    private static readonly System.Text.RegularExpressions.Regex DoubleQuotedName = new(
+        "\\[\"([^\"'\\\\\\]]*)\"\\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+
+    private static QueryException InvalidPath() =>
+        new("Invalid JSONPath syntax. Use dot notation ($.name), single-quoted brackets ($['name']) or array indexes ($[0]).");
 
     private static JToken? Single(JToken row, string path, Action check)
     {

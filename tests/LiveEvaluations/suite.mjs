@@ -27,6 +27,9 @@ const evaluationSourcePaths = [
     ),
 ];
 const LIVE_SUITE_SIZE = 20;
+const THROTTLE_MARGIN_MS = 5000;
+// The app waits at most five minutes for a cost retry; allow a bounded margin beyond it.
+const MAX_THROTTLE_WAIT_MS = 6 * 60 * 1000;
 const CURATED_CASE_IDS = Object.freeze([
     "fa300ef5396c951b", // Crawl maturity
     "967d9300e17ef22a", // Current-month cost by service
@@ -420,6 +423,14 @@ export function publishableResult(result, publishAnswers) {
                   complete: judge.complete === true,
               }
             : null,
+        attempts: Number.isInteger(result.attempts) ? result.attempts : 1,
+        throttle: {
+            notices: Number.isInteger(result.throttle?.notices)
+                ? result.throttle.notices : 0,
+            final: result.throttle?.final === true,
+            retryAtUtc: Number.isFinite(Date.parse(result.throttle?.retryAtUtc ?? ""))
+                ? new Date(result.throttle.retryAtUtc).toISOString() : null,
+        },
     };
     if (!publishAnswers)
         return {
@@ -591,37 +602,73 @@ export async function runCases(
     };
     try {
         await report();
+        let cooldownUntil = 0;
+        const waitForCooldown = async (minimumMs) => {
+            // Honour the service's retry deadline so the next attempt does not start inside a Cost Management cooldown.
+            const remaining = Math.min(
+                Math.max(cooldownUntil - Date.now() + THROTTLE_MARGIN_MS, 0),
+                MAX_THROTTLE_WAIT_MS,
+            );
+            const waitMs = Math.max(minimumMs, remaining);
+            if (waitMs > 0) {
+                if (remaining > minimumMs)
+                    console.log(`Waiting ${Math.ceil(waitMs / 1000)}s for a reported service cooldown.`);
+                await delay(waitMs, undefined, { signal: controller.signal });
+            }
+        };
+        const noteThrottle = (result) => {
+            const retryAt = Date.parse(result?.throttle?.retryAtUtc ?? "");
+            if (Number.isFinite(retryAt)) cooldownUntil = Math.max(cooldownUntil, retryAt);
+            return result?.throttle?.final === true;
+        };
         for (const [index, scenario] of cases.entries()) {
             controller.signal.throwIfAborted();
             // Spaces cases so the suite does not throttle tenant-wide Cost Management quota itself.
-            if (index > 0 && pauseMs > 0)
-                await delay(pauseMs, undefined, { signal: controller.signal });
+            await waitForCooldown(index > 0 ? pauseMs : 0);
             controller.signal.throwIfAborted();
             await renew();
             controller.signal.throwIfAborted();
             const resultPath = resolve(captureDirectory, `${scenario.id}.json`);
-            const exitCode = await execute(
-                scenario,
-                resultPath,
-                sha,
-                suiteHash,
-                undefined,
-                { signal: controller.signal },
-            );
-            controller.signal.throwIfAborted();
-            let result;
-            try {
-                result = JSON.parse(await readFile(resultPath, "utf8"));
-            } catch {
-                result = null;
+            const runAttempt = async () => {
+                const exitCode = await execute(
+                    scenario,
+                    resultPath,
+                    sha,
+                    suiteHash,
+                    undefined,
+                    { signal: controller.signal },
+                );
+                controller.signal.throwIfAborted();
+                let result;
+                try {
+                    result = JSON.parse(await readFile(resultPath, "utf8"));
+                } catch {
+                    result = null;
+                }
+                const failures = validateResult(
+                    scenario,
+                    result,
+                    exitCode,
+                    sha,
+                    suiteHash,
+                );
+                return { exitCode, result, failures };
+            };
+            let { exitCode, result, failures } = await runAttempt();
+            let attempts = 1;
+            // A final service throttle is an environmental refusal, not an agent verdict: rerun once, unchanged, after the deadline.
+            if (noteThrottle(result) && failures.length > 0) {
+                console.log(`[${index + 1}/${cases.length}] ${scenario.id} throttled by the service; retrying once after cooldown.`);
+                await waitForCooldown(pauseMs);
+                controller.signal.throwIfAborted();
+                await renew();
+                controller.signal.throwIfAborted();
+                ({ exitCode, result, failures } = await runAttempt());
+                noteThrottle(result);
+                attempts = 2;
             }
-            const failures = validateResult(
-                scenario,
-                result,
-                exitCode,
-                sha,
-                suiteHash,
-            );
+            if (result && typeof result === "object" && !Array.isArray(result))
+                result.attempts = attempts;
             if (retainedCapture && failures.length === 0) {
                 try {
                     const location = await privateDiagnosticsLocation(

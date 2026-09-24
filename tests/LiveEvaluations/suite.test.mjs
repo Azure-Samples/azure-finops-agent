@@ -844,6 +844,78 @@ test("suite execution writes all results but rejects one failed answer", async (
     }
 });
 
+test("a final service throttle is retried once after its deadline with the rubric unchanged", async () => {
+    const directory = await createDirectory();
+    try {
+        const planned = cases.slice(0, 3);
+        const calls = [];
+        const verdict = await runCases(
+            planned,
+            directory,
+            sha,
+            suiteHash,
+            async (scenario, path) => {
+                calls.push(scenario.id);
+                const result = pass(scenario);
+                const throttled = scenario === planned[1] && calls.filter((id) => id === scenario.id).length === 1;
+                const refused = scenario === planned[2];
+                if (throttled || refused) {
+                    result.accepted = false;
+                    result.tools = [{ name: "QueryAzure", success: false }];
+                    result.toolCount = 1;
+                    result.reasons = ["At least one tool failed."];
+                }
+                if (throttled)
+                    result.throttle = { notices: 2, final: true, retryAtUtc: new Date(Date.now() + 50).toISOString() };
+                await writeFile(path, JSON.stringify(result));
+                return throttled || refused ? 1 : 0;
+            },
+            async () => {},
+            false,
+        );
+        assert.deepEqual(calls, [planned[0].id, planned[1].id, planned[1].id, planned[2].id]);
+        assert.equal(verdict.accepted, false);
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        const retried = report.results.find((row) => row.id === planned[1].id);
+        assert.equal(retried.failures.length, 0);
+        assert.equal(retried.result.attempts, 2);
+        const failed = report.results.find((row) => row.id === planned[2].id);
+        assert.ok(failed.failures.length > 0);
+        assert.equal(failed.result.attempts, 1);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("a throttled case that still fails after its single retry remains failed", async () => {
+    const directory = await createDirectory();
+    try {
+        const planned = cases.slice(0, 1);
+        let executed = 0;
+        const verdict = await runCases(
+            planned,
+            directory,
+            sha,
+            suiteHash,
+            async (scenario, path) => {
+                executed++;
+                const result = pass(scenario);
+                result.accepted = false;
+                result.reasons = ["At least one tool failed."];
+                result.throttle = { notices: 1, final: true, retryAtUtc: new Date(Date.now() + 20).toISOString() };
+                await writeFile(path, JSON.stringify(result));
+                return 1;
+            },
+            async () => {},
+            false,
+        );
+        assert.equal(executed, 2);
+        assert.equal(verdict.accepted, false);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test("internal-test runs publish verdicts but withhold answers and judge rationale", async () => {
     const directory = await createDirectory();
     let captureDirectory;

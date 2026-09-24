@@ -26,7 +26,8 @@ public static class RetailPricingTools
         + "Example filters are not defaults; a vCore count alone does not establish a database tier. "
         + "An explicit cross-region ranking or global rate-card comparison waives only selecting a single region, not other material product configuration. "
         + "Standard on-demand is the purchase-type default, not an OS/license or service tier default. "
-        + "Comparisons of explicitly named variants already establish those variants; compare them instead of asking the user to choose one.";
+        + "Comparisons of explicitly named variants already establish those variants; compare them instead of asking the user to choose one. "
+        + "A storage comparison naming capacity, access tiers and region is fully specified: price Data Stored rates with LRS as the stated default redundancy instead of asking about redundancy.";
     private const string ReturnedRateGuidance =
         "QUOTE COVERAGE: RESOLUTION describes the whole filtered catalogue, not whether each returned price is usable. "
         + "Returned rates do not establish missing user quote inputs. "

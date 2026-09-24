@@ -121,6 +121,31 @@ public sealed class ToolResultTests
     }
 
     [Theory]
+    [InlineData("$[\"name\"]")]
+    [InlineData("$['name']")]
+    [InlineData("$.name")]
+    public void BracketNotationProjectsNamedFields(string namePath)
+    {
+        var entry = new ToolResultStore().Retain(101, "session",
+            """{"properties":{"columns":[{"name":"Cost","type":"Number"},{"name":"ResourceId","type":"String"}]}}""", Source)!;
+        var query = JsonSerializer.Serialize(new { path = "$.properties.columns[*]", select = new { name = namePath }, limit = 10 });
+
+        using var response = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, query));
+        var rows = response.RootElement.GetProperty("rows");
+        Assert.Equal(2, rows.GetArrayLength());
+        Assert.Equal("ResourceId", rows[1].GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public void MalformedJsonPathErrorsNameTheInvalidPath()
+    {
+        var entry = new ToolResultStore().Retain(101, "session", """{"rows":[{"a":1}]}""", Source)!;
+        var result = ToolResultQueryTools.Execute(entry, """{"path":"$.rows[*]","select":{"a":"$[a"}}""");
+        Assert.StartsWith("Error:", result);
+        Assert.Contains("JSONPath", result);
+    }
+
+    [Theory]
     [InlineData("""{"where":null}""")]
     [InlineData("""{"where":{}}""")]
     [InlineData("""{"sort":null}""")]

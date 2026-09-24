@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Text.Json;
@@ -147,6 +148,12 @@ internal static class Program
             if (type is "delta" or "message" && Text(item, "content").Length > 0) state.FirstTokenMs ??= started.ElapsedMilliseconds;
             if (type == "message" && !string.IsNullOrWhiteSpace(Text(item, "content"))) answers[Text(item, "messageId")] = Text(item, "content");
             if (type is "error" or "busy") errors.Add(Text(item, "message"));
+            if (type == "cooling_down" && item.TryGetProperty("status", out var throttleStatus) && throttleStatus.ValueKind == JsonValueKind.Number
+                && throttleStatus.GetInt32() is 429 or 502 or 503 or 504)
+                // Slow-request heartbeats (status 0) are not throttles; only an explicit willRetry=false 429 is a final service refusal.
+                state.RecordThrottle(
+                    DateTimeOffset.TryParse(Text(item, "retryAtUtc"), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var retryAt) ? retryAt : null,
+                    !(throttleStatus.GetInt32() == 429 && item.TryGetProperty("willRetry", out var willRetry) && willRetry.ValueKind == JsonValueKind.False));
             if (type is "chart" or "maturity_score" or "follow_up" or "html_ready" or "script_ready" or "approval_required" && visible.Count < 20)
                 visible.Add(line[6..].Length <= 200000 ? line[6..] : JsonSerializer.Serialize(new { type, omitted = "Visible payload exceeds the judge budget", characters = line.Length - 6 }));
             if (type == "tool_start")
@@ -248,6 +255,12 @@ internal static class Program
                 detail = Bounded(failure.Detail, 4000)
             } : null,
             transcriptVerified = state.TranscriptVerified,
+            throttle = new
+            {
+                notices = state.ThrottleNotices,
+                final = state.FinalThrottle,
+                retryAtUtc = state.ThrottleRetryAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)
+            },
             accepted = verdict.Accepted && state.TranscriptVerified && state.Failure is null,
             reasons = verdict.Reasons.Select(reason => Redact(reason, subscriptions)),
             judge = verdict.Judge is { } judge ? new

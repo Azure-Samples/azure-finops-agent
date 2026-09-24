@@ -17,7 +17,17 @@ public sealed class EvaluationRunState
     public bool Terminal { get; set; }
     public bool TranscriptVerified { get; set; }
     public string HostContext { get; set; } = "";
+    public int ThrottleNotices { get; set; }
+    public bool FinalThrottle { get; set; }
+    public DateTimeOffset? ThrottleRetryAtUtc { get; set; }
     public EvaluationFailure? Failure { get; private set; }
+
+    public void RecordThrottle(DateTimeOffset? retryAtUtc, bool willRetry)
+    {
+        ThrottleNotices++;
+        if (!willRetry) FinalThrottle = true;
+        if (retryAtUtc is { } at && (ThrottleRetryAtUtc is null || at > ThrottleRetryAtUtc)) ThrottleRetryAtUtc = at;
+    }
 
     public RunCapture Capture() => new(string.Join("\n\n", Answers.Values), Tools.ToArray(), Terminal,
         Errors.ToArray(), DurationMs ?? Clock.ElapsedMilliseconds, FirstTokenMs, VisibleOutputs.ToArray(), HostContext);
