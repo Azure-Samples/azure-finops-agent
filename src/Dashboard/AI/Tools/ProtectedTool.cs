@@ -73,6 +73,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
     "QueryLogAnalytics",
     "QueryCostsAcrossSubscriptions",
     "GetCrawlMaturityEvidence",
+    "GetTagCoverage",
     "BulkAzureRequest",
     "FindIdleResources",
     "DetectCostAnomalies",

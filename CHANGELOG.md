@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- `GetTagCoverage` audits tag compliance with host-built Resource Graph queries. It discovers the tenant's actual tag-key spellings (`CostCenter`, `cost-center`, `cost_center`), reports per-tag and all-required-tags coverage over every resource group, and ranks the worst groups. The model no longer writes tag KQL, which previously failed intermittently. Placeholder values, near-miss keys and truncation are reported rather than counted.
+
 ### Changed
 
 - Default the model deployment service tier to `Default` (new `AZURE_OPENAI_SERVICE_TIER` azd setting) because gpt-6-luna 2026-09-22 rejects the Priority tier, which made `azd up` fail. Reasoning effort is now an azd parameter (`AZURE_OPENAI_REASONING_EFFORT`, default `high`) instead of a hardcoded app setting.
