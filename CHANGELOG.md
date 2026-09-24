@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- Default the model deployment service tier to `Default` (new `AZURE_OPENAI_SERVICE_TIER` azd setting) because gpt-6-luna 2026-09-22 rejects the Priority tier, which made `azd up` fail. Reasoning effort is now an azd parameter (`AZURE_OPENAI_REASONING_EFFORT`, default `high`) instead of a hardcoded app setting.
+- Production deployment now applies and verifies the evaluated deployment name, reasoning effort and endpoint fingerprint, matching the test-slot contract, instead of setting only the endpoint.
+- `GetCopilotUsage` returns structured unavailability when the Microsoft 365 reporting service does not know the tenant (`UnknownTenantId`) instead of failing. It then reads current `subscribedSkus`: zero assigned Copilot seats (by SKU or service plan) yields determinate zero counts and zero inactive-license waste; otherwise counts stay unknown.
+- An explicit cross-region VM price ranking with no OS/license stated now ranks the Linux and Windows on-demand variants separately instead of asking. Other missing product configuration, such as a database tier, still requires clarification.
+
 - Delete a conversation with one click instead of an inline confirmation step. The row stays visible and disabled while the server responds, running conversations still must be stopped first, and failures remain visible for retry.
 
 ### Fixed

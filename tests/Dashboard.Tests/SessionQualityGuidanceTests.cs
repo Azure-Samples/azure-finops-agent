@@ -111,7 +111,8 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("clarify missing material product configuration, including VM OS/license basis or service tier", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("Example filters are not defaults", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("Explicit cross-region rankings and global rate-card comparisons", CopilotSessionFactory.SystemPrompt);
-        Assert.Contains("do not waive missing product configuration", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("rank the Linux and Windows on-demand variants separately and label each", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("Other missing material configuration, such as a database service tier, still requires clarification", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("Do not ask again for variants the user explicitly named", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("purchase-type default does not choose a VM OS/license basis", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("OS/license basis, tier and purchase type in answer headlines and chart labels", CopilotSessionFactory.SystemPrompt);

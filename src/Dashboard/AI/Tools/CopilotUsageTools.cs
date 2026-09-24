@@ -20,7 +20,8 @@ public sealed class CopilotUsageTools(UserTokens tokens)
             "Requires delegated Graph Reports.Read.All and a supported directory role; do not repeatedly reconnect ARM for a reports permission error. " +
             "This is periodically refreshed licensed-user activity, not current assignment inventory, unlicensed Copilot Chat usage, or proof of financial ROI. " +
             "Never subtract current subscribedSkus assignments from a differently dated active-user report. Preserve unknown activity and anonymized identities. " +
-            "Follow nextOffset only for requested detail; each call reads the report again, so combine pages only when refresh dates and totals agree.");
+            "Follow nextOffset only for requested detail; each call reads the report again, so combine pages only when refresh dates and totals agree. " +
+            "When the tenant has no usage reports (reportAvailable=false), the host reads current subscribedSkus: zero assigned Copilot seats yields determinate zero counts and zero waste; otherwise counts stay unknown.");
     }
 
     private async Task<string> GetCopilotUsage(
@@ -45,6 +46,15 @@ public sealed class CopilotUsageTools(UserTokens tokens)
         var response = await HttpHelper.SendWithRetryAsync(
             $"https://graph.microsoft.com/v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(period='{period}')",
             token, span, "graph.copilot_usage", maxResponseChars: 8_000_000);
+        if (IsTenantWithoutUsageReports(response))
+        {
+            var inventory = await HttpHelper.SendWithRetryAsync(
+                "https://graph.microsoft.com/v1.0/subscribedSkus?$select=skuPartNumber,consumedUnits,servicePlans",
+                token, span, "graph.subscribed_skus", maxResponseChars: 2_000_000);
+            return ReportUnavailable(days, activity, inventory.StartsWith("HTTP 200 ", StringComparison.Ordinal)
+                ? CountAssignedCopilotSeats(inventory[(inventory.IndexOf('\n') + 1)..])
+                : null);
+        }
         if (!response.StartsWith("HTTP 200 ", StringComparison.Ordinal)) return response;
         var result = SummarizeReport(response[(response.IndexOf('\n') + 1)..], days, activity, pageSize, start);
         if (result.StartsWith("HTTP 502 ", StringComparison.Ordinal))
@@ -162,6 +172,78 @@ public sealed class CopilotUsageTools(UserTokens tokens)
 
     private static bool TryDate(string value, out DateOnly date) =>
         DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
+
+    // The Microsoft 365 reporting service answers 404 UnknownTenantId for a directory it has never
+    // provisioned (no Microsoft 365 workloads). That is a definitive "no report exists" outcome, not a
+    // transient or permission fault, so it is returned as structured unavailability with unknown counts.
+    internal static bool IsTenantWithoutUsageReports(string response) =>
+        response.StartsWith("HTTP 404 ", StringComparison.Ordinal)
+        && response.Contains("UnknownTenantId", StringComparison.Ordinal);
+
+    // Returns the assigned Microsoft 365 Copilot seat count from subscribedSkus, or null when the
+    // inventory cannot be read reliably. A SKU counts as Copilot when its part number or any of its
+    // service plans names Copilot, so bundles that carry a Copilot plan are never mistaken for zero seats.
+    internal static int? CountAssignedCopilotSeats(string subscribedSkusJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(subscribedSkusJson);
+            if (!document.RootElement.TryGetProperty("value", out var skus) || skus.ValueKind != JsonValueKind.Array) return null;
+            var seats = 0;
+            foreach (var sku in skus.EnumerateArray())
+            {
+                var copilot = sku.TryGetProperty("skuPartNumber", out var part) && part.ValueKind == JsonValueKind.String
+                    && part.GetString()!.Contains("Copilot", StringComparison.OrdinalIgnoreCase);
+                if (!copilot && sku.TryGetProperty("servicePlans", out var plans) && plans.ValueKind == JsonValueKind.Array)
+                    copilot = plans.EnumerateArray().Any(plan => plan.TryGetProperty("servicePlanName", out var name)
+                        && name.ValueKind == JsonValueKind.String && name.GetString()!.Contains("Copilot", StringComparison.OrdinalIgnoreCase));
+                if (!copilot) continue;
+                if (!sku.TryGetProperty("consumedUnits", out var consumed) || !consumed.TryGetInt32(out var units) || units < 0) return null;
+                seats += units;
+            }
+            return seats;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    internal static string ReportUnavailable(int days, string activity, int? assignedCopilotSeats)
+    {
+        var noSeats = assignedCopilotSeats == 0;
+        return JsonSerializer.Serialize(new
+        {
+            source = "Microsoft Graph Copilot licensed-user usage report",
+            period = "D" + days.ToString(CultureInfo.InvariantCulture),
+            reportAvailable = false,
+            reason = noSeats
+                ? "The Microsoft 365 reporting service does not recognize this tenant (UnknownTenantId), so it has no Copilot activity report. None is needed: current inventory shows zero assigned Copilot seats, so there are no licensed users whose activity could be measured."
+                : "The Microsoft 365 reporting service does not recognize this tenant (UnknownTenantId), so no licensed-user Copilot activity report exists for it.",
+            activityReportRequired = !noSeats,
+            sourceEvidence = noSeats
+                ? (object)new { freshness = "fresh", basis = "current subscribedSkus assignments", retrievedAtUtc = DateTimeOffset.UtcNow }
+                : new { freshness = "unavailable", retrievedAtUtc = DateTimeOffset.UtcNow },
+            licenseInventory = new
+            {
+                source = "Microsoft Graph subscribedSkus (current assignments)",
+                read = assignedCopilotSeats is not null,
+                assignedCopilotSeats
+            },
+            licensedUsersOnly = true,
+            totalReportedUsers = noSeats ? 0 : (int?)null,
+            activeUsers = noSeats ? 0 : (int?)null,
+            inactiveUsers = noSeats ? 0 : (int?)null,
+            unknownActivityUsers = noSeats ? 0 : (int?)null,
+            activity,
+            totalsComplete = noSeats,
+            users = Array.Empty<object>(),
+            inactiveLicenseMonthlyWaste = noSeats ? 0 : (int?)null,
+            interpretation = noSeats
+                ? "Determinate answer, not unknown: 0 Copilot seats assigned, 0 seats actively used, 0 inactive licensed users (none to list) and zero monthly inactive-license waste in any currency, because an empty licensed-user population has nothing to measure or price. State these as zeros; the only uncovered area is unlicensed Copilot Chat activity, which is not license waste."
+                : "Activity counts are unknown, not zero, and inactive-license waste cannot be calculated until the tenant produces usage reports. Report assigned Copilot seats from subscribedSkus consumedUnits."
+        });
+    }
 
     private static string InvalidReport(string detail) => "HTTP 502 BadGateway\n" + detail;
 }

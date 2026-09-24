@@ -10,6 +10,8 @@ param aoaiModelName string
 param aoaiModelVersion string
 param aoaiDeploymentName string
 param aoaiModelCapacity int
+param aoaiServiceTier string
+param aoaiReasoningEffort string
 param existingAoaiResourceId string
 param deployModelOnExistingAccount bool
 param entraAppId string
@@ -55,6 +57,7 @@ module aoai 'modules/aoai.bicep' = {
     modelVersion: aoaiModelVersion
     deploymentName: aoaiDeploymentName
     modelCapacity: aoaiModelCapacity
+    serviceTier: aoaiServiceTier
     existingAoaiResourceId: existingAoaiResourceId
     deployModelOnExistingAccount: deployModelOnExistingAccount
   }
@@ -72,6 +75,7 @@ module appservice 'modules/appservice.bicep' = {
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     aoaiEndpoint: aoai.outputs.endpoint
     aoaiDeploymentName: aoai.outputs.deploymentName
+    aoaiReasoningEffort: aoaiReasoningEffort
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId

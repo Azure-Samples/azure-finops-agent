@@ -10,6 +10,49 @@ public sealed class CopilotUsageTests
     private const string Header = "Report Refresh Date,User Principal Name,Display Name,Last Activity Date,Report Period\n";
 
     [Fact]
+    public void UnprovisionedReportingTenantIsStructuredUnavailabilityWithUnknownCounts()
+    {
+        const string response = "HTTP 404 NotFound\n{\"error\":{\"code\":\"UnknownError\",\"message\":\"{\\u0022error\\u0022:{\\u0022code\\u0022:\\u0022UnknownTenantId\\u0022}}\"}}";
+        Assert.True(CopilotUsageTools.IsTenantWithoutUsageReports(response));
+        Assert.False(CopilotUsageTools.IsTenantWithoutUsageReports("HTTP 404 NotFound\n{\"error\":{\"code\":\"ResourceNotFound\"}}"));
+        Assert.False(CopilotUsageTools.IsTenantWithoutUsageReports("HTTP 403 Forbidden\nUnknownTenantId"));
+
+        using var document = JsonDocument.Parse(CopilotUsageTools.ReportUnavailable(30, "inactive", 3));
+        var body = document.RootElement;
+        Assert.False(body.GetProperty("reportAvailable").GetBoolean());
+        Assert.False(body.GetProperty("totalsComplete").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("totalReportedUsers").ValueKind);
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("inactiveUsers").ValueKind);
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("inactiveLicenseMonthlyWaste").ValueKind);
+        Assert.Equal(0, body.GetProperty("users").GetArrayLength());
+
+        using var unread = JsonDocument.Parse(CopilotUsageTools.ReportUnavailable(30, "inactive", null));
+        Assert.False(unread.RootElement.GetProperty("totalsComplete").GetBoolean());
+        Assert.False(unread.RootElement.GetProperty("licenseInventory").GetProperty("read").GetBoolean());
+    }
+
+    [Fact]
+    public void UnprovisionedReportingTenantWithoutCopilotSeatsHasDeterminateZeros()
+    {
+        const string skus = "{\"value\":[{\"skuPartNumber\":\"Microsoft_365_E5_(no_Teams)\",\"consumedUnits\":2,\"servicePlans\":[{\"servicePlanName\":\"EXCHANGE_S_ENTERPRISE\"}]}," +
+            "{\"skuPartNumber\":\"Microsoft_365_Copilot\",\"consumedUnits\":0,\"servicePlans\":[]}]}";
+        Assert.Equal(0, CopilotUsageTools.CountAssignedCopilotSeats(skus));
+        Assert.Equal(4, CopilotUsageTools.CountAssignedCopilotSeats(
+            "{\"value\":[{\"skuPartNumber\":\"BUNDLE\",\"consumedUnits\":4,\"servicePlans\":[{\"servicePlanName\":\"M365_COPILOT_APPS\"}]}]}"));
+        Assert.Null(CopilotUsageTools.CountAssignedCopilotSeats("{\"value\":[{\"skuPartNumber\":\"Microsoft_365_Copilot\"}]}"));
+        Assert.Null(CopilotUsageTools.CountAssignedCopilotSeats("not json"));
+
+        using var document = JsonDocument.Parse(CopilotUsageTools.ReportUnavailable(30, "inactive", 0));
+        var body = document.RootElement;
+        Assert.False(body.GetProperty("reportAvailable").GetBoolean());
+        Assert.True(body.GetProperty("totalsComplete").GetBoolean());
+        Assert.Equal(0, body.GetProperty("inactiveUsers").GetInt32());
+        Assert.Equal(0, body.GetProperty("activeUsers").GetInt32());
+        Assert.Equal(0, body.GetProperty("inactiveLicenseMonthlyWaste").GetInt32());
+        Assert.Equal(0, body.GetProperty("licenseInventory").GetProperty("assignedCopilotSeats").GetInt32());
+    }
+
+    [Fact]
     public void LargeReportIsCountedBeforeFilteringAndPaging()
     {
         var csv = Header + string.Join('\n', Enumerable.Range(0, 1200)

@@ -327,8 +327,10 @@ public sealed class RetailPricingTests
             Assert.Contains("unless the user explicitly authorized an assumed scenario", tool.Description);
             Assert.Contains("Example filters are not defaults", tool.Description);
             Assert.Contains("a vCore count alone does not establish a database tier", tool.Description);
-            Assert.Contains("cross-region ranking or global rate-card comparison waives only selecting a single region, not other material product configuration",
+            Assert.Contains("cross-region ranking or global rate-card comparison waives selecting a single region",
                 tool.Description);
+            Assert.Contains("rank the Linux and Windows on-demand variants separately from the same lookup", tool.Description);
+            Assert.Contains("such as a database service tier, still requires clarification", tool.Description);
             Assert.Contains("Standard on-demand is the purchase-type default, not an OS/license or service tier default",
                 tool.Description);
             Assert.Contains("Comparisons of explicitly named variants already establish those variants; compare them instead of asking the user to choose one",
@@ -338,7 +340,7 @@ public sealed class RetailPricingTests
         var single = tools.Single(tool => tool.Name == "GetAzureRetailPricing");
         Assert.Contains("use standard on-demand purchase pricing unless other purchase variants are explicitly requested",
             single.Description);
-        Assert.Contains("clarify missing material product configuration even for cross-region rankings", single.Description);
+        Assert.Contains("an explicit cross-region VM ranking with no OS/license stated ranks the Linux and Windows variants separately", single.Description);
         Assert.DoesNotContain("unless the user explicitly asked for Spot, Low Priority, Windows", single.Description);
         Assert.Contains("clarify a missing region rather than choosing an example region",
             single.JsonSchema.GetProperty("properties").GetProperty("armRegionName").GetProperty("description").GetString());
@@ -348,7 +350,8 @@ public sealed class RetailPricingTests
         Assert.Contains("ask a concise clarification before pricing, calculation or charting",
             batchParameter);
         Assert.Contains("including cross-region rankings, establish material product configuration", batchParameter);
-        Assert.Contains("waives only selecting a single region, not other material product configuration", batchParameter);
+        Assert.Contains("waives selecting a single region", batchParameter);
+        Assert.Contains("rank the Linux and Windows on-demand variants separately", batchParameter);
         Assert.Contains("compare them instead of asking the user to choose one", batchParameter);
     }
 

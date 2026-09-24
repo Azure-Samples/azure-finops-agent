@@ -91,6 +91,14 @@ param aoaiDeploymentName string = 'gpt-6-luna'
 @description('Azure OpenAI GlobalStandard deployment capacity in model-specific quota units. For gpt-6-luna, 1000 units corresponds to 1M tokens/minute. Verify unallocated quota for the model, SKU and region; quota already assigned to other deployments is not available. Lower this value when needed. The service is billed by usage, not reserved throughput.')
 param aoaiModelCapacity int = 1000
 
+@description('Model deployment service tier. Keep "Default" unless the selected model/version supports priority processing; gpt-6-luna 2026-09-22 does not.')
+@allowed(['Default', 'Priority'])
+param aoaiServiceTier string = 'Default'
+
+@description('Reasoning effort surfaced as `AzureOpenAI__ReasoningEffort`. CI deployments override this with the effort the live evaluation gate actually tested.')
+@allowed(['low', 'medium', 'high', 'xhigh'])
+param aoaiReasoningEffort string = 'high'
+
 @description('Optional resource ID of an existing Azure OpenAI account to reuse instead of creating a new one. When set, `aoaiLocation` is ignored. The model deployment must already exist unless `deployModelOnExistingAccount` is true.')
 param existingAoaiResourceId string = ''
 
@@ -147,6 +155,8 @@ module resources 'main-resources.bicep' = {
     aoaiModelVersion: aoaiModelVersion
     aoaiDeploymentName: aoaiDeploymentName
     aoaiModelCapacity: aoaiModelCapacity
+    aoaiServiceTier: aoaiServiceTier
+    aoaiReasoningEffort: aoaiReasoningEffort
     existingAoaiResourceId: existingAoaiResourceId
     deployModelOnExistingAccount: deployModelOnExistingAccount
     entraAppId: entraAppId

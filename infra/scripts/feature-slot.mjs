@@ -89,6 +89,23 @@ export function readFeatureConfiguration(environment) {
     return { subscription, resourceGroup, webAppName, slotName, endpoint, verifyUrl, productionUrl, ...contract };
 }
 
+export function readProductionConfiguration(environment) {
+    const contract = validateModelContract({
+        model: environment.EVALUATED_MODEL,
+        reasoningEffort: environment.EVALUATED_REASONING_EFFORT,
+        sha: environment.EVALUATED_SHA,
+    });
+    if (contract.sha !== environment.GITHUB_SHA)
+        throw new ValidationError("The successfully evaluated commit does not match this deployment.");
+    const endpoint = environment.AOAI_ENDPOINT;
+    const evaluatedFingerprint = text(environment.EVALUATED_ENDPOINT_SHA256, "evaluated endpoint fingerprint");
+    if (!/^[a-f0-9]{64}$/.test(evaluatedFingerprint))
+        throw new ValidationError("The evaluated endpoint fingerprint must be a lowercase SHA-256 digest.");
+    if (endpointFingerprint(endpoint) !== evaluatedFingerprint)
+        throw new ValidationError("Deployment endpoint does not match the successfully evaluated inference endpoint. Deployment is blocked.");
+    return { endpoint, ...contract };
+}
+
 function resourceHostname(resource, id, type, names) {
     if (!resource || typeof resource.id !== "string" ||
         resource.id.toLowerCase() !== id.toLowerCase() ||
@@ -171,6 +188,17 @@ async function main() {
             build: environment.EXPECTED_BUILD,
             branch: environment.EXPECTED_BRANCH,
         });
+    } else if (command === "check-production-config" && paths.length === 0) {
+        readProductionConfiguration(environment);
+    } else if (command === "production-settings" && paths.length === 1) {
+        const config = readProductionConfiguration(environment);
+        await writeFile(paths[0], JSON.stringify([
+            { name: "AzureOpenAI__Endpoint", value: config.endpoint, slotSetting: false },
+            { name: "AzureOpenAI__DeploymentName", value: config.model, slotSetting: false },
+            { name: "AzureOpenAI__ReasoningEffort", value: config.reasoningEffort, slotSetting: false },
+        ]), { mode: 0o600, flag: "wx" });
+    } else if (command === "check-production-settings" && paths.length === 1) {
+        verifyModelSettings(await readJson(paths[0]), readProductionConfiguration(environment));
     } else {
         const config = readFeatureConfiguration(environment);
         if (command === "check-config" && paths.length === 0) return;

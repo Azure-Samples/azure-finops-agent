@@ -9,9 +9,9 @@ param modelName string
 param modelVersion string
 param deploymentName string
 param modelCapacity int
-@description('Deployment service tier. "Priority" enables priority processing (faster time-to-first-token at a premium); "Default" is standard processing.')
+@description('Deployment service tier. "Default" is standard processing. "Priority" enables priority processing at a premium, but only for models that support it; gpt-6-luna 2026-09-22 rejects Priority.')
 @allowed(['Default', 'Priority'])
-param serviceTier string = 'Priority'
+param serviceTier string = 'Default'
 param existingAoaiResourceId string
 @description('When reusing an existing account, also create or update the model deployment on it. Requires deployment permission and available model-specific quota on that account.')
 param deployModelOnExistingAccount bool = false

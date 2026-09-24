@@ -9,6 +9,7 @@ import {
     endpointFingerprint,
     modelParameters,
     readFeatureConfiguration,
+    readProductionConfiguration,
     validateFeatureTarget,
     validateModelContract,
     verifyModelSettings,
@@ -385,4 +386,41 @@ test("Bicep changes only existing slot settings and preserves the full existing 
     assert.match(bicep, /output slotUrl string = 'https:\/\/\$\{slot\.properties\.defaultHostName\}'/);
     assert.equal((bicep.match(/^output /gm) ?? []).length, 1);
     assert.doesNotMatch(bicep, /Microsoft\.CognitiveServices|Microsoft\.Authorization/);
+});
+
+test("production deployment applies and verifies only the evaluated model contract", async () => {
+    const production = readProductionConfiguration(environment);
+    assert.deepEqual(production, {
+        endpoint: environment.AOAI_ENDPOINT,
+        model: environment.EVALUATED_MODEL,
+        reasoningEffort: environment.EVALUATED_REASONING_EFFORT,
+        sha: environment.EVALUATED_SHA,
+    });
+    assert.throws(() => readProductionConfiguration({ ...environment, AOAI_ENDPOINT: "https://other-model.openai.azure.com/" }),
+        /does not match the successfully evaluated inference endpoint/);
+    assert.throws(() => readProductionConfiguration({ ...environment, GITHUB_SHA: "b".repeat(40) }));
+    assert.throws(() => readProductionConfiguration({ ...environment, EVALUATED_REASONING_EFFORT: "" }));
+    await fixture(async (directory) => {
+        const path = join(directory, "settings.json");
+        const result = invoke("production-settings", [path], { TARGET_SUBSCRIPTION: "", SLOT_NAME: "" });
+        assert.equal(result.status, 0, result.stderr);
+        const settings = JSON.parse(await readFile(path, "utf8"));
+        assert.deepEqual(settings.map(({ name, value }) => [name, value]), [
+            ["AzureOpenAI__Endpoint", environment.AOAI_ENDPOINT],
+            ["AzureOpenAI__DeploymentName", environment.EVALUATED_MODEL],
+            ["AzureOpenAI__ReasoningEffort", environment.EVALUATED_REASONING_EFFORT],
+        ]);
+        const effective = join(directory, "effective.json");
+        await writeFile(effective, JSON.stringify(settings.map(({ name, value }) => ({ name, value }))));
+        assert.equal(invoke("check-production-settings", [effective]).status, 0);
+        await writeFile(effective, JSON.stringify(settings.map(({ name, value }) =>
+            ({ name, value: name === "AzureOpenAI__DeploymentName" ? "stale-model" : value }))));
+        const stale = invoke("check-production-settings", [effective]);
+        assert.equal(stale.status, 1);
+        assert.doesNotMatch(stale.stderr, /synthetic-model|stale-model/);
+    });
+    const workflow = await readFile(new URL("../../.github/workflows/main.yml", import.meta.url), "utf8");
+    assert.ok(workflow.indexOf("feature-slot.mjs check-production-config") < workflow.indexOf("uses: azure/login"));
+    assert.ok(workflow.indexOf("feature-slot.mjs production-settings") < workflow.indexOf("feature-slot.mjs check-production-settings"));
+    assert.ok(workflow.indexOf("feature-slot.mjs check-production-settings") < workflow.indexOf("az webapp config container set"));
 });

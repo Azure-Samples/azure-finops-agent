@@ -24,7 +24,9 @@ public static class RetailPricingTools
         + "A fixed-region quote also requires the region. "
         + "If missing, ask a concise clarification before pricing, calculation or charting unless the user explicitly authorized an assumed scenario. "
         + "Example filters are not defaults; a vCore count alone does not establish a database tier. "
-        + "An explicit cross-region ranking or global rate-card comparison waives only selecting a single region, not other material product configuration. "
+        + "An explicit cross-region ranking or global rate-card comparison waives selecting a single region. "
+        + "For an explicit cross-region VM ranking with no OS/license basis established, do not ask and do not pick one: rank the Linux and Windows on-demand variants separately from the same lookup and label each. "
+        + "Other missing material configuration, such as a database service tier, still requires clarification. "
         + "Standard on-demand is the purchase-type default, not an OS/license or service tier default. "
         + "Comparisons of explicitly named variants already establish those variants; compare them instead of asking the user to choose one. "
         + "A storage comparison naming capacity, access tiers and region is fully specified: price Data Stored rates with LRS as the stated default redundancy instead of asking about redundancy.";
@@ -72,7 +74,7 @@ EVERY RESPONSE INCLUDES A `FACETS` BLOCK giving the live distinct values of each
 
 READING THE ROWS: they arrive grouped by meterName, cheapest-first within each meter. Spot, Low Priority, Windows, Reservation, cached-input and regional/zonal variants are all present and are distinguishable via meterName / skuName / type. Never treat different meters as interchangeable. A model/SKU comparison must match the requested pricing variant in each section, not select a minimum across incompatible meters.
 
-DEFAULT INTERPRETATION: use standard on-demand purchase pricing unless other purchase variants are explicitly requested. This does not choose an OS/license or service tier; clarify missing material product configuration even for cross-region rankings. Preserve comparisons of explicitly named variants. productName can distinguish Windows from non-Windows even when meterName is identical. State the established OS/license basis. A 'cheapest region' question means cheapest on-demand region, not cheapest Spot region.
+DEFAULT INTERPRETATION: use standard on-demand purchase pricing unless other purchase variants are explicitly requested. This does not choose an OS/license or service tier; clarify missing material product configuration, except that an explicit cross-region VM ranking with no OS/license stated ranks the Linux and Windows variants separately instead of asking. Preserve comparisons of explicitly named variants. productName can distinguish Windows from non-Windows even when meterName is identical. State the established OS/license basis. A 'cheapest region' question means cheapest on-demand region, not cheapest Spot region.
 
 UNIT SEMANTICS: retailPrice is the price for ONE `unitOfMeasure` of the WHOLE SKU in armSkuName/skuName. Never multiply it by a core/vCore/GPU/node count that is already part of that SKU name — e.g. armSkuName 'SQLDB_GP_Compute_Gen5_4' / skuName '4 vCore' at 1 Hour is the total hourly price for all 4 vCores, not per vCore. Multiply only by quantity the user asked for (number of instances) and by hours.
 VOLUME BANDS: retain tierMinimumUnits and currencyCode. A cheaper high-volume band is not the price for a small dataset. Match the requested quantity to the documented tier rules; split graduated tiers into separate CalculateCost lines instead of applying the cheapest band to every unit.
