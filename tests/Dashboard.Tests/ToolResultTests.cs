@@ -92,6 +92,23 @@ public sealed class ToolResultTests
     }
 
     [Fact]
+    public void CommonQuerySlipsAreNormalizedInsteadOfFailing()
+    {
+        var entry = new ToolResultStore().Retain(101, "session",
+            """{"data":[{"type":"a","count_":4},{"type":"b","count_":6}]}""", Source)!;
+        using var response = JsonDocument.Parse(ToolResultQueryTools.Execute(entry,
+            """{"path":"$.data[*]","aggregates":[{"op":"SUM","path":"$.count_"},{"op":"count"}],"sort":[{"path":"$.count_","direction":"DESC"}],"select":{"type":"$.type","count_":"$.count_"},"limit":"10","offset":"0"}"""));
+        var root = response.RootElement;
+        Assert.Equal(10m, root.GetProperty("totals").GetProperty("sum").GetDecimal());
+        Assert.Equal(2, root.GetProperty("totals").GetProperty("count").GetInt32());
+        Assert.Equal("b", root.GetProperty("rows")[0].GetProperty("type").GetString());
+
+        Assert.StartsWith("Error: Aggregate names", ToolResultQueryTools.Execute(entry,
+            """{"path":"$.data[*]","aggregates":[{"op":"sum","path":"$.count_"},{"op":"sum","path":"$.count_"}]}"""));
+        Assert.StartsWith("Error: Query paging", ToolResultQueryTools.Execute(entry, """{"limit":"ten"}"""));
+    }
+
+    [Fact]
     public void EmptyOptionalMapsDoNotDiscardRows()
     {
         var entry = new ToolResultStore().Retain(101, "session", """{"rows":[{"count":4},{"count":6}]}""", Source)!;

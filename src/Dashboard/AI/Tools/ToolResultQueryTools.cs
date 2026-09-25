@@ -18,7 +18,7 @@ public sealed class ToolResultQueryTools(long owner)
 
     private async Task<string> QueryToolResult(
         [Description("Opaque resultId returned in this conversation. Copy it exactly, including case, from queryable_tool_result, _resultQuery or its query response; never reconstruct, shorten or alter it. Never a file path or URL.")] string resultId,
-        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\"}. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (max 200, 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
+        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\"}. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path and as defaults to the op name. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (max 200, 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
         CancellationToken cancellationToken = default)
     {
         var context = ToolExecutionContext.Current;
@@ -113,10 +113,11 @@ public sealed class ToolResultQueryTools(long owner)
                 var specs = aggregates.EnumerateArray().Select(aggregate =>
                 {
                     OnlyKeys(aggregate, "op", "path", "as");
-                    var operation = String(aggregate, "op", "");
-                    var alias = String(aggregate, "as", "");
-                    Require(operation is "count" or "sum" or "avg" or "min" or "max", "Unsupported aggregate operation.");
-                    Require(alias.Length is > 0 and <= 80 && !groups.ContainsKey(alias) && !invalidNumeric.ContainsKey(alias), "Aggregate names must be distinct from group names.");
+                    var operation = String(aggregate, "op", "").ToLowerInvariant();
+                    Require(operation is "count" or "sum" or "avg" or "min" or "max", "Unsupported aggregate operation; use count, sum, avg, min or max.");
+                    var alias = String(aggregate, "as", operation);
+                    Require(alias.Length is > 0 and <= 80, "Aggregate names (as) must be 1-80 characters.");
+                    Require(!groups.ContainsKey(alias) && !invalidNumeric.ContainsKey(alias), "Aggregate names (as) must be distinct from each other and from group names.");
                     invalidNumeric.Add(alias, 0);
                     return (Operation: operation, Alias: alias, Path: String(aggregate, "path", "$"));
                 }).ToArray();
@@ -173,7 +174,7 @@ public sealed class ToolResultQueryTools(long owner)
                 foreach (var item in sort.EnumerateArray())
                 {
                     OnlyKeys(item, "path", "direction");
-                    var direction = String(item, "direction", "asc");
+                    var direction = String(item, "direction", "asc").ToLowerInvariant();
                     Require(direction is "asc" or "desc", "Sort direction must be asc or desc.");
                     var sortPath = String(item, "path", "$");
                     JToken? Key(JToken row) => Single(row, sortPath, CheckBudget);
@@ -370,8 +371,11 @@ public sealed class ToolResultQueryTools(long owner)
     private static int Integer(JsonElement value, string key, int fallback, int minimum, int maximum)
     {
         if (!value.TryGetProperty(key, out var item)) return fallback;
-        Require(item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out _), "Query paging parameter must be an integer.");
-        var number = item.GetInt32();
+        // Models often quote numbers because other tool parameters are strings.
+        var number = 0;
+        Require(item.ValueKind == JsonValueKind.Number ? item.TryGetInt32(out number)
+            : item.ValueKind == JsonValueKind.String && int.TryParse(item.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out number),
+            "Query paging parameter must be an integer.");
         Require(number >= minimum && number <= maximum, "Query paging parameter is out of range.");
         return number;
     }

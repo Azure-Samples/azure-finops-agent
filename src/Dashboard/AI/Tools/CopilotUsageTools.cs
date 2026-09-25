@@ -250,6 +250,15 @@ public sealed class CopilotUsageTools(UserTokens tokens)
                 assignedCopilotSeats = inventory?.Assigned,
                 unassignedEnabledCopilotSeats = unassigned
             },
+            answerFigures = new[]
+            {
+                "Enabled Copilot seats (current inventory, not invoice-verified): " + Figure(inventory?.Enabled),
+                "Assigned Copilot seats: " + Figure(inventory?.Assigned),
+                "Enabled but unassigned Copilot seats: " + Figure(unassigned),
+                "Actively used licensed seats (" + days.ToString(CultureInfo.InvariantCulture) + " days): " + (noSeats ? "0" : "unknown"),
+                "Inactive licensed users: " + (noSeats ? "0 (none to list)" : "unknown"),
+                "Monthly waste from inactive assigned Copilot licenses: " + (noSeats ? "0" : "unknown")
+            },
             licensedUsersOnly = true,
             totalReportedUsers = noSeats ? 0 : (int?)null,
             activeUsers = noSeats ? 0 : (int?)null,
@@ -260,15 +269,17 @@ public sealed class CopilotUsageTools(UserTokens tokens)
             users = Array.Empty<object>(),
             inactiveLicenseMonthlyWaste = noSeats ? 0 : (int?)null,
             interpretation = noSeats
-                ? "Determinate by counting, not an unknown: actively used seats can never exceed assigned seats, and assigned Copilot seats are 0, so actively used seats are 0, inactive licensed users are 0 (none to list) and inactive-license waste is 0 in any currency because there is no inactive assigned license to price. State the enabled-inventory and assigned counts and explain this reasoning; do not call these metrics unverifiable. " +
+                ? "Determinate by counting, not an unknown: actively used seats can never exceed assigned seats, and assigned Copilot seats are 0, so actively used seats are 0, inactive licensed users are 0 (none to list) and inactive-license waste is 0 in any currency because there is no inactive assigned license to price. Report every answerFigures line, including the enabled-inventory count, and explain this reasoning; do not call these metrics unverifiable. " +
                   (unassigned is > 0
                       ? "Separately report unassignedEnabledCopilotSeats as enabled-but-unassigned inventory; its cost needs the tenant's contract price, so leave that cost unknown unless supplied."
                       : unassigned is null
                           ? "Enabled inventory was not returned, so enabled-but-unassigned seats are unknown."
                           : "There is also no enabled-but-unassigned Copilot inventory.") +
                   " Paid or invoiced quantities are not established by this inventory. Not covered: unlicensed Copilot Chat activity, which this licensed-user report never includes."
-                : "Activity counts are unknown, not zero, and inactive-license waste cannot be calculated until the tenant produces usage reports. Report enabled and assigned Copilot seats from licenseInventory."
+                : "Activity counts are unknown, not zero, and inactive-license waste cannot be calculated until the tenant produces usage reports. Report every answerFigures line, including enabled and assigned Copilot seats."
         });
     }
+
+    private static string Figure(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
     private static string InvalidReport(string detail) => "HTTP 502 BadGateway\n" + detail;
 }

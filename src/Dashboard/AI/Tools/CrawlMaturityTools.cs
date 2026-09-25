@@ -33,7 +33,7 @@ public sealed class CrawlMaturityTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also reads cached Azure Advisor Cost recommendations for the same scopes, ranks reported annual estimates within each currency, and returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides a periodically evaluated MTD snapshot, not real-time or finalized cost.
-SAVINGS: when asked for the biggest savings opportunities, use evidence.savings, not governance scores or generic tag/export tasks. Ranking is over reported annualSavingsAmount within one currency; retain the recommendation's term, scope, SKU, quantity, lastUpdated and coverage. These are potentially overlapping Advisor estimates, not verified net or realized savings: do not add them together, recommend a commitment purchase without eligibility/utilization evidence, or confuse savingsAmount of unspecified period with annualSavingsAmount. Unknown amounts stay unranked, not zero. A zero common-waste count does not mean there are no savings opportunities.
+SAVINGS: when asked for the biggest savings opportunities, use evidence.savings, not governance scores or generic tag/export tasks. Ranking is over reported annualSavingsAmount within one currency; each rankings[].opportunities item groups mutually exclusive Advisor alternatives (for example 1-year/3-year reservation terms and 7/30/60-day lookbacks for the same SKU and scope). Present each opportunity once, with its best estimate and, when alternativeCount > 1, the lowest-to-best alternative range and the best alternative's term/lookback; never list alternatives of one opportunity as separate ranked opportunities. Retain the term, scope, SKU, quantity, lastUpdated and coverage. These are potentially overlapping Advisor estimates, not verified net or realized savings: do not add them together, recommend a commitment purchase without eligibility/utilization evidence, or confuse savingsAmount of unspecified period with annualSavingsAmount. Unknown amounts stay unranked, not zero. A zero common-waste count does not mean there are no savings opportunities.
 EVIDENCE LIMITS: include a concise source-freshness line in the final answer's problem context, before the table. For Resource Graph tagging, policy and waste findings, explicitly state that indexed inventory may lag changes and that its source data-as-of timestamp and indexing delay are unknown. An Advisor retrieval timestamp does not cover inventory findings. generatedUtc is bundle generation time, not an inventory retrieval time. Use each source's returned retrievedAtUtc and lastUpdated when available; source freshness and unmeasured indexing delay remain unknown. When quoting budget spend, state that the snapshot may lag billing and has no source data-as-of timestamp. Generic alert/scheduled-action counts do not establish anomaly-alert configuration; do not claim anomaly alerts are missing or configured from those counts.
 DATA SCOPING: the declared assessment scope controls the subscription inputs. Include every requested subscription and all seven dimensions; do not shrink a full assessment to top spenders. The host uses scoped Resource Graph aggregates and bounded evidence samples. Reuse those summaries rather than asking QueryAzure for raw inventories. Filtered budgets or sample names do not establish whole-estate spend/counts; retain coverage, unknown and notApplicable states.
     Use exactly once for Crawl/FinOps maturity scoring. Pass the exact `subscriptions` array and optional first management-group id from the connection context. Do NOT supplement it with QueryAzure, ReportMaturityScore, SuggestFollowUp, or any other tool—the score persistence, maturity SSE event, and follow-up buttons are already handled by this result.");
@@ -227,6 +227,7 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
         IReadOnlyList<(SubscriptionScope Scope, string Response)> responses)
     {
         const int detailsPerCurrency = 5;
+        const int alternativesPerOpportunity = 12;
         var sources = responses.Select(item => ReadAdvisorSource(item.Scope, item.Response)).ToArray();
         var complete = sources.Length > 0 && sources.All(source => source.Status == 200 && source.Error is null);
         var candidates = sources.SelectMany(source => source.Candidates).ToArray();
@@ -235,17 +236,37 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
         var rankings = quantified
             .GroupBy(candidate => candidate.Currency!, StringComparer.OrdinalIgnoreCase)
             .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(group => new
+            .Select(group =>
             {
-                currency = group.Key,
-                period = "year",
-                recommendationCount = group.Count(),
-                recommendations = group.OrderByDescending(candidate => candidate.AnnualSavings)
-                    .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
-                    .Take(detailsPerCurrency)
-                    .Select(candidate => candidate.Data)
-                    .ToArray(),
-                detailsComplete = group.Count() <= detailsPerCurrency
+                var opportunities = group
+                    .GroupBy(candidate => candidate.AlternativeKey, StringComparer.Ordinal)
+                    .Select(alternatives => alternatives
+                        .OrderByDescending(candidate => candidate.AnnualSavings)
+                        .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
+                        .ToArray())
+                    .OrderByDescending(alternatives => alternatives[0].AnnualSavings)
+                    .ThenBy(alternatives => alternatives[0].Id, StringComparer.Ordinal)
+                    .ToArray();
+                return new
+                {
+                    currency = group.Key,
+                    period = "year",
+                    recommendationCount = group.Count(),
+                    opportunityCount = opportunities.Length,
+                    opportunities = opportunities.Take(detailsPerCurrency).Select((alternatives, index) => new
+                    {
+                        rank = index + 1,
+                        bestAnnualSavingsAmount = alternatives[0].AnnualSavings,
+                        lowestAnnualSavingsAmount = alternatives[^1].AnnualSavings,
+                        alternativeCount = alternatives.Length,
+                        alternativesAreMutuallyExclusive = alternatives.Length > 1,
+                        best = alternatives[0].Data,
+                        alternatives = alternatives.Take(alternativesPerOpportunity).Select(candidate => candidate.Summary).ToArray(),
+                        alternativesComplete = alternatives.Length <= alternativesPerOpportunity
+                    }).ToArray(),
+                    detailsComplete = opportunities.Length <= detailsPerCurrency
+                        && opportunities.All(alternatives => alternatives.Length <= alternativesPerOpportunity)
+                };
             }).ToArray();
         return new
         {
@@ -269,7 +290,7 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
                 recommendationCount = source.Status == 200 && source.Error is null ? (int?)source.Candidates.Count : null,
                 error = source.Error
             }),
-            limitations = "Rankings compare only reported annualSavingsAmount in the same currency, after reading every available page in each requested scope. Missing amounts/currencies are unknown. Cached recommendations can overlap or be alternatives; do not sum them. Preserve term, quantity, scope and lastUpdated. These estimates do not validate applicability, suppression status, existing commitment utilization or realizable net savings. Governance improvements and empty resource groups are not quantified savings."
+            limitations = "Rankings compare only reported annualSavingsAmount in the same currency, after reading every available page in each requested scope. Each opportunity groups mutually exclusive Advisor alternatives for the same recommendation type, subscription, impacted resource, SKU, region and scope (for example reservation term and lookback variants); report it once with its best estimate and alternative range, never as separate opportunities. Missing amounts/currencies are unknown. Different opportunities can still overlap; do not sum them. Preserve term, quantity, scope and lastUpdated. These estimates do not validate applicability, suppression status, existing commitment utilization or realizable net savings. Governance improvements and empty resource groups are not quantified savings."
         };
     }
 
@@ -303,6 +324,29 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
                     && decimal.TryParse(amount.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
                     && parsed >= 0 ? parsed : null;
                 var id = AdvisorText(item, "id");
+                var typeId = AdvisorText(properties, "recommendationTypeId");
+                var impacted = AdvisorText(properties, "impactedValue")
+                    ?? (properties.TryGetProperty("resourceMetadata", out var resourceMeta) ? AdvisorText(resourceMeta, "resourceId") : null);
+                var sku = AdvisorText(extended, "displaySKU") ?? AdvisorText(extended, "sku");
+                var region = AdvisorText(extended, "location") ?? AdvisorText(extended, "region");
+                var commitmentScope = AdvisorText(extended, "scope");
+                var term = AdvisorText(extended, "term");
+                var lookback = AdvisorText(extended, "lookbackPeriod");
+                var quantity = AdvisorText(extended, "displayQty") ?? AdvisorText(extended, "qty");
+                // Advisor emits one record per term/lookback for the same purchase; those are
+                // alternatives, not separate opportunities. Without a type id, never merge.
+                var alternativeKey = !string.IsNullOrWhiteSpace(typeId) && (term is not null || lookback is not null)
+                    ? string.Join('|', scope.Id, typeId, impacted, sku, region, commitmentScope).ToLowerInvariant()
+                    : "id|" + (id ?? Guid.NewGuid().ToString());
+                var summary = JsonSerializer.SerializeToElement(new
+                {
+                    id,
+                    term,
+                    lookbackPeriodDays = lookback,
+                    quantity,
+                    annualSavingsAmount = annual,
+                    lastUpdated = AdvisorText(properties, "lastUpdated")
+                });
                 var data = JsonSerializer.SerializeToElement(new
                 {
                     id,
@@ -310,14 +354,14 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
                     subscriptionName = scope.Name,
                     resourceMetadata = properties.TryGetProperty("resourceMetadata", out var resource) ? (JsonElement?)resource : null,
                     impact = AdvisorText(properties, "impact"),
-                    recommendationTypeId = AdvisorText(properties, "recommendationTypeId"),
+                    recommendationTypeId = typeId,
                     shortDescription = properties.TryGetProperty("shortDescription", out var description) ? (JsonElement?)description : null,
                     lastUpdated = AdvisorText(properties, "lastUpdated"),
                     annualSavingsAmount = annual,
                     savingsCurrency = currency,
                     extendedProperties = extended.ValueKind == JsonValueKind.Object ? (JsonElement?)extended : null
                 });
-                candidates.Add(new(id, annual, currency, data));
+                candidates.Add(new(id, annual, currency, data, alternativeKey, summary));
             }
             return new(scope, status, candidates, null);
         }
@@ -331,7 +375,7 @@ DATA SCOPING: the declared assessment scope controls the subscription inputs. In
         item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var value)
         && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
-    private sealed record AdvisorCandidate(string? Id, decimal? AnnualSavings, string? Currency, JsonElement Data);
+    private sealed record AdvisorCandidate(string? Id, decimal? AnnualSavings, string? Currency, JsonElement Data, string AlternativeKey, JsonElement Summary);
     private sealed record AdvisorSource(SubscriptionScope Scope, int Status, IReadOnlyList<AdvisorCandidate> Candidates, string? Error);
 
     private async Task<IReadOnlyList<CollectionEvidence>> ReadCollections(

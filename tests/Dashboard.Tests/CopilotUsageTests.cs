@@ -57,9 +57,15 @@ public sealed class CopilotUsageTests
         Assert.Equal(0, body.GetProperty("licenseInventory").GetProperty("enabledCopilotSeats").GetInt32());
         Assert.Contains("0 assigned Copilot seats", body.GetProperty("reason").GetString());
         Assert.DoesNotContain("purchase", body.GetProperty("interpretation").GetString(), StringComparison.OrdinalIgnoreCase);
+        var figures = body.GetProperty("answerFigures").EnumerateArray().Select(f => f.GetString()).ToArray();
+        Assert.Contains("Enabled Copilot seats (current inventory, not invoice-verified): 0", figures);
+        Assert.Contains("Assigned Copilot seats: 0", figures);
+        Assert.Contains("Monthly waste from inactive assigned Copilot licenses: 0", figures);
 
         using var idle = JsonDocument.Parse(CopilotUsageTools.ReportUnavailable(30, "inactive", new(1, 0, 10)));
         Assert.Equal(10, idle.RootElement.GetProperty("licenseInventory").GetProperty("unassignedEnabledCopilotSeats").GetInt32());
+        Assert.Contains("Enabled but unassigned Copilot seats: 10",
+            idle.RootElement.GetProperty("answerFigures").EnumerateArray().Select(f => f.GetString()));
         Assert.Equal(0, idle.RootElement.GetProperty("inactiveUsers").GetInt32());
         Assert.Contains("contract price", idle.RootElement.GetProperty("interpretation").GetString());
     }

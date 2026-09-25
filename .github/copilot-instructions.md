@@ -137,7 +137,7 @@ Use `QueryCostsAcrossSubscriptions` exactly once for totals-only all-subscriptio
 
 Use `GetCrawlMaturityEvidence` exactly once for explicit Crawl scoring.
 
-- It includes cached Advisor Cost recommendations across the same scopes, ranked by reported annual estimates within each currency after collection paging. Preserve terms, quantities, source update dates and unknown/partial coverage; overlapping alternatives are not additive or proof of realizable net savings.
+- It includes cached Advisor Cost recommendations across the same scopes, ranked by reported annual estimates within each currency after collection paging. Term/lookback variants of one recommendation are grouped into one opportunity (best/lowest estimate plus mutually exclusive alternatives); report each opportunity once. Preserve terms, quantities, source update dates and unknown/partial coverage; overlapping alternatives are not additive or proof of realizable net savings.
 - Biggest-savings requests use that evidence, not generic governance tasks. Keep all seven score formulas unchanged; a zero common-waste count does not exclude other savings opportunities.
 - Bundle `generatedUtc` is not an inventory timestamp. Source projections expose retrieval time separately from unknown source freshness/indexing delay.
 - It runs budget/current-spend, required-tag, exports, alert/scheduled-action, policy, common-waste, and empty-resource-group checks concurrently.

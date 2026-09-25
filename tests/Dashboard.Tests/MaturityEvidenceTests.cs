@@ -30,7 +30,8 @@ public sealed class MaturityEvidenceTests
         Assert.Equal(2, rankings.Length);
         var usd = rankings.Single(group => group.GetProperty("currency").GetString() == "USD");
         Assert.Equal("year", usd.GetProperty("period").GetString());
-        var first = usd.GetProperty("recommendations")[0];
+        Assert.Equal(2, usd.GetProperty("opportunityCount").GetInt32());
+        var first = usd.GetProperty("opportunities")[0].GetProperty("best");
         Assert.Equal("large", first.GetProperty("id").GetString());
         Assert.Equal(240m, first.GetProperty("annualSavingsAmount").GetDecimal());
         Assert.Equal("20", first.GetProperty("extendedProperties").GetProperty("savingsAmount").GetString());
@@ -59,11 +60,63 @@ public sealed class MaturityEvidenceTests
         Assert.False(evidence.GetProperty("detailsComplete").GetBoolean());
         var group = evidence.GetProperty("rankings")[0];
         Assert.Equal(10, group.GetProperty("recommendationCount").GetInt32());
-        var recommendations = group.GetProperty("recommendations");
-        Assert.Equal(5, recommendations.GetArrayLength());
-        Assert.Equal("largest", recommendations[0].GetProperty("id").GetString());
-        Assert.Equal("second", recommendations[0].GetProperty("subscriptionId").GetString());
-        Assert.Equal(6m, recommendations[4].GetProperty("annualSavingsAmount").GetDecimal());
+        var opportunities = group.GetProperty("opportunities");
+        Assert.Equal(5, opportunities.GetArrayLength());
+        Assert.Equal("largest", opportunities[0].GetProperty("best").GetProperty("id").GetString());
+        Assert.Equal("second", opportunities[0].GetProperty("best").GetProperty("subscriptionId").GetString());
+        Assert.Equal(6m, opportunities[4].GetProperty("bestAnnualSavingsAmount").GetDecimal());
+    }
+
+    [Fact]
+    public void AdvisorTermAndLookbackAlternativesFormOneOpportunity()
+    {
+        static object Reservation(string id, decimal annual, string term, string lookback, string sku = "P0v3") => new
+        {
+            id,
+            properties = new
+            {
+                category = "Cost",
+                recommendationTypeId = "reservation-type",
+                impactedValue = "synthetic-subscription",
+                lastUpdated = "2026-09-24T05:51:15Z",
+                extendedProperties = new
+                {
+                    annualSavingsAmount = annual.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    savingsCurrency = "USD",
+                    term,
+                    lookbackPeriod = lookback,
+                    displayQty = "1",
+                    displaySKU = sku,
+                    location = "swedencentral",
+                    scope = "Single"
+                }
+            }
+        };
+
+        var evidence = AdvisorEvidence(
+            Reservation("p1y-60", 266, "P1Y", "60"),
+            Reservation("p3y-7", 429, "P3Y", "7"),
+            Reservation("p3y-30", 424, "P3Y", "30"),
+            Reservation("p1y-7", 271, "P1Y", "7"),
+            Reservation("other-sku", 100, "P3Y", "7", "P1v3"),
+            Recommendation("rightsize", "300", "USD"));
+        var usd = evidence.GetProperty("rankings")[0];
+        Assert.Equal(6, usd.GetProperty("recommendationCount").GetInt32());
+        Assert.Equal(3, usd.GetProperty("opportunityCount").GetInt32());
+        var top = usd.GetProperty("opportunities")[0];
+        Assert.Equal(1, top.GetProperty("rank").GetInt32());
+        Assert.Equal(429m, top.GetProperty("bestAnnualSavingsAmount").GetDecimal());
+        Assert.Equal(266m, top.GetProperty("lowestAnnualSavingsAmount").GetDecimal());
+        Assert.Equal(4, top.GetProperty("alternativeCount").GetInt32());
+        Assert.True(top.GetProperty("alternativesAreMutuallyExclusive").GetBoolean());
+        Assert.Equal("p3y-7", top.GetProperty("best").GetProperty("id").GetString());
+        var alternatives = top.GetProperty("alternatives").EnumerateArray().ToArray();
+        Assert.Equal(["P3Y", "P3Y", "P1Y", "P1Y"], alternatives.Select(a => a.GetProperty("term").GetString()));
+        Assert.Equal("7", alternatives[0].GetProperty("lookbackPeriodDays").GetString());
+        Assert.Equal("rightsize", usd.GetProperty("opportunities")[1].GetProperty("best").GetProperty("id").GetString());
+        Assert.False(usd.GetProperty("opportunities")[1].GetProperty("alternativesAreMutuallyExclusive").GetBoolean());
+        Assert.Equal("other-sku", usd.GetProperty("opportunities")[2].GetProperty("best").GetProperty("id").GetString());
+        Assert.True(evidence.GetProperty("detailsComplete").GetBoolean());
     }
 
     [Theory]
