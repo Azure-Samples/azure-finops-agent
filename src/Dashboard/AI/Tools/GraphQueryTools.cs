@@ -28,7 +28,7 @@ DATA SCOPING: use $select for needed fields, $top for a small page, and $filter 
 For Copilot activity counts and inactive-user lists prefer GetCopilotUsage, which processes the supported report on the host and returns bounded, dated counts/pages instead of an oversized raw report.
 
 Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant areas:
-- Licenses: /v1.0/subscribedSkus?$select=skuId,skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus. This collection supports ONLY $select: never add $top, $filter or $search. Compare consumedUnits with prepaidUnits.enabled for unassigned seats; the host appends a root `_licenseSummary` with per-SKU and total enabled/assigned/unassigned counts plus a headline and table — present those verbatim instead of adding or subtracting seats yourself. Assignment is not proof of active use. Label prepaidUnits.enabled as enabled license inventory, never as verified purchased or paid seats. Graph does not return contract unit prices or invoices. For actual purchased quantities and monthly waste, request the customer's invoice/pricesheet when billing evidence was not provided; public marketing prices cannot establish that bill. Fetch public pricing only for an explicitly requested list-price/hypothetical estimate, not as a substitute for missing contract inputs.
+- Licenses: /v1.0/subscribedSkus?$select=skuId,skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus. This collection supports ONLY $select: never add $top, $filter or $search. Compare consumedUnits with prepaidUnits.enabled for unassigned seats; the host appends a root `_licenseSummary` with per-SKU and total enabled/assigned/unassigned counts plus a headline, table and freshness sentence (retrieval time) — present those verbatim instead of adding or subtracting seats yourself. Assignment is not proof of active use. Label prepaidUnits.enabled as enabled license inventory, never as verified purchased or paid seats. Graph does not return contract unit prices or invoices. For actual purchased quantities and monthly waste, request the customer's invoice/pricesheet when billing evidence was not provided; public marketing prices cannot establish that bill. Fetch public pricing only for an explicitly requested list-price/hypothetical estimate, not as a substitute for missing contract inputs.
 - M365 usage reports (period='D30'): /v1.0/reports/getOffice365ActiveUserDetail, getMailboxUsageDetail, getTeamsUserActivityUserDetail, getOneDriveUsageAccountDetail, getSharePointSiteUsageDetail, getM365AppUserDetail
 - M365 Copilot usage: GET /v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(period='D30') or getMicrosoft365CopilotUserCountSummary(period='D30') returns CSV for licensed users. version='v1' is the default (D7/D30/D90/D180/ALL); version='v2' uses D28 instead of D30 and adds prompt counts/active days. The beta /copilot/reports equivalents return JSON. Do not add $filter, $top or $select to these functions. Legacy /beta/reports/getMicrosoft365CopilotUsageUserDetail and getMicrosoft365CopilotUserCountSummary support $format only, not $filter. Reports.Read.All plus a supported directory role is required. Missing report access or anonymized user names is not zero activity; licensed-user reports do not cover unlicensed Copilot Chat. An UnknownTenantId/report-unavailable result from GetCopilotUsage is not repaired by repeating the same report through QueryGraph; report the setup/data-availability blocker instead.
 - Intune: /v1.0/deviceManagement/managedDevices (use /beta/ only for preview-only fields)
@@ -85,7 +85,7 @@ Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant a
     }
 
     // Adds host-computed per-SKU and total seat arithmetic so answers never add or subtract seat counts in prose.
-    internal static string AppendLicenseSummary(string response)
+    internal static string AppendLicenseSummary(string response, DateTimeOffset? retrievedAtUtc = null)
     {
         if (!response.StartsWith("HTTP 200", StringComparison.Ordinal)) return response;
         var start = response.IndexOf('{');
@@ -117,11 +117,15 @@ Use standard Graph URL conventions; you know the v1.0 surface. FinOps-relevant a
             foreach (var row in rows.OrderByDescending(r => r.Unassigned ?? -1).ThenBy(r => r.Sku, StringComparer.Ordinal))
                 table.AppendLine($"| {row.Sku.Replace("|", "\\|", StringComparison.Ordinal)} | {row.Status} | Not returned by Graph | {N(row.Enabled)} | {N(row.Assigned)} | {N(row.Unassigned)} | Unknown (no contract rate) |");
             table.Append($"| **Total** | | **Not returned by Graph** | **{N(totalEnabled)}** | **{N(totalAssigned)}** | **{N(totalUnassigned)}** | **Unknown** |");
+            var retrieved = (retrievedAtUtc ?? DateTimeOffset.UtcNow).ToUniversalTime();
+            var retrievedText = retrieved.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
             root["_licenseSummary"] = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(new
             {
-                note = "Host-computed from this response (not source data). Present headline and answerTable verbatim; do not recompute seat counts. Enabled is license inventory, not invoice-verified purchases; Graph returns no contract prices, so the cost of unassigned seats is unknown without the customer's price sheet or invoice.",
+                note = "Host-computed from this response (not source data). Present headline, answerTable and freshness verbatim; do not recompute seat counts. Enabled is license inventory, not invoice-verified purchases; Graph returns no contract prices, so the cost of unassigned seats is unknown without the customer's price sheet or invoice.",
                 headline = $"{N(totalUnassigned)} enabled Microsoft 365 license seats are unassigned across {rows.Count} SKU{(rows.Count == 1 ? "" : "s")} ({N(totalEnabled)} enabled, {N(totalAssigned)} assigned); their monthly cost cannot be verified without contract rates.",
                 answerTable = table.ToString(),
+                retrievedAtUtc = retrieved.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+                freshness = $"Microsoft 365 license inventory retrieved from Microsoft Graph subscribedSkus at {retrievedText} UTC; Graph reports no source as-of time for this inventory, so assignment changes after retrieval are not reflected.",
                 complete,
                 totals = new { skuCount = rows.Count, enabled = totalEnabled, assigned = totalAssigned, unassignedEnabled = totalUnassigned },
                 skus = rows.Select(r => new { skuPartNumber = r.Sku, capabilityStatus = r.Status, enabled = r.Enabled, assigned = r.Assigned, unassignedEnabled = r.Unassigned })
