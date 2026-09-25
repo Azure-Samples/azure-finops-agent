@@ -242,6 +242,9 @@ public sealed class ToolResultTests
         Assert.Equal(2, rows.GetArrayLength());
         Assert.Equal(10, rows[0].GetProperty("spotLimit").GetInt32());
         Assert.Equal(0, rows[1].GetProperty("spotLimit").GetInt32());
+        using var capped = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"limit":250}"""));
+        Assert.Equal(2, capped.RootElement.GetProperty("returned").GetInt32());
+        Assert.StartsWith("Error: Query paging", ToolResultQueryTools.Execute(entry, """{"limit":-1}"""));
     }
 
     [Fact]
@@ -369,7 +372,7 @@ public sealed class ToolResultTests
     [InlineData("{\"file\":\"/etc/passwd\"}")]
     [InlineData("{\"owner\":202}")]
     [InlineData("{\"path\":\"$\",\"path\":\"$.rows\"}")]
-    [InlineData("{\"limit\":201}")]
+    [InlineData("{\"offset\":100001}")]
     [InlineData("{\"mode\":\"execute\"}")]
     [InlineData("{\"path\":\"$[\"}")]
     [InlineData("{\"path\":\"$..*\"}")]

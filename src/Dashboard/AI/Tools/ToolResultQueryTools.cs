@@ -18,7 +18,7 @@ public sealed class ToolResultQueryTools(long owner)
 
     private async Task<string> QueryToolResult(
         [Description("Opaque resultId returned in this conversation. Copy it exactly, including case, from queryable_tool_result, _resultQuery or its query response; never reconstruct, shorten or alter it. Never a file path or URL.")] string resultId,
-        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\"}. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path and as defaults to the op name. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (max 200, 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
+        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\"}. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path and as defaults to the op name. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (pages hold at most 200 rows; follow nextOffset; 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
         CancellationToken cancellationToken = default)
     {
         var context = ToolExecutionContext.Current;
@@ -185,7 +185,8 @@ public sealed class ToolResultQueryTools(long owner)
                 if (ordered is not null) rows = ordered.ToList();
             }
             var offset = Integer(query, "offset", 0, 0, 100000);
-            var limit = Integer(query, "limit", 50, 0, 200);
+            // A larger page request is served like the 16 KB page cap: complete=false and nextOffset continue it.
+            var limit = Math.Min(Integer(query, "limit", 50, 0, int.MaxValue), 200);
             var page = new List<JsonElement>();
             var bytes = 0;
             foreach (var row in rows.Skip(offset).Take(limit))
@@ -376,7 +377,7 @@ public sealed class ToolResultQueryTools(long owner)
         Require(item.ValueKind == JsonValueKind.Number ? item.TryGetInt32(out number)
             : item.ValueKind == JsonValueKind.String && int.TryParse(item.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out number),
             "Query paging parameter must be an integer.");
-        Require(number >= minimum && number <= maximum, "Query paging parameter is out of range (offset >= 0, limit 0-200).");
+        Require(number >= minimum && number <= maximum, "Query paging parameter is out of range (offset 0-100000, limit >= 0).");
         return number;
     }
     private static void Require(bool condition, string message) { if (!condition) throw new QueryException(message); }
