@@ -38,7 +38,7 @@ The agent's model was separately switched to an existing Luna deployment because
 | FIN-12: volatile uploads | Persistent conversation binding, hashes, expiry and reader leases; reset preserves files | Restart/isolation/expiry tests and desktop/mobile reset |
 | FIN-13: unsupported feasibility claims | Separate quota, SKU/zone restrictions, placement likelihood and VM-origin connectivity | Diagnostic parsing/coverage tests; no allocation guarantee |
 | FIN-14: discarded bulk results | Indexed per-item bodies, cancellation/unattempted counts, explicit pending/partial state | Bulk GET/operation/cancellation tests |
-| FIN-15: lost pricing variants | Exact SKU-field fallback, meter/region projection, resolution/coverage metadata | Synthetic pagination, vocabulary and region tests |
+| FIN-15: lost pricing variants | Raw retail rows preserve product, meter, region, purchase type, volume band and source coverage for model-side comparison | Synthetic pagination, vocabulary and region tests |
 | FIN-16: fabricated zero rates | Deterministic validated arithmetic with explicit assumptions and rate provenance | Missing/nonfinite/locale/currency tests and live synthetic estimate |
 | FIN-17: accepted writes called complete | Persist intent, exact approval, async polling and prerequisite history; suppress unknown duplicates | Approval/fingerprint/async/restart tests |
 | FIN-18: wrong reconnect guidance | Resource-specific structured consent actions with same-origin allowlist | Consent-contract and desktop/mobile URL tests |
@@ -48,7 +48,7 @@ The agent's model was separately switched to an existing Luna deployment because
 ## Source And Execution Semantics
 
 - A budget `currentSpend` value is a periodically evaluated snapshot. Retrieval time is not billing data time. Preserve `_finops` and aggregate `sourceEvidence`; cached results during cooldown are not fresh measurements.
-- Pricing `RESOLUTION` distinguishes exact, ambiguous, partial and missing coverage. Missing rates remain unknown. A calculator result is an estimate, not a measured bill or proof of a commercial rate.
+- Pricing responses are raw Retail Prices API rows plus source metadata. Missing rates remain unknown, `complete=false` means catalogue coverage is partial, and a calculator result is an estimate, not a measured bill or proof of a commercial rate.
 - Quota headroom and SKU availability are necessary evidence, not guaranteed capacity. Effective inherited Azure Policy and successful allocation are not inferred. Connectivity is probed from a specified existing Azure VM, not the app host.
 - ARM PUT/PATCH first returns an approval proposal. Approve requires the exact stored request and explicit cost acknowledgement. HTTP 202, in-progress and unknown outcomes require polling, not a retry of the write. Background jobs cannot purchase capacity without the same approval.
 - `ReportJobOutcome` is checked against host-observed source calls. A later read replaces earlier evidence only for identical canonical arguments. Unknown/partial scope must be reported as such. This does not independently prove that a model chose every scope implied by an arbitrary natural-language request.
@@ -136,12 +136,12 @@ The descriptive review classified 25 histories as pass, 38 partial, 16 blocked, 
 | Chart/schema rejection | Canonical `type` with a guarded legacy `chart` adapter; documented optional inputs have real defaults. Real SDK/CLI and omitted-argument tests cover the boundary. |
 | Pricing rows hidden by verbose output | Global top-N selection happens after pagination and within compatible variants. Facets omit irrelevant identifiers; ranking/detail completeness and volume thresholds remain explicit. |
 | Unsupported Graph query options and stale report guidance | Endpoint-specific preflight and current Copilot report routes/response formats replace generic query-option guessing. |
-| Copilot reports too large for model context | `GetCopilotUsage` reads the supported report and returns full counts plus bounded, advancing pages; malformed, duplicate, mixed-period and mixed-date reports fail explicitly. |
+| Copilot reports too large for model context | Raw `QueryGraph` report calls can be retained and summarized with `QueryToolResult`; malformed, duplicate, mixed-period and mixed-date reports fail explicitly. |
 | Reservation-utilization scope errors | Single and bulk paths require discovered billing/reservation scope; guidance no longer prescribes a provider-root call or cycles versions to repair it. |
 | Currency/unit corruption | Calculator currency matching, preserved pricing bands and explicit source-currency/unit instructions; no inferred FX or taxes. |
 | Incompatible report and inventory cohorts | Activity classification uses the report's own date and identities. Current assignments must not be subtracted from older aggregate activity. |
 | SDK failures hidden from host outcomes | Admitted failures before callbacks count once, and failed auxiliary tools produce partial execution rather than a clean outcome. |
-| Conflicting follow-up instructions | The requested deliverable takes precedence; Crawl-provided actions and public prompt links do not require another follow-up tool round. |
+| Conflicting follow-up instructions | The requested deliverable takes precedence; maturity-scoring context and public prompt links do not require another follow-up tool round. |
 
 Additional hardening emits an `empty_result` event for genuinely empty terminal turns, without relabeling explicit Stop or a structured chart/score/artifact result as empty. A retained blank answer alone is not proof of this failure; host cancellation must be checked.
 

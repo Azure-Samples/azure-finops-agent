@@ -233,7 +233,7 @@ internal static class Program
             {
                 name = tool.Name,
                 arguments = Bounded(tool.Arguments, 6000),
-                detail = Bounded(((tool.Error ?? "") + " " + tool.Result).Trim(), 1500)
+                detail = Bounded(((tool.Error ?? "") + " " + FailedBatchEntries(tool.Result)).Trim(), 4000)
             }),
             toolDetails = tools.Select(tool =>
             {
@@ -289,6 +289,27 @@ internal static class Program
     }
 
     private static string Text(JsonElement item, string property) => item.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+    // Batch results can exceed the capture limit before reaching the failed entry, so keep only unsuccessful entries.
+    private static string FailedBatchEntries(string result)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(result);
+            if (document.RootElement is not { ValueKind: JsonValueKind.Object } root
+                || !root.TryGetProperty("results", out var results)
+                || results.ValueKind != JsonValueKind.Array)
+                return result;
+            var failed = results.EnumerateArray()
+                .Where(entry => !(entry.TryGetProperty("outcome", out var outcome) && outcome.ValueEquals("succeeded")))
+                .Select(entry => entry.GetRawText());
+            return "failed batch entries: [" + string.Join(",", failed) + "]";
+        }
+        catch (JsonException)
+        {
+            return result;
+        }
+    }
+
     private static string Redact(string text, string[] subscriptions)
     {
         text = ReportRedaction.Apply(text);

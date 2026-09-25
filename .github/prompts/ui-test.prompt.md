@@ -199,7 +199,7 @@ Click **Connect Azure** via JS, then STOP and ask me to sign in. Poll `/auth/azu
 2. **Tenant picker** — `/auth/azure/tenants`; the Tenant ID box routes to a specific tenant.
 3. **Conversations pane** — create, switch, delete, reload persistence, per-pane collapse (all three panes), `N saved` count correct, job run-logs HIDDEN from this list.
 4. **Consent tiers** — each add-on (`licenses`, `chargeback`, `loganalytics`, `storage`) triggers its OWN consent screen; `graphTier` accumulates; the "grant all remaining" chain walks tiers in sequence. After each, the matching tool works (`QueryGraph`, `QueryLogAnalytics`, `ListCostExportBlobs`).
-5. **Real tenant queries** — MTD spend, top resources, Advisor, budgets, tagging coverage, reservations, `FindIdleResources`, `DetectCostAnomalies`, `StartPricesheetDownload` + `GetPricesheetStatus`. Verify at least one figure against `az` directly.
+5. **Real tenant queries** — MTD spend, top resources, Advisor, budgets, tagging coverage, reservations, idle-resource patterns and anomaly investigations through `QueryAzure`/`BulkAzureRequest`, plus `StartPricesheetDownload` + `GetPricesheetStatus`. Verify at least one figure against `az` directly.
 6. **Maturity scoring** — click Score for Crawl; assert the `maturity_score` SSE arrives and sidebar stars update; `GetScoreHistory` returns the prior score.
 7. **Savings ledger** — `RecordSavingsAction` → `UpdateSavingsAction` → `GetSavingsLedger` round-trips.
 8. **Security gates** (all must be refused):
