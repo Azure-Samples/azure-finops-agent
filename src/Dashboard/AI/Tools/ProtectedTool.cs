@@ -9,6 +9,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
 {
     protected override async ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
+        CoerceScalarStrings(JsonSchema, arguments);
         var argumentJson = JsonSerializer.Serialize(arguments);
         if (SensitiveContent.ContainsSecret(argumentJson))
             return SensitiveContent.RejectedMessage;
@@ -51,6 +52,36 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         return result;
     }
 
+    // Models often send a JSON number or boolean for a string parameter (for example
+    // "limit": 50); argument binding would otherwise fail the whole tool call.
+    internal static void CoerceScalarStrings(JsonElement schema, AIFunctionArguments arguments)
+    {
+        if (schema.ValueKind != JsonValueKind.Object || !schema.TryGetProperty("properties", out var properties)
+            || properties.ValueKind != JsonValueKind.Object) return;
+        foreach (var key in arguments.Keys.ToList())
+        {
+            if (!properties.TryGetProperty(key, out var property) || !IsStringOnly(property)) continue;
+            arguments[key] = arguments[key] switch
+            {
+                JsonElement { ValueKind: JsonValueKind.Number } number => number.GetRawText(),
+                JsonElement { ValueKind: JsonValueKind.True } => "true",
+                JsonElement { ValueKind: JsonValueKind.False } => "false",
+                bool flag => flag ? "true" : "false",
+                int or long or decimal or double or float => Convert.ToString(arguments[key], System.Globalization.CultureInfo.InvariantCulture),
+                var value => value
+            };
+        }
+
+        static bool IsStringOnly(JsonElement property)
+        {
+            if (!property.TryGetProperty("type", out var type)) return false;
+            if (type.ValueKind == JsonValueKind.String) return type.GetString() == "string";
+            return type.ValueKind == JsonValueKind.Array
+                && type.EnumerateArray().All(item => item.ValueKind == JsonValueKind.String && item.GetString() is "string" or "null")
+                && type.EnumerateArray().Any(item => item.GetString() == "string");
+        }
+    }
+
     private string PrepareResult(string text, (bool Success, bool Fresh, bool Partial) evidence)
     {
         var redacted = SensitiveContent.Redact(text);
@@ -75,6 +106,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
     "GetCrawlMaturityEvidence",
     "GetTagCoverage",
     "GetChargebackReport",
+    "CompareSubscriptionCosts",
     "BulkAzureRequest",
     "FindIdleResources",
     "DetectCostAnomalies",

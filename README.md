@@ -165,6 +165,10 @@ See [SECURITY.md](SECURITY.md) for reporting vulnerabilities and [docs/session-m
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SUPPORT.md](SUPPORT.md), and the [Code of Conduct](CODE_OF_CONDUCT.md).
 
+## Contact
+
+Questions about this sample or delivering it for your organization: contact the maintainer, [Ali Reza Farahnak on LinkedIn](https://www.linkedin.com/in/alirezafarahnak/). Report bugs and feature requests as [GitHub issues](https://github.com/Azure-Samples/azure-finops-agent/issues).
+
 ## License
 
 [MIT](LICENSE)

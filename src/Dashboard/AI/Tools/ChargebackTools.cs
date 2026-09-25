@@ -39,6 +39,224 @@ public sealed class ChargebackTools(UserTokens tokens)
             "State the cost type, currency, inclusive date ranges, subscription scope, the chosen tag, and that billing data may lag and is not a finalized invoice. " +
             "If complete is false, disclose the failed or unattempted scopes instead of presenting partial totals as complete. " +
             "Pass the full subscriptions array from the connection context.");
+
+        yield return AIFunctionFactory.Create(CompareSubscriptionCosts, "CompareSubscriptionCosts",
+            "Rank subscriptions by spend with month-over-month change in ONE call. " +
+            "Use it instead of QueryCostsAcrossSubscriptions plus QueryAzure/BulkAzureRequest cost queries whenever the user asks to compare, rank or trend spend across subscriptions, " +
+            "or asks for a per-subscription month-over-month or previous-month comparison. " +
+            "The host runs host-built ActualCost Cost Management queries grouped by ServiceName for each subscription, sequentially, stopping after a final throttle: " +
+            "the requested month (month-to-date for the current month) and a comparison window (the same day-of-month window of the previous month for the current month; the full previous month for a past month). " +
+            "It returns subscriptions ranked by current spend with name, id, currency, current and comparison ActualCost, host-computed difference, percentChange and share, top services, totals by currency, exact inclusive dates and per-query status in results. " +
+            "Use its host-built headline as the bold first sentence and answerTable verbatim as the ranking table (they hold these values); do not recompute them with CompareAmounts or QueryToolResult, do not re-query the same costs and do not mix in budget currentSpend snapshots. " +
+            "percentChange is null when comparison spend is zero. " +
+            "State the cost type (ActualCost), currency, both inclusive date ranges, subscription scope and that billing data may lag and is not a finalized invoice. " +
+            "If complete is false, disclose the failed or unattempted scopes instead of presenting partial totals as complete. " +
+            "Pass the full subscriptions array from the connection context.");
+    }
+
+    private async Task<string> CompareSubscriptionCosts(
+        [Description("JSON array of subscription ids or {id,name} objects from the connection context covering the full requested scope (max 20).")] string subscriptionsJson,
+        [Description("Optional month in yyyy-MM format; default is the current UTC month (month-to-date). Past months use the full calendar month.")] string month = "")
+    {
+        using var span = HttpHelper.Telemetry.StartActivity("CompareSubscriptionCosts");
+        const int top = 3;
+        var (subscriptions, subscriptionError) = TagCoverageTools.ParseSubscriptions(subscriptionsJson);
+        var (periods, monthError) = ResolvePeriods(month, DateOnly.FromDateTime(DateTime.UtcNow));
+        var error = subscriptionError ?? monthError
+            ?? (subscriptions.Count == 0 ? "No valid subscription IDs were supplied." : null)
+            ?? (subscriptions.Count > MaxSubscriptions ? $"CompareSubscriptionCosts supports at most {MaxSubscriptions} subscriptions per call; split larger estates into explicit scopes." : null);
+        if (error is not null)
+        {
+            span?.SetStatus(ActivityStatusCode.Error, "Invalid subscription comparison input");
+            return $"HTTP 400 BadRequest\n{error} No request was sent.";
+        }
+
+        var token = tokens.AzureToken;
+        if (string.IsNullOrEmpty(token))
+            return HttpHelper.TokenMissing("AzureToken", span, "subscription_comparison");
+
+        var queries = new List<QueryOutcome>();
+        var sourceEvidence = new List<JsonElement>();
+        var throttled = false;
+        foreach (var subscription in subscriptions)
+        {
+            foreach (var period in new[] { periods.Current, periods.Comparison })
+            {
+                if (throttled)
+                {
+                    queries.Add(new(subscription.Id, subscription.Name, period.Name, 0, 0, false, "not attempted after tenant throttle", []));
+                    continue;
+                }
+                var outcome = await RunCostQuery(token, subscription, period, BuildServiceQueryBody(period), "cost.subscription_comparison", span, sourceEvidence);
+                queries.Add(outcome);
+                throttled = outcome.Status == 429;
+            }
+        }
+
+        return SummarizeSubscriptions(subscriptions, periods, queries, sourceEvidence, throttled, top,
+            DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture));
+    }
+
+    internal static string BuildServiceQueryBody(Period period) => JsonSerializer.Serialize(new
+    {
+        type = "ActualCost",
+        timeframe = "Custom",
+        timePeriod = new
+        {
+            from = period.From.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            to = period.ToInclusive.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+        },
+        dataset = new
+        {
+            granularity = "None",
+            aggregation = new { totalCost = new { name = "Cost", function = "Sum" } },
+            grouping = new object[] { new { type = "Dimension", name = "ServiceName" } }
+        }
+    });
+
+    private static string Headline(IReadOnlyList<(int Rank, TeamTotals Value)> ranked, Periods periods)
+    {
+        var leader = ranked[0].Value;
+        var amount = leader.Currency + " " + Math.Round(leader.Current, 2, MidpointRounding.AwayFromZero).ToString("#,##0.00", CultureInfo.InvariantCulture);
+        var change = leader.Comparison == 0
+            ? "with no ActualCost in the comparison window"
+            : (leader.Current >= leader.Comparison ? "up " : "down ")
+              + Math.Abs(Math.Round((leader.Current - leader.Comparison) / leader.Comparison * 100, 1, MidpointRounding.AwayFromZero)).ToString("#,##0.0", CultureInfo.InvariantCulture)
+              + "% month over month";
+        var count = ranked.Count == 1 ? "the only subscription with reported cost" : $"the highest of {ranked.Count} subscriptions";
+        return $"{leader.Team} is {count} at {amount} ActualCost for {periods.Current.From:yyyy-MM-dd} to {periods.Current.ToInclusive:yyyy-MM-dd}, {change} (vs {periods.Comparison.From:yyyy-MM-dd} to {periods.Comparison.ToInclusive:yyyy-MM-dd}).";
+    }
+
+    internal static string SummarizeSubscriptions(
+        IReadOnlyList<(string Id, string Name)> subscriptions,
+        Periods periods,
+        IReadOnlyList<QueryOutcome> queries,
+        IReadOnlyList<JsonElement> sourceEvidence,
+        bool throttled,
+        int top,
+        string retrievedAtUtc)
+    {
+        static decimal Round(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
+        static decimal? Change(decimal current, decimal comparison) =>
+            comparison == 0 ? null : Math.Round((current - comparison) / comparison * 100, 1, MidpointRounding.AwayFromZero);
+
+        var totals = new Dictionary<(string Id, string Currency), TeamTotals>();
+        var missingCurrency = false;
+        foreach (var query in queries.Where(q => q.Status == 200 && q.Error is null))
+        {
+            foreach (var row in query.Rows)
+            {
+                if (string.IsNullOrWhiteSpace(row.Currency))
+                {
+                    if (row.Cost != 0) missingCurrency = true;
+                    continue;
+                }
+                var key = (query.SubscriptionId, row.Currency!.ToUpperInvariant());
+                if (!totals.TryGetValue(key, out var item))
+                    totals[key] = item = new TeamTotals(query.SubscriptionName, false, false, key.Item2);
+                if (query.Period == "current")
+                {
+                    item.Current += row.Cost;
+                    item.Services[row.Service] = item.Services.GetValueOrDefault(row.Service) + row.Cost;
+                }
+                else item.Comparison += row.Cost;
+            }
+        }
+
+        var failed = queries.Where(q => q.Status != 200 || q.Error is not null).ToList();
+        var complete = failed.Count == 0 && !queries.Any(q => q.Truncated) && !missingCurrency;
+        var answered = subscriptions.Where(s => queries.Any(q => q.SubscriptionId == s.Id && q.Period == "current" && q.Status == 200 && q.Error is null)).ToList();
+        var noCost = answered.Where(s => !totals.Keys.Any(k => k.Id == s.Id)).ToList();
+        var byCurrency = totals.GroupBy(t => t.Key.Currency).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
+        var retryAt = sourceEvidence
+            .Select(e => e.ValueKind == JsonValueKind.Object && e.TryGetProperty("retryAtUtc", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null)
+            .LastOrDefault(r => r is not null);
+
+        var ranked = byCurrency.SelectMany(g => g.OrderByDescending(t => t.Value.Current).ThenBy(t => t.Value.Team, StringComparer.Ordinal)
+            .Select((t, index) => (Rank: index + 1, t.Value))).ToList();
+        static string Money(decimal value, string currency) => currency + " " + Math.Round(value, 2, MidpointRounding.AwayFromZero).ToString("#,##0.00", CultureInfo.InvariantCulture);
+        static string Signed(decimal value, string currency) => (value > 0 ? "+" : value < 0 ? "-" : "") + Money(Math.Abs(value), currency);
+        static string Percent(decimal? value) => value is null ? "n/a (no comparison spend)" : (value > 0 ? "+" : "") + value.Value.ToString("0.0", CultureInfo.InvariantCulture) + "%";
+        static string Range(Period period) => period.From.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " to " + period.ToInclusive.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var table = new System.Text.StringBuilder();
+        table.Append("| Rank | Subscription | ActualCost ").Append(Range(periods.Current)).Append(" | ActualCost ").Append(Range(periods.Comparison)).Append(" | Month-over-month change | % change |\n");
+        table.Append("|---:|---|---:|---:|---:|---:|\n");
+        foreach (var (rank, item) in ranked)
+            table.Append("| ").Append(rank).Append(" | ").Append(item.Team.Replace("|", "\\|", StringComparison.Ordinal))
+                .Append(" | ").Append(Money(item.Current, item.Currency)).Append(" | ").Append(Money(item.Comparison, item.Currency))
+                .Append(" | ").Append(Signed(item.Current - item.Comparison, item.Currency)).Append(" | ").Append(Percent(Change(item.Current, item.Comparison))).Append(" |\n");
+
+        return JsonSerializer.Serialize(new
+        {
+            source = "Azure Cost Management query (host-built, per subscription, grouped by ServiceName)",
+            costType = "ActualCost",
+            aggregation = "Cost",
+            retrievedAtUtc,
+            dataAsOfUtc = (string?)null,
+            freshness = BillingFreshness,
+            complete,
+            throttled,
+            retryAtUtc = throttled ? retryAt : null,
+            coverageNote = complete
+                ? "Totals cover every Cost Management row returned for the requested subscriptions and both periods."
+                : "Some queries failed, were not attempted or were truncated; totals below are partial and must not be presented as complete.",
+            answerTable = ranked.Count == 0 ? null : table.ToString(),
+            headline = ranked.Count == 0 ? null : Headline(ranked, periods),
+            answerTableNote = "Host-built from the rows below; use headline as the answer's bold first sentence and answerTable verbatim as the ranking table. The comparison is month-over-month (" + periods.Basis.ToLowerInvariant() + "), never year-over-year.",
+            scope = new { subscriptionCount = subscriptions.Count, subscriptions = subscriptions.Select(s => new { id = s.Id, name = s.Name }) },
+            currentPeriod = new { from = periods.Current.From, to = periods.Current.ToInclusive, endInclusive = true },
+            comparisonPeriod = new { from = periods.Comparison.From, to = periods.Comparison.ToInclusive, endInclusive = true },
+            comparisonBasis = periods.Basis,
+            method = "Each subscription is queried separately for both periods. percentChange = (current - comparison) / comparison * 100 and is null when comparison spend is zero. sharePercent is the subscription's share of current spend in that currency.",
+            totalsByCurrency = byCurrency.ToDictionary(g => g.Key, g =>
+            {
+                var current = g.Sum(t => t.Value.Current);
+                var comparison = g.Sum(t => t.Value.Comparison);
+                return new
+                {
+                    current = Round(current),
+                    comparison = Round(comparison),
+                    difference = Round(current - comparison),
+                    percentChange = Change(current, comparison),
+                    subscriptions = g.Count()
+                };
+            }),
+            subscriptions = byCurrency.SelectMany(g =>
+            {
+                var currencyTotal = g.Sum(t => t.Value.Current);
+                return g.OrderByDescending(t => t.Value.Current).ThenBy(t => t.Value.Team, StringComparer.Ordinal).Select((t, index) =>
+                {
+                    var ranked = t.Value.Services.OrderByDescending(s => s.Value).ThenBy(s => s.Key, StringComparer.Ordinal).ToList();
+                    return new
+                    {
+                        rank = index + 1,
+                        subscriptionName = t.Value.Team,
+                        subscriptionId = t.Key.Id,
+                        currency = t.Value.Currency,
+                        current = Round(t.Value.Current),
+                        comparison = Round(t.Value.Comparison),
+                        difference = Round(t.Value.Current - t.Value.Comparison),
+                        percentChange = Change(t.Value.Current, t.Value.Comparison),
+                        sharePercent = currencyTotal == 0 ? (decimal?)null : Math.Round(t.Value.Current / currencyTotal * 100, 1, MidpointRounding.AwayFromZero),
+                        topServices = ranked.Take(top).Select(s => new { service = s.Key, current = Round(s.Value) }),
+                        otherServices = new { count = Math.Max(0, ranked.Count - top), current = Round(ranked.Skip(top).Sum(s => s.Value)) }
+                    };
+                });
+            }),
+            subscriptionsWithNoReportedCost = noCost.Select(s => new { id = s.Id, name = s.Name }),
+            results = queries.Select(q => new
+            {
+                subscriptionId = q.SubscriptionId,
+                subscriptionName = q.SubscriptionName,
+                period = q.Period,
+                status = q.Status,
+                pages = q.Pages,
+                truncated = q.Truncated,
+                rows = q.Rows.Count,
+                error = q.Error
+            }),
+            sourceEvidence
+        });
     }
 
     private async Task<string> GetChargebackReport(
@@ -92,7 +310,7 @@ public sealed class ChargebackTools(UserTokens tokens)
                     queries.Add(new(subscription.Id, subscription.Name, period.Name, 0, 0, false, "not attempted after tenant throttle", []));
                     continue;
                 }
-                var outcome = await RunCostQuery(token, subscription, period, allocation.Key, span, sourceEvidence);
+                var outcome = await RunCostQuery(token, subscription, period, BuildQueryBody(allocation.Key, period), "cost.chargeback", span, sourceEvidence);
                 queries.Add(outcome);
                 throttled = outcome.Status == 429;
             }
@@ -188,15 +406,14 @@ public sealed class ChargebackTools(UserTokens tokens)
     });
 
     private static async Task<QueryOutcome> RunCostQuery(
-        string token, (string Id, string Name) subscription, Period period, string tagKey, Activity? span, List<JsonElement> sourceEvidence)
+        string token, (string Id, string Name) subscription, Period period, string body, string operation, Activity? span, List<JsonElement> sourceEvidence)
     {
         var path = $"/subscriptions/{subscription.Id}/providers/Microsoft.CostManagement/query";
         var url = $"https://management.azure.com{path}?api-version=2026-08-01";
-        var body = BuildQueryBody(tagKey, period);
         var rows = new List<CostRow>();
         for (var page = 1; page <= MaxPages; page++)
         {
-            var response = await HttpHelper.SendWithRetryAsync(url, token, span, "cost.chargeback",
+            var response = await HttpHelper.SendWithRetryAsync(url, token, span, operation,
                 method: HttpMethod.Post, jsonBody: body);
             sourceEvidence.Add(AzureQueryTools.ReadCostSourceEvidence(response));
             var status = ParseStatus(response);

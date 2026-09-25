@@ -120,18 +120,14 @@ async function send(page, prompt = "make an Excel file") {
   await expect(page.locator(".action-btn--stop")).toHaveCount(0);
 }
 
-test("top bar links to the owner LinkedIn profile", async ({ page }) => {
+test("top bar links to the source repository without a personal contact link", async ({ page }) => {
   const { errors } = await arrange(page, []);
-  const link = page.getByRole("link", {
-    name: "Contact Ali Reza Farahnak on LinkedIn",
-  });
-  await expect(link).toBeVisible();
-  await expect(link).toHaveAttribute(
-    "href",
-    "https://www.linkedin.com/in/alirezafarahnak/",
+  const link = page.locator(
+    '.portal-trustline-link[href="https://github.com/Azure-Samples/azure-finops-agent"]',
   );
+  await expect(link).toBeVisible();
   await expect(link).toHaveAttribute("target", "_blank");
-  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(page.locator('a[href*="linkedin.com"]')).toHaveCount(0);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

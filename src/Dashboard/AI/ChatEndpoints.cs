@@ -1246,7 +1246,7 @@ public static class ChatEndpoints
         // Marker-based side channels (chart / html / script / maturity).
         // If a marker is detected we emit the tool_done event followed by the
         // structured event, then return null so the caller skips re-emit.
-        if (toolName == "GetCrawlMaturityEvidence" && toolDone.Data.Success && resultText is not null)
+        if (toolName == "GetCrawlMaturityEvidence" && toolDone.Data.Success && resultText is not null && resultText.StartsWith('{'))
         {
             try
             {

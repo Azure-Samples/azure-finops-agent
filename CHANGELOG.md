@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- `CompareSubscriptionCosts` ranks subscriptions by ActualCost with host-computed month-over-month change, share and top services, plus a host-built headline and ranking table. The model previously combined a budget `currentSpend` snapshot with its own cost queries, sometimes with a different cost type (`Usage`) or a mislabelled comparison, and answers mixed the two sources.
 - `GetChargebackReport` builds tag-based chargeback reports with host-built queries. It resolves the allocation tag actually carried in scope (`Owner`, `CostCenter`, ...), runs two sequential ActualCost queries per subscription grouped by that tag and service, and returns team totals, top services, untagged spend and host-computed month-over-month change. The model previously authored several tag and cost queries per report, which intermittently failed or exhausted the Cost Management throttle.
 - `GetTagCoverage` audits tag compliance with host-built Resource Graph queries. It discovers the tenant's actual tag-key spellings (`CostCenter`, `cost-center`, `cost_center`), reports per-tag and all-required-tags coverage over every resource group, and ranks the worst groups. The model no longer writes tag KQL, which previously failed intermittently. Placeholder values, near-miss keys and truncation are reported rather than counted.
 
@@ -21,6 +22,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - `GetCrawlMaturityEvidence` groups Advisor term and lookback variants of the same recommendation (for example one App Service reservation offered as 1-year/3-year × 7/30/60-day lookback) into one savings opportunity with best and lowest estimates and its mutually exclusive alternatives. Previously each variant was ranked separately, so one reservation filled the top-five list and answers presented alternatives as distinct opportunities.
 - `GetCopilotUsage` adds an `answerFigures` list (enabled, assigned, unassigned-enabled, active and inactive seats, and inactive-license waste) when the activity report is unavailable, so answers report the enabled-inventory count instead of omitting it.
 - `QueryToolResult` accepts quoted integers for `limit`/`offset`, case-insensitive aggregate operations and sort directions, and defaults an aggregate's `as` name to its operation, instead of failing the call on these common slips. Error messages now name the aggregate constraint that failed.
+- Tool calls that pass a JSON number or boolean for a string parameter (for example `"topServices": 3`) are coerced to the string form before argument binding. Previously argument binding threw and the whole call failed.
+- Remove the maintainer's LinkedIn contact link from the application header; contact details are now in the README.
 - An explicit cross-region VM price ranking with no OS/license stated now ranks the Linux and Windows on-demand variants separately instead of asking. Other missing product configuration, such as a database tier, still requires clarification.
 
 - Delete a conversation with one click instead of an inline confirmation step. The row stays visible and disabled while the server responds, running conversations still must be stopped first, and failures remain visible for retry.

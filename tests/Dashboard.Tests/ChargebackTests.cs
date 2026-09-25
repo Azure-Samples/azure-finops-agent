@@ -12,7 +12,7 @@ public sealed class ChargebackTests
     [Fact]
     public void SchemaRequiresOnlyTheSubscriptionScope()
     {
-        var tool = new ChargebackTools(new UserTokens { UserId = 7 }).Create().Single();
+        var tool = new ChargebackTools(new UserTokens { UserId = 7 }).Create().First(t => t.Name == "GetChargebackReport");
         Assert.Equal("GetChargebackReport", tool.Name);
         var required = tool.JsonSchema.GetProperty("required").EnumerateArray().Select(e => e.GetString()!).ToArray();
         Assert.Equal(["subscriptionsJson"], required);
@@ -22,7 +22,7 @@ public sealed class ChargebackTests
     [Fact]
     public async Task InvalidInputFailsBeforeAnyNetworkRequest()
     {
-        var tool = new ChargebackTools(new UserTokens { UserId = 7 }).Create().Single();
+        var tool = new ChargebackTools(new UserTokens { UserId = 7 }).Create().First(t => t.Name == "GetChargebackReport");
         foreach (var arguments in new[]
         {
             new AIFunctionArguments { ["subscriptionsJson"] = "[]" },
@@ -38,9 +38,21 @@ public sealed class ChargebackTests
     }
 
     [Fact]
+    public async Task NumericArgumentForAStringParameterIsCoercedInsteadOfFailingTheCall()
+    {
+        var inner = new ChargebackTools(new UserTokens { UserId = 7 }).Create().First(t => t.Name == "GetChargebackReport");
+        var tool = new ProtectedTool(inner);
+        using var arguments = JsonDocument.Parse($$"""{"subscriptionsJson":"[\"{{Sub}}\"]","topServices":0}""");
+        var args = new AIFunctionArguments(arguments.RootElement.EnumerateObject().ToDictionary(p => p.Name, p => (object?)p.Value.Clone()));
+        var response = (await tool.InvokeAsync(args))!.ToString()!;
+        Assert.Contains("topServices must be an integer", response);
+        Assert.Equal("0", args["topServices"]);
+    }
+
+    [Fact]
     public async Task MissingArmTokenRequestsSignInWithDefaults()
     {
-        var tool = new ChargebackTools(new UserTokens { UserId = 7 }).Create().Single();
+        var tool = new ChargebackTools(new UserTokens { UserId = 7 }).Create().First(t => t.Name == "GetChargebackReport");
         var response = (await tool.InvokeAsync(new AIFunctionArguments { ["subscriptionsJson"] = $"[{{\"id\":\"{Sub}\",\"name\":\"Prod\"}}]" }))!.ToString()!;
         Assert.StartsWith("HTTP 401", response);
     }
@@ -128,6 +140,65 @@ public sealed class ChargebackTests
         Assert.Equal(JsonValueKind.Null, teams[1].GetProperty("percentChange").ValueKind);
         Assert.True(teams[2].GetProperty("untagged").GetBoolean());
         Assert.True(ProtectedTool.InspectEvidence(root.GetRawText()).Success);
+    }
+
+    [Fact]
+    public void SubscriptionComparisonRanksSubscriptionsWithHostComputedChange()
+    {
+        const string Other = "00000000-0000-0000-0000-000000000002";
+        const string Columns = "\"columns\":[{\"name\":\"Cost\"},{\"name\":\"ServiceName\"},{\"name\":\"Currency\"}]";
+        List<ChargebackTools.CostRow> Rows(string rows)
+        {
+            var parsed = ChargebackTools.ParseCostRows("{\"properties\":{" + Columns + ",\"rows\":" + rows + "}}");
+            Assert.Null(parsed.Error);
+            return parsed.Rows;
+        }
+        var (periods, _) = ChargebackTools.ResolvePeriods("", new DateOnly(2026, 9, 25));
+        using var doc = JsonDocument.Parse(ChargebackTools.SummarizeSubscriptions([(Sub, "Dev"), (Other, "Prod")], periods,
+            [
+                new(Sub, "Dev", "current", 200, 1, false, null, Rows("""[[40,"Storage","USD"],[10,"Bandwidth","USD"]]""")),
+                new(Sub, "Dev", "comparison", 200, 1, false, null, Rows("""[[25,"Storage","USD"]]""")),
+                new(Other, "Prod", "current", 200, 1, false, null, Rows("""[[150,"Virtual Machines","USD"]]""")),
+                new(Other, "Prod", "comparison", 200, 1, false, null, Rows("[]"))
+            ],
+            [], throttled: false, top: 1, retrievedAtUtc: "t"));
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("complete").GetBoolean());
+        Assert.Equal("ActualCost", root.GetProperty("costType").GetString());
+        var rows = root.GetProperty("subscriptions").EnumerateArray().ToList();
+        Assert.Equal(["Prod", "Dev"], rows.Select(r => r.GetProperty("subscriptionName").GetString()));
+        Assert.Equal(1, rows[0].GetProperty("rank").GetInt32());
+        Assert.Equal(JsonValueKind.Null, rows[0].GetProperty("percentChange").ValueKind);
+        Assert.Equal(75.0m, rows[0].GetProperty("sharePercent").GetDecimal());
+        Assert.Equal(50m, rows[1].GetProperty("current").GetDecimal());
+        Assert.Equal(25m, rows[1].GetProperty("difference").GetDecimal());
+        Assert.Equal(100.0m, rows[1].GetProperty("percentChange").GetDecimal());
+        Assert.Equal(1, rows[1].GetProperty("otherServices").GetProperty("count").GetInt32());
+        var totals = root.GetProperty("totalsByCurrency").GetProperty("USD");
+        Assert.Equal(200m, totals.GetProperty("current").GetDecimal());
+        Assert.Equal(700.0m, totals.GetProperty("percentChange").GetDecimal());
+        Assert.True(ProtectedTool.InspectEvidence(root.GetRawText()).Success);
+        var table = root.GetProperty("answerTable").GetString()!;
+        Assert.Contains("| 1 | Prod | USD 150.00 | USD 0.00 | +USD 150.00 | n/a (no comparison spend) |", table);
+        Assert.Contains("| 2 | Dev | USD 50.00 | USD 25.00 | +USD 25.00 | +100.0% |", table);
+        Assert.Equal("Prod is the highest of 2 subscriptions at USD 150.00 ActualCost for 2026-09-01 to 2026-09-25, with no ActualCost in the comparison window (vs 2026-08-01 to 2026-08-25).",
+            root.GetProperty("headline").GetString());
+
+        using var body = JsonDocument.Parse(ChargebackTools.BuildServiceQueryBody(periods.Comparison));
+        Assert.Equal("ActualCost", body.RootElement.GetProperty("type").GetString());
+        Assert.Equal("2026-08-25", body.RootElement.GetProperty("timePeriod").GetProperty("to").GetString());
+        Assert.Equal("ServiceName", body.RootElement.GetProperty("dataset").GetProperty("grouping")[0].GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public void ThrottledSubscriptionComparisonIsPartialAndFailsEvidenceInspection()
+    {
+        var (periods, _) = ChargebackTools.ResolvePeriods("", new DateOnly(2026, 9, 25));
+        using var doc = JsonDocument.Parse(ChargebackTools.SummarizeSubscriptions([(Sub, "Dev")], periods,
+            [new(Sub, "Dev", "current", 429, 1, false, "HTTP 429 TooManyRequests", []), new(Sub, "Dev", "comparison", 0, 0, false, "not attempted after tenant throttle", [])],
+            [], throttled: true, top: 3, retrievedAtUtc: "t"));
+        Assert.False(doc.RootElement.GetProperty("complete").GetBoolean());
+        Assert.False(ProtectedTool.InspectEvidence(doc.RootElement.GetRawText()).Success);
     }
 
     [Fact]

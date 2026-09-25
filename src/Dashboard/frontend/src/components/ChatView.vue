@@ -50,27 +50,6 @@
           </svg>
           <span>Open source</span>
         </a>
-        <a
-          class="portal-trustline-link portal-contact-link"
-          href="https://www.linkedin.com/in/alirezafarahnak/"
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Contact Ali Reza Farahnak on LinkedIn"
-          aria-label="Contact Ali Reza Farahnak on LinkedIn"
-        >
-          <svg
-            width="13"
-            height="13"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              d="M20.45 20.45h-3.56v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.34V8.98h3.42v1.57h.05c.47-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.29zM5.32 7.41a2.07 2.07 0 1 1 0-4.13 2.07 2.07 0 0 1 0 4.13zM7.1 20.45H3.54V8.98H7.1v11.47z"
-            />
-          </svg>
-          <span>LinkedIn</span>
-        </a>
       </div>
       <!-- Build/branch badge in the top-right corner. Highlights non-main
            (preview slot) deployments so it's obvious which build you're on. -->
@@ -8734,19 +8713,12 @@ async function send() {
   color: #ffffff;
   opacity: 1;
 }
-.portal-contact-link {
-  padding-left: 10px;
-  border-left: 1px solid rgba(255, 255, 255, 0.35);
-}
 @media (max-width: 520px) {
   .portal-header-left {
     gap: 8px;
   }
   .portal-trustline-link span {
     display: none;
-  }
-  .portal-contact-link {
-    padding-left: 8px;
   }
 }
 @media (max-width: 720px) {
@@ -12579,23 +12551,6 @@ async function send() {
 }
 
 /* ── Misc sidebar elements ── */
-.sidebar-linkedin {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 7px 10px;
-  border-radius: 4px;
-  border: 1px solid #0078d4;
-  color: #0078d4;
-  font-size: 13px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: background 0.15s;
-}
-.sidebar-linkedin:hover {
-  background: #f3f2f1;
-}
 .new-chat-btn {
   display: flex;
   align-items: center;
