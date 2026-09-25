@@ -3,7 +3,7 @@ using AzureFinOps.Dashboard.AI.Tools;
 
 namespace Dashboard.Tests;
 
-public sealed class GraphReportServiceTests
+public sealed class ThinToolBoundaryTests
 {
     private const string UnknownTenant = """
         HTTP 404 NotFound
@@ -31,4 +31,19 @@ public sealed class GraphReportServiceTests
     [InlineData("/v1.0/reports/getOffice365ActiveUserDetail(period='D30')", "HTTP 403 Forbidden\n{\"error\":{\"code\":\"UnknownTenantId\"}}")]
     public void OtherFailuresStayFailures(string path, string result) =>
         Assert.False(GraphQueryTools.IsReportServiceAbsent(path, result));
+
+    [Fact]
+    public void JsonObjectForStringParameterIsPassedAsRawJson()
+    {
+        using var schema = JsonDocument.Parse("""{"properties":{"queryJson":{"type":"string"},"limit":{"type":"string"}}}""");
+        using var argument = JsonDocument.Parse("""{"mode":"query","path":"$.value[*]"}""");
+        var arguments = new Microsoft.Extensions.AI.AIFunctionArguments
+        {
+            ["queryJson"] = argument.RootElement.Clone(),
+            ["limit"] = JsonDocument.Parse("5").RootElement.Clone(),
+        };
+        ProtectedTool.CoerceScalarStrings(schema.RootElement, arguments);
+        Assert.Equal("""{"mode":"query","path":"$.value[*]"}""", arguments["queryJson"]);
+        Assert.Equal("5", arguments["limit"]);
+    }
 }

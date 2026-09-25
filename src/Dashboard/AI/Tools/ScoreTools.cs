@@ -32,7 +32,7 @@ public sealed class ScoreTools
 
     [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores. Each dimension must include status=observed|unknown|notApplicable. Observed dimensions get 0-5; unknown and notApplicable get score=null and a reason. Missing permission is unknown, not zero. An absent workload makes workload-specific controls notApplicable. Auto-saved to history for trend analysis.
 
-Evaluate ALL the dimensions for the requested level via QueryAzure (and GraphQuery/LogAnalytics where relevant) and score each 0-5 with a one-line `detail`. Don't ask which to score — score them all.
+Evaluate ALL the dimensions for the requested level via QueryAzure (and GraphQuery/LogAnalytics where relevant) and score each 0-5 with a one-line `detail`. Don't ask which to score — score them all. Plan the whole level first: fetch its independent evidence in one BulkAzureRequest (Cost Management query/forecast reads stay separate and sequential), then read each retained result path once with QueryToolResult; a level should need about 15 tool calls, not 30.
 
 DATA SCOPING: use filtered source aggregates for the requested level and subscription scope, not raw resource lists. Submit all dimensions of that level with concise evidence; do not drop unknown or low-scoring dimensions to reduce payload.
 
@@ -41,8 +41,8 @@ EVIDENCE IS MANDATORY: each observed `detail` cites concrete counts, %, cost or 
 CRAWL — Visibility & Baseline (id slug — label — what to check):
   1. budgets — 'Budgets & thresholds' — Cost Mgmt budgets: count, amounts, notification config. Flag unrealistic (≥$1M placeholders) and missing alerts.
   2. tagging — 'Tagging for accountability' — Resource Graph: total resources + % carrying CostCenter, Owner, Environment (exact key names). Flag inconsistent casing ('department' vs 'Department') and placeholder values ('unassigned', 'unknown').
-  3. exports — 'Cost data exports' — list Cost Mgmt exports. Score 0 if none.
-  4. alerts — 'Cost alerts & scheduled actions' — list anomaly alerts + scheduled actions. Score 0 if none.
+  3. exports — 'Cost data exports' — list Cost Mgmt exports (Microsoft.CostManagement/exports). Score 0 if none.
+  4. alerts — 'Cost alerts & scheduled actions' — list Microsoft.CostManagement/scheduledActions (anomaly alerts are kind InsightAlert). Score 0 if none.
   5. policy — 'Governance guardrails' — management-group/subscription policy assignments enforcing FinOps tagging or cost controls.
   6. waste — 'Waste identification & cleanup' — counts of unattached disks, orphaned public IPs, empty App Service plans, empty resource groups.
   7. visibility — 'Cost visibility & ownership' — MTD spend grouped by RG and by top services.

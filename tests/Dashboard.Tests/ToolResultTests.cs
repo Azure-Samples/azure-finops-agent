@@ -232,6 +232,19 @@ public sealed class ToolResultTests
     }
 
     [Fact]
+    public void BatchResultsProjectOneRowPerRequestWithFilterExpressions()
+    {
+        const string text = """{"results":[{"index":0,"body":{"value":[{"name":{"value":"cores"},"limit":100},{"name":{"value":"lowPriorityCores"},"limit":10}]}},{"index":1,"body":{"value":[{"name":{"value":"lowPriorityCores"},"limit":0}]}}]}""";
+        var entry = ToolResultStore.Default.Retain(304, "batch-session", text, Source)!;
+        var output = ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index","spotLimit":"$.body.value[?(@.name.value=='lowPriorityCores')].limit"}}""");
+        using var document = JsonDocument.Parse(output);
+        var rows = document.RootElement.GetProperty("rows");
+        Assert.Equal(2, rows.GetArrayLength());
+        Assert.Equal(10, rows[0].GetProperty("spotLimit").GetInt32());
+        Assert.Equal(0, rows[1].GetProperty("spotLimit").GetInt32());
+    }
+
+    [Fact]
     public void ResultsAreExactImmutableAndOwnerSessionBound()
     {
         var store = new ToolResultStore();

@@ -52,8 +52,8 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         return result;
     }
 
-    // Models often send a JSON number or boolean for a string parameter (for example
-    // "limit": 50); argument binding would otherwise fail the whole tool call.
+    // Models often send a JSON number, boolean, object or array for a string parameter (for example
+    // "limit": 50 or an unquoted queryJson object); argument binding would otherwise fail the whole tool call.
     internal static void CoerceScalarStrings(JsonElement schema, AIFunctionArguments arguments)
     {
         if (schema.ValueKind != JsonValueKind.Object || !schema.TryGetProperty("properties", out var properties)
@@ -66,6 +66,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
                 JsonElement { ValueKind: JsonValueKind.Number } number => number.GetRawText(),
                 JsonElement { ValueKind: JsonValueKind.True } => "true",
                 JsonElement { ValueKind: JsonValueKind.False } => "false",
+                JsonElement { ValueKind: JsonValueKind.Object or JsonValueKind.Array } json => json.GetRawText(),
                 bool flag => flag ? "true" : "false",
                 int or long or decimal or double or float => Convert.ToString(arguments[key], System.Globalization.CultureInfo.InvariantCulture),
                 var value => value

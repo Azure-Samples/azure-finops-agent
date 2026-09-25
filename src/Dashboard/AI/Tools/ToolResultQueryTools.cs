@@ -376,7 +376,7 @@ public sealed class ToolResultQueryTools(long owner)
         Require(item.ValueKind == JsonValueKind.Number ? item.TryGetInt32(out number)
             : item.ValueKind == JsonValueKind.String && int.TryParse(item.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out number),
             "Query paging parameter must be an integer.");
-        Require(number >= minimum && number <= maximum, "Query paging parameter is out of range.");
+        Require(number >= minimum && number <= maximum, "Query paging parameter is out of range (offset >= 0, limit 0-200).");
         return number;
     }
     private static void Require(bool condition, string message) { if (!condition) throw new QueryException(message); }
