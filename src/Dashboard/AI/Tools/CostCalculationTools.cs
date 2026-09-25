@@ -81,7 +81,7 @@ public static class CostCalculationTools
     internal static string CalculateCost(
         [Description("JSON array of 1-50 verified line items: label, quantity, unitPrice, unit; optional currency inherits the explicit top-level currency, unitsPerRate=1 and multiplier=1. Example: [{\"label\":\"Units\",\"quantity\":5,\"unitPrice\":5,\"unit\":\"unit\"}]. Numbers or decimal-point strings are accepted. Include only the requested period/scope; never use unknown rates as zero.")] string lineItemsJson,
         [Description("Required three-letter source currency shared by every line, such as USD, EUR or CAD. Lines may omit currency to inherit this value; an explicit different currency is rejected. No implicit currency conversion.")] string currency,
-        [Description("Basis of the quantities, such as month, year1 or 30-day run-rate. Use month only for a fixed monthly estimate; its annualizedTotal is not a growth projection.")] string period,
+        [Description("Short basis of the quantities (at most 60 characters), such as month, year1 or 30-day run-rate; put longer assumptions in the line labels or answer. Use month only for a fixed monthly estimate; its annualizedTotal is not a growth projection.")] string period,
         [Description("Explicit supported discount percentage, 0-100. Default 0; do not invent negotiated discounts.")] string discountPercent = "0",
         [Description("Explicit tax percentage applied after discount, 0-100. Default 0; do not infer taxes from currency.")] string taxPercent = "0")
     {
@@ -94,7 +94,7 @@ public static class CostCalculationTools
         if (string.IsNullOrWhiteSpace(currency) || currency.Length != 3 || !currency.All(char.IsAsciiLetter) || string.IsNullOrWhiteSpace(period) || period.Length > 60
             || !TryDecimal(discountPercent, out var discountRate) || discountRate is < 0 or > 100
             || !TryDecimal(taxPercent, out var taxRate) || taxRate is < 0 or > 100)
-            return Error("Provide one source currency, an explicit period and decimal-point discount/tax percentages between 0 and 100.");
+            return Error("Provide one ISO source currency, an explicit period of at most 60 characters and decimal-point discount/tax percentages between 0 and 100.");
         currency = currency.ToUpperInvariant();
         if (string.IsNullOrWhiteSpace(lineItemsJson) || lineItemsJson.Length > 30_000)
             return Error("Provide a bounded JSON array of 1-50 line items.");

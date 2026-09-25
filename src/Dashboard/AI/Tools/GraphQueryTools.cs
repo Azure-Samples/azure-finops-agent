@@ -42,10 +42,28 @@ public sealed class GraphQueryTools(UserTokens tokens)
 
         var (httpMethod, methodError) = HttpHelper.ResolveMethod(method, activity, "graph");
         if (methodError is not null) return methodError;
-        return await HttpHelper.SendWithRetryAsync(
+        var result = await HttpHelper.SendWithRetryAsync(
             $"https://graph.microsoft.com{path}", tokens.GraphToken, activity, "graph",
             method: httpMethod,
             jsonBody: !string.IsNullOrWhiteSpace(body) && httpMethod != HttpMethod.Get ? body : null,
             includeTimestamp: true);
+        return IsReportServiceAbsent(path, result) ? ReportServiceAbsent(result, activity) : result;
+    }
+
+    // Graph answers report functions with 404 UnknownTenantId when Microsoft 365 usage reporting is not
+    // provisioned for the tenant. That is a determinate source state, not a failed request.
+    internal static bool IsReportServiceAbsent(string path, string result) =>
+        result.StartsWith("HTTP 404", StringComparison.Ordinal)
+        && result.Contains("UnknownTenantId", StringComparison.Ordinal)
+        && path.Contains("/reports/", StringComparison.OrdinalIgnoreCase);
+
+    internal static string ReportServiceAbsent(string result, System.Diagnostics.Activity? activity)
+    {
+        activity?.SetTag("graph.result", "report_service_absent");
+        var retrieved = result.Split('\n').FirstOrDefault(line => line.StartsWith("Current UTC time:", StringComparison.Ordinal))?.Trim();
+        return $$"""
+            {{retrieved ?? ""}}
+            {"reportServiceProvisioned":false,"sourceStatus":404,"sourceCode":"UnknownTenantId","meaning":"Microsoft 365 usage reporting has no data service for this tenant, so no per-user activity rows exist from this source. Activity for licensed users is unknown from reports; combine with subscribedSkus/assignedLicenses to state what is determinate (for example zero assigned seats means zero licensed users to be active or inactive)."}
+            """;
     }
 }
