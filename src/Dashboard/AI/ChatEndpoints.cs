@@ -294,9 +294,12 @@ public static class ChatEndpoints
                 : !string.IsNullOrWhiteSpace(azureTenantId)
                     ? $" Tenant/root management-group candidate: {azureTenantId}."
                     : "";
+            // Date-only keeps the per-session context dedup stable within a day while
+            // anchoring the model's year, which it otherwise misquotes from tool timestamps.
+            var today = DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
             var connectionContext = connectedApis.Count > 0
-                ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}.{tenantScopeHint} Proceed with tool calls directly.]"
-                : "[CONTEXT: Azure NOT connected. Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only suggest 'Connect Azure' when the question needs their tenant data. Do NOT refuse public questions.]";
+                ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}.{tenantScopeHint} Today is {today} (UTC). Proceed with tool calls directly.]"
+                : $"[CONTEXT: Azure NOT connected. Today is {today} (UTC). Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only suggest 'Connect Azure' when the question needs their tenant data. Do NOT refuse public questions.]";
 
             // Surface any files the user has dropped into this session so the LLM
             // immediately knows the fileIds it can pass to QueryUploadedFile.
