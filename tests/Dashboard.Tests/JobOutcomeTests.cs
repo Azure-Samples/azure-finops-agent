@@ -11,8 +11,6 @@ public sealed class JobOutcomeTests
     [InlineData("{\"sourceEvidence\":[{\"cacheStatus\": \"cached\"}]}", true, false, false)]
     [InlineData("{\"_finops\":{\"freshness\":\"periodic\"}}", true, false, false)]
     [InlineData("{\"status\": \"accepted\"}", true, true, true)]
-    [InlineData("{\"spotPlacement\":[{\"cacheStatus\":\"cached\"}]}", true, false, false)]
-    [InlineData("{\"rows\":[{\"result\":{\"skuStatus\":\"permitted\",\"quotaStatus\":\"unknown\"}}]}", true, true, true)]
     [InlineData("{\"results\":[{\"error\":\"unavailable\"}]}", false, true, false)]
     [InlineData("{\"complete\":false,\"results\":[{\"outcome\":\"failed\",\"body\":{\"error\":\"denied\"}}]}", false, true, true)]
     [InlineData("{\"complete\":false,\"results\":[{\"outcome\":\"cancelled\"}]}", false, true, true)]

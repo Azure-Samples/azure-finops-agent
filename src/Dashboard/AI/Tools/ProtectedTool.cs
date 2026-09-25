@@ -37,7 +37,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         var evidence = InspectEvidence(resultText);
         if (EvidenceTools.Contains(Name)) turn?.ToolEvidence.Enqueue(new(Name, evidence.Success, evidence.Fresh, evidence.Partial, DateTimeOffset.UtcNow, scopeKey));
         turn?.RecordTool(evidence.Success);
-        if (evidence.Success && Name is "RenderChart" or "RenderAdvancedChart" or "GetCrawlMaturityEvidence" or "ReportMaturityScore")
+        if (evidence.Success && Name is "RenderChart" or "RenderAdvancedChart" or "ReportMaturityScore")
             turn?.RecordVisibleOutput();
         if (resultText.StartsWith("__HTML_READY__:") || resultText.StartsWith("__SCRIPT_READY__:"))
         {
@@ -86,7 +86,6 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
     {
         var redacted = SensitiveContent.Redact(text);
         if (owner is null || sessionId is null || !evidence.Success || !EvidenceTools.Contains(Name)
-            || Name is "GetCrawlMaturityEvidence"
             || redacted.Contains("__HTML_READY__:", StringComparison.Ordinal) || redacted.Contains("__SCRIPT_READY__:", StringComparison.Ordinal)) return redacted;
         var large = System.Text.Encoding.UTF8.GetByteCount(redacted) > ToolResultStore.InlineBytes;
         if (Name == "BulkAzureRequest" && large && redacted.Contains("\"operationId\"", StringComparison.Ordinal)) return redacted;
@@ -96,32 +95,12 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         return large ? JsonSerializer.Serialize(ToolResultStore.Describe(entry)) : ToolResultStore.AnnotateInline(redacted, entry);
     }
 
-    private static readonly HashSet<string> EvidenceTools = new(StringComparer.Ordinal)
-{
-    "QueryAzure",
-    "QueryGraph",
-    "GetCopilotUsage",
-    "QueryLogAnalytics",
-    "QueryCostsAcrossSubscriptions",
-    "GetCrawlMaturityEvidence",
-    "GetTagCoverage",
-    "GetResourceInventory",
-    "GetChargebackReport",
-    "CompareSubscriptionCosts",
-    "GetAdvisorCostRecommendations",
-    "BulkAzureRequest",
-    "FindIdleResources",
-    "DetectCostAnomalies",
-    "GetAzureRetailPricing",
-    "GetAzureRetailPricingBatch",
-    "QueryUploadedFile",
-    "ReadCostExportBlob",
-    "ListCostExportBlobs",
-    "FetchPublicWebPage",
-    "CheckComputeFeasibility",
-    "CheckVmConnectivity",
-    "GetOperationStatus"
-};
+    private static readonly HashSet<string> EvidenceTools =
+    [
+        "QueryAzure", "QueryGraph", "QueryLogAnalytics", "BulkAzureRequest", "GetAzureRetailPricing",
+        "QueryUploadedFile", "ReadCostExportBlob", "ListCostExportBlobs", "FetchPublicWebPage",
+        "CheckVmConnectivity", "GetOperationStatus",
+    ];
 
     internal static (bool Success, bool Fresh, bool Partial) InspectEvidence(string text)
     {
@@ -153,13 +132,12 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
                 }
                 if (property.Name is "cacheStatus" && value.ValueKind == JsonValueKind.String && value.GetString() is not "queried") fresh = false;
                 if (property.Name is "freshness" && value.ValueKind == JsonValueKind.String && value.GetString() is "unknown" or "periodic") fresh = false;
-                if (property.Name is "skuStatus" or "quotaStatus" && value.ValueKind == JsonValueKind.String && value.GetString() == "unknown") partial = true;
                 if (property.Name is "status" or "outcome" && value.ValueKind == JsonValueKind.String)
                 {
                     if (value.GetString() is "failed" or "cancelled") success = false;
                     if (value.GetString() is "accepted" or "inProgress" or "awaitingApproval" or "dispatching" or "unknown" or "partial" or "ambiguous" or "missing") partial = true;
                 }
-                if (property.Name is "_finops" or "sourceEvidence" or "results" or "resolution" or "coverage" or "spotPlacement" or "rows" or "result" or "body") Inspect(value);
+                if (property.Name is "_finops" or "sourceEvidence" or "results" or "resolution" or "coverage" or "rows" or "result" or "body") Inspect(value);
             }
         }
 

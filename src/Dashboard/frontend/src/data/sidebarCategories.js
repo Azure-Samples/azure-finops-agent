@@ -654,7 +654,7 @@ const maturityCategories = [
       {
         label: "Investigate spike with change correlation",
         prompt:
-          "Run DetectCostAnomalies for my most expensive subscription over the last 35 days. For every flagged spike date, immediately fire a Resource Graph resourcechanges query for that day to identify which resources changed (Create / Update / Delete) and which property flipped (e.g. sku.name, capacity, tier). Name the most likely culprit per spike.",
+          "Find cost anomalies (daily spikes) for my most expensive subscription over the last 35 days. For every spike date, query Resource Graph resourcechanges for that day to identify which resources changed (Create / Update / Delete) and which property flipped (e.g. sku.name, capacity, tier). Name the most likely culprit per spike.",
       },
       {
         label: "Policy-blocked SKU audit",

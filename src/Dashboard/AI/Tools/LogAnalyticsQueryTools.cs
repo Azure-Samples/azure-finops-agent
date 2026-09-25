@@ -20,24 +20,12 @@ public class LogAnalyticsQueryTools
 
     public IEnumerable<AIFunction> Create()
     {
-        yield return AIFunctionFactory.Create(QueryLogAnalytics, "QueryLogAnalytics", @"Runs a KQL query against a Log Analytics workspace or Application Insights component.
-DATA SCOPING: filter, aggregate, project, and bound results inside KQL. Start with `where` on the requested time range and resource scope, `summarize` for summaries, and `project` for only needed columns. Use `top`/`take` after aggregation for bounded detail; never limit raw events before computing full counts or totals. Choose the coarsest time bin that answers the question, retaining minute-level detail when explicitly needed. Drill into named outliers and do not rely on response truncation as a row limit.
-LOG ANALYTICS: workspaceId is the workspace GUID — find via QueryAzure GET .../Microsoft.OperationalInsights/workspaces (customerId field).
-APP INSIGHTS: appId is the App Insights component GUID; set target='appinsights'.
-
-FinOps-relevant tables (you know KQL syntax):
-- Perf / InsightsMetrics — VM CPU, memory, disk, network. Idle-VM detection: AvgCPU < 5% over 7d.
-- Heartbeat — gaps indicate offline/deallocated VMs (LastHeartbeat < ago(7d) = potentially orphaned but billed).
-- KubePodInventory / ContainerInventory — AKS pod requests vs limits for over-provisioning. ContainerLog — often #1 ingestion cost driver; group by ContainerID and sum(_BilledSize).
-- AzureMetrics — PaaS metrics (SQL DTU, Cosmos RU/s).
-- AzureDiagnostics — diagnostic logs (App Gateway, SQL, Firewall, Key Vault).
-- AzureActivity — who created/deleted/modified resources (OperationName, Caller); cost attribution audit trail.
-- AppRequests / AppDependencies — App Insights request and dependency telemetry.
-- Usage — Log Analytics ingestion volume per DataType. sum(Quantity)/1024 = GB/day. Identifies top ingestion cost drivers.
-- _BilledSize — per-record ingestion size column on all tables; use for cost attribution.
-- SecurityEvent / SecurityAlert / Syslog / W3CIISLog / Update — security/OS/web/patch tables.");
+        yield return AIFunctionFactory.Create(QueryLogAnalytics, nameof(QueryLogAnalytics), """
+            Runs KQL against a Log Analytics workspace (id = workspace customerId GUID, discoverable through QueryAzure on Microsoft.OperationalInsights/workspaces) or an Application Insights component (target='appinsights', id = appId).
+            Filter by time and resource first, then summarize and project inside KQL; take/top only after aggregation so counts and totals stay complete.
+            Discover populated tables with `Usage | summarize GB=sum(Quantity)/1024 by DataType` and columns with `<Table> | getschema` rather than guessing. Useful FinOps signals include Usage and _BilledSize (ingestion cost), Perf/InsightsMetrics (utilization), Heartbeat and AzureActivity (who changed what).
+            """);
     }
-
     private async Task<string> QueryLogAnalytics(
         [Description("The workspace GUID (Log Analytics) or app GUID (App Insights)")] string id,
         [Description("KQL query with source-side where/summarize/project and top/take bounds so only the rows and columns needed for the answer are returned.")] string query,

@@ -1246,38 +1246,7 @@ public static class ChatEndpoints
         // Marker-based side channels (chart / html / script / maturity).
         // If a marker is detected we emit the tool_done event followed by the
         // structured event, then return null so the caller skips re-emit.
-        if (toolName == "GetCrawlMaturityEvidence" && toolDone.Data.Success && resultText is not null && resultText.StartsWith('{'))
-        {
-            try
-            {
-                using var resultDoc = JsonDocument.Parse(resultText);
-                var root = resultDoc.RootElement;
-                if (root.TryGetProperty("kind", out var kind)
-                    && kind.GetString() == "crawl_maturity_result"
-                    && root.TryGetProperty("scores", out var scores))
-                {
-                    await emit(sseData);
-                    await emit(JsonSerializer.Serialize(new
-                    {
-                        type = "maturity_score",
-                        level = "crawl",
-                        scores = scores.GetRawText()
-                    }));
-                    if (root.TryGetProperty("followUp", out var followUp))
-                    {
-                        await emit(JsonSerializer.Serialize(new
-                        {
-                            type = "follow_up",
-                            followUp = JsonSerializer.Deserialize<JsonElement>(followUp.GetRawText())
-                        }));
-                    }
-                    return null;
-                }
-            }
-            catch (Exception ex) when (IsClientDisconnect(ex)) { /* SSE client gone */ }
-            catch (Exception ex) { logger.LogWarning(ex, "Failed to emit consolidated Crawl result"); }
-        }
-        else if ((toolName == "RenderChart" || toolName == "RenderAdvancedChart") && toolDone.Data.Success && resultText is not null)
+        if ((toolName == "RenderChart" || toolName == "RenderAdvancedChart") && toolDone.Data.Success && resultText is not null)
         {
             try
             {

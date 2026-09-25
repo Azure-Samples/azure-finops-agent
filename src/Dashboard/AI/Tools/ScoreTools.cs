@@ -34,7 +34,7 @@ public sealed class ScoreTools
 
 Evaluate ALL the dimensions for the requested level via QueryAzure (and GraphQuery/LogAnalytics where relevant) and score each 0-5 with a one-line `detail`. Don't ask which to score — score them all.
 
-DATA SCOPING: use filtered source aggregates for the requested level and subscription scope, not raw resource lists. Submit all dimensions of that level with concise evidence; do not drop unknown or low-scoring dimensions to reduce payload. Explicit Crawl uses GetCrawlMaturityEvidence instead of this separate reporting call.
+DATA SCOPING: use filtered source aggregates for the requested level and subscription scope, not raw resource lists. Submit all dimensions of that level with concise evidence; do not drop unknown or low-scoring dimensions to reduce payload.
 
 EVIDENCE IS MANDATORY: each observed `detail` cites concrete counts, %, cost or other measured evidence. Unknown/notApplicable dimensions give a reason without invented numbers. Preserve per-subscription differences when relevant instead of treating a sample as the whole estate.
 

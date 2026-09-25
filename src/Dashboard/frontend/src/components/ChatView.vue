@@ -4578,12 +4578,6 @@ async function reloadSessionTranscript(sessionId) {
               const fu = JSON.parse(tc.result);
               if (fu.label && fu.prompt) followUp = fu;
             } catch {}
-          } else if (tc.name === "GetCrawlMaturityEvidence" && tc.result) {
-            try {
-              const crawl = JSON.parse(tc.result);
-              if (crawl.followUp?.label && crawl.followUp?.prompt)
-                followUp = crawl.followUp;
-            } catch {}
           }
         }
         const failure =
@@ -4685,14 +4679,6 @@ async function reloadSessionTranscript(sessionId) {
       maturityScores.playbook = null;
       for (const m of restored) {
         for (const tc of m.toolCalls || []) {
-          if (tc.tool === "GetCrawlMaturityEvidence" && tc.result) {
-            try {
-              const crawl = JSON.parse(tc.result);
-              if (Array.isArray(crawl.scores))
-                maturityScores.crawl = crawl.scores;
-            } catch {}
-            continue;
-          }
           if (tc.tool !== "ReportMaturityScore") continue;
           let level = null;
           let scoresJson = null;
@@ -5640,8 +5626,6 @@ function friendlyToolLabel(tc) {
     return lvl ? `Score · ${lvl}` : "Score";
   }
   if (tool === "GetScoreHistory") return "History";
-  if (tool === "DetectCostAnomalies") return "Anomalies";
-  if (tool === "FindIdleResources") return "Idle";
   if (tool === "ListCostExportBlobs") return "Exports";
   if (tool === "ReadCostExportBlob") return "Export";
   if (tool === "SaveReportSchedule") return "Schedule +";

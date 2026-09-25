@@ -35,23 +35,7 @@ public static class WebFetchTools
     public static IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(FetchPublicWebPage, "FetchPublicWebPage",
-            @"PUBLIC WEB FETCH (no auth, HTTPS only, GET only). Use this whenever a typed Azure / Graph / Log Analytics tool cannot answer — third-party SaaS / license pricing pages, Microsoft Learn docs, AWS/GCP docs, vendor changelogs, GitHub raw specs, vendor /pricing pages, vendor admin docs, regulatory rate cards, FX, etc. This is rung 4/5 of the Persistence escalation ladder.
-
-Use only as a bounded fallback for a specific unresolved question after the typed tools. Reuse sufficient API evidence. Missing information is a valid result; never invent a number or keep fetching unrelated sources.
-
-Common patterns:
-- Azure pricing detail page: https://azure.microsoft.com/en-us/pricing/details/{service}/  (e.g. .../cognitive-services/openai-service/, .../virtual-machines/, .../storage/blobs/)
-- Microsoft Learn: https://learn.microsoft.com/{path} (model cards, API references, concept pages)
-- Azure REST specs: https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/{rp}/...
-- Third-party SaaS pricing: https://github.com/pricing, https://www.datadoghq.com/pricing/, https://www.snowflake.com/pricing/, https://openai.com/api/pricing/, https://www.databricks.com/product/pricing, https://www.mongodb.com/pricing, etc.
-- AWS / GCP pricing: https://aws.amazon.com/{service}/pricing/, https://cloud.google.com/{service}/pricing
-- Vendor changelogs / release notes for new SKU / model availability.
-
-Returns: HTTP status, final URL (after redirects), content-type, and the body. HTML is stripped to plain text (script/style/nav removed); JSON / XML / plain text are returned as-is. Default output cap is 60000 characters (maxChars supports up to 200000). If truncated, refine with a more specific URL or grepFor; a URL fragment does not narrow an HTTP download.
-
-PAYLOAD DISCIPLINE: use the most specific authoritative URL available. On long pages, set grepFor to the exact SKU, model, meter, heading, or phrase needed and lower maxChars; do not fetch a broad page at the maximum cap when a focused request can answer the question. grepFor and maxChars reduce returned model context after downloading, not the upstream response size. Preserve any truncation or missing-match caveat.
-
-Limits: HTTPS only. GET only. No cookies, no auth headers. Per-request cap ~600KB on the wire. 20s timeout includes response-body reading; host cancellation stops the request.");
+            @"Fetches a public HTTPS page with GET (no auth or cookies) and returns its status, final URL and text (HTML stripped). Use it to read current documentation, such as the Azure REST and Microsoft Graph references on learn.microsoft.com, or public pricing and vendor pages that the typed tools cannot answer. Use grepFor to return only lines that contain a phrase on long pages. Output is capped (default 60,000 characters, 20-second timeout). A 404 or missing match means the information was not found there; do not invent it.");
     }
 
     private static async Task<string> FetchPublicWebPage(

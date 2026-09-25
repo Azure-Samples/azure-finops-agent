@@ -142,10 +142,7 @@ export function buildCatalog() {
                 prompt.label,
                 `sidebar:${category.key}`,
                 prompt.label === "Score Crawl maturity"
-                    ? ["GetCrawlMaturityEvidence"]
-                    : [],
-                prompt.label === "Score Crawl maturity"
-                    ? ["QueryAzure", "ReportMaturityScore", "SuggestFollowUp"]
+                    ? ["ReportMaturityScore"]
                     : [],
             );
     for (const [type, prompts] of [
@@ -160,7 +157,7 @@ export function buildCatalog() {
         "in which regions can I get h200 on spot quota?",
         "H200 Spot quota",
         "incident:compute",
-        ["CheckComputeFeasibility"],
+        ["QueryAzure"],
     );
     add(
         "Use CalculateCost for 2 units at USD 3 per unit, period month, zero discount and tax. Report the total in English. Do not look up prices.",

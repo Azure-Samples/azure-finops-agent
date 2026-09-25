@@ -36,12 +36,8 @@ public sealed class RuntimePolicyTests
     }
 
     [Fact]
-    public void DetailGuidanceDoesNotRequireAPreliminaryTotalQuery()
+    public void TwoGroupingDimensionsAreAccepted()
     {
-        var tools = new AzureQueryTools(new UserTokens { UserId = 101 }).Create().ToArray();
-        Assert.Contains("not as a prerequisite", tools.Single(tool => tool.Name == "QueryCostsAcrossSubscriptions").Description);
-        Assert.Contains("at most two grouping dimensions", tools.Single(tool => tool.Name == "QueryAzure").Description);
-        Assert.Contains("do not repeatedly reprint the same totals", CopilotSessionFactory.SystemPrompt);
         Assert.Null(AzureQueryTools.ValidateCostQueryBody("/providers/Microsoft.CostManagement/query", "{\"dataset\":{\"grouping\":[{\"type\":\"Dimension\",\"name\":\"ResourceId\"},{\"type\":\"Dimension\",\"name\":\"Meter\"}]}}"));
     }
 
@@ -85,25 +81,18 @@ public sealed class RuntimePolicyTests
     }
 
     [Theory]
-    [InlineData("QueryAzure", "path", "$filter")]
-    [InlineData("QueryAzure", "body", "aggregate")]
-    [InlineData("BulkAzureRequest", "requestsJson", "filter")]
-    [InlineData("QueryGraph", "path", "$select")]
+    [InlineData("QueryAzure", null, "$filter")]
+    [InlineData("QueryAzure", null, "look it up instead of guessing")]
+    [InlineData("BulkAzureRequest", null, "sequentially")]
+    [InlineData("QueryGraph", null, "learn.microsoft.com/graph")]
     [InlineData("QueryLogAnalytics", "query", "summarize")]
     [InlineData("ListCostExportBlobs", "prefix", "prefix")]
     [InlineData("ReadCostExportBlob", "blobPath", "exact")]
     [InlineData("QueryUploadedFile", "paramsJson", "filters")]
-    [InlineData("CheckComputeFeasibility", "skuNames", "SKU")]
     [InlineData("CheckVmConnectivity", "sourceVmResourceId", "VM")]
-    [InlineData("GetAzureRetailPricing", "armSkuName", "filter")]
-    [InlineData("GetAzureRetailPricingBatch", "queriesJson", "filter")]
-    [InlineData("DetectCostAnomalies", "subscriptionId", "scope")]
-    [InlineData("DetectCostAnomalies", "days", "window")]
-    [InlineData("FindIdleResources", "subscriptionIds", "scope")]
-    [InlineData("FindIdleResources", "topPerPattern", "limit")]
+    [InlineData("GetAzureRetailPricing", "filter", "OData")]
     [InlineData("GetSavingsLedger", "status", "filter")]
     [InlineData("GetSavingsLedger", "limit", "limit")]
-    [InlineData("QueryCostsAcrossSubscriptions", "subscriptionsJson", "scope")]
     [InlineData("StartPricesheetDownload", "billingScope", "billing scope")]
     [InlineData("GetPricesheetStatus", "operationStatusUrl", "returned")]
     [InlineData("GetOperationStatus", "operationId", "exact")]
@@ -114,15 +103,13 @@ public sealed class RuntimePolicyTests
         var tokens = new UserTokens { UserId = 101 };
         var tools = toolName switch
         {
-            "QueryAzure" or "BulkAzureRequest" or "QueryCostsAcrossSubscriptions" => new AzureQueryTools(tokens).Create(),
+            "QueryAzure" or "BulkAzureRequest" => new AzureQueryTools(tokens).Create(),
             "QueryGraph" => new GraphQueryTools(tokens).Create(),
             "QueryLogAnalytics" => new LogAnalyticsQueryTools(tokens).Create(),
             "ListCostExportBlobs" or "ReadCostExportBlob" => new StorageQueryTools(tokens).Create(),
             "QueryUploadedFile" => new UploadedFileTools(tokens).Create(),
-            "CheckComputeFeasibility" or "CheckVmConnectivity" => new ComputeDiagnosticTools(tokens).Create(),
-            "GetAzureRetailPricing" or "GetAzureRetailPricingBatch" => RetailPricingTools.Create(),
-            "DetectCostAnomalies" => new AnomalyTools(tokens).Create(),
-            "FindIdleResources" => new IdleResourceTools(tokens).Create(),
+            "CheckVmConnectivity" => new ComputeDiagnosticTools(tokens).Create(),
+            "GetAzureRetailPricing" => RetailPricingTools.Create(),
             "GetSavingsLedger" => new SavingsLedgerTools(tokens).Create(),
             "StartPricesheetDownload" or "GetPricesheetStatus" => new PricesheetTools(tokens).Create(),
             "GetOperationStatus" or "ListOperationResults" => new OperationTools(tokens).Create(),

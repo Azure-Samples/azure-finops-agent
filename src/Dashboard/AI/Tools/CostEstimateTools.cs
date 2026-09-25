@@ -19,15 +19,11 @@ public static class CostEstimateTools
     public static IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(EstimateTokenCost, "EstimateTokenCost",
-            @"DETERMINISTIC token-cost calculator. ALWAYS use this for ANY monthly/volume LLM cost estimate or model-vs-model price comparison — NEVER compute token costs in your head or in prose. Doing the math yourself is the #1 source of wrong totals (summary table disagreeing with the step-by-step, or two different token assumptions blended in one answer).
-
-WORKFLOW: 1) look up per-1M-token rates with GetAzureRetailPricing (Standard + Global unless asked otherwise); 2) pass those rates plus ONE shared set of token assumptions here; 3) report the returned numbers VERBATIM.
-
-DATA SCOPING: modelsJson contains only the 1-20 models and deployment variants requested, with the selected rate fields and provenance. Do not copy an unfiltered retail catalogue or duplicate equivalent scenarios. Filter compatible currency/region/tier/meter evidence before calling; this calculator cannot resolve unrelated or missing rates by filtering them afterward.
-
-The arithmetic is reconciled, but source validity and billing freshness remain separate. Include source, rateId, region, deploymentTier, currency and dataAsOfUtc in each model when known. Input + output + cached costs sum to totalMonthlyCost. Report those calculated figures consistently, labelled as an estimate rather than measured billing. Use one assumption set per scenario; never mix or change it merely because the user challenges the answer.
-
-Always label each model with the pricing basis you priced it on (e.g. 'gpt-5.6-sol, Global Standard') so the estimate states what it is based on.");
+            """
+            Deterministic token-cost calculator for monthly or volume LLM estimates and model comparisons; use it instead of computing token costs yourself.
+            Pass per-1M-token rates from GetAzureRetailPricing for only the requested models (with their deployment tier, region and currency) and one shared set of token assumptions, then report the returned figures verbatim as an estimate, not measured billing.
+            Label each model with the pricing basis it was priced on, for example "gpt-4o, Global Standard".
+            """);
     }
 
     internal static string EstimateTokenCost(

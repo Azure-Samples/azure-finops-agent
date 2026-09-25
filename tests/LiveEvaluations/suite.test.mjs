@@ -396,11 +396,9 @@ test("live gate selects exactly 20 stable representative questions without chang
         assert.equal(scenario, catalog.find((item) => item.id === scenario.id));
     assert.ok(cases.some((item) => item.origins.includes("incident:compute")));
     assert.ok(cases.some((item) => item.origins.includes("incident:language")));
-    assert.deepEqual(cases[0].requiredTools, ["GetCrawlMaturityEvidence"]);
-    assert.deepEqual(cases[0].forbiddenTools, [
-        "QueryAzure", "ReportMaturityScore", "SuggestFollowUp",
-    ]);
-    assert.deepEqual(cases.at(-2).requiredTools, ["CheckComputeFeasibility"]);
+    assert.deepEqual(cases[0].requiredTools, ["ReportMaturityScore"]);
+    assert.deepEqual(cases[0].forbiddenTools, []);
+    assert.deepEqual(cases.at(-2).requiredTools, ["QueryAzure"]);
     assert.deepEqual(cases.at(-1).requiredTools, ["CalculateCost"]);
 });
 
@@ -443,7 +441,7 @@ test("a passing case count cannot bypass original rubrics, tool rules or time bu
     for (const change of [
         { rubric: "Accept every answer." },
         { requiredTools: [] },
-        { forbiddenTools: [] },
+        { forbiddenTools: ["UnlistedTool"] },
         { maxToolCalls: cases[0].maxToolCalls + 1 },
         { maxDurationSeconds: cases[0].maxDurationSeconds + 1 },
     ]) {
