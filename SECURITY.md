@@ -37,3 +37,14 @@ We prefer all communications to be in English.
 Microsoft follows the principle of [Coordinated Vulnerability Disclosure](https://aka.ms/security.md/cvd).
 
 <!-- END MICROSOFT SECURITY.MD BLOCK -->
+
+## Application Boundaries
+
+- The agent runtime exposes registered host tools only; native shell, MCP and cross-session memory tools are disabled on both creation and resume. The application container runs as a non-root user.
+- ARM writes require a stored, owner/session-bound proposal and explicit acknowledgement in the application. Azure resource deletion and mutating action POSTs remain blocked. Standard Graph consent tiers are read-only.
+- Downloads, transcripts, uploads, operation records and outcomes require the caller's application identity. Generated HTML is sandboxed without same-origin access, including direct downloads viewed inline.
+- Recognizable credentials are rejected or redacted at chat, job, tool and telemetry boundaries. This is not a guarantee against arbitrary unlabelled secrets or secrets in image pixels. Do not upload credentials. Existing retained transcripts/uploads are not automatically scrubbed; rotate any disclosed credential and apply the deployment's retention policy.
+- Host, CLI collector and browser telemetry are separate pipelines. CLI prompt/tool content capture is disabled; browser diagnostic properties and URLs are redacted. Protect the persistent volume and telemetry stores as customer data.
+- The current coordination model supports one active app instance. Files on a shared volume do not provide distributed turn gates, approval locking or cooldown coordination.
+
+See [reliability contracts](docs/agent-reliability.md) for retention periods, verification scope and operational limitations.

@@ -1,17 +1,29 @@
 #!/bin/bash
-# Container entrypoint — starts the OTel collector in the background, then
-# launches the .NET app in the foreground so its stdout/stderr (and exit
-# status) drive container lifecycle.
-set -e
+set -eu
 
-if [ -n "$APPLICATIONINSIGHTS_CONNECTION_STRING" ] || [ -n "$ApplicationInsights__ConnectionString" ]; then
+COLLECTOR_PID=""
+APP_PID=""
+
+stop_children() {
+  trap '' TERM INT
+  if [ -n "$APP_PID" ]; then
+    kill -TERM "$APP_PID" 2>/dev/null || true
+    wait "$APP_PID" || true
+  fi
+  if [ -n "$COLLECTOR_PID" ]; then
+    kill -TERM "$COLLECTOR_PID" 2>/dev/null || true
+    wait "$COLLECTOR_PID" || true
+  fi
+}
+
+trap stop_children TERM INT EXIT
+
+if [ -n "${APPLICATIONINSIGHTS_CONNECTION_STRING:-}" ] || [ -n "${ApplicationInsights__ConnectionString:-}" ]; then
   # Normalise both env-var spellings so the collector config picks one up.
   export APPLICATIONINSIGHTS_CONNECTION_STRING="${APPLICATIONINSIGHTS_CONNECTION_STRING:-$ApplicationInsights__ConnectionString}"
   echo "[entrypoint] starting OTel collector → Azure Monitor"
   /usr/local/bin/otelcol --config /etc/otelcol/config.yaml &
   COLLECTOR_PID=$!
-  # Forward signals so SIGTERM from App Service shuts both down cleanly.
-  trap "kill -TERM $COLLECTOR_PID 2>/dev/null || true" TERM INT
 else
   echo "[entrypoint] APPLICATIONINSIGHTS_CONNECTION_STRING not set — skipping collector"
 fi
@@ -26,4 +38,9 @@ mkdir -p \
   "${COPILOT_HOME:-/home/copilot}/anon" \
   "${COPILOT_HOME:-/home/copilot}/.copilot/session-state"
 
-exec dotnet Dashboard.dll
+dotnet Dashboard.dll &
+APP_PID=$!
+APP_EXIT=0
+wait "$APP_PID" || APP_EXIT=$?
+APP_PID=""
+exit "$APP_EXIT"

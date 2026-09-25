@@ -27,6 +27,7 @@ import io
 import json
 import math
 import os
+import re
 import sys
 import traceback
 import warnings
@@ -113,6 +114,8 @@ def _json_path_get(root: Any, path: str) -> Any:
     """Very small dot/bracket navigator: a.b[0].c"""
     if not path:
         return root
+    if not isinstance(path, str) or len(path) > 1000 or not re.fullmatch(r"(?:[\w-]+|\[\d+\])(?:\.[\w-]+|\[\d+\])*", path):
+        raise ValueError("invalid selector")
     cur = root
     token = ""
     i = 0
@@ -194,13 +197,13 @@ def _handle_json(req: dict, raw: bytes) -> dict:
 
     if mode == "json_path":
         try:
-            sub = _json_path_get(data, req.get("path", ""))
-        except Exception as e:
-            return _err(f"json_path error: {e}")
+            sub = _json_path_get(data, req.get("jsonPath", ""))
+        except (ValueError, KeyError, IndexError, TypeError):
+            return _err("JSON selector is malformed or does not match this document")
         # truncate
         if isinstance(sub, list):
-            return _ok(kind="json", path=req.get("path", ""), length=len(sub), items=sub[:MAX_ROWS_PER_CALL])
-        return _ok(kind="json", path=req.get("path", ""), value=sub if not isinstance(sub, dict) else dict(list(sub.items())[:SCHEMA_MAX_KEYS]))
+            return _ok(kind="json", jsonPath=req.get("jsonPath", ""), length=len(sub), items=sub[:MAX_ROWS_PER_CALL], complete=len(sub) <= MAX_ROWS_PER_CALL)
+        return _ok(kind="json", jsonPath=req.get("jsonPath", ""), value=sub if not isinstance(sub, dict) else dict(list(sub.items())[:SCHEMA_MAX_KEYS]), complete=not isinstance(sub, dict) or len(sub) <= SCHEMA_MAX_KEYS)
 
     if mode in ("head", "tail", "slice"):
         if not isinstance(data, list):
@@ -222,7 +225,7 @@ def _handle_json(req: dict, raw: bytes) -> dict:
             return _ok(kind="json", keys=len(data))
         return _ok(kind="json", scalar=True)
 
-    if mode in ("filter", "aggregate"):
+    if mode in ("filter", "aggregate", "query"):
         # Treat list-of-objects as a tabular dataset and reuse pandas
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             return _err("filter/aggregate require a JSON array of objects")
@@ -234,58 +237,117 @@ def _handle_json(req: dict, raw: bytes) -> dict:
 
 
 def _df_query(df, req: dict, kind: str) -> dict:
-    import pandas as pd  # noqa: F401
-    mode = req["mode"]
-
-    if mode == "filter":
-        col = req["column"]
-        op = req.get("op", "eq")
-        val = req.get("value")
-        limit = min(int(req.get("limit", 50)), MAX_ROWS_PER_CALL)
-        if col not in df.columns:
-            return _err(f"unknown column '{col}'", columns=list(df.columns))
-        s = df[col]
-        try:
-            if op == "eq":
-                mask = s == val
-            elif op == "ne":
-                mask = s != val
-            elif op == "gt":
-                mask = pd.to_numeric(s, errors="coerce") > float(val)
-            elif op == "lt":
-                mask = pd.to_numeric(s, errors="coerce") < float(val)
-            elif op == "ge":
-                mask = pd.to_numeric(s, errors="coerce") >= float(val)
-            elif op == "le":
-                mask = pd.to_numeric(s, errors="coerce") <= float(val)
-            elif op == "contains":
-                mask = s.astype(str).str.contains(str(val), case=False, na=False)
+    import pandas as pd
+    try:
+        source_rows = len(df)
+        mode = req["mode"]
+        limit = max(1, min(int(req.get("limit", 50)), MAX_ROWS_PER_CALL))
+        offset = max(0, int(req.get("offset", 0)))
+        filters = req.get("filters", [])
+        if mode == "filter":
+            filters = [dict(column=req.get("column"), op=req.get("op", "eq"), value=req.get("value")), *filters]
+        if not isinstance(filters, list) or len(filters) > 12:
+            return _err("filters must contain at most 12 predicates")
+        for predicate in filters:
+            column = predicate.get("column")
+            operation = predicate.get("op", "eq")
+            expected = predicate.get("value")
+            if column not in df.columns:
+                return _err("unknown filter column", columns=list(df.columns))
+            values = df[column]
+            if operation == "contains":
+                mask = values.astype("string").str.contains(str(expected), case=False, regex=False, na=False)
+            elif operation == "in":
+                if not isinstance(expected, list) or len(expected) > 100:
+                    return _err("in requires an array of at most 100 values")
+                mask = values.isin(expected)
+            elif operation in ("eq", "ne"):
+                mask = values.isna() if expected is None else values.eq(expected)
+                if operation == "ne":
+                    mask = ~mask
+            elif operation in ("gt", "lt", "ge", "le"):
+                numeric = pd.to_numeric(values, errors="coerce")
+                number = float(expected)
+                if not math.isfinite(number):
+                    return _err("filter value must be finite")
+                mask = {"gt": numeric.gt, "lt": numeric.lt, "ge": numeric.ge, "le": numeric.le}[operation](number)
             else:
-                return _err(f"unknown op '{op}'")
-        except Exception as e:
-            return _err(f"filter failed: {e}")
-        sub = df[mask].head(limit)
-        return _ok(kind=kind, total_matches=int(mask.sum()), rows=sub.to_dict(orient="records"))
+                return _err("unsupported filter operation")
+            df = df[mask.fillna(False)]
+        filtered_rows = len(df)
+        group_columns = req.get("group_by") or []
+        if isinstance(group_columns, str):
+            group_columns = [group_columns]
+        if not isinstance(group_columns, list) or len(group_columns) > 6 or len(set(group_columns)) != len(group_columns):
+            return _err("group_by must contain up to 6 distinct columns")
+        if any(column not in df.columns for column in group_columns):
+            return _err("unknown grouping column", columns=list(df.columns))
+        aggregates = req.get("aggregates", [])
+        if mode == "aggregate":
+            aggregates = [dict(column=req.get("column"), op=req.get("agg", "sum"), **{"as": req.get("agg", "sum")})]
+        if not isinstance(aggregates, list) or len(aggregates) > 8:
+            return _err("aggregates must contain at most 8 operations")
+        totals = {}
+        invalid_numeric = {}
+        result = df
+        if aggregates:
+            used_aliases = set(group_columns)
+            numeric_columns = df[group_columns].copy()
+            operations = {}
+            for aggregate in aggregates:
+                column, operation, alias = aggregate.get("column"), aggregate.get("op"), aggregate.get("as")
+                if column not in df.columns or operation not in ("sum", "mean", "min", "max", "count"):
+                    return _err("unsupported aggregate or unknown column", columns=list(df.columns))
+                if not isinstance(alias, str) or not alias or len(alias) > 80 or alias in used_aliases:
+                    return _err("aggregate aliases must be unique and distinct from grouping columns")
+                used_aliases.add(alias)
+                values = df[column] if operation == "count" else pd.to_numeric(df[column], errors="coerce").replace([math.inf, -math.inf], float("nan"))
+                invalid_numeric[alias] = int((df[column].notna() & values.isna()).sum())
+                numeric_columns[alias] = values
+                operations[alias] = operation
+                totals[alias] = _aggregate_series(values, operation)
+            if group_columns:
+                grouped = numeric_columns.groupby(group_columns, dropna=False, sort=False)
+                result = pd.DataFrame({alias: grouped[alias].agg(lambda values, op=operation: _aggregate_series(values, op)) for alias, operation in operations.items()}).reset_index()
+            else:
+                result = pd.DataFrame([totals])
+        sort = req.get("sort") or ([{"column": aggregates[0]["as"], "direction": "desc"}] if aggregates else [])
+        if not isinstance(sort, list) or len(sort) > 6:
+            return _err("sort must contain up to 6 fields")
+        if any(item.get("column") not in result.columns or item.get("direction", "asc") not in ("asc", "desc") for item in sort):
+            return _err("invalid sort field or direction")
+        if sort:
+            result = result.sort_values([item["column"] for item in sort], ascending=[item.get("direction", "asc") == "asc" for item in sort], kind="stable", na_position="last")
+        projection = req.get("columns")
+        if projection is not None:
+            if (not isinstance(projection, list) or not 1 <= len(projection) <= 50
+                    or any(not isinstance(column, str) for column in projection)
+                    or len(set(projection)) != len(projection)):
+                return _err("columns must contain 1-50 distinct output column names")
+            if any(column not in result.columns for column in projection):
+                return _err("unknown projected column", columns=list(result.columns))
+            result = result.loc[:, projection]
+        total_results = len(result)
+        selected = result.iloc[offset:offset + limit]
+        payload = _ok(kind=kind, source_rows=source_rows, filtered_rows=filtered_rows, total_matches=filtered_rows,
+                      total_results=total_results, delivered_rows=len(selected), offset=offset,
+                      complete=offset == 0 and len(selected) == total_results, rows=selected.to_dict(orient="records"),
+                      totals=totals, invalid_numeric=invalid_numeric)
+        if mode == "aggregate":
+            payload.update(agg=req.get("agg", "sum"), group_by=req.get("group_by"), column=req.get("column"))
+            if not group_columns:
+                payload["value"] = totals[req.get("agg", "sum")]
+        return payload
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return _err("invalid bounded query plan; verify columns, numeric values, predicates and aggregation names")
 
-    if mode == "aggregate":
-        gb = req.get("group_by")
-        agg = req.get("agg", "sum")
-        col = req.get("column")
-        limit = min(int(req.get("limit", 50)), MAX_ROWS_PER_CALL)
-        if col not in df.columns:
-            return _err(f"unknown column '{col}'", columns=list(df.columns))
-        series = pd.to_numeric(df[col], errors="coerce")
-        if gb:
-            if gb not in df.columns:
-                return _err(f"unknown group_by column '{gb}'", columns=list(df.columns))
-            grouped = series.groupby(df[gb])
-            result = getattr(grouped, agg)()
-            result = result.sort_values(ascending=False).head(limit)
-            return _ok(kind=kind, agg=agg, group_by=gb, column=col, rows=[{gb: k, agg: float(v) if pd.notna(v) else None} for k, v in result.items()])
-        scalar = getattr(series, agg)()
-        return _ok(kind=kind, agg=agg, column=col, value=float(scalar) if pd.notna(scalar) else None)
 
-    return _err(f"mode '{mode}' not supported here")
+def _aggregate_series(values, operation):
+    if operation == "sum":
+        return values.sum(min_count=1)
+    if operation == "count":
+        return values.count()
+    return {"mean": values.mean, "min": values.min, "max": values.max}[operation]()
 
 
 def _handle_csv(req: dict, raw: bytes) -> dict:
@@ -404,6 +466,9 @@ def _handle_xlsx(req: dict, path: str) -> dict:
         rows = list(rows_for(ws))
         headers = rows[0][0] if rows else headers_for(next(ws.iter_rows(values_only=True), ()))
         data = [values for _, values in rows]
+        if mode in ("aggregate", "filter", "query"):
+            import pandas as pd
+            return _df_query(pd.DataFrame(data, columns=headers), req, kind="xlsx") | {"sheet": sheet, "sheets": sheet_names}
 
         if mode in ("preview", "schema"):
             sample = data[: min(int(req.get("rows", PREVIEW_ROWS)), MAX_ROWS_PER_CALL)]
@@ -560,7 +625,7 @@ def _tabular_response(df, req: dict, kind: str) -> dict:
         offset = max(0, int(req.get("offset", 0)))
         count = min(int(req.get("count", PREVIEW_ROWS)), MAX_ROWS_PER_CALL)
         return _ok(kind=kind, offset=offset, rows=df.iloc[offset : offset + count].to_dict(orient="records"))
-    if mode in ("filter", "aggregate"):
+    if mode in ("filter", "aggregate", "query"):
         return _df_query(df, req, kind=kind)
     return _err(f"mode '{mode}' not supported for {kind}")
 
@@ -578,6 +643,31 @@ def _handle_pdf(req: dict, path: str) -> dict:
 
 # ------------------------------------------------------------------------ main
 
+def _resolve_upload_path(raw: Any) -> str | None:
+    """Return `raw` resolved inside the host's upload root, else None.
+
+    CWE-73: `path` arrives over stdin from a host that is itself driven by LLM
+    tool arguments, so it is treated as untrusted. Symlinks and `..` are
+    collapsed by realpath before the containment test, and a missing/empty
+    FINOPS_UPLOAD_ROOT fails closed so a mis-wired caller can never read the
+    wider filesystem.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    roots = [r for r in (os.environ.get("FINOPS_UPLOAD_ROOT") or "").split(os.pathsep) if r]
+    if not roots:
+        return None
+    resolved = os.path.realpath(raw)
+    for root in roots:
+        root_resolved = os.path.realpath(root)
+        try:
+            if os.path.commonpath([resolved, root_resolved]) == root_resolved:
+                return resolved
+        except ValueError:  # different drives / UNC roots on Windows
+            continue
+    return None
+
+
 def main() -> int:
     try:
         req = json.loads(sys.stdin.read() or "{}")
@@ -585,10 +675,12 @@ def main() -> int:
         print(json.dumps(_err(f"bad request json: {e}")))
         return 0
 
-    path = req.get("path")
+    path = _resolve_upload_path(req.get("path"))
     kind = (req.get("kind") or "").lower()
-    if not path or not os.path.exists(path):
-        print(json.dumps(_err("file not found", path=path)))
+    if not path or not os.path.isfile(path):
+        # The requested path is deliberately not echoed back: that would turn
+        # this helper into a filesystem-probing oracle for the model.
+        print(json.dumps(_err("file not found in the upload directory")))
         return 0
 
     try:
@@ -609,8 +701,8 @@ def main() -> int:
                 resp = _handle_json(req, raw)
             else:  # txt and unknown → text fallback
                 resp = _handle_text(req, raw)
-    except Exception as e:
-        resp = _err(f"{type(e).__name__}: {e}", trace=traceback.format_exc().splitlines()[-5:])
+    except Exception:
+        resp = _err("file inspection failed; verify the file format and query parameters")
 
     # Hard cap stdout size — keep the LLM context small
     try:

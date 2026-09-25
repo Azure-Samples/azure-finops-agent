@@ -10,8 +10,22 @@ on:
     branches-ignore: [main]
     paths:
       - "src/Dashboard/**"
+      - "tests/**"
+      - "infra/**"
+      - "global.json"
+      - ".github/workflows/validate.yml"
+      - ".github/workflows/live-evaluations.yml"
       - ".github/workflows/feature.yml"
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy to the test slot after every validation gate passes
+        type: boolean
+        default: false
+      preflight:
+        description: Only verify read-only test-slot access and model prerequisites (no build, evaluation or deployment)
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -26,58 +40,100 @@ env:
   RESOURCE_GROUP: ${{ vars.TEST_RESOURCE_GROUP }}
   VERIFY_URL: ${{ vars.TEST_VERIFY_URL }}
 
-# Only one deploy at a time: every branch targets the same configured test slot.
+# Never cancel the shared slot's non-atomic settings merge or image update.
 concurrency:
-  group: test-slot-deploy
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'workflow_dispatch' && !inputs.deploy && 'test-slot-evaluation' || 'test-slot-deploy' }}
+  cancel-in-progress: false
 
 jobs:
+  regressions:
+    if: github.event_name != 'workflow_dispatch' || !inputs.preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/validate.yml
+
+  live-evaluations:
+    needs: regressions
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/live-evaluations.yml
+    secrets: inherit
+
   deploy:
     name: Build & Deploy to test slot
+    needs: [regressions, live-evaluations]
     runs-on: ubuntu-latest
     # Dependabot-triggered runs don't get access to repo secrets, so azure/login
     # would fail. Skip — these PRs are reviewed and merged via main.yml.
-    if: github.actor != 'dependabot[bot]'
+    if: github.actor != 'dependabot[bot]' && github.ref_type == 'branch' && github.ref_name != 'main' && (github.event_name != 'workflow_dispatch' || inputs.deploy)
+    env:
+      TARGET_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AOAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      PRODUCTION_VERIFY_URL: ${{ vars.PROD_VERIFY_URL }}
+      EVALUATED_MODEL: ${{ needs.live-evaluations.outputs.model }}
+      EVALUATED_REASONING_EFFORT: ${{ needs.live-evaluations.outputs.reasoning_effort }}
+      EVALUATED_SHA: ${{ needs.live-evaluations.outputs.sha }}
+      EVALUATED_ENDPOINT_SHA256: ${{ needs.live-evaluations.outputs.endpoint_sha256 }}
     steps:
       # Shallow checkout — we no longer need full git history (build number
       # comes from github.run_number instead of `git rev-list --count HEAD`).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          for name in ACR_NAME ACR_LOGIN IMAGE; do
+            if [[ -z "${!name//[[:space:]]/}" ]]; then
+              echo "::error::Missing GitHub repository variable for test: $name"
+              exit 1
+            fi
+          done
+          node infra/scripts/feature-slot.mjs check-config
 
       - name: Azure Login (OIDC)
-        uses: azure/login@v3
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Validate deployment configuration
+      - name: Validate exact existing nonproduction target
+        id: target
         shell: bash
         run: |
-          for name in ACR_NAME ACR_LOGIN IMAGE WEBAPP_NAME SLOT_NAME RESOURCE_GROUP VERIFY_URL; do
-            if [ -z "${!name}" ]; then
-              echo "Missing GitHub repository variable for test: $name" >&2
-              exit 1
-            fi
-          done
+          umask 077
+          work=$(mktemp -d "$RUNNER_TEMP/feature-target.XXXXXX")
+          trap 'rm -f "$work/parent.json" "$work/slot.json"; rmdir "$work"' EXIT
+          az webapp show --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
+            --query '{id:id,name:name,type:type,defaultHostName:defaultHostName}' \
+            --output json > "$work/parent.json"
+          az webapp show --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+            --query '{id:id,name:name,type:type,defaultHostName:defaultHostName}' \
+            --output json > "$work/slot.json"
+          node infra/scripts/feature-slot.mjs check-target "$work/parent.json" "$work/slot.json"
 
       - name: Login to ACR
-        run: az acr login --name ${{ env.ACR_NAME }}
+        run: az acr login --subscription "$TARGET_SUBSCRIPTION" --name "$ACR_NAME"
 
       - name: Set build metadata
         id: meta
         run: |
-          BRANCH="${GITHUB_REF#refs/heads/}"
-          TAG_BRANCH=$(echo "$BRANCH" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
-          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
-          echo "tag_branch=$TAG_BRANCH" >> $GITHUB_OUTPUT
-          echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-          echo "build=${{ github.run_number }}" >> $GITHUB_OUTPUT
+          tag_branch=$(printf '%s' "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g' | cut -c1-100)
+          printf 'branch=%s\ntag_branch=%s\nsha=%s\nbuild=%s\n' \
+            "$GITHUB_REF_NAME" "$tag_branch" "$GITHUB_SHA" "$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Build & push Docker image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: src/Dashboard
           push: true
@@ -99,42 +155,61 @@ jobs:
             type=registry,ref=${{ env.IMAGE }}:buildcache-main
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
 
+      # Standard App Service settings write: merges only these three keys into the
+      # existing slot dictionary and needs no ARM deployment permission.
+      - name: Apply only the evaluated feature-slot model settings
+        shell: bash
+        run: |
+          umask 077
+          work=$(mktemp -d "$RUNNER_TEMP/feature-model.XXXXXX")
+          trap 'rm -f "$work/settings.json"; rmdir "$work"' EXIT
+          node infra/scripts/feature-slot.mjs settings "$work/settings.json"
+          az webapp config appsettings set --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+            --settings "@$work/settings.json" --output none
+
       # `az webapp config container set` triggers App Service to re-pull and
       # restart the slot, so an explicit `webapp restart` is redundant.
       - name: Point test slot at new image
+        env:
+          IMAGE_SHA: ${{ steps.meta.outputs.sha }}
         run: |
           az webapp config container set \
-            --name ${{ env.WEBAPP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --slot ${{ env.SLOT_NAME }} \
-            --container-image-name ${{ env.IMAGE }}:test-${{ steps.meta.outputs.sha }} \
-            --container-registry-url https://${{ env.ACR_LOGIN }} \
+            --subscription "$TARGET_SUBSCRIPTION" \
+            --name "$WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --slot "$SLOT_NAME" \
+            --container-image-name "$IMAGE:test-$IMAGE_SHA" \
+            --container-registry-url "https://$ACR_LOGIN" \
             --output none
 
-      - name: Configure App Service settings (test slot)
-        env:
-          AOAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      - name: Verify all effective model settings
+        shell: bash
         run: |
-          if [ -z "$AOAI_ENDPOINT" ]; then
-            echo "Missing GitHub secret for test: AZURE_OPENAI_ENDPOINT" >&2
-            exit 1
-          fi
-          az webapp config appsettings set \
-            --name ${{ env.WEBAPP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --slot ${{ env.SLOT_NAME }} \
-            --settings AzureOpenAI__Endpoint="$AOAI_ENDPOINT" \
-            --output none
+          umask 077
+          work=$(mktemp -d "$RUNNER_TEMP/feature-settings.XXXXXX")
+          trap 'rm -f "$work/settings.json"; rmdir "$work"' EXIT
+          az webapp config appsettings list --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+            --query "[?name=='AzureOpenAI__Endpoint' || name=='AzureOpenAI__DeploymentName' || name=='AzureOpenAI__ReasoningEffort']" \
+            --output json > "$work/settings.json"
+          node infra/scripts/feature-slot.mjs check-settings "$work/settings.json"
 
       - name: Verify deployment
+        env:
+          PREVIEW_URL: ${{ steps.target.outputs.slot_url }}
+          EXPECTED_SHA: ${{ steps.meta.outputs.sha }}
+          EXPECTED_BUILD: ${{ steps.meta.outputs.build }}
+          EXPECTED_BRANCH: ${{ steps.meta.outputs.branch }}
+        shell: bash
         run: |
+          work=$(mktemp -d "$RUNNER_TEMP/feature-version.XXXXXX")
+          trap 'rm -f "$work/version.json"; rmdir "$work"' EXIT
           for attempt in $(seq 1 24); do
-            payload=$(curl --connect-timeout 10 --max-time 20 -sf "${VERIFY_URL%/}/api/version" || true)
-            sha=$(jq -r '.sha // empty' <<<"$payload")
-            build=$(jq -r '.build // empty' <<<"$payload")
-            branch=$(jq -r '.branch // empty' <<<"$payload")
-            if [[ "$sha" == "${{ steps.meta.outputs.sha }}" && "$build" == "${{ steps.meta.outputs.build }}" && "$branch" == "${{ steps.meta.outputs.branch }}" ]]; then
-              echo "Verified test build $build ($sha) on $branch."
+            if curl --connect-timeout 10 --max-time 20 --fail --silent --show-error \
+                "$PREVIEW_URL/api/version" --output "$work/version.json" &&
+                node infra/scripts/feature-slot.mjs check-version "$work/version.json"; then
+              printf 'Verified test build %s (%s) on %s.\n' "$EXPECTED_BUILD" "$EXPECTED_SHA" "$EXPECTED_BRANCH"
               exit 0
             fi
             echo "Waiting for expected test build (attempt $attempt/24)..."
@@ -144,13 +219,58 @@ jobs:
           exit 1
 
       - name: Summary
+        env:
+          PREVIEW_URL: ${{ steps.target.outputs.slot_url }}
+          DEPLOYED_SHA: ${{ steps.meta.outputs.sha }}
+          DEPLOYED_BUILD: ${{ steps.meta.outputs.build }}
+          DEPLOYED_BRANCH: ${{ steps.meta.outputs.branch }}
         run: |
           {
-            echo "### Test slot deployed :rocket:"
-            echo ""
-            echo "- **Branch:** \`${{ steps.meta.outputs.branch }}\`"
-            echo "- **Build:** \`${{ steps.meta.outputs.build }}\`"
-            echo "- **SHA:** \`${{ steps.meta.outputs.sha }}\`"
-            echo "- **Image:** \`${{ env.IMAGE }}:test-${{ steps.meta.outputs.sha }}\`"
-            echo "- **URL:** ${VERIFY_URL}"
-          } >> $GITHUB_STEP_SUMMARY
+            printf '### Test slot deployed\n\n'
+            printf -- '- **Branch:** `%s`\n- **Build:** `%s`\n- **SHA:** `%s`\n' "$DEPLOYED_BRANCH" "$DEPLOYED_BUILD" "$DEPLOYED_SHA"
+            printf -- '- **Image:** `%s:test-%s`\n- **Model:** `%s` (%s)\n' "$IMAGE" "$DEPLOYED_SHA" "$EVALUATED_MODEL" "$EVALUATED_REASONING_EFFORT"
+            printf -- '- **Preview URL:** %s\n' "$PREVIEW_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  preflight:
+    name: Read-only test-slot preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AOAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Reports only booleans, model metadata and a one-way endpoint fingerprint.
+      - name: Inspect target prerequisites
+        shell: bash
+        run: |
+          report() { printf -- '- %s: `%s`\n' "$1" "$2" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          printf '### Test-slot preflight\n\n' >> "$GITHUB_STEP_SUMMARY"
+          report "OIDC login" "ok"
+          normalized="${AOAI_ENDPOINT%/}"
+          report "Target endpoint SHA-256" "$(printf '%s' "$normalized" | sha256sum | cut -d' ' -f1)"
+          az webapp show --subscription "$TARGET_SUBSCRIPTION" --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" --query id --output none 2>/dev/null \
+            && report "Slot readable" "yes" || report "Slot readable" "no"
+          deployment=$(az webapp config appsettings list --subscription "$TARGET_SUBSCRIPTION" --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+            --query "[?name=='AzureOpenAI__DeploymentName'].value | [0]" --output tsv 2>/dev/null || true)
+          report "Slot deployment setting" "${deployment:-unset}"
+          account=$(az graph query --first 1 --query "resources | where type =~ 'microsoft.cognitiveservices/accounts' | where tolower(trim_end('/', tostring(properties.endpoint))) == tolower('$normalized') or tolower(trim_end('/', tostring(properties.endpoints['OpenAI Language Model Instance API']))) == tolower('$normalized') | project id" \
+            --query "data[0].id" --output tsv 2>/dev/null || true)
+          report "Endpoint account visible" "$([[ -n "$account" ]] && echo yes || echo no)"
+          if [[ -n "$account" ]]; then
+            models=$(az rest --method get --url "https://management.azure.com${account}/deployments?api-version=2024-10-01" \
+              --query "value[].[name,properties.model.name,properties.model.version,sku.name]" --output tsv 2>/dev/null | tr '\t' '/' | paste -sd ',' - || true)
+            report "Endpoint deployments" "${models:-unreadable}"
+          fi
+          az acr show --subscription "$TARGET_SUBSCRIPTION" --name "$ACR_NAME" --query id --output none 2>/dev/null \
+            && report "Registry readable" "yes" || report "Registry readable" "no"

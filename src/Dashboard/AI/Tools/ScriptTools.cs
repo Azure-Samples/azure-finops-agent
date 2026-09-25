@@ -12,34 +12,33 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// The LLM produces the script content after discussing with the user, and this tool
 /// packages it as a downloadable .ps1 or .sh file with a code preview in the UI.
 /// </summary>
-public static class ScriptTools
+public sealed class ScriptTools(long ownerUserId)
 {
-    // Store generated files for download: fileId → (path, created, content, owner).
-    // Owner is the per-turn userId from Activity Baggage — the download endpoint
-    // rejects other users' sessions (fileIds leak into logs/telemetry).
-    internal static readonly ConcurrentDictionary<string, (string Path, DateTime Created, string Content, long? Owner)> GeneratedFiles = new();
+    internal static void CleanupOldFiles() => ArtifactStore.Default.Cleanup();
 
-    internal static void CleanupOldFiles() =>
-        TempFileHelper.CleanupOldFiles(GeneratedFiles, v => v.Created, v => v.Path);
-
-    public static IEnumerable<AIFunction> Create()
+    public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateScript, "GenerateScript",
-            @"Generates a downloadable Azure CLI or PowerShell script from FinOps recommendations.
+            @"Directly creates a downloadable Azure CLI or PowerShell artifact from the complete code supplied in scriptContent. The tool packages that code with credential redaction; it never executes it and does not write or complete the code itself.
 
-Call ONLY AFTER you have analyzed the user's environment, found actionable recommendations (orphaned resources, untagged, right-sizing, idle VMs, unattached disks, missing budgets, etc.) AND confirmed the user wants a script.
+Call this tool in the same response whenever the user explicitly requests code, a script, or a repeatable command workflow. Write the complete executable script in scriptContent instead of returning only a fenced code block. For tenant-specific remediation, analyze and scope the environment first. A self-contained parameterized script does not require a tenant query.
 
-If no actionable recommendations yet, do NOT call this tool. Tell the user: 'I don't have actionable recommendations to script yet — let me first analyze your environment.'
+If the requested tenant-specific script depends on targets that have not been identified yet, query only the filtered evidence needed to identify them before calling this tool.
 
-Script MUST include safety features: --what-if / confirmation prompts / dry-run mode, comments per logical step. Prefer Azure CLI (`az`) unless user asks for PowerShell.");
+For Azure Resource Graph, use az graph query --graph-query (or -q) for KQL; --query is only the JMESPath selector for the returned JSON, not the KQL argument. Never emit duplicate --query flags. Keep command failures and invalid/missing output as explicit errors: a missing count is unknown, never zero.
+
+For scripts that change resources, default to dry-run and require explicit local confirmation. Use only preview flags supported by the chosen commands; do not invent a universal --what-if flag. Never embed credentials; use the user's own login, managed identity, or local secret input. Query scripts must filter and aggregate at the source with supported API options instead of downloading full collections for a summary. Prefer Azure CLI (`az`) unless user asks for PowerShell.");
     }
 
-    private static Task<string> GenerateScript(
-        [Description(@"The full script content (Azure CLI or PowerShell). Must include:
+    private Task<string> GenerateScript(
+        [Description(@"The complete executable script content (Azure CLI or PowerShell). Supply the actual code, not instructions asking the tool to generate it. Must include:
 - A header comment block explaining what the script does, prerequisites, and usage
-- Safety features: dry-run mode, confirmation prompts, or --what-if flags
+- For changes: dry-run by default and local confirmation, using only supported preview flags
+- No embedded credentials; use the user's login, managed identity, or local secret input
+- For queries: source-side filtering and aggregation with supported API options
+- For az graph query: KQL goes in --graph-query/-q; --query only selects the returned JSON with JMESPath
 - Clear comments for each logical section
-- Error handling for critical operations
+- Error handling for critical operations; never replace failed queries or invalid/missing counts with zero
 Example header:
 #!/bin/bash
 # FinOps Remediation Script: Delete Orphaned Disks
@@ -47,9 +46,9 @@ Example header:
 # Prerequisites: Azure CLI 2.50+, logged in via 'az login'
 # Usage: chmod +x script.sh && ./script.sh
 # Mode: DRY-RUN by default — set DRY_RUN=false to execute")] string scriptContent,
-        [Description("Filename for the script (without extension). Default: 'finops-remediation'")] string? filename,
-        [Description("Script language: 'bash' for .sh (Azure CLI), 'powershell' for .ps1. Default: 'bash'")] string? language,
-        [Description("Brief description of what the script does (shown in the UI download button)")] string? description)
+        [Description("Filename for the script (without extension). Default: 'finops-remediation'")] string? filename = null,
+        [Description("Script language: 'bash' for .sh (Azure CLI), 'powershell' for .ps1. Default: 'bash'")] string? language = null,
+        [Description("Optional brief description of what the script does (shown in the UI download button)")] string? description = null)
     {
         if (string.IsNullOrWhiteSpace(scriptContent))
             return Task.FromResult("Error: No script content provided.");
@@ -58,18 +57,15 @@ Example header:
 
         var lang = (language ?? "bash").ToLowerInvariant();
         var ext = lang == "powershell" ? ".ps1" : ".sh";
-        var fileId = Guid.NewGuid().ToString("N")[..12];
         var safeName = string.IsNullOrWhiteSpace(filename) ? "finops-remediation" : SanitizeFilename(filename);
-        var outputPath = Path.Combine(Path.GetTempPath(), $"{fileId}_{safeName}{ext}");
         var desc = string.IsNullOrWhiteSpace(description) ? "FinOps remediation script" : description;
 
-        File.WriteAllText(outputPath, scriptContent, Encoding.UTF8);
-
-        GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, scriptContent, HttpHelper.CurrentTurnUserId());
+        var artifact = ArtifactStore.Default.Register(ownerUserId, safeName + ext,
+            lang == "powershell" ? "application/x-powershell" : "application/x-shellscript", Encoding.UTF8.GetBytes(SensitiveContent.Redact(scriptContent)));
 
         var lineCount = scriptContent.Split('\n').Length;
 
-        return Task.FromResult($"__SCRIPT_READY__:{fileId}:{safeName}{ext}:{lineCount}:{lang}:{desc}");
+        return Task.FromResult($"__SCRIPT_READY__:{artifact.Id}:{safeName}{ext}:{lineCount}:{lang}:{desc}");
     }
 
     private static string SanitizeFilename(string name) =>

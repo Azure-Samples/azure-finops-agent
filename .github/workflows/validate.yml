@@ -1,0 +1,62 @@
+name: Regression validation
+
+on:
+  workflow_call:
+  pull_request:
+    paths:
+      - "src/Dashboard/**"
+      - "tests/**"
+      - "global.json"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  regressions:
+    name: Backend, browser and Linux runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Backend and Python regressions
+        run: |
+          docker run --rm -v "$PWD:/workspace" -w /workspace \
+            mcr.microsoft.com/dotnet/sdk:10.0 bash -ec '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends python3 python3-pip
+              python3 -m pip install --break-system-packages pandas openpyxl
+              dotnet test tests/Dashboard.Tests/Dashboard.Tests.csproj --nologo --verbosity minimal
+              python3 -m unittest discover -s tests -p "test_*.py" -v
+            '
+
+      - name: Frontend and rendered desktop/mobile regressions
+        run: |
+          docker run --rm --ipc=host -e CI=true -v "$PWD:/workspace" -w /workspace/src/Dashboard/frontend \
+            node:26-slim bash -ec '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends git
+              git config --global --add safe.directory /workspace
+              node --test ../../../tests/LiveEvaluations/*.test.mjs
+              npm ci --no-audit --no-fund
+              npm run test
+              npx playwright install --with-deps chromium
+              npm run test:browser
+              npm run build
+            '
+
+      - name: Build the Linux application image
+        run: docker build -t finops-validation:local -f src/Dashboard/Dockerfile src/Dashboard
+
+      - name: Non-root startup and offline telemetry shutdown
+        run: |
+          docker run --rm -v "$PWD/tests:/validation:ro" --entrypoint python3 \
+            finops-validation:local /validation/container_smoke.py
+
+      - name: Reject fixable critical runtime vulnerabilities
+        run: |
+          docker save finops-validation:local -o "$RUNNER_TEMP/finops-validation.tar"
+          docker run --rm -v "$RUNNER_TEMP:/validation:ro" aquasec/trivy:0.74.0 image \
+            --input /validation/finops-validation.tar --scanners vuln --severity CRITICAL \
+            --ignore-unfixed --no-progress --skip-version-check --exit-code 1

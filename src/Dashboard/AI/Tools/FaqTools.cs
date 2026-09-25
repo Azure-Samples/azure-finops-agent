@@ -9,7 +9,7 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 
 /// <summary>
 /// Publishes useful public Q&As as SEO-indexable FAQ pages.
-/// The LLM calls PublishFAQ after answering a public FinOps question.
+/// The LLM calls PublishFAQ only for an explicit request to publish or submit a FAQ.
 /// Requires Azure authentication — anonymous users are blocked at the tool layer.
 /// </summary>
 public class FaqTools
@@ -46,10 +46,10 @@ public class FaqTools
         yield return AIFunctionFactory.Create(PublishFAQ);
     }
 
-    [Description("Publish a useful public FinOps Q&A as an SEO page. Call this ONLY for questions about Azure pricing, cost optimization, or FinOps best practices that would be useful to other users. Do NOT publish tenant-specific or private data.")]
+    [Description("Publish or submit one concise public FinOps Q&A only when the user explicitly requests publishing or submitting a FAQ. This changes the publication queue; never call automatically after answering a pricing or FinOps question. Pending review is not publication. Select only the verified public facts needed for that question; do not include raw tool responses, price catalogues or conversation transcripts. Use only for public Azure pricing, optimization or FinOps best practices. Never publish tenant-specific or private data, and do not gather tenant data merely to create a public answer.")]
     private string PublishFAQ(
         [Description("The question (e.g. 'How much does a D4s_v5 VM cost per month?')")] string question,
-        [Description("A concise, factual answer (1-3 sentences with specific numbers)")] string answer,
+        [Description("A concise factual public answer, 1-3 sentences with supported numbers and their scope. No raw tool responses, tenant facts or private data.")] string answer,
         [Description("SEO page title (e.g. 'Azure D4s_v5 VM Pricing by Region')")] string title)
     {
         // Hard auth gate — anon users (all-null tokens) must not write to the public FAQ surface.

@@ -8,7 +8,8 @@ namespace AzureFinOps.Dashboard.Auth;
 
 /// <summary>
 /// Persistent per-user identity + OAuth refresh-token store backed by an
-/// encrypted JSON file under <c>$COPILOT_HOME/users/{oid}/identity.json</c>.
+/// encrypted JSON file under a tenant-and-object scoped directory beneath
+/// <c>$COPILOT_HOME/users/</c>.
 ///
 /// Why this exists: the ASP.NET <see cref="ISession"/> store is in-memory
 /// (<c>AddDistributedMemoryCache</c>) so OAuth tokens vanish on every container
@@ -27,12 +28,14 @@ namespace AzureFinOps.Dashboard.Auth;
 /// scoped to <c>FinOps.Identity.v1</c>; keys persist to
 /// <c>/home/dataprotection-keys/</c> so they survive restarts but never leave
 /// the tenant. Only refresh tokens are written to disk &#8212; access tokens
-/// stay in-memory. The cookie itself contains only an opaque token; the OID is
-/// inside the encrypted payload.
+/// stay in-memory. The cookie itself contains only an opaque token; the tenant
+/// and object identifiers are inside the encrypted payload.
 /// </summary>
 public sealed class PersistentIdentity
 {
     private const string IdentityCookieName = "finops_id";
+    private const string IdentityCookieVersion = "v2";
+    private const string LegacyOwnerFileName = "owner.json";
     private static readonly TimeSpan CookieLifetime = TimeSpan.FromDays(30);
 
     private static readonly string CopilotHome =
@@ -41,33 +44,54 @@ public sealed class PersistentIdentity
 
     private readonly IDataProtector _protector;
     private readonly ILogger<PersistentIdentity> _logger;
+    private readonly string _copilotHome;
 
-    // Per-oid serialization lock so concurrent SaveIdentity / UpdateRefreshToken
+    // Per-principal serialization lock so concurrent SaveIdentity / UpdateRefreshToken
     // / UpdateGraphTier calls can't race on the same file. Cheap: one Semaphore
     // per logged-in user, GC'd implicitly when the dict is rebuilt on restart.
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _fileLocks = new();
-    private static SemaphoreSlim LockFor(string oid) =>
-        _fileLocks.GetOrAdd(oid, _ => new SemaphoreSlim(1, 1));
+    private static SemaphoreSlim LockFor(string principalKey) =>
+        _fileLocks.GetOrAdd(principalKey, _ => new SemaphoreSlim(1, 1));
 
-    // userId → oid lookup so background services (e.g. TenantTokenRefresher)
+    // userId → tenant/object lookup so background services (e.g. TenantTokenRefresher)
     // can find an identity record by the userId surfaced in telemetry without
     // an HttpContext. Populated on every Save / Load / Update so once a user has
     // touched the system in this process, lookup is O(1).
-    private static readonly ConcurrentDictionary<long, string> _userIdToOid = new();
+    private static readonly ConcurrentDictionary<long, (string TenantId, string Oid)> _userIdToPrincipal = new();
+    private readonly ConcurrentDictionary<string, string> _principalDirectories = new();
 
     public PersistentIdentity(IDataProtectionProvider provider, ILogger<PersistentIdentity> logger)
+        : this(provider, logger, CopilotHome)
+    {
+    }
+
+    internal PersistentIdentity(IDataProtectionProvider provider, ILogger<PersistentIdentity> logger, string copilotHome)
     {
         _protector = provider.CreateProtector("FinOps.Identity.v1");
         _logger = logger;
+        _copilotHome = copilotHome;
     }
 
-    /// <summary>SHA-256 of the Entra OID, folded into a 64-bit id. Stable across
-    /// devices and sessions for the same human; collisions are astronomically
-    /// unlikely (birthday bound > 2^32 OIDs before any expected collision).</summary>
-    public static long DeriveUserId(string oid)
+    /// <summary>SHA-256 of the validated Entra tenant and object identifiers,
+    /// folded into a 64-bit runtime owner id. An OID alone is not globally unique
+    /// in a multi-tenant application.</summary>
+    public static long DeriveUserId(string tenantId, string oid)
     {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(oid));
+        var hash = PrincipalHash(tenantId, oid);
         return BitConverter.ToInt64(hash, 0);
+    }
+
+    internal static string PrincipalDirectoryName(string tenantId, string oid) =>
+        Convert.ToHexString(PrincipalHash(tenantId, oid)).ToLowerInvariant();
+
+    private static byte[] PrincipalHash(string tenantId, string oid) =>
+        SHA256.HashData(Encoding.UTF8.GetBytes(PrincipalKey(tenantId, oid)));
+
+    private static string PrincipalKey(string tenantId, string oid)
+    {
+        if (!Guid.TryParse(tenantId, out var tenantGuid) || !Guid.TryParse(oid, out var objectGuid))
+            throw new ArgumentException("The tenant and object identifiers must be GUIDs.");
+        return $"{tenantGuid:D}\n{objectGuid:D}";
     }
 
     /// <summary>Persists identity + the rotating refresh token to disk and
@@ -76,36 +100,43 @@ public sealed class PersistentIdentity
     /// new refresh_token.</summary>
     public async Task SaveIdentityAsync(HttpContext ctx, IdentityRecord record)
     {
-        var sem = LockFor(record.Oid);
+        if (!HasPrincipal(record))
+            throw new ArgumentException("A tenant and object identifier are required.", nameof(record));
+
+        record.UserId = DeriveUserId(record.TenantId, record.Oid);
+        var principalKey = PrincipalKey(record.TenantId, record.Oid);
+        var sem = LockFor(principalKey);
         await sem.WaitAsync();
         try
         {
-            var dir = GetUserDir(record.Oid);
+            var dir = GetOwnedUserDirectory(record.TenantId, record.Oid);
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, "identity.json");
             var encrypted = _protector.Protect(JsonSerializer.Serialize(record));
             AtomicWrite(path, encrypted);
-            _userIdToOid[record.UserId] = record.Oid;
+            WriteLegacyOwnerMarker(dir, record.TenantId, record.Oid);
+            _userIdToPrincipal[record.UserId] = (record.TenantId, record.Oid);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to persist identity for oid={Oid}", record.Oid);
+            _logger.LogWarning(ex, "Failed to persist identity for the Entra principal");
         }
         finally { sem.Release(); }
 
-        SetIdentityCookie(ctx, record.Oid);
+        SetIdentityCookie(ctx, record.TenantId, record.Oid);
     }
 
     /// <summary>Writes (or rewrites) the encrypted <c>finops_id</c> cookie for the
-    /// given OID. Also used on Entra account switch to repoint the cookie at the
+    /// given principal. Also used on Entra account switch to repoint the cookie at the
     /// NEW account when no fresh refresh token came back (the SaveIdentityAsync
     /// path didn't run) — otherwise the stale cookie would resurrect the previous
     /// account's identity on the next hydration.</summary>
-    public void SetIdentityCookie(HttpContext ctx, string oid)
+    public void SetIdentityCookie(HttpContext ctx, string tenantId, string oid)
     {
         try
         {
-            var cookie = _protector.Protect(oid);
+            var pointer = JsonSerializer.Serialize(new IdentityPointer(IdentityCookieVersion, tenantId, oid));
+            var cookie = _protector.Protect(pointer);
             ctx.Response.Cookies.Append(IdentityCookieName, cookie, new CookieOptions
             {
                 HttpOnly = true,
@@ -122,7 +153,7 @@ public sealed class PersistentIdentity
         }
     }
 
-    /// <summary>Returns the persisted identity for the OID encoded in the
+    /// <summary>Returns the persisted identity for the principal encoded in the
     /// caller's <c>finops_id</c> cookie, or null if absent / tampered / the
     /// file is missing.</summary>
     public IdentityRecord? Load(HttpContext ctx)
@@ -130,8 +161,8 @@ public sealed class PersistentIdentity
         if (!ctx.Request.Cookies.TryGetValue(IdentityCookieName, out var cookie) || string.IsNullOrEmpty(cookie))
             return null;
 
-        string oid;
-        try { oid = _protector.Unprotect(cookie); }
+        string pointer;
+        try { pointer = _protector.Unprotect(cookie); }
         catch
         {
             // Tampered or key-rotated cookie &#8212; clear it so the browser stops sending.
@@ -139,46 +170,46 @@ public sealed class PersistentIdentity
             return null;
         }
 
-        var path = Path.Combine(GetUserDir(oid), "identity.json");
-        if (!File.Exists(path)) return null;
-
-        try
+        if (TryReadPointer(pointer, out var tenantId, out var oid))
         {
-            var encrypted = File.ReadAllText(path);
-            var json = _protector.Unprotect(encrypted);
-            var rec = JsonSerializer.Deserialize<IdentityRecord>(json);
-            if (rec is not null) _userIdToOid[rec.UserId] = rec.Oid;
-            return rec;
-        }
-        catch (CryptographicException ex)
-        {
-            // Same expected condition the cookie path above already swallows: the
-            // key rotated out of the ring (90-day default) or the record predates
-            // this deployment. Drop the cookie so the next request short-circuits
-            // instead of re-reading a permanently unreadable file, and log WITHOUT
-            // the exception object — passing it emits one AppExceptions row per
-            // request per user, which on a rotation trips the >10-in-15-min alert.
+            var record = LoadByPrincipal(tenantId, oid);
+            if (record is not null) return record;
             ctx.Response.Cookies.Delete(IdentityCookieName);
-            _logger.LogInformation(
-                "Identity record unreadable, re-auth required: {Reason}", ex.Message);
             return null;
         }
-        catch (Exception ex)
+
+        // Legacy cookies contained only the OID. Admit the old directory only
+        // when its encrypted identity record supplies and matches the tenant;
+        // then rotate the browser pointer to the pair-bound v2 format.
+        var legacyPath = LegacyIdentityPath(pointer);
+        var legacy = LoadRecord(legacyPath);
+        if (legacy is not null && HasPrincipal(legacy)
+            && string.Equals(legacy.Oid, pointer, StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogWarning(ex, "Failed to load identity from {Path}", path);
-            return null;
+            var normalized = Normalize(legacy);
+            var legacyDirectory = Path.GetDirectoryName(legacyPath)!;
+            _principalDirectories[PrincipalKey(normalized.TenantId, normalized.Oid)] = legacyDirectory;
+            WriteLegacyOwnerMarker(legacyDirectory, normalized.TenantId, normalized.Oid);
+            SetIdentityCookie(ctx, normalized.TenantId, normalized.Oid);
+            return normalized;
         }
+
+        ctx.Response.Cookies.Delete(IdentityCookieName);
+        return null;
     }
 
     /// <summary>Clears the identity cookie and removes the on-disk file. Called
     /// from /auth/logout.</summary>
-    public void Clear(HttpContext ctx, string? oid)
+    public void Clear(HttpContext ctx, string? tenantId, string? oid)
     {
         ctx.Response.Cookies.Delete(IdentityCookieName);
-        if (!string.IsNullOrEmpty(oid))
+        if (!string.IsNullOrWhiteSpace(tenantId) && !string.IsNullOrWhiteSpace(oid))
         {
-            try { File.Delete(Path.Combine(GetUserDir(oid), "identity.json")); }
+            var principalKey = PrincipalKey(tenantId, oid);
+            try { File.Delete(Path.Combine(GetOwnedUserDirectory(tenantId, oid), "identity.json")); }
             catch { }
+            _principalDirectories.TryRemove(principalKey, out _);
+            _userIdToPrincipal.TryRemove(DeriveUserId(tenantId, oid), out _);
         }
     }
 
@@ -188,35 +219,166 @@ public sealed class PersistentIdentity
     /// to populate the cache; subsequent calls are O(1).</summary>
     public IdentityRecord? LoadByUserId(long userId)
     {
-        if (_userIdToOid.TryGetValue(userId, out var cachedOid))
-            return LoadByOid(cachedOid);
+        if (_userIdToPrincipal.TryGetValue(userId, out var cached))
+            return LoadByPrincipal(cached.TenantId, cached.Oid);
 
         // Cold path after restart: walk users/ until we find a match. Cheap —
         // O(active users) and only on cache misses.
-        var root = Path.Combine(CopilotHome, "users");
+        var root = Path.Combine(_copilotHome, "users");
         if (!Directory.Exists(root)) return null;
-        foreach (var dir in Directory.EnumerateDirectories(root))
+        foreach (var path in Directory.EnumerateFiles(root, "identity.json", SearchOption.AllDirectories))
         {
-            var oid = Path.GetFileName(dir);
-            var rec = LoadByOid(oid);
-            if (rec is not null && rec.UserId == userId) return rec;
+            var record = LoadRecord(path);
+            if (record is null || !HasPrincipal(record)) continue;
+            var normalized = Normalize(record);
+            if (normalized.UserId != userId) continue;
+            _principalDirectories[PrincipalKey(normalized.TenantId, normalized.Oid)] =
+                Path.GetDirectoryName(path)!;
+            return normalized;
         }
         return null;
     }
 
-    /// <summary>Loads an identity by Entra OID directly (no cookie / context
-    /// required). Returns null if the file is missing or undecryptable.</summary>
-    public IdentityRecord? LoadByOid(string oid)
+    /// <summary>Loads an identity by the validated Entra tenant and object pair.
+    /// Returns null if the record is missing, undecryptable, or belongs to a
+    /// different principal.</summary>
+    public IdentityRecord? LoadByPrincipal(string tenantId, string oid)
     {
-        var path = Path.Combine(GetUserDir(oid), "identity.json");
+        if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(oid)) return null;
+        var path = Path.Combine(GetOwnedUserDirectory(tenantId, oid), "identity.json");
+        var record = LoadRecord(path);
+        if (record is null || !Matches(record, tenantId, oid)) return null;
+        return Normalize(record);
+    }
+
+    /// <summary>Updates only the refresh token + recorded scopes on an existing
+    /// identity file. Used by <see cref="SessionTokenStore"/> when a refresh
+    /// rotates the token (Entra rotates refresh tokens on use).</summary>
+    public Task UpdateRefreshTokenAsync(string tenantId, string oid, string newRefreshToken)
+    {
+        return UpdateRecordAsync(tenantId, oid, r => { r.RefreshToken = newRefreshToken; });
+    }
+
+    /// <summary>Persists the comma-separated list of consented Graph tiers so a
+    /// post-restart hydration restores the user's full add-on set, not just the
+    /// base ARM scope.</summary>
+    public Task UpdateGraphTierAsync(string tenantId, string oid, string? graphTier)
+    {
+        return UpdateRecordAsync(tenantId, oid, r => { r.GraphTier = graphTier; });
+    }
+
+    private async Task UpdateRecordAsync(string tenantId, string oid, Action<IdentityRecord> mutate)
+    {
+        var path = Path.Combine(GetOwnedUserDirectory(tenantId, oid), "identity.json");
+        if (!File.Exists(path)) return;
+        var sem = LockFor(PrincipalKey(tenantId, oid));
+        await sem.WaitAsync();
+        try
+        {
+            var existing = JsonSerializer.Deserialize<IdentityRecord>(_protector.Unprotect(File.ReadAllText(path)));
+            if (existing is null || !Matches(existing, tenantId, oid)) return;
+            mutate(existing);
+            existing.UserId = DeriveUserId(existing.TenantId, existing.Oid);
+            existing.UpdatedUtc = DateTimeOffset.UtcNow;
+            AtomicWrite(path, _protector.Protect(JsonSerializer.Serialize(existing)));
+            _userIdToPrincipal[existing.UserId] = (existing.TenantId, existing.Oid);
+        }
+        catch (CryptographicException ex)
+        {
+            _logger.LogInformation(
+                "Identity record unreadable (key rotated); skipping update: {Reason}", ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to update identity record");
+        }
+        finally { sem.Release(); }
+    }
+
+    /// <summary>Returns the sole working directory authorized for this Entra
+    /// principal. A legacy OID-only directory is accepted only when its encrypted
+    /// identity record attests the same tenant and object pair.</summary>
+    public string GetOwnedUserDirectory(string tenantId, string oid)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(oid))
+            throw new ArgumentException("A tenant and object identifier are required.");
+
+        var principalKey = PrincipalKey(tenantId, oid);
+        return _principalDirectories.GetOrAdd(principalKey, _ =>
+        {
+            var canonical = Path.Combine(
+                _copilotHome, "users", "v2", PrincipalDirectoryName(tenantId, oid));
+            var canonicalRecord = LoadRecord(Path.Combine(canonical, "identity.json"));
+            if (canonicalRecord is not null)
+            {
+                if (!Matches(canonicalRecord, tenantId, oid))
+                    throw new InvalidOperationException("The principal directory owner does not match.");
+                return canonical;
+            }
+
+            var legacy = Path.Combine(_copilotHome, "users", oid);
+            var legacyRecord = LoadRecord(Path.Combine(legacy, "identity.json"));
+            if (legacyRecord is not null && Matches(legacyRecord, tenantId, oid))
+            {
+                WriteLegacyOwnerMarker(legacy, tenantId, oid);
+                return legacy;
+            }
+            var legacyOwner = LoadLegacyOwnerMarker(legacy);
+            if (legacyOwner is not null
+                && string.Equals(legacyOwner.TenantId, tenantId, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(legacyOwner.Oid, oid, StringComparison.OrdinalIgnoreCase))
+                return legacy;
+
+            Directory.CreateDirectory(canonical);
+            return canonical;
+        });
+    }
+
+    private IdentityRecord? LoadRecord(string path)
+    {
         if (!File.Exists(path)) return null;
         try
         {
             var encrypted = File.ReadAllText(path);
-            var json = _protector.Unprotect(encrypted);
-            var rec = JsonSerializer.Deserialize<IdentityRecord>(json);
-            if (rec is not null) _userIdToOid[rec.UserId] = rec.Oid;
-            return rec;
+            return JsonSerializer.Deserialize<IdentityRecord>(_protector.Unprotect(encrypted));
+        }
+        catch (CryptographicException ex)
+        {
+            _logger.LogInformation(
+                "Identity record unreadable, re-auth required: {Reason}", ex.Message);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load an identity record");
+            return null;
+        }
+    }
+
+    private void WriteLegacyOwnerMarker(string directory, string tenantId, string oid)
+    {
+        var expectedLegacyDirectory = Path.Combine(_copilotHome, "users", oid);
+        if (!string.Equals(directory, expectedLegacyDirectory, StringComparison.Ordinal)) return;
+        try
+        {
+            var marker = _protector.Protect(JsonSerializer.Serialize(
+                new LegacyOwner(tenantId, oid)));
+            AtomicWrite(Path.Combine(directory, LegacyOwnerFileName), marker);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist a legacy conversation owner marker");
+        }
+    }
+
+    private LegacyOwner? LoadLegacyOwnerMarker(string directory)
+    {
+        var path = Path.Combine(directory, LegacyOwnerFileName);
+        if (!File.Exists(path)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<LegacyOwner>(
+                _protector.Unprotect(File.ReadAllText(path)));
         }
         catch
         {
@@ -224,48 +386,46 @@ public sealed class PersistentIdentity
         }
     }
 
-    /// <summary>Updates only the refresh token + recorded scopes on an existing
-    /// identity file. Used by <see cref="SessionTokenStore"/> when a refresh
-    /// rotates the token (Entra rotates refresh tokens on use).</summary>
-    public Task UpdateRefreshTokenAsync(string oid, string newRefreshToken)
+    private IdentityRecord Normalize(IdentityRecord record)
     {
-        return UpdateRecordAsync(oid, r => { r.RefreshToken = newRefreshToken; });
+        record.UserId = DeriveUserId(record.TenantId, record.Oid);
+        _userIdToPrincipal[record.UserId] = (record.TenantId, record.Oid);
+        return record;
     }
 
-    /// <summary>Persists the comma-separated list of consented Graph tiers so a
-    /// post-restart hydration restores the user's full add-on set, not just the
-    /// base ARM scope.</summary>
-    public Task UpdateGraphTierAsync(string oid, string? graphTier)
-    {
-        return UpdateRecordAsync(oid, r => { r.GraphTier = graphTier; });
-    }
+    private static bool HasPrincipal(IdentityRecord record) =>
+        !string.IsNullOrWhiteSpace(record.TenantId) && !string.IsNullOrWhiteSpace(record.Oid);
 
-    private async Task UpdateRecordAsync(string oid, Action<IdentityRecord> mutate)
+    private static bool Matches(IdentityRecord record, string tenantId, string oid) =>
+        HasPrincipal(record)
+        && string.Equals(record.TenantId, tenantId, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(record.Oid, oid, StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryReadPointer(string value, out string tenantId, out string oid)
     {
-        var path = Path.Combine(GetUserDir(oid), "identity.json");
-        if (!File.Exists(path)) return;
-        var sem = LockFor(oid);
-        await sem.WaitAsync();
+        tenantId = "";
+        oid = "";
         try
         {
-            var existing = JsonSerializer.Deserialize<IdentityRecord>(_protector.Unprotect(File.ReadAllText(path)));
-            if (existing is null) return;
-            mutate(existing);
-            existing.UpdatedUtc = DateTimeOffset.UtcNow;
-            AtomicWrite(path, _protector.Protect(JsonSerializer.Serialize(existing)));
-            _userIdToOid[existing.UserId] = existing.Oid;
+            var pointer = JsonSerializer.Deserialize<IdentityPointer>(value);
+            if (pointer is null || pointer.Version != IdentityCookieVersion
+                || string.IsNullOrWhiteSpace(pointer.TenantId)
+                || string.IsNullOrWhiteSpace(pointer.Oid)) return false;
+            tenantId = pointer.TenantId;
+            oid = pointer.Oid;
+            return true;
         }
-        catch (CryptographicException ex)
+        catch (JsonException)
         {
-            _logger.LogInformation(
-                "Identity record for oid={Oid} unreadable (key rotated); skipping update: {Reason}",
-                oid, ex.Message);
+            return false;
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to update identity record for oid={Oid}", oid);
-        }
-        finally { sem.Release(); }
+    }
+
+    private string LegacyIdentityPath(string oid)
+    {
+        if (!Guid.TryParse(oid, out _) || Path.GetFileName(oid) != oid)
+            return Path.Combine(_copilotHome, "invalid-legacy-identity");
+        return Path.Combine(_copilotHome, "users", oid, "identity.json");
     }
 
     /// <summary>Crash-safe write: stage to a sibling .tmp then atomically replace
@@ -278,7 +438,8 @@ public sealed class PersistentIdentity
         File.Move(tmp, path, overwrite: true);
     }
 
-    private static string GetUserDir(string oid) => Path.Combine(CopilotHome, "users", oid);
+    private sealed record IdentityPointer(string Version, string TenantId, string Oid);
+    private sealed record LegacyOwner(string TenantId, string Oid);
 }
 
 /// <summary>Encrypted-on-disk identity record. Contains only the long-lived

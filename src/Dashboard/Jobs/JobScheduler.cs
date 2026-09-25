@@ -1,7 +1,10 @@
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.Auth;
+using AzureFinOps.Dashboard.Infrastructure;
 using AzureFinOps.Dashboard.Observability;
 using GitHub.Copilot;
+
+#pragma warning disable GHCP001
 
 namespace AzureFinOps.Dashboard.Jobs;
 
@@ -118,25 +121,31 @@ public sealed class JobScheduler : BackgroundService
 
     private async Task RunJobCoreAsync(ScheduledJob job, CancellationToken ct)
     {
+        if (SensitiveContent.ContainsSecret(job.Prompt) || SensitiveContent.ContainsSecret(job.Name))
+        {
+            job.Enabled = false;
+            MarkFailure(job, "sensitive_content", SensitiveContent.RejectedMessage);
+            return;
+        }
         // Reschedule FIRST so a crash mid-run can't produce a hot retry loop.
         job.NextRunUtc = DateTimeOffset.UtcNow.AddMinutes(job.IntervalMinutes);
         _store.Save();
 
-        // 1) Hydrate delegated tokens from the persisted refresh token.
-        // OID-FIRST: the Entra OID is the tenant-scoped identity a job was
-        // created under — load exactly that record. The userId-hash lookup is
-        // only a legacy fallback, and the loaded record must AGREE with the
-        // job's OID: these jobs can perform ARM writes, so hydrating another
-        // user's tokens (however unlikely) must be structurally impossible.
-        var record = string.IsNullOrEmpty(job.EntraOid)
-            ? _identity.LoadByUserId(job.UserId)
-            : _identity.LoadByOid(job.EntraOid);
-        if (record is not null
-            && !string.IsNullOrEmpty(job.EntraOid)
-            && !string.Equals(record.Oid, job.EntraOid, StringComparison.OrdinalIgnoreCase))
+        // 1) Hydrate delegated tokens from the exact tenant-and-object-bound
+        // identity the job was created under. Legacy OID-only jobs fail closed.
+        if (string.IsNullOrEmpty(job.EntraOid) || string.IsNullOrEmpty(job.EntraTenantId))
         {
-            _logger.LogError("Job {JobId}: identity record OID mismatch (job={JobOid}, record={RecordOid}) — refusing to run",
-                job.Id, job.EntraOid, record.Oid);
+            job.Enabled = false;
+            MarkFailure(job, "auth_expired", "Reconnect Azure and recreate this job to restore tenant-bound ownership.");
+            return;
+        }
+
+        var record = _identity.LoadByPrincipal(job.EntraTenantId, job.EntraOid);
+        if (record is not null
+            && (!string.Equals(record.Oid, job.EntraOid, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(record.TenantId, job.EntraTenantId, StringComparison.OrdinalIgnoreCase)))
+        {
+            _logger.LogError("Job {JobId}: identity record mismatch — refusing to run", job.Id);
             MarkFailure(job, "auth_expired", "Identity mismatch — reconnect Azure to resume this job.");
             return;
         }
@@ -188,17 +197,21 @@ public sealed class JobScheduler : BackgroundService
             {
                 try
                 {
-                    session = await _factory.GetOrResumeAsync(job.UserId, job.SessionId, job.UserLogin, job.EntraOid);
+                    session = await _factory.GetOrResumeAsync(
+                        job.UserId, job.SessionId, job.UserLogin,
+                        job.EntraTenantId, job.EntraOid);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Job {JobId}: resume of session {SessionId} failed; creating fresh", job.Id, job.SessionId);
-                    session = await _factory.CreateNewAsync(job.UserId, job.UserLogin, job.EntraOid);
+                    session = await _factory.CreateNewAsync(
+                        job.UserId, job.UserLogin, job.EntraTenantId, job.EntraOid);
                 }
             }
             else
             {
-                session = await _factory.CreateNewAsync(job.UserId, job.UserLogin, job.EntraOid);
+                session = await _factory.CreateNewAsync(
+                    job.UserId, job.UserLogin, job.EntraTenantId, job.EntraOid);
             }
         }
         finally
@@ -217,7 +230,7 @@ public sealed class JobScheduler : BackgroundService
         }
 
         // 3) One turn per session — never race a live chat turn.
-        if (!ChatEndpoints.TryBeginTurn(session.SessionId, job.UserId, session))
+        if (!ChatEndpoints.TryBeginTurn(session.SessionId, job.UserId, session, out var turn))
         {
             job.LastStatus = "busy";
             job.NextRunUtc = DateTimeOffset.UtcNow.AddMinutes(2); // retry shortly
@@ -228,37 +241,41 @@ public sealed class JobScheduler : BackgroundService
 
         try
         {
-            var (ok, summary) = await RunTurnAsync(job, session, ct);
+            turn.IsScheduled = true;
+            var outcome = await RunTurnAsync(job, session, turn, ct);
+            turn.JobOutcome = outcome;
             // A deploy, restart or scale-in cancels the host token mid-run. That is
             // the platform interrupting us, not the job failing — counting it would
             // spend one of the five strikes that auto-pause the schedule, so a few
             // deploys in a row could silently disable a perfectly healthy job.
             // Observed in production: run #63 landed as status=error 30ms after
             // "Application is shutting down", with its token refresh already 200 OK.
-            if (!ok && ct.IsCancellationRequested)
+            if (!outcome.Succeeded && ct.IsCancellationRequested)
             {
                 _logger.LogInformation(
                     "Job {JobId} '{Name}' interrupted by shutdown mid-run; not counted as a failure, retrying next tick",
                     job.Id, job.Name);
                 return;
             }
-            job.LastRunUtc = DateTimeOffset.UtcNow;
-            job.RunCount++;
-            if (ok)
+            JobRunOutcome.Apply(job, outcome, DateTimeOffset.UtcNow);
+            if (job.Enabled && !turn.CancellationToken.IsCancellationRequested && job.RunCount - job.LastCompactedRun >= 20)
             {
-                job.LastStatus = "ok";
-                job.LastSummary = summary;
-                job.ConsecutiveFailures = 0;
-            }
-            else
-            {
-                job.ConsecutiveFailures++;
-                job.LastStatus = "error";
-                job.LastSummary = summary;
-                if (job.ConsecutiveFailures >= MaxConsecutiveFailures)
+                try
+                {
+                    using var compactionTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    compactionTimeout.CancelAfter(TimeSpan.FromMinutes(1));
+                    var compacted = await session.Rpc.History.CompactAsync(new GitHub.Copilot.Rpc.SessionHistoryCompactRequest
+                    {
+                        CustomInstructions = "Retain only the job objective, declared scope, unresolved blockers and latest evidence summary. Prior answers are not fresh evidence. Do not preserve credentials."
+                    }, compactionTimeout.Token);
+                    if (!compacted.Success) throw new InvalidOperationException("Context compaction did not complete.");
+                    job.LastCompactedRun = job.RunCount;
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
                     job.Enabled = false;
-                    _logger.LogWarning("Job {JobId} '{Name}' paused after {N} consecutive failures", job.Id, job.Name, job.ConsecutiveFailures);
+                    job.LastSummary = "Run result retained. Schedule paused because history compaction could not be verified.";
+                    _logger.LogWarning("Job history maintenance failed: {ErrorType}", exception.GetType().Name);
                 }
             }
             _store.Save();
@@ -266,14 +283,15 @@ public sealed class JobScheduler : BackgroundService
         }
         finally
         {
-            ChatEndpoints.EndTurn(session.SessionId);
+            if (!await ChatEndpoints.EndTurnAsync(turn))
+                _logger.LogWarning("Job turn remains quarantined until execution stops.");
         }
     }
 
     /// <summary>Sends the job prompt into the session and waits for the turn to
     /// complete (SessionIdleEvent) or fail (SessionErrorEvent), with a hard
     /// timeout. Returns (success, answer-summary).</summary>
-    private async Task<(bool Ok, string Summary)> RunTurnAsync(ScheduledJob job, CopilotSession session, CancellationToken ct)
+    private async Task<JobRunOutcome> RunTurnAsync(ScheduledJob job, CopilotSession session, TurnExecution turn, CancellationToken ct)
     {
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var buf = new System.Text.StringBuilder();
@@ -306,7 +324,10 @@ public sealed class JobScheduler : BackgroundService
         var prompt =
             $"[SCHEDULED JOB RUN — '{job.Name}' — run #{job.RunCount + 1}, cadence {cadence}, {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm} UTC. " +
             "This is an automated background run; no human is watching live. Produce a complete, CONCISE answer — lead with what changed since the last run if prior runs exist in this conversation. " +
-            "If the goal is now achieved (e.g. capacity found and acted on) or permanently impossible, say so explicitly on the first line so the user knows to disable this job.]\n" +
+            "Read fresh evidence for the entire declared scope. Prior runs are context, never proof nothing changed. " +
+            "After source tools finish call ReportJobOutcome with status, summary, exact evidence tool names, source dataAsOfUtc when known, and any retry deadline. " +
+            "Use blocked or partial when access, throttling, stale data, or incomplete coverage prevents success. Use goal_achieved only when verified; the scheduler will pause automatically. " +
+            $"Latest bounded result: {SensitiveContent.Redact(job.LastSummary ?? "none")}.]\n" +
             job.Prompt;
 
         try
@@ -315,7 +336,7 @@ public sealed class JobScheduler : BackgroundService
         }
         catch (Exception ex)
         {
-            return (false, $"send failed: {ex.Message}");
+            return JobRunOutcome.Failed($"Send failed: {ex.GetType().Name}");
         }
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -327,13 +348,14 @@ public sealed class JobScheduler : BackgroundService
             lock (bufLock) { answer = buf.ToString(); }
             answer = answer.Trim();
             var summary = answer.Length > 200 ? answer[..200] + "…" : answer;
-            return (ok, summary.Length > 0 ? summary : (ok ? "(empty answer)" : "session error"));
+            if (!ok) return JobRunOutcome.Failed(summary.Length > 0 ? summary : "Session error.");
+            return JobRunOutcome.Validate(turn.JobOutcome, turn, answer, DateTimeOffset.UtcNow);
         }
         catch (OperationCanceledException)
         {
-            // Turn still running server-side; we stop waiting. The answer will
-            // land in the session transcript regardless.
-            return (false, "run timed out after 10 min (answer may still appear in the conversation)");
+            var confirmed = await turn.AbortAsync(ct.IsCancellationRequested ? "interrupted" : "timeout");
+            return JobRunOutcome.Failed(confirmed ? "Run cancelled after interruption or timeout; review partial results."
+                : "Run interrupted; session quarantined until execution stops.");
         }
     }
 
@@ -350,7 +372,8 @@ public sealed class JobScheduler : BackgroundService
             apply((result.Value.Token, result.Value.Expiry));
             if (!string.IsNullOrEmpty(result.Value.RotatedRefreshToken) && result.Value.RotatedRefreshToken != record.RefreshToken)
             {
-                await _identity.UpdateRefreshTokenAsync(record.Oid, result.Value.RotatedRefreshToken);
+                await _identity.UpdateRefreshTokenAsync(
+                    record.TenantId, record.Oid, result.Value.RotatedRefreshToken);
                 record.RefreshToken = result.Value.RotatedRefreshToken;
             }
             return true;

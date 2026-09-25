@@ -38,7 +38,7 @@ param environmentName string
   'westus'
   'westus3'
 ])
-@description('Primary Azure region for the resource group and all non-AOAI resources. Restricted to regions where the full stack (App Service, ACR, Log Analytics/App Insights, and gpt-5.6-sol Global Standard) is available, so `azd up` succeeds for any customer.')
+@description('Primary Azure region for the resource group and non-AOAI resources. Model availability and quota are verified separately in aoaiLocation.')
 param location string
 
 @allowed([
@@ -72,27 +72,38 @@ param location string
   'westus'
   'westus3'
 ])
-@description('Azure region for the Azure OpenAI account. Restricted to regions where gpt-5.6-sol Global Standard (version 2026-07-09) is available — verified against the Foundry model region-availability matrix. May differ from `location`. Default: swedencentral.')
+@description('Azure region for the Azure OpenAI account. Verify the selected model/version and available GlobalStandard quota in this region before deployment. May differ from location. Default: swedencentral.')
 param aoaiLocation string = 'swedencentral'
 
 @allowed(['B1', 'B2', 'B3', 'S1', 'S2', 'S3', 'P0V3', 'P1V3', 'P2V3', 'P3V3'])
 @description('App Service Plan SKU. B1 (~$13/mo) is the recommended evaluation default; P0V3 matches production.')
 param appServicePlanSku string = 'B1'
 
-@description('Azure OpenAI model name to deploy (must be available in `aoaiLocation`). The agent requires a reasoning model — `ReasoningEffort=xhigh` is set in code (see CopilotSessionFactory.cs). gpt-4o / gpt-4 will not work.')
-param aoaiModelName string = 'gpt-5.6-sol'
+@description('Azure OpenAI model name to deploy. The default gpt-6-luna supports the Responses API used by this agent; verify availability in aoaiLocation.')
+param aoaiModelName string = 'gpt-6-luna'
 
-@description('Azure OpenAI model version. Must match the model name: gpt-5.6-sol = 2026-07-09.')
-param aoaiModelVersion string = '2026-07-09'
+@description('Azure OpenAI model version. Must match the model name: gpt-6-luna = 2026-09-22.')
+param aoaiModelVersion string = '2026-09-22'
 
 @description('Azure OpenAI deployment name surfaced as `AzureOpenAI__DeploymentName` to the app.')
-param aoaiDeploymentName string = 'gpt-5.6-sol'
+param aoaiDeploymentName string = 'gpt-6-luna'
 
-@description('Azure OpenAI model deployment capacity — TPM in THOUSANDS (1000 = 1M tokens/min). For GlobalStandard this is purely a rate-limit knob billed per-token, so raising it costs nothing by itself. The agent uses high reasoning (token-heavy) and long tool chains — 30 hits 429 rate limits under real use. Default 1000 (1M TPM), which matches the default per-subscription gpt-5.6-sol GlobalStandard quota; lower it if your quota is smaller, since a deployment cannot exceed the subscription limit for that model+SKU.')
+@description('Azure OpenAI GlobalStandard deployment capacity in model-specific quota units. For gpt-6-luna, 1000 units corresponds to 1M tokens/minute. Verify unallocated quota for the model, SKU and region; quota already assigned to other deployments is not available. Lower this value when needed. The service is billed by usage, not reserved throughput.')
 param aoaiModelCapacity int = 1000
 
-@description('Optional resource ID of an existing Azure OpenAI account to reuse instead of creating a new one. When set, `aoaiLocation`/`aoaiModelName`/`aoaiModelVersion` are ignored — the deployment must already exist on the existing account.')
+@description('Model deployment service tier. Keep "Default" unless the selected model/version supports priority processing; gpt-6-luna 2026-09-22 does not.')
+@allowed(['Default', 'Priority'])
+param aoaiServiceTier string = 'Default'
+
+@description('Reasoning effort surfaced as `AzureOpenAI__ReasoningEffort`. CI deployments override this with the effort the live evaluation gate actually tested.')
+@allowed(['low', 'medium', 'high', 'xhigh'])
+param aoaiReasoningEffort string = 'high'
+
+@description('Optional resource ID of an existing Azure OpenAI account to reuse instead of creating a new one. When set, `aoaiLocation` is ignored. The model deployment must already exist unless `deployModelOnExistingAccount` is true.')
 param existingAoaiResourceId string = ''
+
+@description('When reusing an existing account, create or update the configured model deployment on it. Requires deployment rights and unallocated model-specific quota on that account.')
+param deployModelOnExistingAccount bool = false
 
 @description('Entra ID multi-tenant app registration client ID. Created automatically by the preprovision hook if empty.')
 param entraAppId string = ''
@@ -144,7 +155,10 @@ module resources 'main-resources.bicep' = {
     aoaiModelVersion: aoaiModelVersion
     aoaiDeploymentName: aoaiDeploymentName
     aoaiModelCapacity: aoaiModelCapacity
+    aoaiServiceTier: aoaiServiceTier
+    aoaiReasoningEffort: aoaiReasoningEffort
     existingAoaiResourceId: existingAoaiResourceId
+    deployModelOnExistingAccount: deployModelOnExistingAccount
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Auth;
+using AzureFinOps.Dashboard.Infrastructure;
 using AzureFinOps.Dashboard.Observability;
 using GitHub.Copilot;
 
@@ -21,20 +22,12 @@ public static class ChatEndpoints
     // turn then runs with nobody listening (blinking cursor, answer lost to
     // disk). The state remains registered after an SSE viewer disconnects and
     // is released only after SDK idle/error or a confirmed abort.
-    private static readonly ConcurrentDictionary<string, ActiveTurnState> ActiveTurns = new();
+    private static readonly ConcurrentDictionary<string, TurnExecution> ActiveTurns = TurnExecution.Active;
 
     /// <summary>Upper bound on a single turn, shared by the chat wait and the
     /// scheduler. The frontend's recovery poller is sized to the same budget.</summary>
     internal static readonly TimeSpan MaxTurnDuration = TimeSpan.FromMinutes(15);
 
-    private sealed class ActiveTurnState(long userId, CopilotSession? session)
-    {
-        public long UserId { get; } = userId;
-        public DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
-        public CopilotSession? Session { get; set; } = session;
-        public TaskCompletionSource Completion { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-    }
 
     // Last context blocks sent per session — the [CONTEXT: …] / [UPLOADED FILES …]
     // prefixes used to be prepended to EVERY user message and permanently
@@ -63,26 +56,19 @@ public static class ChatEndpoints
     /// background <see cref="Jobs.JobScheduler"/>). Shares the same dictionary as
     /// chat turns so a scheduled run can never race a live chat turn in the same
     /// session — in either direction.</summary>
-    internal static bool TryBeginTurn(string sessionId, long userId, CopilotSession? session = null) =>
-        ActiveTurns.TryAdd(sessionId, new ActiveTurnState(userId, session));
+    internal static bool TryBeginTurn(string sessionId, long userId, CopilotSession? session, out TurnExecution turn) =>
+        TurnExecution.TryBegin(sessionId, userId, session, out turn);
 
     /// <summary>Releases a gate claimed via <see cref="TryBeginTurn"/>.</summary>
-    internal static void EndTurn(string sessionId)
-    {
-        if (ActiveTurns.TryRemove(sessionId, out var state))
-            state.Completion.TrySetResult();
-    }
+    internal static Task<bool> EndTurnAsync(TurnExecution turn, bool dispatchAttempted = true) => turn.FinishAsync(dispatchAttempted);
 
     private static bool MoveTurn(
         string oldSessionId,
         string newSessionId,
-        ActiveTurnState state,
+        TurnExecution state,
         CopilotSession session)
     {
-        state.Session = session;
-        if (oldSessionId.Equals(newSessionId, StringComparison.Ordinal)) return true;
-        ActiveTurns.TryRemove(oldSessionId, out _);
-        return ActiveTurns.TryAdd(newSessionId, state);
+        return state.SessionId == oldSessionId && session.SessionId == newSessionId && state.MoveTo(session);
     }
 
     /// <summary>
@@ -94,29 +80,20 @@ public static class ChatEndpoints
         + "optionally naming a couple of things you can help with inline. Do NOT call any tools. "
         + "Do NOT emit tables, headings, bullet lists or charts.]";
 
-    /// <summary>
-    /// Conservative trivial-prompt classifier for per-turn effort routing.
-    /// Only short prompts with NO FinOps/data signal qualify — a misclassified
-    /// deep question would get shallow reasoning, so bias heavily toward false.
-    /// </summary>
-    private static bool IsTrivialPrompt(string prompt)
+    private static readonly HashSet<string> StandaloneGreetings = new(StringComparer.OrdinalIgnoreCase)
     {
-        var p = prompt.Trim();
-        if (p.Length > 60) return false;
-        // Capability/help intents have their own onboarding response contract
-        // (capability table + clickable prompt examples + starter actions).
-        // Treating them as small talk suppresses that entire entry path.
-        if (System.Text.RegularExpressions.Regex.IsMatch(p,
-            @"\bhelp\b|what can you|what do you do|capabilit|how can you|how do you",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-            return false;
-        // Any FinOps/data keyword disqualifies.
-        if (System.Text.RegularExpressions.Regex.IsMatch(p,
-            @"cost|price|pricing|vm|disk|budget|quota|subscri|region|reserv|saving|tag|azure|score|export|anomal|licen|graph|kql|storage|network|sql|aks|gpu|token|spend|bill|invoice|resource|advisor|polic|\$|\d",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-            return false;
-        return true;
-    }
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "bonjour",
+        "hej"
+    };
+
+    internal static bool IsTrivialPrompt(string prompt) =>
+        StandaloneGreetings.Contains(prompt.Trim().TrimEnd('.', '!', '?').TrimEnd());
 
     public static void MapChatEndpoints(
         this IEndpointRouteBuilder app,
@@ -136,6 +113,8 @@ public static class ChatEndpoints
 
             using var bodyDoc = await JsonDocument.ParseAsync(ctx.Request.Body);
             var prompt = bodyDoc.RootElement.GetProperty("prompt").GetString();
+            var attachmentIds = bodyDoc.RootElement.TryGetProperty("fileIds", out var fileIds) && fileIds.ValueKind == JsonValueKind.Array
+                ? fileIds.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()!).ToArray() : [];
             string? requestedSessionId = null;
             if (bodyDoc.RootElement.TryGetProperty("sessionId", out var sidProp) && sidProp.ValueKind == JsonValueKind.String)
             {
@@ -150,12 +129,19 @@ public static class ChatEndpoints
                 return;
             }
 
+            if (SensitiveContent.ContainsSecret(prompt))
+            {
+                ctx.Response.StatusCode = 400;
+                await ctx.Response.WriteAsJsonAsync(new { error = SensitiveContent.RejectedMessage, code = "sensitive_content" });
+                return;
+            }
+
             var user = JsonSerializer.Deserialize<JsonElement>(userJson);
             var userId = user.GetProperty("id").GetInt64();
             var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
 
-            // Entra-connected users get persistent per-oid session storage; anonymous
-            // users get an ephemeral working dir that won't appear in any list.
+            // Entra-connected users get persistent tenant-and-object scoped
+            // session storage; anonymous users get an ephemeral working dir.
             string? entraOid = null;
             string? azureTenantId = null;
             var azureUserJson = ctx.Session.GetString("azure_user");
@@ -184,7 +170,6 @@ public static class ChatEndpoints
             chatActivity?.SetTag("ai.user", userLogin);
             chatActivity?.SetTag("ai.model", copilotFactory.Deployment);
             chatActivity?.SetTag("ai.prompt_length", prompt!.Length);
-            chatActivity?.SetTag("ai.prompt", prompt.Length > 500 ? prompt[..500] + "..." : prompt);
             logger.LogInformation("Chat request from {User} model={Model} promptLen={PromptLen}",
                 userLogin, copilotFactory.Deployment, prompt.Length);
 
@@ -317,36 +302,40 @@ public static class ChatEndpoints
             // immediately knows the fileIds it can pass to QueryUploadedFile.
             // Images are handled separately — they're attached natively to the
             // message (vision input) rather than exposed through the Python tool.
-            var uploads = AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ListForUser(userId);
-            var imageUploads = uploads.Where(u => u.Kind == "image" && File.Exists(u.Path)).ToList();
-            var dataUploads = uploads.Where(u => u.Kind != "image").ToList();
+            List<UploadedFileTools.UploadEntry> imageUploads = [];
             string uploadsContext = "";
-            if (dataUploads.Count > 0)
-            {
-                var sb = new System.Text.StringBuilder();
-                sb.Append("[UPLOADED FILES IN THIS SESSION — the user dropped these in. Their question is almost certainly about them. Use QueryUploadedFile(fileId, mode, paramsJson) to drill in. The schema is already shown below — you usually do NOT need a separate 'preview' call. Jump straight to head / slice / filter / aggregate / text_range / json_path. Responses are capped at ~200 rows / ~8000 chars; issue more calls if needed.");
-                foreach (var u in dataUploads)
-                {
-                    sb.Append($"\n  - fileId={u.FileId} name='{u.FileName}' kind={u.Kind} size={u.SizeBytes}B");
-                    if (!string.IsNullOrEmpty(u.SchemaSummary))
-                        sb.Append($"\n      schema: {u.SchemaSummary}");
-                }
-                sb.Append("]\n[ANSWER SHAPE FOR FILE ANALYSIS: (1) ONE-sentence headline naming the #1 waste with $ amount + concrete owner/RG/resource. (2) ONE visual — RenderChart (horizontal_bar of top-5 by $) when ≥3 data points, else a tight ≤5-row markdown table with an Owner column. NEVER both. NEVER long bullet lists of generic advice. (3) Optional 1-line takeaway. Then call SuggestFollowUp.]\n[FOLLOW-UP DIRECTIVE: After answering, you MUST call SuggestFollowUp. When the answer involved file analysis, prefer 2-3 distinct actions via the optional label2/prompt2 + label3/prompt3 parameters. Each action must propose a concrete next ACTION on these files (e.g. 'Rank top 5 prioritized actions across all files', 'Generate a cleanup script for the disks identified', 'Build a CFO deck from these uploads', 'Tag the untagged resources via PATCH'). Never propose a follow-up that just re-asks for analysis the user already saw.]");
-                uploadsContext = sb.ToString();
-            }
-            // Native vision attachments for image uploads (screenshots of the
-            // Azure portal, cost dashboards, architecture diagrams…). Attached on
-            // EVERY turn while listed — the CLI uploads them with the message and
-            // the model sees them directly; no tool round-trip involved.
             List<Attachment>? imageAttachments = null;
-            if (imageUploads.Count > 0)
+            void PrepareUploads(string sessionId)
             {
-                imageAttachments = imageUploads.Select(Attachment (u) => new AttachmentFile
+                var uploads = UploadedFileTools.Catalog.BindAndList(userId, sessionId, attachmentIds);
+                imageUploads = uploads.Where(upload => upload.Kind == "image" && File.Exists(upload.Path)).ToList();
+                var dataUploads = uploads.Where(upload => upload.Kind != "image").ToList();
+                if (dataUploads.Count > 0)
                 {
-                    Path = u.Path,
-                    DisplayName = u.FileName,
-                    MimeType = AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ImageMimeType(u.FileName),
-                }).ToList();
+                    var sb = new System.Text.StringBuilder();
+                    sb.Append("[UPLOADED FILES IN THIS SESSION — the user dropped these in. Their question is almost certainly about them. Use QueryUploadedFile(fileId, mode, paramsJson) to drill in. The schema is already shown below — you usually do NOT need a separate 'preview' call. Jump straight to head / slice / filter / aggregate / text_range / json_path. Responses are capped at ~200 rows / ~8000 chars; issue more calls if needed.");
+                    foreach (var u in dataUploads)
+                    {
+                        sb.Append($"\n  - fileId={u.FileId} name='{u.FileName}' kind={u.Kind} size={u.SizeBytes}B");
+                        if (!string.IsNullOrEmpty(u.SchemaSummary))
+                            sb.Append($"\n      schema: {u.SchemaSummary}");
+                    }
+                    sb.Append("]\n[FILE EVIDENCE: Answer the actual question from these files. Honor requested tables, filters and groupings. Reconcile source totals; disclose partial results and unknown values. Use GenerateDataReport for complete CSV/XLSX/HTML output. If a file is missing, request re-upload; do not silently use another source. A sample or an estimate is not measured full-file evidence.]");
+                    uploadsContext = sb.ToString();
+                }
+                // Native vision attachments for image uploads (screenshots of the
+                // Azure portal, cost dashboards, architecture diagrams…). Attached on
+                // EVERY turn while listed — the CLI uploads them with the message and
+                // the model sees them directly; no tool round-trip involved.
+                if (imageUploads.Count > 0)
+                {
+                    imageAttachments = imageUploads.Select(Attachment (u) => new AttachmentFile
+                    {
+                        Path = u.Path,
+                        DisplayName = u.FileName,
+                        MimeType = AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ImageMimeType(u.FileName),
+                    }).ToList();
+                }
             }
             // NOTE: context blocks are merged into the prompt AFTER session
             // acquisition (see below) so they can be deduplicated per session.
@@ -364,7 +353,12 @@ public static class ChatEndpoints
             // Detaches the streaming subscriptions. Declared out here so it is
             // visible in the finally; (re)assigned by WireHandlers inside the try.
             IDisposable? handlers = null;
-            ActiveTurnState? turnState = null;
+            // Guards every write to this request's response. Also set in the
+            // finally, because the HttpContext is pooled and reused once the
+            // turn ends (see the finally for why that matters).
+            var streamDetached = 0;
+            TurnExecution? turnState = null;
+            var dispatchAttempted = false;
             try
             {
                 CopilotSession session;
@@ -373,25 +367,29 @@ public static class ChatEndpoints
                 if (!string.IsNullOrEmpty(requestedSessionId))
                 {
                     // IDOR guard: a requested sessionId must belong to this
-                    // user's persistent workdir (Entra OID workdir or anon-userId workdir).
+                    // user's principal-owned workdir or anonymous user-id workdir.
                     // If it doesn't (stale localStorage after a redeploy, or a forged id),
                     // silently fall through to the user's current/new session so the
                     // UX doesn't dead-end &#8212; we never resume someone else's session.
-                    if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, requestedSessionId, ctx.RequestAborted))
+                    if (!await copilotFactory.UserOwnsSessionAsync(
+                        userId, azureTenantId, entraOid, requestedSessionId, ctx.RequestAborted))
                     {
                         logger.LogInformation("Requested sessionId {Sid} not owned by user {Uid}; falling back to current session", requestedSessionId, userId);
-                        session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
+                        session = await copilotFactory.GetCurrentOrCreateAsync(
+                            userId, userLogin!, azureTenantId, entraOid);
                         sessionAcquireMode = "fallback_current";
                     }
                     else
                     {
-                        session = await copilotFactory.GetOrResumeAsync(userId, requestedSessionId, userLogin!, entraOid);
+                        session = await copilotFactory.GetOrResumeAsync(
+                            userId, requestedSessionId, userLogin!, azureTenantId, entraOid);
                         sessionAcquireMode = "resume";
                     }
                 }
                 else
                 {
-                    session = await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid);
+                    session = await copilotFactory.GetCurrentOrCreateAsync(
+                        userId, userLogin!, azureTenantId, entraOid);
                     sessionAcquireMode = "current_or_new";
                 }
                 sessionSw.Stop();
@@ -402,9 +400,9 @@ public static class ChatEndpoints
                 // in-process entry by age: a long model turn may still be writing
                 // to the session. Every request/job path releases in finally, and
                 // a process restart naturally clears this dictionary.
-                turnState = new ActiveTurnState(userId, session);
-                if (!ActiveTurns.TryAdd(activeSessionId, turnState))
+                if (!TryBeginTurn(activeSessionId, userId, session, out turnState))
                 {
+                    turnState = null;
                     ActiveTurns.TryGetValue(activeSessionId, out var existingTurn);
                     logger.LogInformation("Rejected concurrent turn for session {SessionId} (running since {Start})", activeSessionId, existingTurn?.StartedAt);
                     await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "busy", message = "I'm still working on your previous question — one moment. This message wasn't sent; try again when the current answer finishes." })}\n\n");
@@ -413,11 +411,13 @@ public static class ChatEndpoints
                     return;
                 }
                 turnGateSessionId = activeSessionId;
+                chatActivity?.SetTag("request.id", turnState.RequestId);
+                PrepareUploads(activeSessionId);
 
                 // Per-turn effort routing: greetings/acknowledgements don't need
                 // deep deliberation — run them at "low" (~2-3s first token vs ~6s).
                 // Real FinOps questions keep the configured default effort.
-                var trivialTurn = IsTrivialPrompt(prompt);
+                var trivialTurn = attachmentIds.Length == 0 && imageUploads.Count == 0 && uploadsContext.Length == 0 && IsTrivialPrompt(prompt);
                 var targetEffort = copilotFactory.GetEffortForTurn(trivialTurn);
                 if (targetEffort is not null
                     && telemetry.LiveSessions.TryGetValue(activeSessionId, out var liveInfo)
@@ -439,7 +439,8 @@ public static class ChatEndpoints
                         // dead handle and nothing would stream (the SendAsync recycle
                         // path can't rebind them). Move the turn gate to the new id.
                         logger.LogWarning("Effort switch found stale session {SessionId}; recycling before streaming", activeSessionId);
-                        session = await copilotFactory.RecycleSessionAsync(userId, activeSessionId, userLogin!, entraOid);
+                        session = await copilotFactory.RecycleSessionAsync(
+                            userId, activeSessionId, userLogin!, azureTenantId, entraOid);
                         if (turnGateSessionId is null
                             || turnState is null
                             || !MoveTurn(turnGateSessionId, session.SessionId, turnState, session))
@@ -483,10 +484,9 @@ public static class ChatEndpoints
                 if (trivialTurn)
                     contextBits.Add(TrivialTurnDirective);
                 if (contextBits.Count > 0)
-                    prompt = string.Join("\n", contextBits) + "\n" + prompt;
+                    prompt = SensitiveContent.Redact(string.Join("\n", contextBits) + "\n" + prompt);
 
                 var done = new TaskCompletionSource();
-                var streamDetached = 0;
                 var toolTracker = new ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)>();
                 var firstEventLogged = 0;
 
@@ -517,7 +517,7 @@ public static class ChatEndpoints
                     try
                     {
                         if (Volatile.Read(ref streamDetached) == 0)
-                            await EmitAsync(ctx, sseData);
+                            await EmitAsync(ctx, SensitiveContent.Redact(sseData));
                     }
                     catch (Exception ex) when (IsClientDisconnect(ex))
                     {
@@ -541,6 +541,7 @@ public static class ChatEndpoints
                 // NOT thread-safe — the SDK may dispatch callbacks concurrently —
                 // so we guard every mutation/read.
                 var assistantBuf = new System.Text.StringBuilder();
+                var completedAssistantMessages = new Dictionary<string, string>(StringComparer.Ordinal);
                 var assistantBufLock = new object();
 
                 // (Re)attaches the streaming + assistant-capture handlers to a
@@ -582,7 +583,7 @@ public static class ChatEndpoints
                             // on one response stream interleave bytes into
                             // malformed SSE frames.
                             await HandleSessionEventAsync(evt, SafeEmit, toolTracker, telemetry, copilotFactory.Deployment,
-                                userId, userLogin!, activeSessionId, chatActivity, logger, done);
+                                userId, userLogin!, activeSessionId, chatActivity, logger, done, turnState);
                         }
                         catch (Exception eventEx)
                         {
@@ -597,7 +598,12 @@ public static class ChatEndpoints
                         if (evt is AssistantMessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Data.DeltaContent))
                             lock (assistantBufLock) { assistantBuf.Append(ad.Data.DeltaContent); }
                         else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Data.Content))
-                            lock (assistantBufLock) { assistantBuf.Clear(); assistantBuf.Append(am.Data.Content); }
+                            lock (assistantBufLock)
+                            {
+                                completedAssistantMessages[am.Data.MessageId ?? "legacy"] = am.Data.Content;
+                                assistantBuf.Clear();
+                                assistantBuf.AppendJoin("\n\n", completedAssistantMessages.Values);
+                            }
                         await Task.CompletedTask;
                     });
                     return new CompositeDisposable(mainSub, captureSub);
@@ -658,11 +664,22 @@ public static class ChatEndpoints
                 // — both failed to flow through that boundary; baggage does.
                 turnKey = $"{userId}:{activeSessionId}";
                 chatActivity?.SetBaggage("finops.turn.id", turnKey);
-                Infrastructure.HttpHelper.RetryReporters[turnKey] = (attempt, waitSec, url, tool, status) =>
+                Infrastructure.HttpHelper.RetryReporters[turnKey] = notice =>
                 {
                     logger.LogInformation("EMIT cooling_down sse turn={Turn} attempt={Attempt} status={Status} tool={Tool} waitSec={Wait:F1}",
-                        turnKey, attempt, status, tool, waitSec);
-                    return SafeEmit(JsonSerializer.Serialize(new { type = "cooling_down", attempt, waitSeconds = waitSec, url, tool, status }));
+                        turnKey, notice.Attempt, notice.Status, notice.Tool, notice.WaitSeconds);
+                    return SafeEmit(JsonSerializer.Serialize(new
+                    {
+                        type = "cooling_down",
+                        attempt = notice.Attempt,
+                        waitSeconds = notice.WaitSeconds,
+                        url = notice.Url,
+                        tool = notice.Tool,
+                        status = notice.Status,
+                        retryAtUtc = notice.RetryAtUtc,
+                        willRetry = notice.WillRetry,
+                        toolCallId = ToolExecutionContext.Current?.ToolCallId
+                    }));
                 };
                 // Belt-and-braces cleanup on request abort.
                 var turnKeyForAbort = turnKey;
@@ -670,6 +687,7 @@ public static class ChatEndpoints
 
                 try
                 {
+                    dispatchAttempted = true;
                     await session.SendAsync(new MessageOptions { Prompt = prompt, Attachments = imageAttachments });
                 }
                 catch (Exception sendEx) when (sendEx.Message.Contains("Session not found", StringComparison.OrdinalIgnoreCase))
@@ -680,7 +698,8 @@ public static class ChatEndpoints
                     // them to the live session — otherwise the recycled session's
                     // events never reach the SSE stream and the turn hangs silently.
                     handlers?.Dispose();
-                    session = await copilotFactory.RecycleSessionAsync(userId, activeSessionId, userLogin!, entraOid);
+                    session = await copilotFactory.RecycleSessionAsync(
+                        userId, activeSessionId, userLogin!, azureTenantId, entraOid);
                     if (turnGateSessionId is not null && turnGateSessionId != session.SessionId)
                     {
                         if (turnState is null
@@ -690,7 +709,7 @@ public static class ChatEndpoints
                     }
                     else if (turnState is not null)
                     {
-                        turnState.Session = session;
+                        turnState.MoveTo(session);
                     }
                     activeSessionId = session.SessionId;
                     handlers = WireHandlers(session);
@@ -715,12 +734,36 @@ public static class ChatEndpoints
                 // dies without either, an unbounded wait would hold the session's
                 // turn gate for the process lifetime, so cap it at the backend's
                 // turn budget and treat the timeout as an abandoned turn.
-                if (await Task.WhenAny(done.Task, Task.Delay(MaxTurnDuration)) != done.Task)
+                ArgumentNullException.ThrowIfNull(turnState);
+                try
                 {
-                    logger.LogWarning("Turn for session {SessionId} exceeded {Minutes} min without an SDK completion event; abandoning it",
-                        activeSessionId, MaxTurnDuration.TotalMinutes);
-                    done.TrySetResult();
+                    await Task.WhenAny(done.Task, turnState.Terminal.Task).WaitAsync(MaxTurnDuration);
+                    if (!done.Task.IsCompleted && turnState.Terminal.Task.IsCompleted)
+                    {
+                        try { await done.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+                        catch (TimeoutException)
+                        {
+                            logger.LogWarning("Terminal event delivery did not finish for turn {RequestId}", turnState.RequestId);
+                            if (EmptyResultNotice(turnState) is { } notice) await SafeEmit(notice);
+                            await SafeEmit("[DONE]");
+                        }
+                    }
                 }
+                catch (TimeoutException)
+                {
+                    var confirmed = await turnState.AbortAsync("timeout");
+                    logger.LogWarning("Turn timed out; terminationConfirmed={Confirmed}", confirmed);
+                    await SafeEmit(JsonSerializer.Serialize(new
+                    {
+                        type = "error",
+                        code = "turn_timeout",
+                        message = confirmed
+                        ? "The turn timed out and was cancelled. Review any partial operation results before retrying."
+                        : "The turn timed out. This session is quarantined until execution stops; do not repeat pending changes."
+                    }));
+                    await SafeEmit("[DONE]");
+                }
+                done.TrySetResult();
 
                 // Stop the keepalive pinger before any post-turn writes so it
                 // can never interleave with the title/timing emissions below.
@@ -752,7 +795,7 @@ public static class ChatEndpoints
                 lock (assistantBufLock) { assistantReply = assistantBuf.ToString(); }
                 logger.LogDebug("Title-gen check: streamDetached={StreamDetached} replyLen={Len} sessionId={Sid}",
                     Volatile.Read(ref streamDetached) != 0, assistantReply.Length, activeSessionId);
-                if (!string.IsNullOrWhiteSpace(assistantReply))
+                if (!string.IsNullOrWhiteSpace(assistantReply) && !turnState.CancellationToken.IsCancellationRequested)
                 {
                     var existing = telemetry.SessionTitles.TryGetValue(activeSessionId, out var t) ? t : null;
                     var promptClean = AzureFinOps.Dashboard.Endpoints.SessionEndpoints.CleanSummary(prompt);
@@ -832,16 +875,26 @@ public static class ChatEndpoints
                     new KeyValuePair<string, object?>("model", copilotFactory.Deployment),
                     new KeyValuePair<string, object?>("user", userLogin),
                     new KeyValuePair<string, object?>("error_type", ex.GetType().Name));
-                chatActivity?.SetTag("ai.error", ex.Message);
+                var safeError = Infrastructure.SensitiveContent.Redact(ex.Message);
+                chatActivity?.SetTag("ai.error", safeError);
                 chatActivity?.SetTag("ai.error_type", ex.GetType().Name);
-                logger.LogError(ex, "Chat request failed for {User}", userLogin);
-                var errorData = JsonSerializer.Serialize(new { type = "error", message = ex.Message });
+                logger.LogError("Chat request failed for {User}; errorType={ErrorType}", userLogin, ex.GetType().Name);
+                var errorData = JsonSerializer.Serialize(new { type = "error", message = safeError });
                 await ctx.Response.WriteAsync($"data: {errorData}\n\n");
                 await ctx.Response.WriteAsync("data: [DONE]\n\n");
                 await ctx.Response.Body.FlushAsync();
             }
             finally
             {
+                // The response is finished, so this request's HttpContext goes
+                // back to ASP.NET's pool and is reused by the next request on
+                // the connection. SDK callbacks can still arrive after this
+                // point (handler disposal races an in-flight dispatch), so the
+                // stream must be marked detached BEFORE anything else — without
+                // it a late SafeEmit writes SSE bytes into an unrelated
+                // response, which then fails with "response has already
+                // started" and aborts that connection.
+                Interlocked.Exchange(ref streamDetached, 1);
                 // Detach the streaming subscriptions from whatever session they
                 // ended up bound to (original or recycled).
                 handlers?.Dispose();
@@ -850,11 +903,8 @@ public static class ChatEndpoints
                 // sidebar score racing chat) holds its own key in the dict.
                 if (turnKey is not null)
                     Infrastructure.HttpHelper.RetryReporters.TryRemove(turnKey, out _);
-                if (turnGateSessionId is not null)
-                    EndTurn(turnGateSessionId);
-                // Also releases a state orphaned by a failed MoveTurn, so a
-                // waiting Stop resolves instead of timing out.
-                turnState?.Completion.TrySetResult();
+                if (turnState is not null && !await EndTurnAsync(turnState, dispatchAttempted))
+                    logger.LogWarning("Turn remains quarantined until SDK termination and host-tool completion are confirmed.");
             }
         });
 
@@ -867,13 +917,15 @@ public static class ChatEndpoints
             var userId = user.GetProperty("id").GetInt64();
             var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
 
-            string? entraOid = null;
+            string? entraTenantId = null, entraOid = null;
             var azureUserJson = ctx.Session.GetString("azure_user");
             if (azureUserJson is not null)
             {
                 try
                 {
                     var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("tenantId", out var tenantProp))
+                        entraTenantId = tenantProp.GetString();
                     if (au.TryGetProperty("objectId", out var oidProp))
                         entraOid = oidProp.GetString();
                 }
@@ -882,8 +934,8 @@ public static class ChatEndpoints
 
             // "Reset" semantics: start a brand-new conversation. The previous one
             // remains on disk and can be resumed via the Conversations sidebar.
-            var fresh = await copilotFactory.CreateNewAsync(userId, userLogin!, entraOid);
-            AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ClearForUser(userId);
+            var fresh = await copilotFactory.CreateNewAsync(
+                userId, userLogin!, entraTenantId, entraOid);
             logger.LogInformation("Started new conversation for user {UserId} sessionId={SessionId}", userId, fresh.SessionId);
             await ctx.Response.WriteAsJsonAsync(new { sessionId = fresh.SessionId });
         });
@@ -905,13 +957,15 @@ public static class ChatEndpoints
             var userId = user.GetProperty("id").GetInt64();
             var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
 
-            string? entraOid = null;
+            string? entraTenantId = null, entraOid = null;
             var azureUserJson = ctx.Session.GetString("azure_user");
             if (azureUserJson is not null)
             {
                 try
                 {
                     var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("tenantId", out var tenantProp))
+                        entraTenantId = tenantProp.GetString();
                     if (au.TryGetProperty("objectId", out var oidProp))
                         entraOid = oidProp.GetString();
                 }
@@ -920,7 +974,11 @@ public static class ChatEndpoints
 
             _ = Task.Run(async () =>
             {
-                try { await copilotFactory.GetCurrentOrCreateAsync(userId, userLogin!, entraOid); }
+                try
+                {
+                    await copilotFactory.GetCurrentOrCreateAsync(
+                        userId, userLogin!, entraTenantId, entraOid);
+                }
                 catch (Exception ex) { logger.LogWarning(ex, "Session warm-up failed for user {UserId}", userId); }
             });
             ctx.Response.StatusCode = 202;
@@ -942,13 +1000,15 @@ public static class ChatEndpoints
             var user = JsonSerializer.Deserialize<JsonElement>(userJson);
             var userId = user.GetProperty("id").GetInt64();
 
-            string? entraOid = null;
+            string? entraTenantId = null, entraOid = null;
             var azureUserJson = ctx.Session.GetString("azure_user");
             if (azureUserJson is not null)
             {
                 try
                 {
                     var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (au.TryGetProperty("tenantId", out var tenantProp))
+                        entraTenantId = tenantProp.GetString();
                     if (au.TryGetProperty("objectId", out var oidProp))
                         entraOid = oidProp.GetString();
                 }
@@ -965,7 +1025,8 @@ public static class ChatEndpoints
 
             if (string.IsNullOrWhiteSpace(sessionId)) { ctx.Response.StatusCode = 400; return; }
 
-            if (!await copilotFactory.UserOwnsSessionAsync(userId, entraOid, sessionId, ctx.RequestAborted))
+            if (!await copilotFactory.UserOwnsSessionAsync(
+                    userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
             {
                 ctx.Response.StatusCode = 404;
                 return;
@@ -991,24 +1052,7 @@ public static class ChatEndpoints
             if (activeSession is null && telemetry.LiveSessions.TryGetValue(sessionId, out var live))
                 activeSession = live.Session;
 
-            var abortAccepted = false;
-            if (activeSession is not null)
-            {
-                try
-                {
-                    using var abortCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                    await activeSession.AbortAsync(abortCts.Token);
-                    abortAccepted = true;
-                }
-                catch (Exception ex)
-                {
-                    // Expected condition, not a fault: log without the exception
-                    // object so it lands in AppTraces rather than AppExceptions.
-                    logger.LogInformation(
-                        "Abort failed for session {SessionId}; leaving turn gate held: {Reason}",
-                        sessionId, ex.Message);
-                }
-            }
+            var abortAccepted = await activeTurn.AbortAsync();
 
             // AbortAsync acceptance alone is not enough to free the gate. Wait
             // until the chat/job event loop observes SDK idle/error and calls
@@ -1021,7 +1065,7 @@ public static class ChatEndpoints
             {
                 stopped,
                 alreadyCompleted = false,
-                abortPending = abortAccepted && !stopped,
+                abortPending = !stopped,
             });
         });
     }
@@ -1037,13 +1081,14 @@ public static class ChatEndpoints
         string activeSessionId,
         Activity? chatActivity,
         ILogger logger,
-        TaskCompletionSource done)
+        TaskCompletionSource done,
+        TurnExecution? turnState = null)
     {
         string? sseData = null;
 
         if (evt is AssistantMessageDeltaEvent delta)
         {
-            sseData = JsonSerializer.Serialize(new { type = "delta", content = delta.Data.DeltaContent });
+            sseData = JsonSerializer.Serialize(new { type = "delta", messageId = delta.Data.MessageId, content = delta.Data.DeltaContent });
         }
         else if (evt is AssistantReasoningDeltaEvent reasoningDelta)
         {
@@ -1055,7 +1100,18 @@ public static class ChatEndpoints
         }
         else if (evt is AssistantMessageEvent msg)
         {
-            sseData = JsonSerializer.Serialize(new { type = "message", content = msg.Data.Content });
+            sseData = JsonSerializer.Serialize(new { type = "message", messageId = msg.Data.MessageId, content = msg.Data.Content });
+        }
+        else if (evt is AssistantUsageEvent usage)
+        {
+            var finish = usage.Data.FinishReason;
+            if ((!string.IsNullOrEmpty(finish) && finish is not "stop" and not "tool_calls" and not "completed")
+                || usage.Data.ContentFilterTriggered == true)
+            {
+                logger.LogWarning(
+                    "Model call ended without a normal finish (finish={FinishReason}, contentFilter={ContentFilter}, outputTokens={OutputTokens}, maxOutputTokens={MaxOutputTokens})",
+                    finish, usage.Data.ContentFilterTriggered, usage.Data.OutputTokens, usage.Data.MaxOutputTokens);
+            }
         }
         else if (evt is ToolExecutionStartEvent toolStart)
         {
@@ -1076,13 +1132,13 @@ public static class ChatEndpoints
                     logger.LogWarning(serializeEx, "Failed to serialise tool arguments for telemetry (tool={Tool})", toolStart.Data.ToolName);
                 }
             }
-            toolActivity?.SetTag("ai.tool.args", argsJson?.Length > 1000 ? argsJson[..1000] + "..." : argsJson);
+            toolActivity?.SetTag("ai.tool.args_length", argsJson?.Length);
             logger.LogInformation("Tool start: {Tool} id={ToolId}", toolStart.Data.ToolName, toolId);
             sseData = JsonSerializer.Serialize(new { type = "tool_start", tool = toolStart.Data.ToolName, id = toolId, args = argsJson });
         }
         else if (evt is ToolExecutionCompleteEvent toolDone)
         {
-            sseData = await HandleToolDoneAsync(toolDone, emit, toolTracker, telemetry, userLogin, logger);
+            sseData = await HandleToolDoneAsync(toolDone, emit, toolTracker, telemetry, userId, activeSessionId, userLogin, logger);
         }
         else if (evt is SessionTitleChangedEvent titleEvt)
         {
@@ -1107,16 +1163,33 @@ public static class ChatEndpoints
 
         if (evt is SessionIdleEvent || evt is SessionErrorEvent)
         {
+            if (evt is SessionIdleEvent && turnState is not null && EmptyResultNotice(turnState) is { } notice)
+            {
+                logger.LogWarning("Turn {RequestId} reached SDK idle without a user-visible result", turnState.RequestId);
+                await emit(notice);
+            }
             await emit("[DONE]");
             done.TrySetResult();
         }
     }
+
+    internal static string? EmptyResultNotice(TurnExecution turn) =>
+        turn.HasUserOutput || turn.CancellationReason is not null || turn.CancellationToken.IsCancellationRequested || !turn.TryClaimEmptyNotice()
+            ? null
+            : JsonSerializer.Serialize(new
+            {
+                type = "error",
+                code = "empty_result",
+                message = "The model finished without an answer or generated result. Your request was not fulfilled. You can retry the question; review any pending operations before retrying a change."
+            });
 
     private static async Task<string?> HandleToolDoneAsync(
         ToolExecutionCompleteEvent toolDone,
         Func<string, Task> emit,
         ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)> toolTracker,
         AiTelemetry telemetry,
+        long userId,
+        string sessionId,
         string userLogin,
         ILogger logger)
     {
@@ -1149,10 +1222,31 @@ public static class ChatEndpoints
         logger.LogInformation("Tool done: {Tool} id={ToolId} success={Success} durationMs={Duration} resultLen={ResultLen}",
             toolName, toolId, toolDone.Data.Success, durationMs, resultText?.Length ?? 0);
 
+        var consentActions = HttpHelper.ConsentActions(resultText);
+        if (consentActions.Length > 0)
+            await emit(JsonSerializer.Serialize(new { type = "consent_required", actions = consentActions }));
+
+        if (resultText is not null && (resultText.StartsWith("HTTP 409 ApprovalRequired\n", StringComparison.Ordinal) || toolName == "BulkAzureRequest"))
+        {
+            try
+            {
+                using var proposal = JsonDocument.Parse(resultText.StartsWith("HTTP ") ? resultText[(resultText.IndexOf('\n') + 1)..] : resultText);
+                var bodies = toolName == "BulkAzureRequest" && proposal.RootElement.TryGetProperty("results", out var results)
+                    ? results.EnumerateArray().Where(item => item.TryGetProperty("body", out var value) && value.ValueKind == JsonValueKind.Object).Select(item => item.GetProperty("body")).ToArray()
+                    : [proposal.RootElement];
+                foreach (var body in bodies)
+                    if (body.TryGetProperty("operationId", out var operationId)
+                        && OperationStore.Default.Find(operationId.GetString() ?? "", userId) is { Status: "awaitingApproval" } operation
+                        && operation.SessionId == sessionId)
+                        await emit(JsonSerializer.Serialize(new { type = "approval_required", change = OperationStore.Review(operation) }));
+            }
+            catch (JsonException) { }
+        }
+
         // Marker-based side channels (chart / html / script / maturity).
         // If a marker is detected we emit the tool_done event followed by the
         // structured event, then return null so the caller skips re-emit.
-        if (toolName == "GetCrawlMaturityEvidence" && toolDone.Data.Success && resultText is not null)
+        if (toolName == "GetCrawlMaturityEvidence" && toolDone.Data.Success && resultText is not null && resultText.StartsWith('{'))
         {
             try
             {
@@ -1253,8 +1347,8 @@ public static class ChatEndpoints
                         {
                             var scriptFileId = parts[0];
                             var scriptContent = "";
-                            if (ScriptTools.GeneratedFiles.TryGetValue(scriptFileId, out var scriptEntry))
-                                scriptContent = scriptEntry.Content ?? "";
+                            if (ArtifactStore.Default.Find(scriptFileId, userId) is { } scriptEntry)
+                                scriptContent = SensitiveContent.Redact(File.ReadAllText(scriptEntry.Path));
                             var scriptPayload = JsonSerializer.Serialize(new { type = "script_ready", fileId = parts[0], fileName = parts[1], lineCount = parts[2], language = parts[3], description = parts.Length > 4 ? parts[4] : "", content = scriptContent });
                             await emit(sseData);
                             await emit(scriptPayload);

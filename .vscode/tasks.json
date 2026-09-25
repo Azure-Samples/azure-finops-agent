@@ -1,0 +1,30 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run local dashboard (built frontend)",
+			"type": "process",
+			"command": "dotnet",
+			"args": [
+				"run",
+				"--project",
+				"Dashboard.csproj",
+				"--no-build",
+				"--no-restore",
+				"--urls",
+				"http://localhost:5000"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}${pathSeparator}src${pathSeparator}Dashboard",
+				"env": {
+					"ASPNETCORE_ENVIRONMENT": "Development",
+					"BUILD_SHA": "local",
+					"BUILD_NUMBER": "ui-fix",
+					"BUILD_BRANCH": "local"
+				}
+			},
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}

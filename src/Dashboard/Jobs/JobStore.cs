@@ -16,6 +16,7 @@ public sealed class ScheduledJob
     /// <summary>Durable owner identity — jobs are Entra-only (background auth
     /// needs the persisted refresh token, which anonymous users don't have).</summary>
     public string EntraOid { get; set; } = "";
+    public string EntraTenantId { get; set; } = "";
     public string UserLogin { get; set; } = "";
     public string Name { get; set; } = "";
     public string Prompt { get; set; } = "";
@@ -34,6 +35,9 @@ public sealed class ScheduledJob
     public string? LastStatus { get; set; }
     /// <summary>First ~200 chars of the last answer, for the sidebar tooltip.</summary>
     public string? LastSummary { get; set; }
+    public DateTimeOffset? LastDataAsOfUtc { get; set; }
+    public string[] LastEvidenceTools { get; set; } = [];
+    public int LastCompactedRun { get; set; }
     public int RunCount { get; set; }
     public int ConsecutiveFailures { get; set; }
 }
@@ -60,12 +64,14 @@ public sealed class JobStore
         Load();
     }
 
-    public IReadOnlyList<ScheduledJob> ForUser(long userId, string? entraOid) =>
+    public IReadOnlyList<ScheduledJob> ForUser(
+        long userId, string? entraTenantId, string? entraOid) =>
         _jobs.Values
-            // Jobs are Entra-only — match strictly on the OID (tenant-scoped
-            // identity). No userId-hash fallback: listing must never leak
-            // another user's jobs.
-            .Where(j => !string.IsNullOrEmpty(entraOid) && j.EntraOid == entraOid)
+            .Where(j => j.UserId == userId
+                && !string.IsNullOrEmpty(entraTenantId)
+                && !string.IsNullOrEmpty(entraOid)
+                && string.Equals(j.EntraTenantId, entraTenantId, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(j.EntraOid, entraOid, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(j => j.CreatedUtc)
             .ToList();
 
@@ -74,9 +80,11 @@ public sealed class JobStore
 
     public ScheduledJob? Get(string id) => _jobs.TryGetValue(id, out var j) ? j : null;
 
-    public int EnabledCountForUser(long userId, string entraOid) =>
+    public int EnabledCountForUser(long userId, string entraTenantId, string entraOid) =>
         _jobs.Values.Count(j =>
-            j.Enabled && !string.IsNullOrEmpty(entraOid) && j.EntraOid == entraOid);
+            j.Enabled && j.UserId == userId
+            && string.Equals(j.EntraTenantId, entraTenantId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(j.EntraOid, entraOid, StringComparison.OrdinalIgnoreCase));
 
     public void Add(ScheduledJob job)
     {
@@ -132,8 +140,26 @@ public sealed class JobStore
             if (!File.Exists(JobsFile)) return;
             var list = JsonSerializer.Deserialize<List<ScheduledJob>>(File.ReadAllText(JobsFile));
             if (list is null) return;
-            foreach (var j in list) _jobs[j.Id] = j;
+            var disabledLegacyJobs = 0;
+            foreach (var j in list)
+            {
+                if (string.IsNullOrWhiteSpace(j.EntraTenantId))
+                {
+                    j.Enabled = false;
+                    j.LastStatus = "auth_expired";
+                    j.LastSummary = "Reconnect Azure and recreate this job to restore tenant-bound ownership.";
+                    disabledLegacyJobs++;
+                }
+                _jobs[j.Id] = j;
+            }
             _logger.LogInformation("JobStore: loaded {Count} scheduled job(s)", list.Count);
+            if (disabledLegacyJobs > 0)
+            {
+                _logger.LogWarning(
+                    "JobStore: disabled {Count} legacy job(s) without tenant-bound ownership",
+                    disabledLegacyJobs);
+                Save();
+            }
         }
         catch (Exception ex)
         {

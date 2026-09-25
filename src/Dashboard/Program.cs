@@ -5,6 +5,7 @@ using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Observability;
 using AzureFinOps.Dashboard.Endpoints;
+using AzureFinOps.Dashboard.Infrastructure;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 
@@ -30,20 +31,13 @@ if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
         "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-RESOURCE.openai.azure.com/\" " +
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
-var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-5.6-sol";
+var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-6-luna";
 // Optional: pin the BYOK credential to the AOAI resource's tenant. Needed for
 // local dev when the az CLI's DEFAULT account lives in a different tenant than
 // the AOAI resource (DefaultAzureCredential would mint a token for the wrong
 // tenant → "Token tenant does not match resource tenant" 400s on every turn).
 var azureOpenAITenantId = builder.Configuration["AzureOpenAI:TenantId"];
-// Default reasoning effort (low|medium|high|xhigh) for reasoning-capable
-// models. `medium` is the sweet spot for GPT-5.6 on this workload: it roughly
-// halves time-to-first-token vs `high` (the dominant first-response latency)
-// while keeping tool-orchestration + format-following quality. Trivial turns
-// are still auto-routed to `low` per request. Override with
-// AzureOpenAI__ReasoningEffort=high for a max-depth demo, or `xhigh`
-// (measured 8+ min per LLM round-trip in production — opt-in only).
-var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "medium";
+var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "xhigh";
 var appInsightsCs = builder.Configuration["ApplicationInsights:ConnectionString"];
 // Canonical public hostname (bare, no scheme/www) for the owner deployment, e.g.
 // "azure-finops-agent.com". The app is reachable on its *.azurewebsites.net host
@@ -95,7 +89,8 @@ if (!string.IsNullOrEmpty(appInsightsCs))
         .UseAzureMonitor(o =>
         {
             o.ConnectionString = appInsightsCs;
-            o.SamplingRatio = 1.0f;   // preserve pre-1.5.0 behavior; default in 1.5.0 is RateLimitedSampler (5 req/sec)
+            o.SamplingRatio = 1.0f;
+            o.TracesPerSecond = null;
         })
         .WithTracing(t => t
             .AddSource("AzureFinOps.AI")
@@ -128,7 +123,9 @@ AzureFinOps.Dashboard.Infrastructure.HttpHelper.Logger =
     loggerFactory.CreateLogger("AzureFinOps.AI.HttpHelper");
 
 await using var copilotFactory = await CopilotSessionFactory.CreateAsync(
-    telemetry, oauthOptions, azureOpenAIEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort, loggerFactory, azureOpenAITenantId);
+    telemetry, app.Services.GetRequiredService<PersistentIdentity>(), oauthOptions,
+    azureOpenAIEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort,
+    loggerFactory, azureOpenAITenantId);
 
 // Start the janitor now that the factory exists; tie its lifecycle to the host.
 var janitor = new UserStateJanitor(telemetry, copilotFactory, loggerFactory.CreateLogger<UserStateJanitor>());
@@ -196,30 +193,7 @@ app.UseForwardedHeaders(forwardedHeadersOptions);
 // debugging, so this only runs outside Development.
 if (!app.Environment.IsDevelopment())
 {
-    app.UseExceptionHandler(errorApp => errorApp.Run(async ctx =>
-    {
-        var ex = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
-        var traceId = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? ctx.TraceIdentifier;
-        // A client navigating away / closing the tab surfaces as a cancellation.
-        // That is expected, not a fault — log it at Information WITHOUT the
-        // exception object so it never inflates the exceptions table (or trips
-        // exception-rate alerts), mirroring Ipv4HttpHandler's transient handling.
-        var aborted = ctx.RequestAborted.IsCancellationRequested || ex is OperationCanceledException;
-
-        if (aborted)
-            logger.LogInformation("Request aborted on {Method} {Path} (client disconnect, traceId={TraceId})",
-                ctx.Request.Method, ctx.Request.Path.Value, traceId);
-        else if (ex is not null)
-            logger.LogError(ex, "Unhandled exception on {Method} {Path} (traceId={TraceId})",
-                ctx.Request.Method, ctx.Request.Path.Value, traceId);
-
-        if (!ctx.Response.HasStarted && !aborted)
-        {
-            ctx.Response.StatusCode = StatusCodes.Status500InternalServerError;
-            ctx.Response.ContentType = "application/json";
-            await ctx.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred.", traceId });
-        }
-    }));
+    app.UseExceptionHandler(ApiExceptionHandling.CreateOptions(logger));
 }
 
 if (!app.Environment.IsDevelopment())
@@ -433,6 +407,7 @@ app.MapSessionEndpoints(copilotFactory, telemetry, jobStore, logger);
 AzureFinOps.Dashboard.Jobs.JobEndpoints.MapJobEndpoints(app, jobStore, jobScheduler, logger);
 app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
+app.MapOperationEndpoints(copilotFactory, tokenStore);
 app.MapUploadEndpoints();
 app.MapSeoEndpoints();
 

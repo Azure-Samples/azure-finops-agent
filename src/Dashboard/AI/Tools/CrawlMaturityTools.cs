@@ -15,6 +15,12 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// </summary>
 public sealed class CrawlMaturityTools
 {
+    private const string BudgetSpendFreshness =
+        "Budget currentSpend is evaluated periodically and may lag billing; retrieval time is not data freshness. No source data-as-of timestamp is available, and this is not a finalized bill.";
+
+    private const string ResourceGraphFreshness =
+        "Resource Graph is an indexed inventory and may lag resource changes. Its source data-as-of timestamp and indexing delay are unknown; retrievedAtUtc records completion of this inventory read, not source freshness.";
+
     private readonly UserTokens _tokens;
     private readonly ScoreTools _scoreTools;
 
@@ -26,12 +32,224 @@ public sealed class CrawlMaturityTools
 
     public IEnumerable<AIFunction> Create()
     {
-        yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides exact MTD spend.
+        yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also reads cached Azure Advisor Cost recommendations for the same scopes, ranks reported annual estimates within each currency, and returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides a periodically evaluated MTD snapshot, not real-time or finalized cost.
+SAVINGS: when asked for the biggest savings opportunities, use evidence.savings, not governance scores or generic tag/export tasks. Present evidence.savings.answerTable verbatim as the savings table (it already carries each opportunity's range, best option, subscription and Advisor last-updated source date). Ranking is over reported annualSavingsAmount within one currency; each rankings[].opportunities item groups mutually exclusive Advisor alternatives (for example 1-year/3-year reservation terms and 7/30/60-day lookbacks for the same SKU and scope). Present each opportunity once, with its best estimate and, when alternativeCount > 1, the lowest-to-best alternative range and the best alternative's term/lookback; never list alternatives of one opportunity as separate ranked opportunities. Retain the term, scope, SKU, quantity, lastUpdated and coverage. These are potentially overlapping Advisor estimates, not verified net or realized savings: do not add them together, recommend a commitment purchase without eligibility/utilization evidence, or confuse savingsAmount of unspecified period with annualSavingsAmount. Unknown amounts stay unranked, not zero. A zero common-waste count does not mean there are no savings opportunities.
+EVIDENCE LIMITS: include a concise source-freshness line in the final answer's problem context, before the table. For Resource Graph tagging, policy and waste findings, explicitly state that indexed inventory may lag changes and that its source data-as-of timestamp and indexing delay are unknown. An Advisor retrieval timestamp does not cover inventory findings. generatedUtc is bundle generation time, not an inventory retrieval time. Use each source's returned retrievedAtUtc and lastUpdated when available; source freshness and unmeasured indexing delay remain unknown. When quoting budget spend, state that the snapshot may lag billing and has no source data-as-of timestamp. Generic alert/scheduled-action counts do not establish anomaly-alert configuration; do not claim anomaly alerts are missing or configured from those counts.
+DATA SCOPING: the declared assessment scope controls the subscription inputs. Include every requested subscription and all seven dimensions; do not shrink a full assessment to top spenders. The host uses scoped Resource Graph aggregates and bounded evidence samples. Reuse those summaries rather than asking QueryAzure for raw inventories. Filtered budgets or sample names do not establish whole-estate spend/counts; retain coverage, unknown and notApplicable states.
     Use exactly once for Crawl/FinOps maturity scoring. Pass the exact `subscriptions` array and optional first management-group id from the connection context. Do NOT supplement it with QueryAzure, ReportMaturityScore, SuggestFollowUp, or any other tool—the score persistence, maturity SSE event, and follow-up buttons are already handled by this result.");
+        yield return AIFunctionFactory.Create(GetAdvisorCostRecommendations, "GetAdvisorCostRecommendations", @"Reads every page of cached Azure Advisor Cost recommendations for the requested subscriptions and groups them by Advisor impact (High, Medium, Low) in ONE call. Mutually exclusive alternatives for the same purchase (reservation/savings-plan term and lookback variants for one SKU, region and scope) are merged into one opportunity with its best annual estimate and alternative range. Returns a host-built `headline` and markdown `answerTable` with every impact level, including levels with no recommendations.
+Use exactly once for Advisor cost recommendation, savings-by-impact or 'what does Advisor recommend' questions, with the full connection-context subscriptions. Do not also call QueryAzure for Advisor. Present `headline` and `answerTable` verbatim, then the returned coverage, retrievedAtUtc and lastUpdated range. Estimates are Advisor's gross annual figures in the returned currency: do not add different opportunities or alternatives together, convert currency, or call them verified net savings.");
+    }
+
+    private async Task<string> GetAdvisorCostRecommendations(
+        [Description("Subscription objects with id and name from connection context for the full requested scope.")] string subscriptionsJson)
+    {
+        var token = _tokens.AzureToken;
+        if (string.IsNullOrEmpty(token))
+            return HttpHelper.TokenMissing("AzureToken", null, "advisor");
+
+        var (subscriptions, parseError) = ParseSubscriptions(subscriptionsJson);
+        if (parseError is not null) return $"HTTP 400 BadRequest\n{parseError}";
+        if (subscriptions.Count == 0) return "HTTP 400 BadRequest\nNo valid subscription IDs were supplied.";
+
+        using var requestLimiter = new SemaphoreSlim(8, 8);
+        var responses = await Task.WhenAll(subscriptions.Select(async scope =>
+            (Scope: scope, Response: await ReadArmCollection(
+                token, AdvisorCostPath(scope.Id), "advisor.cost_by_impact", requestLimiter))));
+        return JsonSerializer.Serialize(BuildAdvisorImpactReport(responses));
+    }
+
+    private static readonly string[] AdvisorImpactLevels = ["High", "Medium", "Low"];
+
+    internal static object BuildAdvisorImpactReport(
+        IReadOnlyList<(SubscriptionScope Scope, string Response)> responses)
+    {
+        var sources = responses.Select(item => ReadAdvisorSource(item.Scope, item.Response)).ToArray();
+        var complete = sources.Length > 0 && sources.All(source => source.Status == 200 && source.Error is null);
+        var opportunities = sources.SelectMany(source => source.Candidates)
+            .GroupBy(candidate => candidate.AlternativeKey, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(candidate => candidate.AnnualSavings ?? -1)
+                .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
+                .ToArray())
+            .Select(alternatives => new AdvisorOpportunity(alternatives))
+            .ToArray();
+
+        var groups = AdvisorImpactLevels
+            .Concat(opportunities.Select(o => o.Impact)
+                .Where(impact => !AdvisorImpactLevels.Contains(impact, StringComparer.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            .Select(impact =>
+            {
+                var items = opportunities
+                    .Where(o => string.Equals(o.Impact, impact, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(o => o.Best ?? -1)
+                    .ThenBy(o => o.Title, StringComparer.Ordinal)
+                    .ToArray();
+                return new
+                {
+                    impact,
+                    opportunityCount = items.Length,
+                    recommendationCount = items.Sum(o => o.Alternatives.Length),
+                    highestAnnualEstimateByCurrency = items
+                        .Where(o => o.Best is not null && o.Currency is not null)
+                        .GroupBy(o => o.Currency!, StringComparer.OrdinalIgnoreCase)
+                        .Select(g => new { currency = g.Key, amount = g.Max(o => o.Best) })
+                        .ToArray(),
+                    items
+                };
+            }).ToArray();
+
+        var rows = new List<string>
+        {
+            "| Impact | Recommendation | Subscription | Estimated annual savings | Best-estimate option | Alternatives | Advisor last updated |",
+            "|---|---|---|---:|---|---:|---|"
+        };
+        foreach (var group in groups)
+        {
+            if (group.items.Length == 0)
+            {
+                rows.Add($"| {group.impact} | No cost recommendations returned | — | — | — | — | — |");
+                continue;
+            }
+            foreach (var o in group.items)
+                rows.Add($"| {group.impact} | {TableCell(o.Title)} | {TableCell(o.SubscriptionName)} | {o.SavingsText} | {TableCell(o.OptionText)} | {o.Alternatives.Length} | {TableCell(o.LastUpdatedText)} |");
+        }
+
+        var counts = string.Join(", ", groups.Where(g => AdvisorImpactLevels.Contains(g.impact))
+            .Select(g => $"{g.opportunityCount} {g.impact.ToLowerInvariant()}"));
+        var top = opportunities.Where(o => o.Best is not null && o.Currency is not null)
+            .OrderByDescending(o => o.Best).FirstOrDefault();
+        var headline = opportunities.Length == 0
+            ? $"Azure Advisor returned no cost recommendations across {sources.Length} subscription{(sources.Length == 1 ? "" : "s")}."
+            : $"Azure Advisor returned {opportunities.Length} cost opportunit{(opportunities.Length == 1 ? "y" : "ies")} ({counts}) across {sources.Length} subscription{(sources.Length == 1 ? "" : "s")}"
+              + (top is null ? "." : $"; the largest single estimate is {top.Currency} {Money(top.Best!.Value)}/year ({top.Impact} impact).");
+        if (!complete) headline += " Coverage is partial: at least one subscription could not be read.";
+
+        var updated = sources.SelectMany(s => s.Candidates)
+            .Select(c => c.Data.TryGetProperty("lastUpdated", out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null)
+            .Where(v => !string.IsNullOrWhiteSpace(v)).Order(StringComparer.Ordinal).ToArray();
+
+        return new
+        {
+            source = "Azure Advisor cached Cost recommendations",
+            retrievedAtUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            complete,
+            headline,
+            answerTable = string.Join('\n', rows),
+            answerTableNote = "Each row is one opportunity. When Alternatives > 1, the savings column shows the lowest-to-best range of mutually exclusive term/lookback options and the best-estimate option names the best one; choose one, never add them. Different opportunities can overlap, so no combined total is given.",
+            requestedSubscriptionCount = responses.Count,
+            successfulSubscriptionCount = sources.Count(source => source.Status == 200 && source.Error is null),
+            opportunityCount = complete ? (int?)opportunities.Length : null,
+            recommendationCount = complete ? (int?)opportunities.Sum(o => o.Alternatives.Length) : null,
+            lastUpdatedRange = updated.Length == 0 ? null : new { earliest = updated[0], latest = updated[^1] },
+            groups = groups.Select(g => new
+            {
+                g.impact,
+                g.opportunityCount,
+                g.recommendationCount,
+                g.highestAnnualEstimateByCurrency,
+                opportunities = g.items.Select(o => new
+                {
+                    recommendation = o.Title,
+                    subscriptionId = o.SubscriptionId,
+                    subscriptionName = o.SubscriptionName,
+                    currency = o.Currency,
+                    bestAnnualSavingsAmount = o.Best,
+                    lowestAnnualSavingsAmount = o.Lowest,
+                    alternativeCount = o.Alternatives.Length,
+                    alternativesAreMutuallyExclusive = o.Alternatives.Length > 1,
+                    best = o.Alternatives[0].Data,
+                    alternatives = o.Alternatives.Take(12).Select(a => a.Summary).ToArray()
+                }).ToArray()
+            }).ToArray(),
+            sources = sources.Select(source => new
+            {
+                subscriptionId = source.Scope.Id,
+                subscriptionName = source.Scope.Name,
+                status = source.Status,
+                recommendationCount = source.Status == 200 && source.Error is null ? (int?)source.Candidates.Count : null,
+                error = source.Error
+            }),
+            limitations = "Advisor estimates are gross, cached and may overlap; they do not account for existing reservations/savings plans, eligibility or realizable net savings. Missing amounts are unknown, not zero. Amounts keep Advisor's savingsCurrency."
+        };
+    }
+
+    private static string Money(decimal amount) =>
+        amount.ToString(amount >= 100 ? "#,0" : "#,0.00", CultureInfo.InvariantCulture);
+
+    private static string TableCell(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "—" : value.Replace("|", "\\|", StringComparison.Ordinal).Replace('\n', ' ');
+
+    private sealed class AdvisorOpportunity
+    {
+        public AdvisorOpportunity(AdvisorCandidate[] alternatives)
+        {
+            Alternatives = alternatives;
+            var data = alternatives[0].Data;
+            Impact = Text(data, "impact") is { Length: > 0 } impact
+                ? char.ToUpperInvariant(impact[0]) + impact[1..].ToLowerInvariant()
+                : "Unspecified";
+            SubscriptionId = Text(data, "subscriptionId");
+            SubscriptionName = Text(data, "subscriptionName") ?? SubscriptionId;
+            Currency = alternatives[0].Currency;
+            Best = alternatives[0].AnnualSavings;
+            Lowest = alternatives.Where(a => a.AnnualSavings is not null).Select(a => a.AnnualSavings).Min();
+            var extended = data.TryGetProperty("extendedProperties", out var e) && e.ValueKind == JsonValueKind.Object ? e : default;
+            var solution = data.TryGetProperty("shortDescription", out var d) && d.ValueKind == JsonValueKind.Object
+                ? Text(d, "solution") ?? Text(d, "problem") : null;
+            var sku = AdvisorText(extended, "displaySKU") ?? AdvisorText(extended, "sku");
+            var region = AdvisorText(extended, "location") ?? AdvisorText(extended, "region");
+            var qty = AdvisorText(extended, "displayQty") ?? AdvisorText(extended, "qty");
+            var target = string.Join(", ", new[] { sku, region, qty is null ? null : $"qty {qty}" }.Where(v => !string.IsNullOrWhiteSpace(v)));
+            Title = string.IsNullOrWhiteSpace(target) ? solution ?? "Advisor cost recommendation" : $"{solution ?? "Advisor cost recommendation"} ({target})";
+            var term = AdvisorText(extended, "term");
+            var lookback = AdvisorText(extended, "lookbackPeriod");
+            OptionText = string.Join(", ", new[]
+            {
+                term is null ? null : $"term {term}",
+                lookback is null ? null : $"{lookback}-day lookback"
+            }.Where(v => v is not null));
+            SavingsText = Best is null || Currency is null
+                ? "unknown"
+                : Alternatives.Length > 1 && Lowest is not null && Lowest != Best
+                    ? $"{Currency} {Money(Lowest.Value)}–{Money(Best.Value)}"
+                    : $"{Currency} {Money(Best.Value)}";
+            var updated = alternatives
+                .Select(a => Text(a.Data, "lastUpdated"))
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Select(v => v!.Length >= 10 ? v[..10] : v)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            LastUpdatedText = updated.Length switch
+            {
+                0 => "unknown",
+                1 => updated[0],
+                _ => $"{updated[0]} to {updated[^1]}"
+            };
+        }
+
+        public string LastUpdatedText { get; }
+
+        public AdvisorCandidate[] Alternatives { get; }
+        public string Impact { get; }
+        public string? SubscriptionId { get; }
+        public string? SubscriptionName { get; }
+        public string? Currency { get; }
+        public decimal? Best { get; }
+        public decimal? Lowest { get; }
+        public string Title { get; }
+        public string OptionText { get; }
+        public string SavingsText { get; }
+
+        private static string? Text(JsonElement item, string name) =>
+            item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     }
 
     private async Task<string> GetCrawlMaturityEvidence(
-        [Description("Exact subscriptions JSON array from the connection context, with id and name fields")] string subscriptionsJson,
+        [Description("Subscription objects with id and name from connection context for the full requested assessment scope. Never remove low-spend subscriptions to make the result smaller.")] string subscriptionsJson,
         [Description("Optional management-group id or full ARM path from the connection context")] string? managementGroupId = null)
     {
         var totalSw = System.Diagnostics.Stopwatch.StartNew();
@@ -74,9 +292,10 @@ public sealed class CrawlMaturityTools
         // API version; ARM returns UnsupportedApiVersion for 2026-08-01.
         var actionsTask = ReadCollections(token, subscriptions, "scheduledActions", "crawl.scheduled_actions", requestLimiter, "2025-03-01");
         var alertsTask = ReadCollections(token, subscriptions, "alerts", "crawl.alerts", requestLimiter);
+        var savingsTask = ReadAdvisorSavings(token, subscriptions, requestLimiter);
 
         await Task.WhenAll(taggingTask, policyTask, wasteTask, emptyGroupsTask,
-            budgetTask, exportsTask, actionsTask, alertsTask);
+            budgetTask, exportsTask, actionsTask, alertsTask, savingsTask);
         var apiMs = totalSw.ElapsedMilliseconds;
 
         var budgets = budgetTask.Result
@@ -103,9 +322,10 @@ public sealed class CrawlMaturityTools
 
         var evidence = new
         {
-            generatedUtc = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            generatedUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
             subscriptionCount = subscriptions.Count,
             subscriptions,
+            savings = savingsTask.Result,
             budgets = new
             {
                 subscriptionsWithBudgets = budgets.Count(b => b.BudgetCount > 0),
@@ -115,6 +335,8 @@ public sealed class CrawlMaturityTools
                 subscriptionsWithValidatedSpend,
                 currency = currencies.Length == 1 ? currencies[0] : null,
                 totalsByCurrency,
+                dataAsOfUtc = (string?)null,
+                freshness = BudgetSpendFreshness,
                 details = budgets
             },
             tagging = taggingTask.Result,
@@ -161,11 +383,10 @@ public sealed class CrawlMaturityTools
             .SelectMany(r => StringArrayProperty(r, "names"))
             .Take(3)
             .ToArray();
-        var firstActionPrompt =
-            $"Review existing valid CostCenter, Owner, and Environment values, then apply missing tags consistently across {subscriptions.Count} subscriptions; configure missing daily exports and anomaly alerts. Ask before any write, use bulk operations, never invent placeholder tag values, do not delete resources, and summarize changes in one line.";
+        var firstActionPrompt = BuildRemediationPrompt(subscriptions.Count);
         var followUpActions = new[]
         {
-            new { label = "Auto-fix tags + exports + alerts", prompt = firstActionPrompt },
+            new { label = "Review tags + exports + alerts", prompt = firstActionPrompt },
             new { label = "Re-score Crawl maturity", prompt = "Re-score my Crawl FinOps maturity across all connected subscriptions and compare it with the prior score." },
             new
             {
@@ -193,6 +414,197 @@ public sealed class CrawlMaturityTools
             }
         });
     }
+
+    internal static string BuildRemediationPrompt(int subscriptionCount) =>
+        $"Review valid CostCenter, Owner, and Environment values across {subscriptionCount} subscriptions and verify daily-export schedules and anomaly-alert configuration before proposing changes for confirmed gaps. Require explicit application approval before any write, use bulk operations where appropriate, never invent placeholder tag values, and do not delete resources.";
+
+    private static async Task<object> ReadAdvisorSavings(
+        string token,
+        IReadOnlyList<SubscriptionScope> subscriptions,
+        SemaphoreSlim requestLimiter)
+    {
+        var responses = await Task.WhenAll(subscriptions.Select(async scope =>
+            (Scope: scope, Response: await ReadArmCollection(
+                token, AdvisorCostPath(scope.Id), "crawl.advisor_cost", requestLimiter))));
+        return BuildAdvisorSavings(responses);
+    }
+
+    internal static string AdvisorCostPath(string subscriptionId) =>
+        $"/subscriptions/{subscriptionId}/providers/Microsoft.Advisor/recommendations?api-version=2025-01-01&$filter=Category%20eq%20%27Cost%27&$top=100";
+
+    internal static object BuildAdvisorSavings(
+        IReadOnlyList<(SubscriptionScope Scope, string Response)> responses)
+    {
+        const int detailsPerCurrency = 5;
+        const int alternativesPerOpportunity = 12;
+        var sources = responses.Select(item => ReadAdvisorSource(item.Scope, item.Response)).ToArray();
+        var complete = sources.Length > 0 && sources.All(source => source.Status == 200 && source.Error is null);
+        var candidates = sources.SelectMany(source => source.Candidates).ToArray();
+        var quantified = candidates.Where(candidate => candidate.AnnualSavings is not null && candidate.Currency is not null).ToArray();
+        var unranked = candidates.Where(candidate => candidate.AnnualSavings is null || candidate.Currency is null).ToArray();
+        var rankings = quantified
+            .GroupBy(candidate => candidate.Currency!, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var opportunities = group
+                    .GroupBy(candidate => candidate.AlternativeKey, StringComparer.Ordinal)
+                    .Select(alternatives => alternatives
+                        .OrderByDescending(candidate => candidate.AnnualSavings)
+                        .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
+                        .ToArray())
+                    .OrderByDescending(alternatives => alternatives[0].AnnualSavings)
+                    .ThenBy(alternatives => alternatives[0].Id, StringComparer.Ordinal)
+                    .ToArray();
+                return new
+                {
+                    currency = group.Key,
+                    period = "year",
+                    recommendationCount = group.Count(),
+                    opportunityCount = opportunities.Length,
+                    opportunities = opportunities.Take(detailsPerCurrency).Select((alternatives, index) => new
+                    {
+                        rank = index + 1,
+                        bestAnnualSavingsAmount = alternatives[0].AnnualSavings,
+                        lowestAnnualSavingsAmount = alternatives[^1].AnnualSavings,
+                        alternativeCount = alternatives.Length,
+                        alternativesAreMutuallyExclusive = alternatives.Length > 1,
+                        best = alternatives[0].Data,
+                        alternatives = alternatives.Take(alternativesPerOpportunity).Select(candidate => candidate.Summary).ToArray(),
+                        alternativesComplete = alternatives.Length <= alternativesPerOpportunity
+                    }).ToArray(),
+                    detailsComplete = opportunities.Length <= detailsPerCurrency
+                        && opportunities.All(alternatives => alternatives.Length <= alternativesPerOpportunity)
+                };
+            }).ToArray();
+        var tableOpportunities = quantified
+            .GroupBy(candidate => candidate.AlternativeKey, StringComparer.Ordinal)
+            .Select(alternatives => new AdvisorOpportunity(alternatives
+                .OrderByDescending(candidate => candidate.AnnualSavings)
+                .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
+                .ToArray()))
+            .GroupBy(o => o.Currency!, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .SelectMany(group => group.OrderByDescending(o => o.Best).ThenBy(o => o.Alternatives[0].Id, StringComparer.Ordinal).Take(detailsPerCurrency))
+            .ToArray();
+        var savingsTable = tableOpportunities.Length == 0 ? null : string.Join('\n',
+            new[]
+            {
+                "| Rank | Advisor opportunity | Subscription | Estimated annual savings | Best-estimate option | Alternatives | Advisor last updated |",
+                "|---:|---|---|---:|---|---:|---|"
+            }.Concat(tableOpportunities.Select((o, index) =>
+                $"| {index + 1} | {TableCell(o.Title)} | {TableCell(o.SubscriptionName)} | {o.SavingsText} | {TableCell(o.OptionText)} | {o.Alternatives.Length} | {TableCell(o.LastUpdatedText)} |")));
+        return new
+        {
+            source = "Azure Advisor cached Cost recommendations",
+            retrievedAtUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            complete,
+            answerTable = savingsTable,
+            answerTableNote = savingsTable is null ? null : "Host-built savings table: present it verbatim, including the Advisor last updated column (the source date of each recommendation, distinct from retrievedAtUtc). A savings range covers mutually exclusive term/lookback alternatives of one opportunity; never add them or different opportunities together.",
+            requestedSubscriptionCount = responses.Count,
+            successfulSubscriptionCount = sources.Count(source => source.Status == 200 && source.Error is null),
+            observedRecommendationCount = candidates.Length,
+            recommendationCount = complete ? (int?)candidates.Length : null,
+            rankingComplete = complete && unranked.Length == 0,
+            rankings,
+            unrankedRecommendationCount = unranked.Length,
+            unrankedRecommendations = unranked.Take(detailsPerCurrency).Select(candidate => candidate.Data).ToArray(),
+            detailsComplete = complete && rankings.All(group => group.detailsComplete) && unranked.Length <= detailsPerCurrency,
+            sources = sources.Select(source => new
+            {
+                subscriptionId = source.Scope.Id,
+                subscriptionName = source.Scope.Name,
+                status = source.Status,
+                recommendationCount = source.Status == 200 && source.Error is null ? (int?)source.Candidates.Count : null,
+                error = source.Error
+            }),
+            limitations = "Rankings compare only reported annualSavingsAmount in the same currency, after reading every available page in each requested scope. Each opportunity groups mutually exclusive Advisor alternatives for the same recommendation type, subscription, impacted resource, SKU, region and scope (for example reservation term and lookback variants); report it once with its best estimate and alternative range, never as separate opportunities. Missing amounts/currencies are unknown. Different opportunities can still overlap; do not sum them. Preserve term, quantity, scope and lastUpdated. These estimates do not validate applicability, suppression status, existing commitment utilization or realizable net savings. Governance improvements and empty resource groups are not quantified savings."
+        };
+    }
+
+    private static AdvisorSource ReadAdvisorSource(SubscriptionScope scope, string response)
+    {
+        var status = ParseStatus(response);
+        if (status != 200)
+            return new(scope, status, [], "Advisor Cost recommendations could not be read completely.");
+
+        try
+        {
+            using var document = JsonDocument.Parse(ResponseBody(response));
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("value", out var values) || values.ValueKind != JsonValueKind.Array)
+                return new(scope, 0, [], "Advisor Cost response did not contain a recommendation array.");
+            List<AdvisorCandidate> candidates = [];
+            foreach (var item in values.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object
+                    || !item.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object
+                    || !string.Equals(AdvisorText(properties, "category"), "Cost", StringComparison.OrdinalIgnoreCase))
+                    return new(scope, 0, [], "Advisor Cost response contained an invalid recommendation.");
+
+                var extended = properties.TryGetProperty("extendedProperties", out var metadata)
+                    && metadata.ValueKind == JsonValueKind.Object ? metadata : default;
+                var currency = AdvisorText(extended, "savingsCurrency");
+                if (string.IsNullOrWhiteSpace(currency)) currency = null;
+                decimal? annual = extended.ValueKind == JsonValueKind.Object
+                    && extended.TryGetProperty("annualSavingsAmount", out var amount)
+                    && amount.ValueKind is JsonValueKind.String or JsonValueKind.Number
+                    && decimal.TryParse(amount.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+                    && parsed >= 0 ? parsed : null;
+                var id = AdvisorText(item, "id");
+                var typeId = AdvisorText(properties, "recommendationTypeId");
+                var impacted = AdvisorText(properties, "impactedValue")
+                    ?? (properties.TryGetProperty("resourceMetadata", out var resourceMeta) ? AdvisorText(resourceMeta, "resourceId") : null);
+                var sku = AdvisorText(extended, "displaySKU") ?? AdvisorText(extended, "sku");
+                var region = AdvisorText(extended, "location") ?? AdvisorText(extended, "region");
+                var commitmentScope = AdvisorText(extended, "scope");
+                var term = AdvisorText(extended, "term");
+                var lookback = AdvisorText(extended, "lookbackPeriod");
+                var quantity = AdvisorText(extended, "displayQty") ?? AdvisorText(extended, "qty");
+                // Advisor emits one record per term/lookback for the same purchase; those are
+                // alternatives, not separate opportunities. Without a type id, never merge.
+                var alternativeKey = !string.IsNullOrWhiteSpace(typeId) && (term is not null || lookback is not null)
+                    ? string.Join('|', scope.Id, typeId, impacted, sku, region, commitmentScope).ToLowerInvariant()
+                    : "id|" + (id ?? Guid.NewGuid().ToString());
+                var summary = JsonSerializer.SerializeToElement(new
+                {
+                    id,
+                    term,
+                    lookbackPeriodDays = lookback,
+                    quantity,
+                    annualSavingsAmount = annual,
+                    lastUpdated = AdvisorText(properties, "lastUpdated")
+                });
+                var data = JsonSerializer.SerializeToElement(new
+                {
+                    id,
+                    subscriptionId = scope.Id,
+                    subscriptionName = scope.Name,
+                    resourceMetadata = properties.TryGetProperty("resourceMetadata", out var resource) ? (JsonElement?)resource : null,
+                    impact = AdvisorText(properties, "impact"),
+                    recommendationTypeId = typeId,
+                    shortDescription = properties.TryGetProperty("shortDescription", out var description) ? (JsonElement?)description : null,
+                    lastUpdated = AdvisorText(properties, "lastUpdated"),
+                    annualSavingsAmount = annual,
+                    savingsCurrency = currency,
+                    extendedProperties = extended.ValueKind == JsonValueKind.Object ? (JsonElement?)extended : null
+                });
+                candidates.Add(new(id, annual, currency, data, alternativeKey, summary));
+            }
+            return new(scope, status, candidates, null);
+        }
+        catch (JsonException)
+        {
+            return new(scope, 0, [], "Advisor Cost response was not valid JSON.");
+        }
+    }
+
+    private static string? AdvisorText(JsonElement item, string name) =>
+        item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private sealed record AdvisorCandidate(string? Id, decimal? AnnualSavings, string? Currency, JsonElement Data, string AlternativeKey, JsonElement Summary);
+    private sealed record AdvisorSource(SubscriptionScope Scope, int Status, IReadOnlyList<AdvisorCandidate> Candidates, string? Error);
 
     private async Task<IReadOnlyList<CollectionEvidence>> ReadCollections(
         string token,
@@ -355,7 +767,14 @@ public sealed class CrawlMaturityTools
                 if (string.IsNullOrWhiteSpace(skipToken))
                 {
                     var serializedRows = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(rows));
-                    return new { status = 200, data = serializedRows };
+                    return new
+                    {
+                        status = 200,
+                        retrievedAtUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+                        dataAsOfUtc = (string?)null,
+                        freshness = ResourceGraphFreshness,
+                        data = serializedRows
+                    };
                 }
             }
             catch (JsonException ex)
@@ -382,7 +801,7 @@ public sealed class CrawlMaturityTools
             using var doc = JsonDocument.Parse(ResponseBody(response));
             var values = doc.RootElement.TryGetProperty("value", out var value)
                 && value.ValueKind == JsonValueKind.Array
-                ? value.EnumerateArray().ToArray()
+                ? value.EnumerateArray().Where(IsEnabledControl).ToArray()
                 : [];
             double amount = 0;
             var actualNotifications = 0;
@@ -454,7 +873,7 @@ public sealed class CrawlMaturityTools
         }
     }
 
-    private static IReadOnlyList<MaturityScore> BuildScores(
+    internal static IReadOnlyList<MaturityScore> BuildScores(
         IReadOnlyList<SubscriptionScope> subscriptions,
         IReadOnlyList<BudgetEvidence> budgets,
         object taggingProjection,
@@ -539,7 +958,7 @@ public sealed class CrawlMaturityTools
         var commonWaste = wasteRows.Sum(r => IntProperty(r, "wasteCount"));
         var emptyGroupRows = DataRows(emptyGroupsProjection);
         var emptyGroups = emptyGroupRows.Sum(r => IntProperty(r, "emptyGroupCount"));
-        var totalWaste = commonWaste + emptyGroups;
+        var totalWaste = commonWaste;
         var wasteReadable = ProjectionStatus(wasteProjection) == 200 && ProjectionStatus(emptyGroupsProjection) == 200;
         var wasteScore = !wasteReadable ? 0 : totalWaste switch
         {
@@ -569,23 +988,53 @@ public sealed class CrawlMaturityTools
             .Select(b => $"{b.CurrentSpend!.Value.ToString("N2", CultureInfo.InvariantCulture)} {b.Currency ?? "currency unknown"} in {b.SubscriptionName}"));
         var spendSummary = FormatCostSummary(mtdSpend, mtdCurrency, totalsByCurrency);
 
-        return
+        List<MaturityScore> scores =
         [
             new("budgets", "Budgets & thresholds", budgetScore,
-                $"{coveredBudgets}/{subscriptions.Count} subscriptions have budgets; {budgets.Sum(b => b.BudgetCount)} budgets expose {notificationCount} enabled actual/forecast notifications and {spendSummary} from strict unfiltered monthly budgets."),
+                $"{coveredBudgets}/{subscriptions.Count} subscriptions have budgets; {budgets.Sum(b => b.BudgetCount)} budgets expose {notificationCount} enabled actual/forecast notifications and {spendSummary} from strict unfiltered monthly budgets. {BudgetSpendFreshness}"),
             new("tagging", "Tagging for accountability", tagScore,
                 $"Valid CostCenter+Owner+Environment coverage is {Math.Round(tagCoverage, 1)}% across {totalResources} resources ({tagSpread}); exact valid-key counts are CostCenter={costCenter}, Owner={owner}, Environment={environment}, with {placeholderTags} placeholder values excluded."),
             new("exports", "Cost data exports", exportsScore,
                 $"{exportCount} exports cover {exportCoverage}/{subscriptions.Count} subscriptions; {exports.Count(e => e.Status == 200)}/{subscriptions.Count} export-list calls succeeded."),
             new("alerts", "Cost alerts & scheduled actions", alertsScore,
-                $"{alertCount} cost alerts and {actionCount} scheduled actions cover {alertCoverage}/{subscriptions.Count} subscriptions; {alerts.Count(a => a.Status == 200) + scheduledActions.Count(a => a.Status == 200)}/{subscriptions.Count * 2} list calls succeeded."),
+                $"{alertCount} cost alerts and {actionCount} scheduled actions cover {alertCoverage}/{subscriptions.Count} subscriptions; {alerts.Count(a => a.Status == 200) + scheduledActions.Count(a => a.Status == 200)}/{subscriptions.Count * 2} list calls succeeded. These counts do not establish anomaly-alert configuration."),
             new("policy", "Governance guardrails", policyScore,
-                $"{finOpsPolicies} FinOps-related policy assignments were found among {totalPolicies} total assignments, covering {policyCoverage}/{subscriptions.Count} subscriptions."),
+                $"{finOpsPolicies} potentially FinOps-related assignments among {totalPolicies} assignments; assignment inventory alone does not verify effective effects, inherited coverage, or compliance."),
             new("waste", "Waste identification & cleanup", wasteScore,
-                $"{totalWaste} waste items were found: {commonWaste} unattached disks/orphaned IPs/empty paid App Service plans plus {emptyGroups} empty resource groups ({emptyGroupSpread})."),
+                $"{commonWaste} potentially billable waste items were found. Separately, {emptyGroups} empty resource groups ({emptyGroupSpread}) are housekeeping only and have no direct resource-group charge."),
             new("visibility", "Cost visibility & ownership", visibilityScore,
-                $"Budget currentSpend provides {spendSummary} across {visibleSubscriptions}/{subscriptions.Count} subscriptions ({spendSpread}); governed ownership-tag coverage is {Math.Round(tagCoverage, 1)}% across {totalResources} resources.")
+                $"Budget currentSpend provides {spendSummary} across {visibleSubscriptions}/{subscriptions.Count} subscriptions ({spendSpread}); governed ownership-tag coverage is {Math.Round(tagCoverage, 1)}% across {totalResources} resources. {BudgetSpendFreshness}")
         ];
+        SetEvidenceState(scores, "budgets", allBudgetReadsOk);
+        SetEvidenceState(scores, "tagging", ProjectionStatus(taggingProjection) == 200, totalResources == 0);
+        SetEvidenceState(scores, "exports", exports.Count == subscriptions.Count && exports.All(item => item.Status == 200 && item.Error is null));
+        SetEvidenceState(scores, "alerts", alertsReadable && alerts.Count == subscriptions.Count && scheduledActions.Count == subscriptions.Count);
+        SetEvidenceState(scores, "policy", false);
+        SetEvidenceState(scores, "waste", wasteReadable);
+        SetEvidenceState(scores, "visibility", visibleSubscriptions == subscriptions.Count);
+        return scores;
+    }
+
+    private static void SetEvidenceState(List<MaturityScore> scores, string id, bool readable, bool notApplicable = false)
+    {
+        var index = scores.FindIndex(score => score.Id == id);
+        var status = !readable ? "unknown" : notApplicable ? "notApplicable" : "observed";
+        if (status != "observed") scores[index] = scores[index] with { Score = null, Status = status };
+    }
+
+    internal static bool IsEnabledControl(JsonElement item)
+    {
+        if (!item.TryGetProperty("properties", out var properties)) return true;
+        if (properties.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.False) return false;
+        if (properties.TryGetProperty("status", out var status) && status.ValueKind == JsonValueKind.String
+            && status.GetString() is { } text && (text.Equals("Disabled", StringComparison.OrdinalIgnoreCase) || text.Equals("Inactive", StringComparison.OrdinalIgnoreCase))) return false;
+        if (properties.TryGetProperty("schedule", out var schedule))
+        {
+            if (schedule.TryGetProperty("status", out var scheduleStatus) && !string.Equals(scheduleStatus.GetString(), "Active", StringComparison.OrdinalIgnoreCase)) return false;
+            if (schedule.TryGetProperty("recurrencePeriod", out var period) && period.TryGetProperty("to", out var end)
+                && DateTimeOffset.TryParse(end.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var expires) && expires < DateTimeOffset.UtcNow) return false;
+        }
+        return true;
     }
 
     private static string FormatCostSummary(
@@ -713,9 +1162,9 @@ public sealed class CrawlMaturityTools
     private static string Truncate(string value, int length) =>
         value.Length <= length ? value : value[..length];
 
-    private sealed record SubscriptionScope(string Id, string Name);
+    internal sealed record SubscriptionScope(string Id, string Name);
 
-    private sealed record BudgetEvidence(
+    internal sealed record BudgetEvidence(
         string SubscriptionId,
         string SubscriptionName,
         int Status,
@@ -727,7 +1176,7 @@ public sealed class CrawlMaturityTools
         int EnabledForecastNotifications,
         string? Error);
 
-    private sealed record CollectionEvidence(
+    internal sealed record CollectionEvidence(
         string SubscriptionId,
         string SubscriptionName,
         int Status,
@@ -735,9 +1184,10 @@ public sealed class CrawlMaturityTools
         string[] Names,
         string? Error);
 
-    private sealed record MaturityScore(
+    internal sealed record MaturityScore(
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("label")] string Label,
-        [property: JsonPropertyName("score")] int Score,
-        [property: JsonPropertyName("detail")] string Detail);
+        [property: JsonPropertyName("score")] int? Score,
+        [property: JsonPropertyName("detail")] string Detail,
+        [property: JsonPropertyName("status")] string Status = "observed");
 }

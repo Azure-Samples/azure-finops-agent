@@ -91,8 +91,9 @@ public static class UploadEndpoints
             var userJson = ctx.Session.GetString("user");
             if (userJson is null) return Results.Unauthorized();
             var userId = JsonSerializer.Deserialize<JsonElement>(userJson).GetProperty("id").GetInt64();
-            var list = UploadedFileTools.ListForUser(userId)
-                .Select(e => new { fileId = e.FileId, fileName = e.FileName, kind = e.Kind, sizeBytes = e.SizeBytes });
+            var requestedSession = ctx.Request.Query["sessionId"].ToString();
+            var list = UploadedFileTools.ListForUser(userId, string.IsNullOrWhiteSpace(requestedSession) ? null : requestedSession)
+                .Select(e => new { fileId = e.FileId, fileName = e.FileName, kind = e.Kind, sizeBytes = e.SizeBytes, expiresUtc = e.ExpiresUtc, sha256 = e.Sha256 });
             return Results.Ok(new { files = list });
         });
 
@@ -102,7 +103,11 @@ public static class UploadEndpoints
             if (userJson is null) return Results.Unauthorized();
             var userId = JsonSerializer.Deserialize<JsonElement>(userJson).GetProperty("id").GetInt64();
             return UploadedFileTools.RemoveForUser(userId, fileId)
-                ? Results.NoContent()
+                // Integrated Chromium reports a completed 204 DELETE as
+                // net::ERR_ABORTED after fetch has already resolved. Return a
+                // small 200 payload so successful cleanup remains observable as
+                // a successful request in browser diagnostics.
+                ? Results.Ok(new { removed = true })
                 : Results.NotFound();
         });
     }

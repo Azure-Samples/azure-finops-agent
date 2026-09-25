@@ -30,6 +30,8 @@ public class AzureQueryTools
         yield return AIFunctionFactory.Create(QueryAzure, "QueryAzure", @"Queries Azure ARM REST APIs (https://management.azure.com) using the signed-in user's delegated token. Returns raw JSON.
 Methods: GET, PUT, PATCH, plus allowlisted read-only POST endpoints. Mutating action POSTs and DELETE are blocked at the code level. The user's Entra RBAC is the effective access boundary.
 
+PAYLOAD DISCIPLINE: filter, aggregate, project, and limit every broad read at the source using only options that the endpoint supports. Use `$filter`, `$select`, and a small `$top` where supported; otherwise choose a narrower resource endpoint or a scoped Resource Graph query. Resource Graph uses `where`, `summarize`, `project`, and `top`; Cost Management uses dataset filters and aggregation/grouping over the requested date range. Aggregate before limiting rows so totals are not calculated from a sample. For requested full results preserve pagination, counts, `_finops`/sourceEvidence and partial coverage. Never rely on response truncation or client-side filtering to make an unfiltered collection small.
+
 Use standard ARM URL conventions; you know the resource providers and current api-versions. Common surfaces: Microsoft.CostManagement (query/forecast/exports), Microsoft.Consumption (budgets/pricesheets/reservation*), Microsoft.Capacity (reservations), Microsoft.BillingBenefits (savingsPlans), Microsoft.Advisor (recommendations), Microsoft.ResourceGraph (KQL across subs), Microsoft.Insights (metrics/diagnostics/autoscale), Microsoft.Compute, Microsoft.ContainerService, Microsoft.Network, Microsoft.Storage, Microsoft.Sql, Microsoft.Web, Microsoft.OperationalInsights, Microsoft.MachineLearningServices, Microsoft.CognitiveServices, Microsoft.App, Microsoft.Authorization (RBAC/Policy/Locks), Microsoft.Management, Microsoft.Quota, Microsoft.Carbon, Microsoft.Migrate, Microsoft.Support, Microsoft.ResourceHealth, Microsoft.Security.
 
 === NON-OBVIOUS RULES (read carefully) ===
@@ -40,11 +42,15 @@ Use standard ARM URL conventions; you know the resource providers and current ap
   /providers/Microsoft.Billing/billingAccounts/{billingAccountId}[/billingProfiles/{id}|/invoiceSections/{id}]
 Never bare /providers/Microsoft.CostManagement/... — that returns 400.
 
-COST MANAGEMENT QUERY: use api-version=2026-08-01. ALWAYS group by a real dimension (ServiceName, ResourceGroupName, MeterCategory). Do NOT add 'UsageDate' to the grouping array — it's a response column, not a dimension; use granularity=""Daily"" for per-day. Never request raw ungrouped cost data. For totals across all subscriptions, query the tenant/root management-group scope ONCE and group by SubscriptionName; never fan out one query per subscription.
+COST MANAGEMENT QUERY: use api-version=2026-08-01 and dataset.aggregation for totals. Add real grouping dimensions (ServiceName, ResourceGroupName, MeterCategory) only for the requested breakdown. Do NOT add 'UsageDate' to the grouping array — it's a response column, not a dimension; use granularity=""Daily"" for per-day. Never request raw cost detail rows for a summary. For totals across all subscriptions, call QueryCostsAcrossSubscriptions exactly once with connection-context scopes; never fan out one query per subscription yourself. For grouped detail across two or more known subscription scopes, use ONE BulkAzureRequest with parallelism=1 and the exact scopes, dates, cost type and filters. The host executes cost reads sequentially; do not spend a model round-trip on every subscription.
 
-THROTTLING: Cost Management /query and /forecast are aggressively throttled per-tenant. Interactive queries make at most one short retry; other transient calls retain the standard retry policy. Do NOT call multiple CostManagement endpoints in parallel from the same turn — Resource Graph and Advisor parallelize fine. If a call still returns HTTP 429, do not make another Cost Management call in the same turn; report the throttle and offer to retry later.
+FORECASTS AND BUDGETS: In raw Cost Management /query and /forecast bodies, timePeriod.to is the INCLUSIVE last day: a whole-month window for September 2026 is from=2026-09-01, to=2026-09-30; never pass the next month's first day, which adds an extra day of rows. For a whole-month chart, a Daily forecast with includeActualCost=true and explicit month bounds can supply both actual and forecast rows. includeActualCost and includeFreshPartialCost are TOP-LEVEL request fields beside type/timeframe/timePeriod/dataset, NEVER under dataset.configuration. Keep dataset.aggregation for Cost/Sum; do not combine aggregation with dataset.configuration (the service rejects that). Shape example (substitute dates and preserve any requested cost type, filters and grouping): {""type"":""Usage"",""timeframe"":""Custom"",""timePeriod"":{""from"":""<requested-start>"",""to"":""<requested-end>""},""includeActualCost"":true,""dataset"":{""granularity"":""Daily"",""aggregation"":{""totalCost"":{""name"":""Cost"",""function"":""Sum""}}}}. Inspect CostStatus, dates and currency before summing nonoverlapping rows. For remaining spend, aggregate only forecast rows in the requested future window. Before comparing with a budget, inspect its timeGrain, filters, currentSpend AND forecastSpend. The budget's forecastSpend is an independent periodically evaluated projection, not the sum of your daily forecast. Explicitly disclose conflicting month-end estimates, especially opposite under/over-budget outcomes, before concluding whether the budget is safe. A generic freshness caveat does not reconcile them. Never mix incompatible scopes, filters, currencies or unknown date coverage.
 
-RESOURCE GRAPH (POST /providers/Microsoft.ResourceGraph/resources): always use 'project' to limit columns and 'top N' to limit rows. Use one pipeline; Azure Resource Graph does not accept multi-statement `let ...; let ...;` queries.
+DETAIL REQUESTS: for costs by resource/model, start with a valid resource/meter breakdown, not a totals-only query followed by another request for the actual question. Cost Management permits at most two grouping dimensions. At subscription scope use ResourceId plus Meter; derive subscription/resource-group from the scope or ResourceId instead of adding third/fourth grouping dimensions. At management-group scope use SubscriptionId plus ResourceId for resource attribution, then a targeted meter query only when still needed. Reuse returned detail to compute totals; follow pagination and disclose partial coverage. Token activity/inventory is not billed resource or model cost.
+
+THROTTLING: the host serializes Cost Management /query and /forecast and automatically retries once after the full service deadline when it is at most five minutes. The UI reports that wait. A returned HTTP 429 means the bounded retry is exhausted or the deadline is longer; do not make another Cost Management call in this turn. Read _finops.retryAtUtc or retryAtUtc, report the exact deadline, and do not offer an immediate retry before it. Other independent read services remain available, but do not present their activity as billing detail.
+
+RESOURCE GRAPH (POST /providers/Microsoft.ResourceGraph/resources): declare exactly one non-empty subscriptions array of GUID strings or managementGroups array of IDs in the JSON body, using the full requested connection-context scope. Never omit scope: the service would otherwise query other accessible subscriptions. Use project to limit columns and aggregate before limiting rows. KQL top REQUIRES a by expression: `top N by count_ desc`; after `order by`, use `take N`, NOT bare `top N`. Preserve full-result pagination and totals. Start with a supported table such as resources, then a single pipeline; not a leading union of parenthesized subqueries or multi-statement `let ...; let ...;`. For overall and resource-group tag percentages, use separate simple aggregate queries, or derive overall counts from complete grouped results with QueryToolResult. Never reference placeholder or undefined columns. Changing table capitalization or API versions does not fix an unsupported query shape.
 
 SPOT QUOTA: Spot/low-priority VM quota is a SINGLE regional bucket called 'lowPriorityCores' (NOT per VM family) — covers ALL spot VMs including H100/A100. Standard quotas are per-family ('standardNDSH100v5Family', 'StandardNCadsH100v5Family'). Microsoft.Quota requires RP registration (PUT /subscriptions/{subId}/providers/Microsoft.Quota/register) — fall back to GET .../Microsoft.Compute/locations/{region}/usages if not registered.
 
@@ -54,32 +60,38 @@ MIGRATE: Use resource type 'assessmentProjects' (NOT 'migrateProjects' — retur
 
 CONSUMPTION DEPRECATIONS: usageDetails → use Microsoft.CostManagement/generateCostDetailsReport. reservationDetails → use Microsoft.CostManagement/generateReservationDetailsReport.
 
-For public retail pricing use https://prices.azure.com (no auth) with ?$filter=armRegionName eq '...' and serviceName eq '...' and armSkuName eq '...'&$top=20.");
+RESERVATION UTILIZATION: reservationSummaries is NOT a tenant-root endpoint. Discover reservation orders first, then GET /providers/Microsoft.Capacity/reservationOrders/{orderId}/providers/Microsoft.Consumption/reservationSummaries?api-version=2024-08-01&grain=monthly. A discovered billing-account or billing-profile scope is another supported route. Do not invent a scope or cycle API versions after a missing-scope error. Denied/missing utilization is unknown, never proof that rightsizing will not strand a commitment.
 
-        yield return AIFunctionFactory.Create(QueryCostsAcrossSubscriptions, "QueryCostsAcrossSubscriptions", @"Gets an exact Cost Management total and per-subscription breakdown in ONE agent tool call. Use this for any cost request spanning all connected subscriptions; never loop QueryAzure yourself.
-Input subscriptionsJson: the exact `subscriptions` JSON array supplied in the connection context ({id,name,...}). Input managementGroupId: the optional id/name from the context's managementGroups array. Dates are yyyy-MM-dd; `to` is the exclusive end date.
-    For the current calendar month, the tool first reads each subscription's unfiltered monthly budget `currentSpend` in parallel; this is exact live MTD cost and avoids the heavily throttled query API. For other periods it tries one management-group aggregate query, then the minimum sequential per-subscription fallback. It stops immediately when Cost Management remains throttled and reports completed, failed, and unattempted scopes. Never call this tool twice in one turn after a 429.");
+For public retail pricing use GetAzureRetailPricing, or GetAzureRetailPricingBatch for independent filter combinations; QueryAzure calls ARM only.");
+
+        yield return AIFunctionFactory.Create(QueryCostsAcrossSubscriptions, "QueryCostsAcrossSubscriptions", @"Gets a reported Cost Management total and per-subscription breakdown in ONE agent tool call. Use this for requested subscription totals, not as a prerequisite for resource/service/model detail. For a subscription ranking or comparison with month-over-month or previous-month change, use CompareSubscriptionCosts instead of this tool plus extra cost queries. For detailed spending questions use a valid grouped QueryAzure request first and derive totals from the detail when complete. Do not make users repeat the request for detail after a totals-only answer.
+Input subscriptionsJson: the exact `subscriptions` JSON array supplied in the connection context ({id,name,...}). Input managementGroupId: the optional id/name from the context's managementGroups array. Dates are yyyy-MM-dd; `to` is the exclusive end date. Keep the exclusive-end label on the exact returned `to`; if showing the last included day instead, label that date inclusive, never exclusive.
+DATA SCOPING: use only the requested dates and subscriptions, but include every requested subscription for a whole-estate total. Never take a top-N sample of subscriptions or filtered budget snapshots and label it total spend. This tool has no service/resource-group filter; use a scoped QueryAzure aggregate for those breakdowns. Its host-built queries aggregate before returning results; preserve sourceEvidence and all failed/unattempted scope coverage instead of re-querying returned totals.
+Cost-query responses declare costType=ActualCost, timePeriod with an exclusive end, and aggregation=Cost. Reuse those successful results for the same period and scope; do not repeat them through QueryAzure merely to establish the cost type or request PreTaxCost instead. Budget snapshots have costType=null because this response does not establish a comparable query basis. For a matched ActualCost comparison, query only the missing period/basis and reuse any historical ActualCost results already returned.
+    For the current calendar month, the tool first reads each subscription's unfiltered monthly budget `currentSpend` in parallel. Budgets are evaluated periodically: report this as a delayed MTD snapshot, not a real-time or finalized bill. For other periods it tries one management-group aggregate query, then the minimum sequential per-subscription fallback. Preserve sourceEvidence cache/freshness metadata. It stops immediately when Cost Management remains throttled and reports completed, failed, and unattempted scopes. Never call this tool twice in one turn after a 429.");
 
 
-        yield return AIFunctionFactory.Create(BulkAzureRequest, "BulkAzureRequest", @"Executes MANY Azure ARM requests in ONE tool call, in parallel, server-side. Use this whenever you would otherwise loop QueryAzure for the same kind of operation across multiple resources (bulk tagging, cleanup discovery, autoshutdown rollout, budget rollout across subs, multi-resource right-sizing, RBAC fan-out, etc.).
+        yield return AIFunctionFactory.Create(BulkAzureRequest, "BulkAzureRequest", @"Executes MANY Azure ARM requests in ONE tool call, server-side. Independent non-cost requests can run in parallel. Any batch containing Cost Management /query or /forecast is automatically sequential, even if a larger parallelism was requested, and stops after a final cost 429. Use one batch for grouped cost detail across two or more known subscription scopes instead of a QueryAzure model round-trip per subscription. Keep every requested scope and the exact date window, cost type, filters and grouping; do not mix speculative management-group probes with subscription fallbacks.
+Use this whenever you would otherwise loop QueryAzure for the same kind of operation across multiple resources (bulk tagging, cleanup discovery, autoshutdown rollout, budget rollout across subs, multi-resource right-sizing, RBAC fan-out, etc.).
 Input: requestsJson = JSON array of {""method"":""GET|POST|PUT|PATCH"",""path"":""/...?api-version=..."",""body"":""<optional JSON string>""}.
 Optional: parallelism (default 20, max 50), stopOnFirstError (default false).
-Returns ONE compact JSON summary: {""total"":N,""succeeded"":X,""failed"":Y,""durationMs"":Z,""failures"":[{""index"":i,""status"":code,""path"":""..."",""error"":""...""}],""successSamples"":[{""path"":""..."",""name"":""...""}]}.
-DELETE is still blocked at the code level. Same per-request response trimming as QueryAzure (PUT/PATCH echoes are compacted). Throttling-aware: 429 retries are handled per request, batches stay below ARM's 1200 writes/hour/sub.
-Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Build the request list from your prior Resource Graph discovery query in the same turn.");
+    PAYLOAD DISCIPLINE: every read in requestsJson must filter, aggregate, project, and limit at the source using only supported API options. Prefer one scoped Resource Graph query over many broad inventory GETs. Never batch unfiltered collections and rely on trimming. Request parallelism=1 for Cost Management /query and /forecast; never fan out separate cost tools in parallel.
+    Returns total, succeeded, failed, pending, unattempted, cancelled, stopped, complete, and indexed results with status, outcome, partial, body, error, and cost sourceEvidence. At most 200 requests, 4,000,000 response characters per item and a 12,000,000-character batch data budget; omitted bodies are explicitly partial, not complete evidence. Large complete batches return a queryable_tool_result schema and resultId for QueryToolResult. Source freshness and retry deadlines survive body omission. Narrow only those indexed reads if further detail is needed.
+    DELETE and mutating action POSTs remain blocked. PUT/PATCH create exact owner/session-bound proposals requiring explicit UI approval. Accepted, pending, unknown, and awaitingApproval outcomes are not successful writes. Respect all returned retry deadlines; never retry Cost Management after a final 429 in this turn.
+Use this INSTEAD of looping QueryAzure for two or more grouped cost reads, or five or more other similar requests. Cost scopes come from connection context; other resource targets come from the prior Resource Graph discovery query in the same turn.");
     }
 
     private async Task<string> QueryAzure(
         [Description("HTTP method: GET, POST, PUT, or PATCH (DELETE is blocked)")] string method,
-        [Description("API path starting with /, e.g. /subscriptions?api-version=2022-12-01")] string path,
-        [Description("Optional JSON request body for POST/PUT/PATCH requests. Omit or leave empty for GET.")] string? body = null)
+        [Description("Scoped ARM path starting with / and an api-version. Use $filter/$select/$top only when the endpoint supports them; otherwise choose a narrower endpoint or Resource Graph query. Do not fetch full collections for a summary.")] string path,
+        [Description("Optional JSON request body for POST/PUT/PATCH. Resource Graph POST requires an explicit subscriptions array of GUID strings or managementGroups array of IDs from the requested connection-context scope, plus query. KQL top requires by; use order by ... | take N rather than bare top N. For queries, filter and aggregate at the source and limit only after aggregation. Cost Management permits at most two grouping dimensions; use ResourceId plus Meter at subscription scope for resource/model detail. Preserve totals and coverage. Omit for GET.")] string? body = null)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("QueryAzure");
         activity?.SetTag("azure.method", method);
         activity?.SetTag("azure.path", path);
         activity?.SetTag("azure.has_body", !string.IsNullOrWhiteSpace(body));
         if (!string.IsNullOrWhiteSpace(body))
-            activity?.SetTag("azure.body", body.Length > 2000 ? body[..2000] + "..." : body);
+            activity?.SetTag("azure.body_length", body.Length);
 
         var token = _tokens.AzureToken;
         if (string.IsNullOrEmpty(token))
@@ -109,8 +121,11 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         if (methodError is not null) return methodError;
         if (httpMethod == HttpMethod.Post)
         {
+            body = CanonicalJsonBody(body);
             var postError = ValidateReadOnlyPostPath(path, activity);
             if (postError is not null) return postError;
+            var queryError = ValidateQueryBody(path, body);
+            if (queryError is not null) return queryError;
         }
 
         var hasBody = !string.IsNullOrWhiteSpace(body);
@@ -122,10 +137,18 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
             includeTimestamp: true);
     }
 
+    // Cost Management treats timePeriod.to as an inclusive day, whereas this
+    // tool's contract is an exclusive end, so send the last included day.
+    internal static object CostQueryTimePeriod(DateOnly fromDate, DateOnly toExclusive) => new
+    {
+        from = fromDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        to = toExclusive.AddDays(-1).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
+    };
+
     private async Task<string> QueryCostsAcrossSubscriptions(
-        [Description("JSON array of subscription objects from the connection context, each with id and name fields")] string subscriptionsJson,
-        [Description("Inclusive start date in yyyy-MM-dd format")] string from,
-        [Description("Exclusive end date in yyyy-MM-dd format")] string to,
+        [Description("JSON array of all subscription objects in the requested scope, from connection context, with id and name fields. Never sample the array for an all-subscription total.")] string subscriptionsJson,
+        [Description("Inclusive start date in yyyy-MM-dd format. Bound to the requested period; the full date range must not exceed 366 days.")] string from,
+        [Description("Exclusive end date in yyyy-MM-dd format. Keep the requested window; do not broaden it to retrieve unrelated billing history.")] string to,
         [Description("Optional management-group id or full ARM path from the connection context")] string? managementGroupId = null)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("QueryCostsAcrossSubscriptions");
@@ -180,11 +203,11 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         if (scopes.Count == 0)
             return "HTTP 400 BadRequest\nsubscriptionsJson contained no valid subscription IDs.";
 
-        // The Consumption budgets endpoint returns subscription-level live
+        // The Consumption budgets endpoint returns subscription-level reported
         // `currentSpend` without consuming the Cost Management query QPU pool.
         // It is valid only for the current calendar month and only when an
         // unfiltered monthly budget covers the whole subscription. Use this
-        // before /query so an unrelated tenant throttle cannot hide exact MTD.
+        // before /query, while retaining the source's periodic-update caveat.
         var utcToday = DateOnly.FromDateTime(DateTime.UtcNow);
         var currentMonthStart = new DateOnly(utcToday.Year, utcToday.Month, 1);
         if (fromDate == currentMonthStart && toDate == utcToday.AddDays(1))
@@ -197,11 +220,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         {
             type = "ActualCost",
             timeframe = "Custom",
-            timePeriod = new
-            {
-                from = fromDate.ToString("yyyy-MM-dd"),
-                to = toDate.ToString("yyyy-MM-dd")
-            },
+            timePeriod = CostQueryTimePeriod(fromDate, toDate),
             dataset = new
             {
                 granularity = "None",
@@ -210,6 +229,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         });
 
         Dictionary<string, CostScopeResult>? aggregateResults = null;
+        var sourceEvidence = new List<JsonElement>();
 
         // Prefer one aggregate call. An accessible management group is not
         // guaranteed to contain the delegated subscriptions, so only 400/403/404
@@ -223,11 +243,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
                 {
                     type = "ActualCost",
                     timeframe = "Custom",
-                    timePeriod = new
-                    {
-                        from = fromDate.ToString("yyyy-MM-dd"),
-                        to = toDate.ToString("yyyy-MM-dd")
-                    },
+                    timePeriod = CostQueryTimePeriod(fromDate, toDate),
                     dataset = new
                     {
                         granularity = "None",
@@ -243,11 +259,12 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
                 var mgResponse = await HttpHelper.SendWithRetryAsync(
                     mgUrl, token, activity, "cost.cross_subscription.mg",
                     method: HttpMethod.Post, jsonBody: mgBody);
+                sourceEvidence.Add(ReadCostSourceEvidence(mgResponse));
                 if (mgResponse.StartsWith("HTTP 200", StringComparison.Ordinal))
                 {
                     var aggregate = ParseAggregateCostResponse(mgResponse, scopes);
                     if (aggregate.Error is null && aggregate.Results.Count == scopes.Count)
-                        return BuildCostResponse("managementGroup", scopes, aggregate.Results, false);
+                        return BuildCostResponse("managementGroup", scopes, aggregate.Results, false, sourceEvidence, fromDate, toDate);
 
                     // Keep any requested subscriptions returned by the aggregate
                     // and query only the missing scopes below. Extra management-
@@ -261,9 +278,13 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
                     {
                         complete = false,
                         source = "managementGroup",
+                        costType = "ActualCost",
+                        timePeriod = new { from = fromDate, to = toDate, endExclusive = true },
+                        aggregation = "Cost",
                         throttled = true,
                         attempted = 1,
                         subscriptionCount = scopes.Count,
+                        sourceEvidence,
                         detail = FirstLineAndBody(mgResponse, 500)
                     });
             }
@@ -282,6 +303,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
             var response = await HttpHelper.SendWithRetryAsync(
                 url, token, activity, "cost.cross_subscription.subscription",
                 method: HttpMethod.Post, jsonBody: body);
+            sourceEvidence.Add(ReadCostSourceEvidence(response));
 
             string? parseError = null;
             if (response.StartsWith("HTTP 200", StringComparison.Ordinal)
@@ -318,7 +340,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         }
 
         var source = reusedAggregateResults ? "managementGroup+subscriptions" : "subscriptions";
-        return BuildCostResponse(source, scopes, resultsById, throttled);
+        return BuildCostResponse(source, scopes, resultsById, throttled, sourceEvidence, fromDate, toDate);
     }
 
     private async Task<string?> TryReadCurrentMonthSpendFromBudgets(
@@ -351,6 +373,16 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         {
             complete = true,
             source = "subscriptionBudgets.currentSpend",
+            costType = (string?)null,
+            timePeriod = new { from = currentMonthStart, to = utcToday.AddDays(1), endExclusive = true },
+            _finops = new
+            {
+                cacheStatus = "queried",
+                freshness = "periodic",
+                retrievedAtUtc = DateTimeOffset.UtcNow,
+                dataAsOfUtc = (DateTimeOffset?)null,
+                caveat = "Budget currentSpend is evaluated periodically and may lag billing. This is a reported snapshot, not a real-time or finalized bill."
+            },
             period = "currentMonthToDate",
             subscriptionCount = scopes.Count,
             totalCost = Math.Round(results.Sum(r => r.Cost), 6),
@@ -532,11 +564,35 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         }
     }
 
-    private static string BuildCostResponse(
+    internal static JsonElement ReadCostSourceEvidence(string response)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(ResponseBody(response));
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("_finops", out var evidence)) return evidence.Clone();
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("retryAtUtc", out var retryAt))
+                return JsonSerializer.SerializeToElement(new
+                {
+                    cacheStatus = "not_available",
+                    freshness = "unknown",
+                    retryAtUtc = retryAt.Clone(),
+                    dataAsOfUtc = (DateTimeOffset?)null
+                });
+        }
+        catch (JsonException) { }
+        return JsonSerializer.SerializeToElement(new { cacheStatus = "unknown", freshness = "unknown", dataAsOfUtc = (DateTimeOffset?)null });
+    }
+
+    internal static string BuildCostResponse(
         string source,
         IReadOnlyList<(string Id, string Name)> scopes,
         IReadOnlyDictionary<string, CostScopeResult> resultsById,
-        bool throttled)
+        bool throttled,
+        IReadOnlyList<JsonElement> sourceEvidence,
+        DateOnly fromDate,
+        DateOnly toDate)
     {
         var orderedResults = scopes.Select(scope =>
             resultsById.TryGetValue(scope.Id, out var result)
@@ -560,6 +616,10 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         {
             complete,
             source,
+            costType = "ActualCost",
+            timePeriod = new { from = fromDate, to = toDate, endExclusive = true },
+            aggregation = "Cost",
+            sourceEvidence,
             throttled,
             subscriptionCount = scopes.Count,
             succeeded,
@@ -633,7 +693,13 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
     private static string ResponseBody(string response)
     {
         var firstNewline = response.IndexOf('\n');
-        return firstNewline >= 0 ? response[(firstNewline + 1)..] : "";
+        var body = firstNewline >= 0 ? response[(firstNewline + 1)..] : "";
+        if (body.StartsWith("Current UTC time: ", StringComparison.Ordinal))
+        {
+            var timestampEnd = body.IndexOf('\n');
+            body = timestampEnd >= 0 ? body[(timestampEnd + 1)..] : "";
+        }
+        return body;
     }
 
     private static int ParseStatusCode(string response)
@@ -654,7 +720,7 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         string? Currency,
         string? BudgetName);
 
-    private sealed record CostScopeResult(
+    internal sealed record CostScopeResult(
         string SubscriptionId,
         string SubscriptionName,
         int Status,
@@ -672,11 +738,19 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
     /// PolicyInsights states, etc.) MUST be prefixed with one of the five canonical scope shapes.
     /// Bare /providers/Microsoft.CostManagement/query was 5/27 of all 4xx failures in the last 5 days.
     /// </summary>
-    private static string? ValidateScopePrefix(string path)
+    internal static string? ValidateScopePrefix(string path)
     {
         // Strip query string for the check
         var qIdx = path.IndexOf('?');
         var clean = qIdx >= 0 ? path[..qIdx] : path;
+
+        if (clean.Contains("/providers/Microsoft.Consumption/reservationSummaries", StringComparison.OrdinalIgnoreCase)
+            && !Regex.IsMatch(clean,
+                @"^/providers/(?:Microsoft\.Billing/billingAccounts/[^/]+(?:/billingProfiles/[^/]+)?|Microsoft\.Capacity/reservationOrders/[^/]+(?:/reservations/[^/]+)?)/providers/Microsoft\.Consumption/reservationSummaries/?$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return "HTTP 400 BadRequest\nReservation summaries require a discovered billing account/profile or reservation-order/reservation scope. " +
+                "Use /providers/Microsoft.Capacity/reservationOrders/{orderId}/providers/Microsoft.Consumption/reservationSummaries?api-version=2024-08-01&grain=monthly after listing accessible reservation orders. " +
+                "A bare tenant-root or subscription path is not supported. No request was sent.";
 
         // Only enforce on the providers that actually require {scope}. Cost Management is the big one.
         // Consumption/budgets and PolicyInsights/policyStates also require it. ResourceGraph, Capacity,
@@ -743,6 +817,84 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         return BlockMutatingPost(activity);
     }
 
+    private static readonly JsonDocumentOptions LenientJson = new() { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip };
+
+    // Model-authored bodies sometimes carry trailing commas or comments; ARM needs strict JSON.
+    internal static string? CanonicalJsonBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return body;
+        try
+        {
+            using var strict = JsonDocument.Parse(body);
+            return body;
+        }
+        catch (JsonException) { }
+        try
+        {
+            using var lenient = JsonDocument.Parse(body, LenientJson);
+            return JsonSerializer.Serialize(lenient.RootElement);
+        }
+        catch (JsonException) { return body; }
+    }
+
+    internal static string? ValidateCostQueryBody(string path, string? body)
+    {
+        var queryIndex = path.IndexOf('?');
+        var requestPath = (queryIndex < 0 ? path : path[..queryIndex]).TrimEnd('/');
+        if (!requestPath.EndsWith("/Microsoft.CostManagement/query", StringComparison.OrdinalIgnoreCase)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(body ?? "");
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return "HTTP 400 BadRequest\nCost Management query body must be a JSON object. No request was sent.";
+            if (document.RootElement.TryGetProperty("dataset", out var dataset)
+                && dataset.ValueKind == JsonValueKind.Object && dataset.TryGetProperty("grouping", out var grouping))
+            {
+                if (grouping.ValueKind != JsonValueKind.Array)
+                    return "HTTP 400 BadRequest\nCost Management dataset.grouping must be an array. No request was sent.";
+                if (grouping.GetArrayLength() > 2)
+                    return "HTTP 400 BadRequest\nCost Management supports at most two grouping dimensions. Use ResourceId plus Meter at subscription scope, or SubscriptionId plus ResourceId at management-group scope. Derive resource-group from ResourceId; do not add a third grouping. No request was sent.";
+            }
+            return null;
+        }
+        catch (JsonException)
+        {
+            return "HTTP 400 BadRequest\nCost Management query body must be valid JSON. No request was sent.";
+        }
+    }
+
+    internal static string? ValidateQueryBody(string path, string? body)
+    {
+        var queryIndex = path.IndexOf('?');
+        var requestPath = (queryIndex < 0 ? path : path[..queryIndex]).TrimEnd('/');
+        if (!requestPath.Equals("/providers/Microsoft.ResourceGraph/resources", StringComparison.OrdinalIgnoreCase))
+            return ValidateCostQueryBody(path, body);
+
+        const string error = "HTTP 400 BadRequest\nResource Graph queries must declare exactly one non-empty subscriptions array of GUID strings or managementGroups array of ID strings from the requested connection-context scope. Implicit tenant-wide scope is not supported by this tool. No request was sent.";
+        if (string.IsNullOrWhiteSpace(body)) return error;
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || root.EnumerateObject().Count(property => property.Name is "subscriptions" or "managementGroups") != 1)
+                return error;
+            var subscriptionScope = root.TryGetProperty("subscriptions", out var scopes);
+            if (!subscriptionScope) scopes = root.GetProperty("managementGroups");
+            if (scopes.ValueKind != JsonValueKind.Array || scopes.GetArrayLength() == 0)
+                return error;
+            foreach (var scope in scopes.EnumerateArray())
+                if (scope.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(scope.GetString())
+                    || subscriptionScope && !Guid.TryParse(scope.GetString(), out _))
+                    return error;
+            return null;
+        }
+        catch (JsonException)
+        {
+            return "HTTP 400 BadRequest\nResource Graph query body must be one complete valid JSON object (check closing quotes and braces), with an explicit subscriptions or managementGroups array and a query string. No request was sent.";
+        }
+    }
+
     private static string BlockMutatingPost(Activity? activity)
     {
         activity?.SetTag("azure.result", "blocked_mutating_post");
@@ -751,9 +903,10 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
     }
 
     private async Task<string> BulkAzureRequest(
-        [Description("JSON array of {method,path,body?} objects, e.g. [{\"method\":\"PATCH\",\"path\":\"/subscriptions/.../tags/default?api-version=2021-04-01\",\"body\":\"{...}\"}]")] string requestsJson,
-        [Description("Max parallel requests in flight. Default 20, max 50.")] int parallelism = 20,
-        [Description("Stop the whole bulk run on the first failure. Default false (continue and report all failures).")] bool stopOnFirstError = false)
+        [Description("JSON array of 1-200 {method,path,body?} objects. Each read must filter, aggregate, project, and limit at the source with supported API options. Resource Graph POST bodies require an explicit subscriptions or managementGroups array covering the requested scope; use top N by field or order by field | take N, never bare top N. Use exact discovered targets for writes; body is a JSON string. Grouped cost reads across two or more scopes belong in one batch with exact requested scopes, dates, cost type and filters; they execute sequentially and stop after a final cost 429.")] string requestsJson,
+        [Description("Max parallel requests in flight. Default 20, max 50. Request 1 for Cost Management; any batch containing /query or /forecast is forced to 1 by the host.")] int parallelism = 20,
+        [Description("Stop the whole bulk run on the first failure. Default false (continue and report all failures). A final Cost Management 429 always stops the batch regardless of this setting.")] bool stopOnFirstError = false,
+        CancellationToken cancellationToken = default)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("BulkAzureRequest");
         var token = _tokens.AzureToken;
@@ -776,122 +929,119 @@ Use this INSTEAD of looping QueryAzure when you have ≥5 similar requests. Buil
         }
         if (items is null || items.Count == 0)
             return "HTTP 400 BadRequest\nrequestsJson must be a non-empty JSON array.";
+        if (items.Any(item => item is null))
+            return "HTTP 400 BadRequest\nEvery batch item must be a request object. No request was sent.";
 
-        var maxPar = Math.Clamp(parallelism, 1, 50);
-        activity?.SetTag("bulk.total", items.Count);
-        activity?.SetTag("bulk.parallelism", maxPar);
-
-        var sw = Stopwatch.StartNew();
-        var results = new BulkResult[items.Count];
-        var cts = new CancellationTokenSource();
-
-        await Parallel.ForEachAsync(
-            Enumerable.Range(0, items.Count),
-            new ParallelOptions { MaxDegreeOfParallelism = maxPar, CancellationToken = cts.Token },
-            async (i, ct) =>
-            {
-                var item = items[i];
-                var (httpMethod, methodError) = HttpHelper.ResolveMethod(item.Method, activity, "bulk");
-                if (methodError is not null)
-                {
-                    results[i] = new BulkResult(i, 0, item.Path ?? "", methodError, false);
-                    if (stopOnFirstError) cts.Cancel();
-                    return;
-                }
-                if (string.IsNullOrWhiteSpace(item.Path) || !item.Path.StartsWith('/'))
-                {
-                    results[i] = new BulkResult(i, 400, item.Path ?? "", $"Invalid path: '{item.Path}'", false);
-                    if (stopOnFirstError) cts.Cancel();
-                    return;
-                }
-                if (httpMethod == HttpMethod.Post)
-                {
-                    var postError = ValidateReadOnlyPostPath(item.Path, activity);
-                    if (postError is not null)
-                    {
-                        results[i] = new BulkResult(i, 403, item.Path, postError, false);
-                        if (stopOnFirstError) cts.Cancel();
-                        return;
-                    }
-                }
-
-                var hasBody = !string.IsNullOrWhiteSpace(item.Body);
-                var resp = await HttpHelper.SendWithRetryAsync(
-                    $"https://management.azure.com{item.Path}",
-                    token, activity, "bulk",
-                    method: httpMethod,
-                    jsonBody: hasBody && httpMethod != HttpMethod.Get ? item.Body : null,
-                    includeTimestamp: false,
-                    maxResponseChars: 1024); // hard cap so a stray verbose 4xx doesn't blow up the summary
-
-                // Parse the "HTTP {code} {reason}\n{body}" envelope SendWithRetryAsync returns.
-                var firstLine = resp.IndexOf('\n');
-                var statusLine = firstLine > 0 ? resp[..firstLine] : resp;
-                var statusParts = statusLine.Split(' ', 3);
-                int.TryParse(statusParts.ElementAtOrDefault(1), out var status);
-                var ok = status >= 200 && status < 300;
-                var bodyPart = firstLine > 0 ? resp[(firstLine + 1)..] : "";
-
-                string? name = null;
-                try
-                {
-                    var idx = bodyPart.IndexOf('{');
-                    if (idx >= 0)
-                    {
-                        using var doc = JsonDocument.Parse(bodyPart[idx..]);
-                        if (doc.RootElement.ValueKind == JsonValueKind.Object
-                            && doc.RootElement.TryGetProperty("name", out var n))
-                            name = n.GetString();
-                    }
-                }
-                catch { /* ignore */ }
-
-                results[i] = new BulkResult(i, status, item.Path, ok ? null : bodyPart, ok, name);
-                if (!ok && stopOnFirstError) cts.Cancel();
-            });
-
-        sw.Stop();
-        var succeeded = results.Count(r => r is not null && r.Ok);
-        var failed = results.Count(r => r is not null && !r.Ok);
-        activity?.SetTag("bulk.succeeded", succeeded);
-        activity?.SetTag("bulk.failed", failed);
-        activity?.SetTag("bulk.duration_ms", sw.ElapsedMilliseconds);
-
-        var failuresPayload = results
-            .Where(r => r is not null && !r.Ok)
-            .Take(20)
-            .Select(r => new
-            {
-                index = r!.Index,
-                status = r.Status,
-                path = r.Path,
-                error = (r.Error ?? "").Length > 200 ? r.Error![..200] : r.Error
-            });
-
-        var successSamples = results
-            .Where(r => r is not null && r.Ok)
-            .Take(5)
-            .Select(r => new { path = r!.Path, name = r.Name });
-
-        var summary = new
+        if (items.Count > 200) return "HTTP 400 BadRequest\nA batch supports at most 200 requests; split larger work explicitly.";
+        return await ExecuteBulkAsync(items, parallelism, stopOnFirstError, async (item, requestToken) =>
         {
-            total = items.Count,
-            succeeded,
-            failed,
-            durationMs = sw.ElapsedMilliseconds,
-            stopped = cts.IsCancellationRequested && stopOnFirstError,
-            failures = failuresPayload,
-            successSamples
-        };
-        return JsonSerializer.Serialize(summary);
+            var (method, methodError) = HttpHelper.ResolveMethod(item.Method, activity, "bulk");
+            if (methodError is not null) return methodError;
+            if (string.IsNullOrWhiteSpace(item.Path) || !item.Path.StartsWith('/') || item.Path.StartsWith("//")
+                || item.Path.Contains('#') || item.Path.Contains('\\')) return "HTTP 400 BadRequest\nInvalid ARM path.";
+            if (ValidateScopePrefix(item.Path) is { } scopeError) return scopeError;
+            if (method == HttpMethod.Post && ValidateReadOnlyPostPath(item.Path, activity) is { } postError) return postError;
+            var body = method == HttpMethod.Post ? CanonicalJsonBody(item.Body) : item.Body;
+            if (method == HttpMethod.Post && ValidateQueryBody(item.Path, body) is { } queryError) return queryError;
+            return await HttpHelper.SendWithRetryAsync($"https://management.azure.com{item.Path}", token, activity, "bulk",
+                method: method, jsonBody: method == HttpMethod.Get ? null : body,
+                cancellationToken: requestToken);
+        }, cancellationToken);
     }
 
-    private sealed class BulkRequestItem
+    internal static async Task<string> ExecuteBulkAsync(IReadOnlyList<BulkRequestItem> items, int parallelism, bool stopOnFirstError,
+        Func<BulkRequestItem, CancellationToken, Task<string>> send, CancellationToken cancellationToken)
+    {
+        if (items.Count is < 1 or > 200) throw new ArgumentException("Batches support 1 to 200 items.");
+        var results = new BulkResult?[items.Count];
+        var stop = 0;
+        var concurrency = items.Any(IsCostRead) ? 1 : Math.Clamp(parallelism, 1, 50);
+        await Parallel.ForEachAsync(Enumerable.Range(0, items.Count),
+            new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = CancellationToken.None },
+            async (index, parallelToken) =>
+            {
+                if (cancellationToken.IsCancellationRequested || Volatile.Read(ref stop) != 0)
+                {
+                    results[index] = new(index, 0, "unattempted", false, null, "Not sent.");
+                    return;
+                }
+                try
+                {
+                    var response = await send(items[index], cancellationToken);
+                    var newline = response.IndexOf('\n');
+                    int.TryParse((newline < 0 ? response : response[..newline]).Split(' ').ElementAtOrDefault(1), out var status);
+                    var content = newline < 0 ? "" : response[(newline + 1)..];
+                    object? body = null;
+                    var partial = content.Length > MaxBulkItemCharacters;
+                    if (!partial && content.Length > 0)
+                    {
+                        try { body = JsonSerializer.Deserialize<JsonElement>(content); }
+                        catch (JsonException) { body = SensitiveContent.Redact(content); }
+                    }
+                    var succeeded = status is >= 200 and < 300;
+                    var outcome = succeeded ? "succeeded" : "failed";
+                    if (body is JsonElement { ValueKind: JsonValueKind.Object } structured)
+                    {
+                        if (structured.TryGetProperty("operationId", out _) && structured.TryGetProperty("status", out var operationStatus))
+                            outcome = operationStatus.GetString() ?? "unknown";
+                        else if (structured.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object
+                            && properties.TryGetProperty("provisioningState", out _)) outcome = OperationStore.Classify(status, structured);
+                    }
+                    if (status == 202 && outcome == "succeeded") outcome = "accepted";
+                    results[index] = new(index, status, outcome, partial, body,
+                        partial ? "Response exceeds the per-item limit. Narrow this indexed request; no complete-coverage claim is permitted." : null,
+                        IsCostRead(items[index]) ? ReadCostSourceEvidence(response) : null);
+                    if ((outcome is "failed" or "unknown" && stopOnFirstError)
+                        || status == 429 && IsCostRead(items[index])) Interlocked.Exchange(ref stop, 1);
+                }
+                catch (OperationCanceledException)
+                {
+                    results[index] = new(index, 0, "cancelled", true, null, "Interrupted after dispatch; verify mutation state before retrying.");
+                    if (stopOnFirstError) Interlocked.Exchange(ref stop, 1);
+                }
+                catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+                {
+                    results[index] = new(index, 0, "failed", false, null, exception.GetType().Name);
+                    if (stopOnFirstError) Interlocked.Exchange(ref stop, 1);
+                }
+            });
+        var budget = MaxBulkBatchCharacters;
+        for (var index = 0; index < results.Length; index++)
+        {
+            var item = results[index]!;
+            var size = JsonSerializer.Serialize(item.Body).Length;
+            if (size > budget) results[index] = item with { Body = null, Partial = true, Error = "Batch data budget reached. Retrieve this indexed item separately." };
+            else budget -= size;
+        }
+        return JsonSerializer.Serialize(new
+        {
+            total = items.Count,
+            succeeded = results.Count(item => item!.Outcome == "succeeded"),
+            failed = results.Count(item => item!.Outcome == "failed"),
+            pending = results.Count(item => item!.Outcome is "awaitingApproval" or "accepted" or "inProgress" or "dispatching" or "unknown"),
+            unattempted = results.Count(item => item!.Outcome == "unattempted"),
+            cancelled = results.Count(item => item!.Outcome == "cancelled"),
+            stopped = Volatile.Read(ref stop) != 0,
+            complete = results.All(item => item is { Outcome: "succeeded", Partial: false }),
+            results
+        }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+    }
+
+    // Sized below ToolResultStore.MaxResultBytes so a complete batch can be retained and queried.
+    internal const int MaxBulkItemCharacters = 4_000_000;
+    internal const int MaxBulkBatchCharacters = 12_000_000;
+
+    internal sealed class BulkRequestItem
     {
         public string Method { get; set; } = "GET";
         public string Path { get; set; } = "";
         public string? Body { get; set; }
     }
 
-    private sealed record BulkResult(int Index, int Status, string Path, string? Error, bool Ok, string? Name = null);
+    private static bool IsCostRead(BulkRequestItem item) =>
+        string.Equals(item.Method?.Trim(), "POST", StringComparison.OrdinalIgnoreCase)
+        && !string.IsNullOrEmpty(item.Path) && HttpHelper.IsInteractiveCostQueryUrl(item.Path);
+
+    private sealed record BulkResult(int Index, int Status, string Outcome, bool Partial, object? Body, string? Error,
+        JsonElement? SourceEvidence = null);
 }

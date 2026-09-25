@@ -19,9 +19,9 @@ public class StorageQueryTools
 
     public IEnumerable<AIFunction> Create()
     {
-        yield return AIFunctionFactory.Create(ListCostExportBlobs, "ListCostExportBlobs", @"Lists blobs in an Azure Storage container to discover cost export files. Use before ReadCostExportBlob. Scheduled exports usually write `{exportName}/{YYYYMMDD-YYYYMMDD}/{file}.csv`. Returns blob names, sizes, last-modified.");
+        yield return AIFunctionFactory.Create(ListCostExportBlobs, "ListCostExportBlobs", @"Lists at most 50 blobs in an Azure Storage container to discover cost export files. Use before ReadCostExportBlob. Scheduled exports usually write `{exportName}/{YYYYMMDD-YYYYMMDD}/{file}.csv`. Pass the narrowest known export/date prefix so the service filters results; do not list the container root when the requested export or period is known. Returns XML with blob names, sizes, and last-modified timestamps. A nonempty NextMarker means this listing is partial; refine the prefix instead of claiming all exports were inspected.");
 
-        yield return AIFunctionFactory.Create(ReadCostExportBlob, "ReadCostExportBlob", @"Reads a CSV blob (FOCUS-format cost export) from Azure Storage. >1MB files: only first 500KB returned — for full analysis, use bash with `curl -H 'Authorization: Bearer {token}' '{blobUrl}' -o /tmp/export.csv` then a Python pandas script.
+        yield return AIFunctionFactory.Create(ReadCostExportBlob, "ReadCostExportBlob", @"Returns at most 512000 characters of CSV from one exact Azure Storage blob. This is an output limit, not server-side row filtering or a download-byte limit. Select the smallest relevant date-partitioned blob through a prefix-filtered ListCostExportBlobs call first. Never compute whole-export totals from a truncated sample. For full analysis, request an upload for QueryUploadedFile; for a requested repeatable download/analysis workflow, call GenerateScript directly with complete user-run Azure CLI or PowerShell code using the user's own login (`az login` and `--auth-mode login` for Azure CLI). Never request or embed bearer tokens or claim the generated script was executed.
 
 FOCUS columns: BilledCost, EffectiveCost, ServiceCategory, ServiceName, SubAccountName, ResourceId, Region, ChargeCategory, PricingModel, etc.");
     }
@@ -29,7 +29,7 @@ FOCUS columns: BilledCost, EffectiveCost, ServiceCategory, ServiceName, SubAccou
     private async Task<string> ListCostExportBlobs(
         [Description("Storage account name (e.g. 'mystorageaccount')")] string storageAccount,
         [Description("Container name (e.g. 'exports' or 'cost-exports')")] string container,
-        [Description("Optional blob prefix/path to filter results (e.g. 'monthly-export/202604'). Omit to list all.")] string? prefix = null)
+        [Description("Blob prefix/path used by Storage to filter results (e.g. 'monthly-export/202604'). Omit only when neither export name nor period is known; at most 50 matches are returned.")] string? prefix = null)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("ListCostExportBlobs");
         activity?.SetTag("storage.account", storageAccount);
@@ -59,7 +59,7 @@ FOCUS columns: BilledCost, EffectiveCost, ServiceCategory, ServiceName, SubAccou
     private async Task<string> ReadCostExportBlob(
         [Description("Storage account name")] string storageAccount,
         [Description("Container name")] string container,
-        [Description("Full blob path/name (e.g. 'monthly-export/20260401-20260430/export.csv')")] string blobPath)
+        [Description("Exact blob path/name from a prefix-filtered listing. Select only the requested export/date partition, not a container root or a SAS URL.")] string blobPath)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("ReadCostExportBlob");
         activity?.SetTag("storage.account", storageAccount);

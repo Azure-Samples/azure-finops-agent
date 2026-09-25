@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Security.Cryptography;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Infrastructure;
 using Microsoft.Extensions.AI;
@@ -24,13 +26,16 @@ public sealed class UploadedFileTools
         long UserId,
         string FileName,
         string Kind,
-        string Path,
+        [property: JsonIgnore] string Path,
         long SizeBytes,
         DateTime CreatedUtc,
-        string? SchemaSummary);
+        string? SchemaSummary,
+        string? SessionId = null,
+        DateTime ExpiresUtc = default,
+        string Sha256 = "",
+        bool Removed = false);
 
-    // userId → (fileId → entry)
-    internal static readonly ConcurrentDictionary<long, ConcurrentDictionary<string, UploadEntry>> UserFiles = new();
+    internal static readonly UploadCatalog Catalog = new(TempFileHelper.UploadRoot);
 
     private const int TimeoutSeconds = 30;
     private const long MaxBytes = 100L * 1024 * 1024; // 100 MB
@@ -54,6 +59,12 @@ public sealed class UploadedFileTools
 
     private static readonly Timer _cleanupTimer;
 
+    // The model controls paramsJson. These keys are resolved by the host from the
+    // per-user upload registry and must never be overridable, or the model could
+    // point the reader at an arbitrary file on disk (CWE-73).
+    private static readonly HashSet<string> ReservedRequestKeys =
+        new(StringComparer.OrdinalIgnoreCase) { "mode", "path", "kind" };
+
     private readonly UserTokens _tokens; // not used today, kept for symmetry with other per-user tools
 
     public UploadedFileTools(UserTokens tokens) => _tokens = tokens;
@@ -64,9 +75,9 @@ public sealed class UploadedFileTools
 @"Inspect or query a file the user dropped into the chat (CSV, TSV, JSON, TXT/log/md, XLSX, PDF, Parquet).
 Each upload is announced at the start of the user's turn with its fileId, kind, size, and a short preview.
 Call this tool to fetch more data — head/tail/slice for rows, schema/count for shape, workbook for all XLSX sheets,
-filter/aggregate for tabular analysis,
+filter/aggregate/query for tabular analysis,
 text_range for long text/PDF, json_path for nested JSON. Responses are capped (≤200 rows or ≤8000 chars per call) so make
-multiple calls if you need more.
+multiple targeted calls only when needed. Prefer filter, aggregate, or query over broad head/slice calls. In query mode, use columns to return only needed output fields; filtering, aggregation and sorting happen before projection and pagination. Preserve source_rows, filtered_rows, total_results, totals, invalid_numeric and complete so a limited result is never presented as the full dataset. These controls reduce helper output, not the already-uploaded file size.
 
 This tool is the only permitted way to inspect uploaded files. Never use shell, PowerShell, Python, filesystem search, or
 the file's temp path. For XLSX, use `workbook` first: it returns every sheet's shape, columns, and bounded numeric
@@ -84,7 +95,9 @@ Modes:
   text_range  txt/pdf substring (params: start, length, max 8000)
   filter      Tabular: rows where column {op} value (params: column, op in eq|ne|gt|lt|ge|le|contains, value, limit)
   aggregate   Tabular: group_by + agg (params: group_by, agg in sum|mean|min|max|count, column, limit)
-  json_path   JSON: navigate dot/bracket path (param: path, e.g. 'properties.rows[0].cost')
+    query       Tabular: filters[], group_by[] and aggregates[{column,op,as}], sort[{column,direction}], columns[], offset, limit. columns selects 1-50 distinct output names, including aggregate aliases when used.
+    json_path   JSON: navigate dot/bracket selector (param: jsonPath, e.g. 'properties.rows[0].cost')
+    Both aggregate and query accept filters:[{column,op,value}]. All predicates must match. group_by accepts one column or an array of up to 6 columns. Aggregate output includes source/filtered counts, totals, and explicit truncation.
 
 Examples:
   QueryUploadedFile(fileId, 'aggregate', '{""group_by"":""ServiceName"",""agg"":""sum"",""column"":""PreTaxCost""}')
@@ -94,15 +107,18 @@ Examples:
 
     private async Task<string> QueryUploadedFile(
         [Description("The fileId returned at upload time (12-char hex).")] string fileId,
-        [Description("Operation: preview, schema, count, workbook, head, tail, slice, text_range, filter, aggregate, json_path.")] string mode,
-        [Description("Optional JSON object with mode-specific parameters (see tool description).")] string? paramsJson)
+        [Description("Operation: preview, schema, count, workbook, head, tail, slice, text_range, filter, aggregate, query, json_path.")] string mode,
+        [Description("Optional JSON object with mode-specific parameters. For tabular query use filters[], group_by[], aggregates[{column,op,as}], sort[{column,direction}], columns[] (1-50 distinct output fields), offset and a small limit. Filter/aggregate before projecting and limiting; retain returned totals/coverage. For JSON selectors use jsonPath. Host path, kind and mode are reserved.")] string? paramsJson = null,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(fileId)) return Json(new { ok = false, error = "fileId required" });
         if (string.IsNullOrWhiteSpace(mode)) return Json(new { ok = false, error = "mode required" });
 
-        var entry = FindEntryForUser(_tokens.UserId, fileId);
-        if (entry is null) return Json(new { ok = false, error = "fileId not found in this session (it may have expired or been cleared)" });
-        if (!File.Exists(entry.Path)) return Json(new { ok = false, error = "file no longer on disk" });
+        IDisposable lease;
+        UploadEntry entry;
+        try { lease = Catalog.Acquire(_tokens.UserId, ToolExecutionContext.Current?.SessionId, fileId, out entry); }
+        catch (InvalidOperationException exception) { return Json(new { ok = false, error = exception.Message, code = "upload_unavailable" }); }
+        using var uploadLease = lease;
         if (entry.Kind == "image")
             return Json(new { ok = false, error = "This fileId is an image — it is attached to the user's message as a visual. Look at the attached image directly instead of querying it." });
 
@@ -117,8 +133,14 @@ Examples:
             try
             {
                 using var doc = JsonDocument.Parse(paramsJson);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                    return Json(new { ok = false, error = "params must be a JSON object." });
                 foreach (var p in doc.RootElement.EnumerateObject())
+                {
+                    if (ReservedRequestKeys.Contains(p.Name))
+                        return Json(new { ok = false, error = $"'{p.Name}' cannot be set in params — the file is selected by fileId." });
                     requestObj[p.Name] = JsonValueToObject(p.Value);
+                }
             }
             catch (JsonException jex)
             {
@@ -126,7 +148,11 @@ Examples:
             }
         }
 
-        return await RunPythonAsync(JsonSerializer.Serialize(requestObj));
+        var result = await RunPythonAsync(JsonSerializer.Serialize(requestObj), cancellationToken);
+        using var response = JsonDocument.Parse(result);
+        var payload = response.RootElement.EnumerateObject().ToDictionary(property => property.Name, property => (object?)property.Value.Clone());
+        payload["source"] = new { fileId = entry.FileId, fileName = entry.FileName, sizeBytes = entry.SizeBytes, sha256 = entry.Sha256, expiresUtc = entry.ExpiresUtc };
+        return Json(payload);
     }
 
     // ---------------------------------------------------------------- Public API
@@ -143,7 +169,7 @@ Examples:
 
         var fileId = Guid.NewGuid().ToString("N")[..12];
         var safeName = TempFileHelper.SanitizeFilename(fileName, "upload" + ext);
-        var path = Path.Combine(Path.GetTempPath(), $"{fileId}_{safeName}");
+        var path = Catalog.PathFor(fileId, safeName);
 
         await using (var fs = File.Create(path))
         {
@@ -195,8 +221,11 @@ Examples:
             schemaSummary = SummarizeSchema(kind, previewJson);
         }
 
-        var entry = new UploadEntry(fileId, userId, fileName, kind, path, size, DateTime.UtcNow, schemaSummary);
-        UserFiles.GetOrAdd(userId, _ => new ConcurrentDictionary<string, UploadEntry>())[fileId] = entry;
+        await using var hashStream = File.OpenRead(path);
+        var hash = Convert.ToHexString(await SHA256.HashDataAsync(hashStream)).ToLowerInvariant();
+        var entry = new UploadEntry(fileId, userId, safeName, kind, path, size, DateTime.UtcNow,
+            SensitiveContent.Redact(schemaSummary ?? ""), ExpiresUtc: DateTime.UtcNow.AddMinutes(30), Sha256: hash);
+        Catalog.Add(entry);
         return (entry, previewJson);
     }
 
@@ -252,36 +281,12 @@ Examples:
         catch { return null; }
     }
 
-    public static IReadOnlyList<UploadEntry> ListForUser(long userId)
-    {
-        if (!UserFiles.TryGetValue(userId, out var bucket)) return Array.Empty<UploadEntry>();
-        return bucket.Values.OrderBy(e => e.CreatedUtc).ToList();
-    }
+    public static IReadOnlyList<UploadEntry> ListForUser(long userId, string? sessionId = null) => Catalog.List(userId, sessionId);
 
-    public static bool RemoveForUser(long userId, string fileId)
-    {
-        // Remove from the user's listing so the LLM context block no longer shows it,
-        // but keep the temp file on disk so any prior tool-call results in the chat
-        // history remain valid for replay. Actual file disposal happens on
-        // /api/chat/reset (ClearForUser) or via the 30-min TTL sweep.
-        return UserFiles.TryGetValue(userId, out var bucket) && bucket.TryRemove(fileId, out _);
-    }
-
-    public static void ClearForUser(long userId)
-    {
-        if (!UserFiles.TryRemove(userId, out var bucket)) return;
-        foreach (var e in bucket.Values)
-            try { File.Delete(e.Path); } catch { }
-    }
+    public static bool RemoveForUser(long userId, string fileId) => Catalog.Remove(userId, fileId);
 
     // ---------------------------------------------------------------- Internals
 
-    private static UploadEntry? FindEntryForUser(long userId, string fileId)
-    {
-        if (UserFiles.TryGetValue(userId, out var bucket) && bucket.TryGetValue(fileId, out var e))
-            return e;
-        return null;
-    }
 
     private static string KindFromExt(string ext) => ext.ToLowerInvariant() switch
     {
@@ -305,30 +310,18 @@ Examples:
         _ => "application/octet-stream",
     };
 
-    private static void Cleanup()
-    {
-        var cutoff = DateTime.UtcNow.AddMinutes(-30);
-        foreach (var (uid, bucket) in UserFiles)
-        {
-            foreach (var (fid, entry) in bucket)
-            {
-                if (entry.CreatedUtc < cutoff)
-                {
-                    bucket.TryRemove(fid, out _);
-                    try { File.Delete(entry.Path); } catch { }
-                }
-            }
-            if (bucket.IsEmpty) UserFiles.TryRemove(uid, out _);
-        }
-    }
+    private static void Cleanup() => Catalog.Cleanup();
 
-    private static async Task<string> RunPythonAsync(string requestJson)
+    internal static async Task<string> RunPythonAsync(string requestJson, CancellationToken cancellationToken = default)
     {
         var script = LoadEmbeddedScript("file_inspect.py");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
+            ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
+        timeout.CancelAfter(TimeSpan.FromSeconds(TimeoutSeconds));
 
         var psi = new ProcessStartInfo
         {
-            FileName = "python3",
+            FileName = Environment.GetEnvironmentVariable("FINOPS_PYTHON") ?? (OperatingSystem.IsWindows() ? "python" : "python3"),
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -337,6 +330,10 @@ Examples:
         };
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add(script);
+
+        // The helper refuses to open anything outside this root, and fails closed
+        // when the variable is missing.
+        psi.Environment["FINOPS_UPLOAD_ROOT"] = TempFileHelper.UploadRoot;
 
         var pipTarget = "/home/site/pip-packages";
         if (Directory.Exists(pipTarget))
@@ -348,16 +345,21 @@ Examples:
         using var process = new Process { StartInfo = psi };
         process.Start();
 
-        await process.StandardInput.WriteAsync(requestJson);
-        process.StandardInput.Close();
-
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
-
-        var exited = process.WaitForExit(TimeoutSeconds * 1000);
-        if (!exited)
+        try
+        {
+            await process.StandardInput.WriteAsync(requestJson.AsMemory(), timeout.Token);
+            process.StandardInput.Close();
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
+            await process.WaitForExitAsync(CancellationToken.None);
+            await Task.WhenAll(stdoutTask, stderrTask);
+            cancellationToken.ThrowIfCancellationRequested();
+            ToolExecutionContext.Current?.CancellationToken.ThrowIfCancellationRequested();
             return Json(new { ok = false, error = $"file_inspect timed out after {TimeoutSeconds}s" });
         }
 
@@ -365,19 +367,21 @@ Examples:
         var stderr = await stderrTask;
 
         if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
-            return Json(new { ok = false, error = $"file_inspect exit={process.ExitCode}", stderr = Truncate(stderr, 1000) });
+            return Json(new { ok = false, error = "File inspection failed. Verify the file format and narrow the query." });
 
-        return stdout.Trim();
+        return SensitiveContent.Redact(stdout.Trim());
     }
 
-    private static object? JsonValueToObject(JsonElement el) => el.ValueKind switch
+    internal static object? JsonValueToObject(JsonElement el) => el.ValueKind switch
     {
         JsonValueKind.String => el.GetString(),
         JsonValueKind.Number => el.TryGetInt64(out var i) ? i : el.GetDouble(),
         JsonValueKind.True => true,
         JsonValueKind.False => false,
         JsonValueKind.Null => null,
-        _ => el.GetRawText(),
+        JsonValueKind.Array => el.EnumerateArray().Select(JsonValueToObject).ToArray(),
+        JsonValueKind.Object => el.EnumerateObject().ToDictionary(property => property.Name, property => JsonValueToObject(property.Value)),
+        _ => null,
     };
 
     private static string Json(object o) => JsonSerializer.Serialize(o);

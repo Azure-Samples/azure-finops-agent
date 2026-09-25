@@ -144,7 +144,7 @@ const maturityCategories = [
       {
         label: "Cost by subscription",
         prompt:
-          "Compare Azure costs across all my subscriptions for the current month. Show a bar chart ranking subscriptions by spend, and a table with subscription name, cost, and month-over-month change.",
+          "Compare Azure costs across all my subscriptions for the current month. Show a table ranking subscriptions by spend, with subscription name, cost, and month-over-month change.",
       },
       {
         label: "Cost by resource group",
@@ -154,7 +154,7 @@ const maturityCategories = [
       {
         label: "Cost by tag",
         prompt:
-          "Break down my Azure costs by the cost-center tag for the current month. Show a pie chart and table. Which cost centers have the highest spend?",
+          "Break down my Azure costs by the cost-center tag for the current month. Show a table ranked by spend, including untagged cost. Which cost centers have the highest spend?",
       },
       {
         label: "Cost by region",
@@ -204,7 +204,7 @@ const maturityCategories = [
       {
         label: "Resource inventory",
         prompt:
-          "Query Resource Graph for a count of all resources by type across my subscriptions. Show a pie chart of the top 15 resource types and a table with the full breakdown.",
+          "Query Resource Graph for a count of all resources by type across my subscriptions. Show a table with the full breakdown by type, sorted by count.",
       },
       {
         label: "My subscriptions",
@@ -389,12 +389,12 @@ const maturityCategories = [
       {
         label: "Chargeback report",
         prompt:
-          "Generate a chargeback report for the current month. Break down costs by the owner tag or cost-center tag. Show a bar chart and table with each team's total spend, top services, and month-over-month change.",
+          "Generate a chargeback report for the current month. Break down costs by the owner tag or cost-center tag. Show a table with each team's total spend, top services, and month-over-month change.",
       },
       {
         label: "Showback report",
         prompt:
-          "Generate a showback report for the current month — show each department/team their Azure costs by tag (cost-center or owner) without billing attribution. Include a summary table and a pie chart of cost distribution across teams.",
+          "Generate a showback report for the current month — show each department/team their Azure costs by tag (cost-center or owner) without billing attribution. Include a summary table with each team's cost and share of total.",
       },
       {
         label: "Cost allocation model",
@@ -505,12 +505,12 @@ const maturityCategories = [
       {
         label: "Spend by analysis bucket",
         prompt:
-          "Analyze my Azure spend across all subscriptions and group it into these analysis buckets: Compute (VMs, VMSS, dedicated hosts), Storage (blob, files, disks, managed disks, NetApp), Databases (SQL, Cosmos DB, MySQL, PostgreSQL, MariaDB, Redis Cache), DataServices (Data Factory, Synapse, Databricks, HDInsight, Data Lake, Stream Analytics, Purview), Networking (VNets, peering, ExpressRoute, VPN, Load Balancer, App Gateway, Firewall, Front Door, CDN, bandwidth/egress, NAT Gateway, Traffic Manager, Private Link), Serverless (Functions, Logic Apps, Event Grid, Service Bus, Event Hubs, API Management), Monitoring (Log Analytics, App Insights, Monitor, Sentinel), Backup_DR (Recovery Services, Site Recovery, Backup), Integration (API Management, Service Bus, Logic Apps, Event Grid), Security (Defender, Key Vault, DDoS Protection, WAF), Containers (AKS, Container Instances, Container Registry, Container Apps), Identity (Entra ID, MFA), AI_ML (Cognitive Services, OpenAI, ML workspaces). Show a pie chart of spend by bucket with % of total. Then show a table with bucket name, total cost, and % of total spend sorted by highest spend first.",
+          "Analyze my Azure spend across all subscriptions and group it into these analysis buckets: Compute (VMs, VMSS, dedicated hosts), Storage (blob, files, disks, managed disks, NetApp), Databases (SQL, Cosmos DB, MySQL, PostgreSQL, MariaDB, Redis Cache), DataServices (Data Factory, Synapse, Databricks, HDInsight, Data Lake, Stream Analytics, Purview), Networking (VNets, peering, ExpressRoute, VPN, Load Balancer, App Gateway, Firewall, Front Door, CDN, bandwidth/egress, NAT Gateway, Traffic Manager, Private Link), Serverless (Functions, Logic Apps, Event Grid, Service Bus, Event Hubs, API Management), Monitoring (Log Analytics, App Insights, Monitor, Sentinel), Backup_DR (Recovery Services, Site Recovery, Backup), Integration (API Management, Service Bus, Logic Apps, Event Grid), Security (Defender, Key Vault, DDoS Protection, WAF), Containers (AKS, Container Instances, Container Registry, Container Apps), Identity (Entra ID, MFA), AI_ML (Cognitive Services, OpenAI, ML workspaces). Show a table with bucket name, total cost, and % of total spend sorted by highest spend first.",
       },
       {
         label: "Top 20 subscriptions by spend",
         prompt:
-          "Show the top 20 Azure subscriptions by total spend for the current month. Show a bar chart and a table with rank, subscription name, cost, and % of total spend.",
+          "Show the top 20 Azure subscriptions by total spend for the current month. Show a table with rank, subscription name, cost, and % of total spend.",
       },
       {
         label: "Top subs per service bucket",
@@ -531,7 +531,7 @@ const maturityCategories = [
       {
         label: "Subscription spend change",
         prompt:
-          "Compare this month vs last month spend by subscription. Which subscriptions had the biggest cost increase and decrease? Show a waterfall chart of changes and a table with subscription name, last month cost, this month cost, change amount, and change %.",
+          "Compare this month vs last month spend by subscription. Which subscriptions had the biggest cost increase and decrease? Show a table with subscription name, last month cost, this month cost, change amount, and change %.",
       },
       // ── Budgets ──
       {
@@ -542,7 +542,7 @@ const maturityCategories = [
       {
         label: "Budget exceeded or at risk",
         prompt:
-          "For all my Azure budgets, show which have been exceeded and which are forecasted to be exceeded this month. Show a table with budget name, scope, budget amount, actual spend, forecasted spend, and status (OK / At Risk / Exceeded). Show a gauge chart for each at-risk budget.",
+          "For all my Azure budgets, show which have been exceeded and which are forecasted to be exceeded this month. Show a table with budget name, scope, budget amount, actual spend, forecasted spend, and status (OK / At Risk / Exceeded).",
       },
       {
         label: "Suggest budget amounts",
@@ -586,7 +586,7 @@ const maturityCategories = [
       {
         label: "Group costs by application tag",
         prompt:
-          "Group my Azure costs by the 'Application' or 'app' tag across all subscriptions. Show total cost per application as a bar chart. Which applications span multiple subscriptions? Show a table with application name, subscriptions involved, and total cost.",
+          "Group my Azure costs by the 'Application' or 'app' tag across all subscriptions. Which applications span multiple subscriptions? Show a table with application name, subscriptions involved, and total cost, sorted by cost.",
       },
       {
         label: "Scope costs by tag",

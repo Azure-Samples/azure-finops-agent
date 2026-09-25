@@ -21,12 +21,14 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// handler, /api/download/html/{id} endpoint, frontend download card, and 30-min
 /// cleanup all work unchanged.
 /// </summary>
-public static class MaturityReportTools
+public sealed class MaturityReportTools(long ownerUserId)
 {
-    public static IEnumerable<AIFunction> Create()
+    public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateMaturityReport, "GenerateMaturityReport",
             @"Generates a DEEP, evidence-based FinOps maturity ASSESSMENT REPORT as one scrolling, print/PDF-friendly HTML document. Use this — NOT GenerateHtmlPresentation — whenever the user wants a 'maturity assessment', 'full FinOps assessment', 'FinOps Foundation report', or a board/exec maturity report with depth.
+
+DATA SCOPING: reportJson uses concise source aggregates for the requested assessment period and full declared scope. Include every requested capability and subscription, but only fields needed for scores, evidence and decisions; do not embed raw inventories, entire exports or transcripts. This is a renderer, not a data-query tool. Scope evidence queries before generating the report and preserve unknown or partial findings instead of dropping them to improve a score.
 
 This renders the canonical FinOps Foundation framework: 4 DOMAINS — 'Understand Cloud Usage & Cost', 'Quantify Business Value', 'Optimize Cloud Usage & Cost', 'Manage the FinOps Practice' — and up to 19 CAPABILITIES. Score every capability 0-5 from REAL Azure API data before calling (Resource Graph, Cost Management query+forecast, Consumption budgets, Advisor, Policy, Locks, Reservations/Capacity, Cost exports, Graph, Log Analytics).
 
@@ -41,8 +43,8 @@ The 19 canonical capabilities (group under the 4 domains):
 Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.");
     }
 
-    private static Task<string> GenerateMaturityReport(
-        [Description(@"JSON object describing the full assessment. SCHEMA:
+    private Task<string> GenerateMaturityReport(
+        [Description(@"JSON object describing the full requested assessment using concise source aggregates, not raw API objects. Preserve every requested capability and declared scope, including unknown/partial evidence. SCHEMA:
 {
   ""customer"": ""Contoso"",                       // optional
   ""assessmentDate"": ""June 7, 2026"",
@@ -91,16 +93,12 @@ Only 'capabilities' is strictly required; every other section renders when prese
             : $"{cust} · FinOps Maturity Assessment";
         var html = BuildShell(title, body);
 
-        var fileId = Guid.NewGuid().ToString("N")[..12];
         var safeName = TempFileHelper.SanitizeFilename(filename ?? "FinOps-Maturity-Assessment", "FinOps-Maturity-Assessment");
-        var outputPath = Path.Combine(Path.GetTempPath(), $"{fileId}_{safeName}.html");
-        File.WriteAllText(outputPath, html, new UTF8Encoding(false));
-
-        HtmlPresentationTools.GeneratedFiles[fileId] = (outputPath, DateTime.UtcNow, HttpHelper.CurrentTurnUserId());
+        var artifact = ArtifactStore.Default.Register(ownerUserId, safeName + ".html", "text/html", Encoding.UTF8.GetBytes(html));
         activity?.SetTag("report.capabilities", capabilityCount);
 
         // slideCount slot doubles as the section/capability count shown on the card.
-        return Task.FromResult($"__HTML_READY__:{fileId}:{safeName}.html:{capabilityCount} capabilities");
+        return Task.FromResult($"__HTML_READY__:{artifact.Id}:{safeName}.html:{capabilityCount} capabilities");
     }
 
     // ────────────────────────────────────────────────────────────────────

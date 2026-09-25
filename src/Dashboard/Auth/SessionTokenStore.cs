@@ -199,8 +199,22 @@ public sealed class SessionTokenStore
                 return null;
             }
             var http = httpFactory.CreateClient("entra-token");
-            var sessionTenant = ctx.Session.GetString("auth_tenant");
-            var result = await ExchangeRefreshTokenForResource(http, refreshToken, refreshScope, sessionTenant);
+            string? identityTenant = null, sessionOid = null;
+            var azureUserJson = ctx.Session.GetString("azure_user");
+            if (azureUserJson is not null)
+            {
+                try
+                {
+                    var azureUser = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
+                    if (azureUser.TryGetProperty("tenantId", out var tenantProp))
+                        identityTenant = tenantProp.GetString();
+                    if (azureUser.TryGetProperty("objectId", out var oidProp))
+                        sessionOid = oidProp.GetString();
+                }
+                catch { }
+            }
+            var tokenTenant = identityTenant ?? ctx.Session.GetString("auth_tenant");
+            var result = await ExchangeRefreshTokenForResource(http, refreshToken, refreshScope, tokenTenant);
             if (result is null)
             {
                 _logger.LogWarning("Token {Key} refresh failed; user must re-authenticate", tokenKey);
@@ -223,22 +237,10 @@ public sealed class SessionTokenStore
                 ctx.Session.SetString("azure_refresh_token", result.Value.RotatedRefreshToken);
                 // Mirror the rotated refresh token to /home so survival across container
                 // restarts keeps working after Entra has rotated the original.
-                var azureUserJson = ctx.Session.GetString("azure_user");
-                if (azureUserJson is not null)
+                if (!string.IsNullOrWhiteSpace(identityTenant) && !string.IsNullOrWhiteSpace(sessionOid))
                 {
-                    string? oid = null;
-                    try
-                    {
-                        var au = JsonSerializer.Deserialize<JsonElement>(azureUserJson);
-                        if (au.TryGetProperty("objectId", out var oidProp))
-                            oid = oidProp.GetString();
-                    }
-                    catch { }
-                    if (!string.IsNullOrEmpty(oid))
-                    {
-                        try { await _identity.UpdateRefreshTokenAsync(oid, result.Value.RotatedRefreshToken); }
-                        catch (Exception ex) { _logger.LogWarning(ex, "Failed to mirror rotated refresh token for oid={Oid}", oid); }
-                    }
+                    try { await _identity.UpdateRefreshTokenAsync(identityTenant, sessionOid, result.Value.RotatedRefreshToken); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "Failed to mirror a rotated refresh token"); }
                 }
             }
             return result.Value.Token;

@@ -8,6 +8,8 @@ param containerImageName string
 param appInsightsConnectionString string
 param aoaiEndpoint string
 param aoaiDeploymentName string
+@allowed(['low', 'medium', 'high', 'xhigh'])
+param aoaiReasoningEffort string = 'high'
 param entraAppId string
 @secure()
 param entraClientSecret string
@@ -73,9 +75,9 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
         // BYOK Azure OpenAI (Program.cs fail-fast key).
         { name: 'AzureOpenAI__Endpoint', value: aoaiEndpoint }
         { name: 'AzureOpenAI__DeploymentName', value: aoaiDeploymentName }
-        // Reasoning effort for reasoning-capable models. 'high' is the tested
-        // default; 'xhigh' produced 8+ minute single LLM round-trips.
-        { name: 'AzureOpenAI__ReasoningEffort', value: 'high' }
+        // Reasoning effort for reasoning-capable models. CI deployments replace
+        // it with the effort the live evaluation gate tested.
+        { name: 'AzureOpenAI__ReasoningEffort', value: aoaiReasoningEffort }
         // Entra ID OAuth (multi-tenant). Empty values disable OAuth gracefully.
         { name: 'Microsoft__ClientId', value: entraAppId }
         { name: 'Microsoft__ClientSecret', value: entraClientSecret }

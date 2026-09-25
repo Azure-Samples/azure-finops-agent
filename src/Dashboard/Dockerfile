@@ -3,11 +3,8 @@
 FROM node:26-slim AS frontend
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
-# Use `npm install` instead of `npm ci` so that Linux-only platform-optional
-# deps (e.g. @emnapi/*) that aren't present when the lockfile was last
-# regenerated on a Windows dev machine still resolve cleanly in CI.
 # Plain RUN (no BuildKit cache mount) so azd's `az acr build` classic builder works.
-RUN npm install --no-audit --no-fund --prefer-offline
+RUN npm ci --no-audit --no-fund --prefer-offline
 COPY frontend/ ./
 RUN npx vite build --outDir ../wwwroot
 
@@ -25,26 +22,28 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 
 # Install Python 3 + CLI tools (plain RUN — classic-builder compatible, no BuildKit).
 RUN apt-get update -qq && \
-    apt-get install -y --no-install-recommends \
-      python3 python3-pip \
-      jq sqlite3 && \
-    ln -sf /usr/bin/python3 /usr/bin/python && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y --no-install-recommends \
+  python3 python3-pip \
+  jq sqlite3 && \
+  ln -sf /usr/bin/python3 /usr/bin/python && \
+  rm -rf /var/lib/apt/lists/*
 
 # Pip packages for the file-analysis tool (plain RUN — classic-builder compatible).
 RUN pip3 install --break-system-packages \
-      requests pandas numpy openpyxl tabulate python-dateutil \
-      "pdfminer.six>=20240706" "pyarrow>=17.0"
+  requests pandas numpy openpyxl tabulate python-dateutil \
+  "pdfminer.six>=20240706" "pyarrow>=17.0"
 
 # OpenTelemetry Collector (contrib build — needed for the azuremonitor exporter).
 # Bridges OTLP from the Copilot CLI subprocess into Azure Application Insights.
-COPY --from=otel/opentelemetry-collector-contrib:0.108.0 /otelcol-contrib /usr/local/bin/otelcol
+COPY --from=otel/opentelemetry-collector-contrib:0.161.0 /otelcol-contrib /usr/local/bin/otelcol
 COPY otel-collector-config.yaml /etc/otelcol/config.yaml
 
 WORKDIR /app
 COPY --from=build /app/publish .
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh && \
+  mkdir -p /home/copilot/users /home/copilot/anon /home/dataprotection-keys && \
+  chown -R app:app /home/copilot /home/dataprotection-keys
 
 # Build metadata baked into the image
 ARG BUILD_SHA=dev
@@ -65,10 +64,11 @@ ENV OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 # COPILOT_HOME is read by CopilotSessionFactory and passed to the SDK via
 # CopilotClientOptions.CopilotHome (1.0-beta.3+) — the CLI then writes session
 # state under /home/copilot/.copilot/session-state/. /home is the persistent
-# Azure Files mount on App Service Linux. Per-user sessions are isolated under
-# /home/copilot/users/{oid} via SessionConfig.WorkingDirectory (filtered at
-# list time via SessionListFilter.Cwd).
+# Azure Files mount on App Service Linux. Entra sessions are isolated under a
+# versioned hash of the validated tenant/object pair; anonymous sessions use a
+# generated user id. SessionConfig.WorkingDirectory is the ownership marker.
 ENV COPILOT_HOME=/home/copilot
 EXPOSE 8080
 
+USER $APP_UID
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

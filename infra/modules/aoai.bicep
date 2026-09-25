@@ -9,10 +9,12 @@ param modelName string
 param modelVersion string
 param deploymentName string
 param modelCapacity int
-@description('Deployment service tier. "Priority" enables priority processing (faster time-to-first-token at a premium); "Default" is standard processing.')
+@description('Deployment service tier. "Default" is standard processing. "Priority" enables priority processing at a premium, but only for models that support it; gpt-6-luna 2026-09-22 rejects Priority.')
 @allowed(['Default', 'Priority'])
-param serviceTier string = 'Priority'
+param serviceTier string = 'Default'
 param existingAoaiResourceId string
+@description('When reusing an existing account, also create or update the model deployment on it. Requires deployment permission and available model-specific quota on that account.')
+param deployModelOnExistingAccount bool = false
 
 var useExisting = !empty(existingAoaiResourceId)
 
@@ -92,9 +94,28 @@ resource existingAccount 'Microsoft.CognitiveServices/accounts@2026-03-01' exist
   scope: resourceGroup(existingSubId, existingRg)
 }
 
-output endpoint string = useExisting ? existingAccount!.properties.endpoint : newAccount!.properties.endpoint
+module existingModelDeployment 'aoai-deployment.bicep' = if (useExisting && deployModelOnExistingAccount) {
+  name: 'aoai-model-${uniqueString(existingAoaiResourceId, deploymentName)}'
+  scope: resourceGroup(existingSubId, existingRg)
+  params: {
+    accountName: existingName
+    modelName: modelName
+    modelVersion: modelVersion
+    deploymentName: deploymentName
+    modelCapacity: modelCapacity
+    serviceTier: serviceTier
+  }
+}
+
+var accountProperties = useExisting ? existingAccount!.properties : newAccount!.properties
+var serviceEndpoints object = accountProperties.?endpoints ?? {}
+
+// AIServices.endpoint is the generic route, not the published OpenAI inference route.
+output endpoint string = serviceEndpoints[?'OpenAI Language Model Instance API'] ?? accountProperties.endpoint
 output accountName string = useExisting ? existingName : newAccount!.name
-output deploymentName string = deploymentName
+output deploymentName string = useExisting && deployModelOnExistingAccount
+  ? existingModelDeployment!.outputs.deploymentName
+  : deploymentName
 output resourceGroup string = useExisting ? existingRg : resourceGroup().name
 output subscriptionId string = useExisting ? existingSubId : subscription().subscriptionId
 output projectName string = useExisting ? '' : 'proj-finops-${resourceToken}'
