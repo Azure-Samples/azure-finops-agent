@@ -18,7 +18,7 @@ public sealed class ToolResultQueryTools(long owner)
 
     private async Task<string> QueryToolResult(
         [Description("Opaque resultId returned in this conversation. Copy it exactly, including case, from queryable_tool_result, _resultQuery or its query response; never reconstruct, shorten or alter it. Never a file path or URL.")] string resultId,
-        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\"}. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path and as defaults to the op name. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (pages hold at most 200 rows; follow nextOffset; 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
+        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\",\"items\":\"$.body.value.length()\"}; a trailing .length() counts an array. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path and as defaults to the op name. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (pages hold at most 200 rows; follow nextOffset; 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
         CancellationToken cancellationToken = default)
     {
         var context = ToolExecutionContext.Current;
@@ -317,6 +317,15 @@ public sealed class ToolResultQueryTools(long owner)
 
     private static JToken? Single(JToken row, string path, Action check)
     {
+        // Jayway-style length() is a common JSONPath extension that Newtonsoft lacks.
+        if (path.EndsWith(".length()", StringComparison.Ordinal))
+            return Single(row, path[..^".length()".Length], check) switch
+            {
+                JArray array => array.Count,
+                JObject item => item.Count,
+                JValue { Type: JTokenType.String } text => ((string)text!).Length,
+                _ => null
+            };
         var values = Select(row, path, check).Take(2).ToArray();
         Require(values.Length <= 1, "Per-row field paths must select one value; use an array path to preserve nested arrays.");
         return values.FirstOrDefault();

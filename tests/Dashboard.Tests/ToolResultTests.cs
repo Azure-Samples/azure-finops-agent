@@ -242,6 +242,9 @@ public sealed class ToolResultTests
         Assert.Equal(2, rows.GetArrayLength());
         Assert.Equal(10, rows[0].GetProperty("spotLimit").GetInt32());
         Assert.Equal(0, rows[1].GetProperty("spotLimit").GetInt32());
+        using var counted = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index","items":"$.body.value.length()"}}"""));
+        Assert.Equal(2, counted.RootElement.GetProperty("rows")[0].GetProperty("items").GetInt32());
+        Assert.Equal(1, counted.RootElement.GetProperty("rows")[1].GetProperty("items").GetInt32());
         using var capped = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"limit":250}"""));
         Assert.Equal(2, capped.RootElement.GetProperty("returned").GetInt32());
         Assert.StartsWith("Error: Query paging", ToolResultQueryTools.Execute(entry, """{"limit":-1}"""));
