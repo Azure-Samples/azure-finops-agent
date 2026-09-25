@@ -119,6 +119,72 @@ public sealed class MaturityEvidenceTests
         Assert.True(evidence.GetProperty("detailsComplete").GetBoolean());
     }
 
+    [Fact]
+    public void AdvisorImpactReportGroupsOpportunitiesAndListsEmptyImpactLevels()
+    {
+        static object Reservation(string id, decimal annual, string term, string lookback) => new
+        {
+            id,
+            properties = new
+            {
+                category = "Cost",
+                impact = "High",
+                recommendationTypeId = "reservation-type",
+                impactedValue = "synthetic-subscription",
+                lastUpdated = "2026-09-24T05:51:15Z",
+                shortDescription = new { solution = "Buy reserved instance" },
+                extendedProperties = new
+                {
+                    annualSavingsAmount = annual.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    savingsCurrency = "USD",
+                    term,
+                    lookbackPeriod = lookback,
+                    displayQty = "1",
+                    displaySKU = "P0v3",
+                    location = "swedencentral",
+                    scope = "Single"
+                }
+            }
+        };
+
+        var report = JsonSerializer.SerializeToElement(CrawlMaturityTools.BuildAdvisorImpactReport(
+            [(new("synthetic", "Synthetic scope"), AdvisorResponse(
+                Reservation("p1y-60", 266, "P1Y", "60"),
+                Reservation("p3y-7", 429, "P3Y", "7"),
+                Recommendation("rightsize", "1200", "USD")))]));
+
+        Assert.True(report.GetProperty("complete").GetBoolean());
+        Assert.Equal(2, report.GetProperty("opportunityCount").GetInt32());
+        Assert.Equal(3, report.GetProperty("recommendationCount").GetInt32());
+        var groups = report.GetProperty("groups").EnumerateArray().ToArray();
+        Assert.Equal(["High", "Medium", "Low"], groups.Select(g => g.GetProperty("impact").GetString()));
+        Assert.Equal(2, groups[0].GetProperty("opportunityCount").GetInt32());
+        Assert.Equal(0, groups[1].GetProperty("opportunityCount").GetInt32());
+        var reservation = groups[0].GetProperty("opportunities")[1];
+        Assert.Equal(429m, reservation.GetProperty("bestAnnualSavingsAmount").GetDecimal());
+        Assert.Equal(266m, reservation.GetProperty("lowestAnnualSavingsAmount").GetDecimal());
+        Assert.Equal(2, reservation.GetProperty("alternativeCount").GetInt32());
+
+        var table = report.GetProperty("answerTable").GetString()!;
+        Assert.Contains("| High | Buy reserved instance (P0v3, swedencentral, qty 1) | Synthetic scope | USD 266–429 | term P3Y, 7-day lookback | 2 |", table);
+        Assert.Contains("| Medium | No cost recommendations returned |", table);
+        Assert.Contains("| Low | No cost recommendations returned |", table);
+        Assert.StartsWith("Azure Advisor returned 2 cost opportunities (2 high, 0 medium, 0 low) across 1 subscription; the largest single estimate is USD 1,200/year", report.GetProperty("headline").GetString());
+    }
+
+    [Fact]
+    public void AdvisorImpactReportMarksUnreadableSubscriptionAsPartial()
+    {
+        var report = JsonSerializer.SerializeToElement(CrawlMaturityTools.BuildAdvisorImpactReport(
+        [
+            (new("readable", "Readable"), AdvisorResponse(Recommendation("known", "120", "USD"))),
+            (new("denied", "Denied"), "HTTP 403 Forbidden\n{}")
+        ]));
+        Assert.False(report.GetProperty("complete").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, report.GetProperty("opportunityCount").ValueKind);
+        Assert.Contains("Coverage is partial", report.GetProperty("headline").GetString());
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
