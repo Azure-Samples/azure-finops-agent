@@ -26,7 +26,7 @@ public sealed partial class TagCoverageTools(UserTokens tokens)
     private const string ArgUrl =
         "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2024-04-01";
 
-    private const string KeyDiscoveryQuery =
+    internal const string KeyDiscoveryQuery =
         "resources | where isnotempty(tags) | mv-expand bagexpansion=array tags limit 400 | extend tagKey=tostring(tags[0]) | where isnotempty(tagKey) | summarize resources=count() by tagKey | order by resources desc";
 
     private const int MaxTags = 10;
@@ -253,9 +253,9 @@ public sealed partial class TagCoverageTools(UserTokens tokens)
         });
     }
 
-    private sealed record GraphResult(List<JsonElement> Rows, bool Truncated, string? Failure);
+    internal sealed record GraphResult(List<JsonElement> Rows, bool Truncated, string? Failure);
 
-    private static async Task<GraphResult> RunResourceGraph(
+    internal static async Task<GraphResult> RunResourceGraph(
         string token, IReadOnlyList<(string Id, string Name)> subscriptions, string query, Activity? span, string telemetry)
     {
         var rows = new List<JsonElement>();

@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- `GetChargebackReport` builds tag-based chargeback reports with host-built queries. It resolves the allocation tag actually carried in scope (`Owner`, `CostCenter`, ...), runs two sequential ActualCost queries per subscription grouped by that tag and service, and returns team totals, top services, untagged spend and host-computed month-over-month change. The model previously authored several tag and cost queries per report, which intermittently failed or exhausted the Cost Management throttle.
 - `GetTagCoverage` audits tag compliance with host-built Resource Graph queries. It discovers the tenant's actual tag-key spellings (`CostCenter`, `cost-center`, `cost_center`), reports per-tag and all-required-tags coverage over every resource group, and ranks the worst groups. The model no longer writes tag KQL, which previously failed intermittently. Placeholder values, near-miss keys and truncation are reported rather than counted.
 
 ### Changed
