@@ -79,7 +79,7 @@ public static class CostCalculationTools
     }
 
     internal static string CalculateCost(
-        [Description("JSON array of 1-20 verified line items: label, quantity, unitPrice, unit; optional currency inherits the explicit top-level currency, unitsPerRate=1 and multiplier=1. Example: [{\"label\":\"Units\",\"quantity\":5,\"unitPrice\":5,\"unit\":\"unit\"}]. Numbers or decimal-point strings are accepted. Include only the requested period/scope; never use unknown rates as zero.")] string lineItemsJson,
+        [Description("JSON array of 1-50 verified line items: label, quantity, unitPrice, unit; optional currency inherits the explicit top-level currency, unitsPerRate=1 and multiplier=1. Example: [{\"label\":\"Units\",\"quantity\":5,\"unitPrice\":5,\"unit\":\"unit\"}]. Numbers or decimal-point strings are accepted. Include only the requested period/scope; never use unknown rates as zero.")] string lineItemsJson,
         [Description("Required three-letter source currency shared by every line, such as USD, EUR or CAD. Lines may omit currency to inherit this value; an explicit different currency is rejected. No implicit currency conversion.")] string currency,
         [Description("Basis of the quantities, such as month, year1 or 30-day run-rate. Use month only for a fixed monthly estimate; its annualizedTotal is not a growth projection.")] string period,
         [Description("Explicit supported discount percentage, 0-100. Default 0; do not invent negotiated discounts.")] string discountPercent = "0",
@@ -97,12 +97,12 @@ public static class CostCalculationTools
             return Error("Provide one source currency, an explicit period and decimal-point discount/tax percentages between 0 and 100.");
         currency = currency.ToUpperInvariant();
         if (string.IsNullOrWhiteSpace(lineItemsJson) || lineItemsJson.Length > 30_000)
-            return Error("Provide a bounded JSON array of 1-20 line items.");
+            return Error("Provide a bounded JSON array of 1-50 line items.");
         try
         {
             using var document = JsonDocument.Parse(lineItemsJson);
-            if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() is < 1 or > 20)
-                return Error("Provide 1-20 line items.");
+            if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() is < 1 or > 50)
+                return Error("Provide 1-50 line items. To total more source rows, use QueryToolResult sum aggregates.");
             var lines = new List<object>();
             decimal rawSubtotal = 0;
             foreach (var item in document.RootElement.EnumerateArray())

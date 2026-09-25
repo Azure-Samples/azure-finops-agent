@@ -134,4 +134,26 @@ public sealed class ApiQueryContractTests
         Assert.DoesNotContain("GET /providers/Microsoft.Consumption/reservationSummaries", CopilotSessionFactory.SystemPrompt);
         Assert.Contains("commitment impact as UNKNOWN", CopilotSessionFactory.SystemPrompt);
     }
+
+    [Fact]
+    public void SubscribedSkusResponseCarriesHostComputedSeatTotals()
+    {
+        Assert.True(GraphQueryTools.IsSubscribedSkusPath("/v1.0/subscribedSkus?$select=skuPartNumber"));
+        Assert.False(GraphQueryTools.IsSubscribedSkusPath("/v1.0/users"));
+        const string response = "HTTP 200 OK\nCurrent UTC time: 2026-09-25 15:56:00\n" +
+            "{\"value\":[{\"skuPartNumber\":\"SKU_A\",\"capabilityStatus\":\"Enabled\",\"consumedUnits\":2,\"prepaidUnits\":{\"enabled\":50}}," +
+            "{\"skuPartNumber\":\"SKU_B\",\"capabilityStatus\":\"Enabled\",\"consumedUnits\":1,\"prepaidUnits\":{\"enabled\":50}}]}";
+        var result = GraphQueryTools.AppendLicenseSummary(response);
+        Assert.StartsWith("HTTP 200 OK\nCurrent UTC time: 2026-09-25 15:56:00\n", result);
+        using var doc = JsonDocument.Parse(result[result.IndexOf('{')..]);
+        Assert.Equal(2, doc.RootElement.GetProperty("value").GetArrayLength());
+        var summary = doc.RootElement.GetProperty("_licenseSummary");
+        Assert.Equal(97, summary.GetProperty("totals").GetProperty("unassignedEnabled").GetInt64());
+        Assert.Equal(100, summary.GetProperty("totals").GetProperty("enabled").GetInt64());
+        Assert.StartsWith("97 enabled Microsoft 365 license seats are unassigned across 2 SKUs (100 enabled, 3 assigned)", summary.GetProperty("headline").GetString());
+        var table = summary.GetProperty("answerTable").GetString()!;
+        Assert.Contains("| SKU_B | Enabled | Not returned by Graph | 50 | 1 | 49 |", table);
+        Assert.Contains("| **Total** | | **Not returned by Graph** | **100** | **3** | **97** | **Unknown** |", table);
+        Assert.Equal("HTTP 403 Forbidden\n{}", GraphQueryTools.AppendLicenseSummary("HTTP 403 Forbidden\n{}"));
+    }
 }

@@ -157,12 +157,37 @@ For one SKU across several regions, use ONE GetAzureRetailPricing call with comm
         output.AppendLine($"BATCH RETAIL PRICING RESULTS — {results.Length} queries completed in parallel.");
         output.AppendLine("AUTHORITATIVE RETAIL API RESULT. Reuse resolved prices directly without shell/search or a pricing-page fetch.");
         output.AppendLine(ReturnedRateGuidance);
+        if (CappedCoverageSentence(results.Select(r => (r.Label, r.Result))) is { } coverage)
+            output.AppendLine("CAPPED COVERAGE SENTENCE (host-built; include it verbatim in the answer when these rates are quoted): " + coverage);
         foreach (var result in results)
         {
             output.AppendLine().Append("=== ").Append(result.Label).AppendLine(" ===");
             output.AppendLine(result.Result);
         }
         return output.ToString();
+    }
+
+    // Host-built wording for capped sections so answers always carry deliveredRows of fetchedRows.
+    internal static string? CappedCoverageSentence(IEnumerable<(string Label, string Result)> sections)
+    {
+        var capped = new List<string>();
+        foreach (var (label, result) in sections)
+        {
+            var line = result.Split('\n').FirstOrDefault(l => l.StartsWith("RESOLUTION {", StringComparison.Ordinal));
+            if (line is null) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line["RESOLUTION ".Length..]);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("complete", out var complete) && complete.ValueKind == JsonValueKind.False
+                    && root.TryGetProperty("deliveredRows", out var delivered) && delivered.TryGetInt32(out var d)
+                    && root.TryGetProperty("fetchedRows", out var fetched) && fetched.TryGetInt32(out var f) && d < f)
+                    capped.Add($"{label} {d.ToString("#,0", CultureInfo.InvariantCulture)} of {f.ToString("#,0", CultureInfo.InvariantCulture)} rows");
+            }
+            catch (JsonException) { }
+        }
+        return capped.Count == 0 ? null
+            : $"The requested rates were returned, but the wider filtered catalogue results were capped (delivered of fetched rows: {string.Join("; ", capped)}).";
     }
 
     // Cap the payload so the CLI keeps the result inline: past its limit it spills

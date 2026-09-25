@@ -33,14 +33,34 @@ public sealed class IdleResourceTests
             Assert.Equal(JsonValueKind.Null, report.GetProperty("currency").ValueKind);
             Assert.Equal(JsonValueKind.Null, report.GetProperty("dataAsOfUtc").ValueKind);
             Assert.Contains("indexing delay are unknown", report.GetProperty("freshness").GetString());
-            Assert.Contains("read-only revalidation/no-op script", report.GetProperty("scriptGuidance").GetString());
+            Assert.Contains("pass revalidationScript verbatim", report.GetProperty("scriptGuidance").GetString());
             Assert.Contains("A follow-up link is not the requested artifact", report.GetProperty("scriptGuidance").GetString());
+            var script = report.GetProperty("revalidationScript").GetString()!;
+            Assert.DoesNotContain("synthetic", script);
+            Assert.Contains("mapfile -t SUBSCRIPTIONS", script);
             Assert.Equal(0, report.GetProperty("patterns").GetProperty("unattached_disks").GetProperty("count").GetInt32());
         }
         finally
         {
             CultureInfo.CurrentCulture = culture;
         }
+    }
+
+    [Fact]
+    public void RevalidationScriptReusesTheScanFiltersReadOnly()
+    {
+        const string sub = "00000000-0000-0000-0000-000000000001";
+        var script = IdleResourceTools.BuildRevalidationScript([sub, "$(rm -rf /)"]);
+        Assert.Contains($"SUBSCRIPTIONS=(\"{sub}\")", script);
+        Assert.DoesNotContain("rm -rf", script);
+        Assert.Contains("--graph-query \"$kql | summarize resourceCount=count()\"", script);
+        Assert.Contains("--query \"data[0].resourceCount\"", script);
+        Assert.Contains("where tostring(properties.extended.instanceView.powerState.code) == 'PowerState/stopped'", script);
+        Assert.Contains("where isnull(properties.ipConfiguration) and isnull(properties.natGateway)", script);
+        var commands = string.Join('\n', script.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
+        foreach (var verb in new[] { " delete", " deallocate", " stop ", " update", " create" })
+            Assert.DoesNotContain(verb, commands, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(4, IdleResourceTools.BillableRevalidationFilters.Length);
     }
 
     [Fact]

@@ -105,6 +105,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
     "QueryCostsAcrossSubscriptions",
     "GetCrawlMaturityEvidence",
     "GetTagCoverage",
+    "GetResourceInventory",
     "GetChargebackReport",
     "CompareSubscriptionCosts",
     "GetAdvisorCostRecommendations",

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 
@@ -35,7 +36,7 @@ public class IdleResourceTools
 DATA SCOPING: pass only the subscription IDs in the user's requested scope; omit them only for an explicitly all-accessible scan. Each pattern filters and projects at Resource Graph before applying topPerPattern (1-200). Use a small topPerPattern for a quick scan, not an estate-wide total; a limited pattern count is not the full count of matching resources. The tool always scans all eight patterns and has no resource-group, region or pattern selector. For one named pattern/resource group, use one scoped QueryAzure Resource Graph query with where, summarize/project and a result limit. Preserve all requested scope and disclose limited coverage; empty resource groups alone are not billable waste.
 
 EVIDENCE LIMITS: inventory does not establish a monetary amount or billing currency. Do not turn zero matching candidates into an invented 0 USD/month estate-wide estimate. Empty resource groups and unused NICs are not billable on their own. Retain source freshness, requested scope and per-pattern limits.
-SCRIPT DELIVERY: when the user explicitly requests a cleanup script, call GenerateScript in this turn rather than merely offering a future script. If no billable targets were found, still deliver a scoped, read-only revalidation/no-op script for review, with no mutation or invented resource targets. Never execute it.
+SCRIPT DELIVERY: when the user explicitly requests a cleanup script, call GenerateScript in this turn rather than merely offering a future script. If no billable targets were found, still deliver a scoped, read-only revalidation/no-op script for review, with no mutation or invented resource targets: pass the returned host-built revalidationScript verbatim as GenerateScript scriptContent (bash) rather than authoring new KQL. Never execute it.
 Use for 'find waste', 'orphaned resources', 'quick cost wins'.");
     }
 
@@ -110,9 +111,56 @@ Use for 'find waste', 'orphaned resources', 'quick cost wins'.");
         monthlyWaste = (decimal?)null,
         currency = (string?)null,
         note = "Monthly waste and currency are not provided by inventory. Price only matched billable candidates using their actual SKU, region, billing unit and commitment coverage; retail estimates are not verified net savings. With no candidates, say no waste was identified by these filters, not that the estate costs 0 USD/month. Empty resource groups and unused NICs alone are not billable waste.",
-        scriptGuidance = "If a script was requested, call GenerateScript now. With no billable candidates, deliver a scoped read-only revalidation/no-op script, without mutations or invented targets. A follow-up link is not the requested artifact. Never execute the script.",
+        scriptGuidance = "If a script was requested, call GenerateScript now. With no billable candidates, pass revalidationScript verbatim as scriptContent (language bash): it re-runs the scan's exact filters read-only, without mutations or invented targets. With candidates, reuse revalidationScript's queries to re-check targets before any reviewed action. A follow-up link is not the requested artifact. Never execute the script.",
+        revalidationScript = BuildRevalidationScript(subscriptions),
         patterns = results
     };
+
+    // Filters must match the scan patterns above so a revalidation re-checks exactly what was scanned.
+    internal static readonly (string Label, string Filter)[] BillableRevalidationFilters =
+    [
+        ("Unattached managed disks", "Resources | where type =~ 'microsoft.compute/disks' | where managedBy == '' or isnull(managedBy)"),
+        ("Unassociated public IP addresses", "Resources | where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) and isnull(properties.natGateway)"),
+        ("Stopped but still allocated VMs", "Resources | where type =~ 'microsoft.compute/virtualmachines' | where tostring(properties.extended.instanceView.powerState.code) == 'PowerState/stopped'"),
+        ("Empty paid App Service plans", "Resources | where type =~ 'microsoft.web/serverfarms' | where toint(properties.numberOfSites) == 0 and tostring(sku.tier) !~ 'Free' and tostring(sku.tier) !~ 'Shared'")
+    ];
+
+    internal static string BuildRevalidationScript(string[]? subscriptions)
+    {
+        var script = new StringBuilder();
+        script.AppendLine("#!/usr/bin/env bash");
+        script.AppendLine("# Read-only revalidation of idle-resource patterns (host-built from the FindIdleResources scan filters).");
+        script.AppendLine("# Safety: READ-ONLY. Uses Azure Resource Graph queries only; it never deletes, stops, deallocates or modifies resources.");
+        script.AppendLine("# Prerequisites: Azure CLI with the resource-graph extension, signed in with az login.");
+        script.AppendLine("set -euo pipefail");
+        script.AppendLine();
+        var ids = (subscriptions ?? []).Where(s => Guid.TryParse(s, out _)).ToArray();
+        if (ids.Length > 0)
+            script.AppendLine($"SUBSCRIPTIONS=({string.Join(' ', ids.Select(s => "\"" + s + "\""))})");
+        else
+        {
+            script.AppendLine("mapfile -t SUBSCRIPTIONS < <(az account list --query \"[?state=='Enabled'].id\" --output tsv)");
+            script.AppendLine("[ \"${#SUBSCRIPTIONS[@]}\" -gt 0 ] || { echo \"ERROR: no enabled subscriptions are accessible.\" >&2; exit 1; }");
+        }
+        script.AppendLine("az extension add --name resource-graph --only-show-errors >/dev/null 2>&1 || az extension show --name resource-graph >/dev/null");
+        script.AppendLine();
+        script.AppendLine("check() {");
+        script.AppendLine("  local label=\"$1\" kql=\"$2\" count");
+        script.AppendLine("  count=$(az graph query --graph-query \"$kql | summarize resourceCount=count()\" --subscriptions \"${SUBSCRIPTIONS[@]}\" --query \"data[0].resourceCount\" --output tsv --only-show-errors) \\");
+        script.AppendLine("    || { echo \"ERROR: Resource Graph query failed for: $label\" >&2; return 1; }");
+        script.AppendLine("  [[ \"$count\" =~ ^[0-9]+$ ]] || { echo \"ERROR: missing or invalid count for: $label\" >&2; return 1; }");
+        script.AppendLine("  echo \"$label: $count\"");
+        script.AppendLine("  if [ \"$count\" -gt 0 ]; then");
+        script.AppendLine("    az graph query --graph-query \"$kql | project id | take 1000\" --subscriptions \"${SUBSCRIPTIONS[@]}\" --query \"data[].id\" --output tsv --only-show-errors | sed 's/^/  /'");
+        script.AppendLine("  fi");
+        script.AppendLine("}");
+        script.AppendLine();
+        foreach (var (label, filter) in BillableRevalidationFilters)
+            script.AppendLine($"check \"{label}\" \"{filter}\"");
+        script.AppendLine();
+        script.Append("echo \"Revalidation complete. No resources were changed.\"");
+        return script.ToString();
+    }
 
     private static async Task<object> RunResourceGraphQuery(string token, string kql, string[]? subs, System.Diagnostics.Activity? activity)
     {

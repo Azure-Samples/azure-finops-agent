@@ -44,6 +44,97 @@ public sealed partial class TagCoverageTools(UserTokens tokens)
             "Values such as unassigned/unknown/n/a/none/tbd are counted as placeholders, not as tagged. Similarly named but unmatched keys (for example ownerEmail) are listed, not counted. " +
             "Resource Graph is an indexed inventory: state that it may lag changes and that its source data-as-of timestamp is unknown. " +
             "Pass the full subscriptions array from the connection context; do not follow up with QueryAzure to recount the same tags.");
+        yield return AIFunctionFactory.Create(GetResourceInventory, "GetResourceInventory",
+            "Resource inventory counts by resource type in ONE call: the host runs one Resource Graph aggregate (count by type, sorted by count) across the requested subscriptions and returns every type with its count, the total, and a host-built `headline` and markdown `answerTable`. " +
+            "Use this instead of QueryAzure Resource Graph KQL plus QueryToolResult when the user asks how many resources they have, a count of resources by type, or an inventory breakdown. " +
+            "Present `headline` and `answerTable` verbatim (the table already lists every type), then the queried scope, retrievedAtUtc and the Resource Graph freshness caveat. Pass the full subscriptions array from the connection context.");
+    }
+
+    internal const string InventoryQuery =
+        "resources | summarize resourceCount=count() by type, subscriptionId | order by resourceCount desc";
+
+    private async Task<string> GetResourceInventory(
+        [Description("JSON array of subscription ids or {id,name} objects from the connection context covering the full requested scope (max 500).")] string subscriptionsJson)
+    {
+        using var span = HttpHelper.Telemetry.StartActivity("GetResourceInventory");
+        var (subscriptions, subscriptionError) = ParseSubscriptions(subscriptionsJson);
+        var error = subscriptionError ?? (subscriptions.Count == 0 ? "No valid subscription IDs were supplied." : null);
+        if (error is not null)
+        {
+            span?.SetStatus(ActivityStatusCode.Error, "Invalid inventory input");
+            return $"HTTP 400 BadRequest\n{error} No request was sent.";
+        }
+
+        var token = tokens.AzureToken;
+        if (string.IsNullOrEmpty(token))
+            return HttpHelper.TokenMissing("AzureToken", span, "resource_inventory");
+
+        var result = await RunResourceGraph(token, subscriptions, InventoryQuery, span, "arg.inventory");
+        if (result.Failure is not null) return result.Failure;
+        return SummarizeInventory(subscriptions, result.Rows, result.Truncated,
+            DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture));
+    }
+
+    internal static string SummarizeInventory(
+        IReadOnlyList<(string Id, string Name)> subscriptions,
+        IReadOnlyList<JsonElement> rows,
+        bool truncated,
+        string retrievedAtUtc)
+    {
+        var parsed = rows
+            .Select(row => (
+                Type: row.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "",
+                Subscription: row.TryGetProperty("subscriptionId", out var s) ? s.GetString() ?? "" : "",
+                Count: row.TryGetProperty("resourceCount", out var c) && c.ValueKind == JsonValueKind.Number && c.TryGetInt64(out var n) ? n : 0))
+            .Where(row => row.Type.Length > 0)
+            .ToList();
+        var byType = parsed
+            .GroupBy(row => row.Type.ToLowerInvariant(), StringComparer.Ordinal)
+            .Select(group => (Type: group.Key, Count: group.Sum(row => row.Count)))
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Type, StringComparer.Ordinal)
+            .ToList();
+        var total = byType.Sum(item => item.Count);
+        var bySubscription = subscriptions.Select(sub => new
+        {
+            subscriptionId = sub.Id,
+            subscriptionName = sub.Name,
+            resourceCount = parsed.Where(row => string.Equals(row.Subscription, sub.Id, StringComparison.OrdinalIgnoreCase)).Sum(row => row.Count)
+        }).ToArray();
+
+        var table = new StringBuilder();
+        table.AppendLine("| # | Resource type | Count | Share |");
+        table.AppendLine("|---:|---|---:|---:|");
+        for (var i = 0; i < byType.Count; i++)
+        {
+            var share = total == 0 ? 0 : Math.Round(byType[i].Count * 100m / total, 1, MidpointRounding.AwayFromZero);
+            table.Append("| ").Append(i + 1).Append(" | `").Append(byType[i].Type.Replace("|", "\\|", StringComparison.Ordinal)).Append("` | ")
+                .Append(byType[i].Count.ToString("#,0", CultureInfo.InvariantCulture)).Append(" | ")
+                .Append(share.ToString("0.0", CultureInfo.InvariantCulture)).AppendLine("% |");
+        }
+        table.Append("| | **Total** | **").Append(total.ToString("#,0", CultureInfo.InvariantCulture)).Append("** | **100.0%** |");
+
+        var scope = subscriptions.Count == 1 ? "1 subscription" : $"{subscriptions.Count} subscriptions";
+        var headline = byType.Count == 0
+            ? $"Resource Graph returned no resources across {scope}."
+            : $"Resource Graph counts {total.ToString("#,0", CultureInfo.InvariantCulture)} resources across {byType.Count} resource types in {scope}; the most common type is `{byType[0].Type}` ({byType[0].Count.ToString("#,0", CultureInfo.InvariantCulture)}).";
+        if (truncated) headline += " The result was truncated, so counts are partial.";
+
+        return JsonSerializer.Serialize(new
+        {
+            source = "Azure Resource Graph resources table",
+            retrievedAtUtc,
+            freshness = ResourceGraphFreshness,
+            complete = !truncated,
+            headline,
+            answerTable = table.ToString(),
+            totalResources = total,
+            resourceTypeCount = byType.Count,
+            query = InventoryQuery,
+            scope = new { subscriptionCount = subscriptions.Count, subscriptions = bySubscription },
+            types = byType.Select((item, index) => new { rank = index + 1, type = item.Type, resourceCount = item.Count }).ToArray(),
+            limitations = "Counts cover the Resource Graph resources table (ARM resources). Resource types are lower-cased by the host so casing variants merge. Resource Graph is an indexed inventory that can lag changes."
+        });
     }
 
     private async Task<string> GetTagCoverage(

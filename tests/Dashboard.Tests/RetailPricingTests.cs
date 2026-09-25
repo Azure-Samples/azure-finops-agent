@@ -37,6 +37,16 @@ public sealed class RetailPricingTests
     }
 
     [Fact]
+    public void CappedBatchSectionsGetAHostBuiltDeliveredOfFetchedSentence()
+    {
+        var capped = RetailPricingTools.CompactBatchResult(Payload(220));
+        var complete = RetailPricingTools.CompactBatchResult(Payload(65));
+        var sentence = RetailPricingTools.CappedCoverageSentence([("Model A", capped), ("Model B", complete)]);
+        Assert.Equal("The requested rates were returned, but the wider filtered catalogue results were capped (delivered of fetched rows: Model A 200 of 220 rows).", sentence);
+        Assert.Null(RetailPricingTools.CappedCoverageSentence([("Model B", complete)]));
+    }
+
+    [Fact]
     public void SameMeterInDifferentProductsIsNotInterleaved()
     {
         var payload = JsonSerializer.Serialize(new

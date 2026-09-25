@@ -12,7 +12,7 @@ public sealed class TagCoverageTests
     [Fact]
     public void SchemaRequiresOnlyTheSubscriptionScope()
     {
-        var tool = new TagCoverageTools(new UserTokens { UserId = 7 }).Create().Single();
+        var tool = new TagCoverageTools(new UserTokens { UserId = 7 }).Create().First(t => t.Name == "GetTagCoverage");
         Assert.Equal("GetTagCoverage", tool.Name);
         var required = tool.JsonSchema.GetProperty("required").EnumerateArray().Select(e => e.GetString()!).ToArray();
         Assert.Equal(["subscriptionsJson"], required);
@@ -22,7 +22,7 @@ public sealed class TagCoverageTests
     [Fact]
     public async Task InvalidInputFailsBeforeAnyNetworkRequest()
     {
-        var tool = new TagCoverageTools(new UserTokens { UserId = 7 }).Create().Single();
+        var tool = new TagCoverageTools(new UserTokens { UserId = 7 }).Create().First(t => t.Name == "GetTagCoverage");
         var noScope = (await tool.InvokeAsync(new AIFunctionArguments { ["subscriptionsJson"] = "[]" }))!.ToString()!;
         Assert.StartsWith("HTTP 400", noScope);
         Assert.Contains("No request was sent", noScope);
@@ -38,7 +38,7 @@ public sealed class TagCoverageTests
     [Fact]
     public async Task MissingArmTokenRequestsSignInWithDefaultTags()
     {
-        var tool = new TagCoverageTools(new UserTokens { UserId = 7 }).Create().Single();
+        var tool = new TagCoverageTools(new UserTokens { UserId = 7 }).Create().First(t => t.Name == "GetTagCoverage");
         var response = (await tool.InvokeAsync(new AIFunctionArguments { ["subscriptionsJson"] = $"[{{\"id\":\"{Sub}\",\"name\":\"Prod\"}}]" }))!.ToString()!;
         Assert.StartsWith("HTTP 401", response);
     }
@@ -127,5 +127,47 @@ public sealed class TagCoverageTests
         using var doc = JsonDocument.Parse(partial);
         Assert.False(doc.RootElement.GetProperty("complete").GetBoolean());
         Assert.True(ProtectedTool.InspectEvidence(partial).Partial);
+    }
+
+    [Fact]
+    public void InventoryMergesTypeCasingAndBuildsRankedTableWithTotal()
+    {
+        static JsonElement Row(string type, string sub, long count) =>
+            JsonSerializer.SerializeToElement(new { type, subscriptionId = sub, resourceCount = count });
+        const string second = "00000000-0000-0000-0000-000000000002";
+        var json = TagCoverageTools.SummarizeInventory(
+            [(Sub, "First"), (second, "Second")],
+            [
+                Row("microsoft.web/sites", Sub, 3),
+                Row("Microsoft.Web/sites", second, 2),
+                Row("microsoft.storage/storageaccounts", Sub, 4),
+                Row("microsoft.insights/components", second, 1)
+            ],
+            truncated: false, retrievedAtUtc: "t");
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("complete").GetBoolean());
+        Assert.Equal(10, root.GetProperty("totalResources").GetInt64());
+        Assert.Equal(3, root.GetProperty("resourceTypeCount").GetInt32());
+        var types = root.GetProperty("types");
+        Assert.Equal("microsoft.web/sites", types[0].GetProperty("type").GetString());
+        Assert.Equal(5, types[0].GetProperty("resourceCount").GetInt64());
+        Assert.Equal(7, root.GetProperty("scope").GetProperty("subscriptions")[0].GetProperty("resourceCount").GetInt64());
+        var table = root.GetProperty("answerTable").GetString()!;
+        Assert.Contains("| 1 | `microsoft.web/sites` | 5 | 50.0% |", table);
+        Assert.Contains("| 3 | `microsoft.insights/components` | 1 | 10.0% |", table);
+        Assert.Contains("**Total** | **10**", table);
+        Assert.StartsWith("Resource Graph counts 10 resources across 3 resource types in 2 subscriptions", root.GetProperty("headline").GetString());
+        Assert.False(ProtectedTool.InspectEvidence(json).Partial);
+    }
+
+    [Fact]
+    public void TruncatedInventoryIsPartial()
+    {
+        var json = TagCoverageTools.SummarizeInventory([(Sub, Sub)],
+            [JsonSerializer.SerializeToElement(new { type = "microsoft.web/sites", subscriptionId = Sub, resourceCount = 1 })],
+            truncated: true, retrievedAtUtc: "t");
+        Assert.Contains("partial", JsonDocument.Parse(json).RootElement.GetProperty("headline").GetString());
+        Assert.True(ProtectedTool.InspectEvidence(json).Partial);
     }
 }

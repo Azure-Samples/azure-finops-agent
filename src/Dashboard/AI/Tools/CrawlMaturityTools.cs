@@ -33,7 +33,7 @@ public sealed class CrawlMaturityTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GetCrawlMaturityEvidence, "GetCrawlMaturityEvidence", @"Collects, scores, and persists all seven Crawl maturity dimensions in ONE tool call: budgets/current spend, exact CostCenter/Owner/Environment tagging, exports, alerts/scheduled actions, policy guardrails, common waste, and cost visibility. It also reads cached Azure Advisor Cost recommendations for the same scopes, ranks reported annual estimates within each currency, and returns ready-to-render fix actions. Low-cost metadata reads run with bounded server-side concurrency; no Cost Management /query is needed because budget currentSpend provides a periodically evaluated MTD snapshot, not real-time or finalized cost.
-SAVINGS: when asked for the biggest savings opportunities, use evidence.savings, not governance scores or generic tag/export tasks. Ranking is over reported annualSavingsAmount within one currency; each rankings[].opportunities item groups mutually exclusive Advisor alternatives (for example 1-year/3-year reservation terms and 7/30/60-day lookbacks for the same SKU and scope). Present each opportunity once, with its best estimate and, when alternativeCount > 1, the lowest-to-best alternative range and the best alternative's term/lookback; never list alternatives of one opportunity as separate ranked opportunities. Retain the term, scope, SKU, quantity, lastUpdated and coverage. These are potentially overlapping Advisor estimates, not verified net or realized savings: do not add them together, recommend a commitment purchase without eligibility/utilization evidence, or confuse savingsAmount of unspecified period with annualSavingsAmount. Unknown amounts stay unranked, not zero. A zero common-waste count does not mean there are no savings opportunities.
+SAVINGS: when asked for the biggest savings opportunities, use evidence.savings, not governance scores or generic tag/export tasks. Present evidence.savings.answerTable verbatim as the savings table (it already carries each opportunity's range, best option, subscription and Advisor last-updated source date). Ranking is over reported annualSavingsAmount within one currency; each rankings[].opportunities item groups mutually exclusive Advisor alternatives (for example 1-year/3-year reservation terms and 7/30/60-day lookbacks for the same SKU and scope). Present each opportunity once, with its best estimate and, when alternativeCount > 1, the lowest-to-best alternative range and the best alternative's term/lookback; never list alternatives of one opportunity as separate ranked opportunities. Retain the term, scope, SKU, quantity, lastUpdated and coverage. These are potentially overlapping Advisor estimates, not verified net or realized savings: do not add them together, recommend a commitment purchase without eligibility/utilization evidence, or confuse savingsAmount of unspecified period with annualSavingsAmount. Unknown amounts stay unranked, not zero. A zero common-waste count does not mean there are no savings opportunities.
 EVIDENCE LIMITS: include a concise source-freshness line in the final answer's problem context, before the table. For Resource Graph tagging, policy and waste findings, explicitly state that indexed inventory may lag changes and that its source data-as-of timestamp and indexing delay are unknown. An Advisor retrieval timestamp does not cover inventory findings. generatedUtc is bundle generation time, not an inventory retrieval time. Use each source's returned retrievedAtUtc and lastUpdated when available; source freshness and unmeasured indexing delay remain unknown. When quoting budget spend, state that the snapshot may lag billing and has no source data-as-of timestamp. Generic alert/scheduled-action counts do not establish anomaly-alert configuration; do not claim anomaly alerts are missing or configured from those counts.
 DATA SCOPING: the declared assessment scope controls the subscription inputs. Include every requested subscription and all seven dimensions; do not shrink a full assessment to top spenders. The host uses scoped Resource Graph aggregates and bounded evidence samples. Reuse those summaries rather than asking QueryAzure for raw inventories. Filtered budgets or sample names do not establish whole-estate spend/counts; retain coverage, unknown and notApplicable states.
     Use exactly once for Crawl/FinOps maturity scoring. Pass the exact `subscriptions` array and optional first management-group id from the connection context. Do NOT supplement it with QueryAzure, ReportMaturityScore, SuggestFollowUp, or any other tool—the score persistence, maturity SSE event, and follow-up buttons are already handled by this result.");
@@ -102,18 +102,18 @@ Use exactly once for Advisor cost recommendation, savings-by-impact or 'what doe
 
         var rows = new List<string>
         {
-            "| Impact | Recommendation | Subscription | Estimated annual savings | Best-estimate option | Alternatives |",
-            "|---|---|---|---:|---|---:|"
+            "| Impact | Recommendation | Subscription | Estimated annual savings | Best-estimate option | Alternatives | Advisor last updated |",
+            "|---|---|---|---:|---|---:|---|"
         };
         foreach (var group in groups)
         {
             if (group.items.Length == 0)
             {
-                rows.Add($"| {group.impact} | No cost recommendations returned | — | — | — | — |");
+                rows.Add($"| {group.impact} | No cost recommendations returned | — | — | — | — | — |");
                 continue;
             }
             foreach (var o in group.items)
-                rows.Add($"| {group.impact} | {Cell(o.Title)} | {Cell(o.SubscriptionName)} | {o.SavingsText} | {Cell(o.OptionText)} | {o.Alternatives.Length} |");
+                rows.Add($"| {group.impact} | {TableCell(o.Title)} | {TableCell(o.SubscriptionName)} | {o.SavingsText} | {TableCell(o.OptionText)} | {o.Alternatives.Length} | {TableCell(o.LastUpdatedText)} |");
         }
 
         var counts = string.Join(", ", groups.Where(g => AdvisorImpactLevels.Contains(g.impact))
@@ -173,13 +173,13 @@ Use exactly once for Advisor cost recommendation, savings-by-impact or 'what doe
             }),
             limitations = "Advisor estimates are gross, cached and may overlap; they do not account for existing reservations/savings plans, eligibility or realizable net savings. Missing amounts are unknown, not zero. Amounts keep Advisor's savingsCurrency."
         };
-
-        static string Cell(string? value) =>
-            string.IsNullOrWhiteSpace(value) ? "—" : value.Replace("|", "\\|", StringComparison.Ordinal).Replace('\n', ' ');
     }
 
     private static string Money(decimal amount) =>
         amount.ToString(amount >= 100 ? "#,0" : "#,0.00", CultureInfo.InvariantCulture);
+
+    private static string TableCell(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "—" : value.Replace("|", "\\|", StringComparison.Ordinal).Replace('\n', ' ');
 
     private sealed class AdvisorOpportunity
     {
@@ -215,7 +215,22 @@ Use exactly once for Advisor cost recommendation, savings-by-impact or 'what doe
                 : Alternatives.Length > 1 && Lowest is not null && Lowest != Best
                     ? $"{Currency} {Money(Lowest.Value)}–{Money(Best.Value)}"
                     : $"{Currency} {Money(Best.Value)}";
+            var updated = alternatives
+                .Select(a => Text(a.Data, "lastUpdated"))
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Select(v => v!.Length >= 10 ? v[..10] : v)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            LastUpdatedText = updated.Length switch
+            {
+                0 => "unknown",
+                1 => updated[0],
+                _ => $"{updated[0]} to {updated[^1]}"
+            };
         }
+
+        public string LastUpdatedText { get; }
 
         public AdvisorCandidate[] Alternatives { get; }
         public string Impact { get; }
@@ -462,11 +477,30 @@ Use exactly once for Advisor cost recommendation, savings-by-impact or 'what doe
                         && opportunities.All(alternatives => alternatives.Length <= alternativesPerOpportunity)
                 };
             }).ToArray();
+        var tableOpportunities = quantified
+            .GroupBy(candidate => candidate.AlternativeKey, StringComparer.Ordinal)
+            .Select(alternatives => new AdvisorOpportunity(alternatives
+                .OrderByDescending(candidate => candidate.AnnualSavings)
+                .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
+                .ToArray()))
+            .GroupBy(o => o.Currency!, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .SelectMany(group => group.OrderByDescending(o => o.Best).ThenBy(o => o.Alternatives[0].Id, StringComparer.Ordinal).Take(detailsPerCurrency))
+            .ToArray();
+        var savingsTable = tableOpportunities.Length == 0 ? null : string.Join('\n',
+            new[]
+            {
+                "| Rank | Advisor opportunity | Subscription | Estimated annual savings | Best-estimate option | Alternatives | Advisor last updated |",
+                "|---:|---|---|---:|---|---:|---|"
+            }.Concat(tableOpportunities.Select((o, index) =>
+                $"| {index + 1} | {TableCell(o.Title)} | {TableCell(o.SubscriptionName)} | {o.SavingsText} | {TableCell(o.OptionText)} | {o.Alternatives.Length} | {TableCell(o.LastUpdatedText)} |")));
         return new
         {
             source = "Azure Advisor cached Cost recommendations",
             retrievedAtUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
             complete,
+            answerTable = savingsTable,
+            answerTableNote = savingsTable is null ? null : "Host-built savings table: present it verbatim, including the Advisor last updated column (the source date of each recommendation, distinct from retrievedAtUtc). A savings range covers mutually exclusive term/lookback alternatives of one opportunity; never add them or different opportunities together.",
             requestedSubscriptionCount = responses.Count,
             successfulSubscriptionCount = sources.Count(source => source.Status == 200 && source.Error is null),
             observedRecommendationCount = candidates.Length,

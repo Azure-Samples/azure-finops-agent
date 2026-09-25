@@ -117,6 +117,9 @@ public sealed class MaturityEvidenceTests
         Assert.False(usd.GetProperty("opportunities")[1].GetProperty("alternativesAreMutuallyExclusive").GetBoolean());
         Assert.Equal("other-sku", usd.GetProperty("opportunities")[2].GetProperty("best").GetProperty("id").GetString());
         Assert.True(evidence.GetProperty("detailsComplete").GetBoolean());
+        var savingsTable = evidence.GetProperty("answerTable").GetString()!;
+        Assert.Contains("| 1 | Advisor cost recommendation (P0v3, swedencentral, qty 1) | Synthetic scope | USD 266–429 | term P3Y, 7-day lookback | 4 | 2026-09-24 |", savingsTable);
+        Assert.Contains("| 2 |", savingsTable);
     }
 
     [Fact]
@@ -166,7 +169,7 @@ public sealed class MaturityEvidenceTests
         Assert.Equal(2, reservation.GetProperty("alternativeCount").GetInt32());
 
         var table = report.GetProperty("answerTable").GetString()!;
-        Assert.Contains("| High | Buy reserved instance (P0v3, swedencentral, qty 1) | Synthetic scope | USD 266–429 | term P3Y, 7-day lookback | 2 |", table);
+        Assert.Contains("| High | Buy reserved instance (P0v3, swedencentral, qty 1) | Synthetic scope | USD 266–429 | term P3Y, 7-day lookback | 2 | 2026-09-24 |", table);
         Assert.Contains("| Medium | No cost recommendations returned |", table);
         Assert.Contains("| Low | No cost recommendations returned |", table);
         Assert.StartsWith("Azure Advisor returned 2 cost opportunities (2 high, 0 medium, 0 low) across 1 subscription; the largest single estimate is USD 1,200/year", report.GetProperty("headline").GetString());
