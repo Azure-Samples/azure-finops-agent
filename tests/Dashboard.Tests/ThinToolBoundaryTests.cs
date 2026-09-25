@@ -46,4 +46,15 @@ public sealed class ThinToolBoundaryTests
         Assert.Equal("""{"mode":"query","path":"$.value[*]"}""", arguments["queryJson"]);
         Assert.Equal("5", arguments["limit"]);
     }
+
+    [Fact]
+    public void ScoresToleratesOnlyAStrayClosingBraceAfterACompleteArray()
+    {
+        const string item = """[{"id":"tagging","label":"Tagging","status":"observed","score":3,"detail":"45% tagged"}]""";
+        Assert.NotNull(ScoreTools.NormalizeScores(item + "}"));
+        Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(item + "}"));
+        Assert.Null(ScoreTools.NormalizeScores(item + "}}}"));
+        Assert.Null(ScoreTools.NormalizeScores(item[..^1] + "}"));
+        Assert.Null(ScoreTools.NormalizeScores(item + "x"));
+    }
 }

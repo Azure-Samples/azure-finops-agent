@@ -79,7 +79,7 @@ Return scores array: id=slug, label=exact name above, status=observed|unknown|no
     {
         try
         {
-            using var document = JsonDocument.Parse(scores);
+            using var document = ParseArray(scores);
             if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() is < 1 or > 30) return null;
             var normalized = new List<object>();
             var identifiers = new HashSet<string>(StringComparer.Ordinal);
@@ -102,6 +102,21 @@ Return scores array: id=slug, label=exact name above, status=observed|unknown|no
             return JsonSerializer.Serialize(normalized);
         }
         catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException) { return null; }
+    }
+
+    // Models writing a long JSON string argument sometimes append the closing brace of the
+    // surrounding call object; a complete array followed only by such braces is unambiguous.
+    private static JsonDocument ParseArray(string text)
+    {
+        try { return JsonDocument.Parse(text); }
+        catch (JsonException)
+        {
+            var trimmed = text.TrimEnd();
+            var end = trimmed.Length;
+            while (end > 0 && trimmed[end - 1] == '}') end--;
+            if (end == trimmed.Length || end == 0 || trimmed[end - 1] != ']' || trimmed.Length - end > 2) throw;
+            return JsonDocument.Parse(trimmed[..end]);
+        }
     }
 
     /// <summary>Persists a score produced by a consolidated evidence tool.
