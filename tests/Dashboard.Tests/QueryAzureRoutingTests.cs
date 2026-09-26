@@ -174,6 +174,15 @@ public sealed class QueryAzureRoutingTests
     }
 
     [Fact]
+    public void GraphRequestsEnableDirectoryAdvancedQueries()
+    {
+        var headers = AzureQueryTools.GraphHeaders();
+        Assert.Equal("eventual", headers["consistencylevel"]);
+        Assert.Single(headers);
+        Assert.Contains("$count=true", AzureQueryTools.ToolDescription);
+    }
+
+    [Fact]
     public async Task PageLimitsAndLaterFailuresReportPartialCoverageWithoutAnError()
     {
         const string first = "HTTP 200 OK\n{\"value\":[1],\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/users?$skiptoken=a\"}";
