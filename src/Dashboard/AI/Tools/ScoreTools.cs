@@ -104,18 +104,20 @@ Return scores array: id=slug, label=exact name above, status=observed|unknown|no
         catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException) { return null; }
     }
 
-    // Models writing a long JSON string argument sometimes append the closing brace of the
-    // surrounding call object; a complete array followed only by such braces is unambiguous.
+    // Models writing a long JSON-in-a-string argument sometimes garble only its closing brackets:
+    // a stray closing brace of the surrounding call object after the array, or a dropped final ].
+    // Each repair must still parse as a complete array of the submitted objects.
     private static JsonDocument ParseArray(string text)
     {
         try { return JsonDocument.Parse(text); }
         catch (JsonException)
         {
-            var trimmed = text.TrimEnd();
+            var trimmed = text.Trim();
             var end = trimmed.Length;
             while (end > 0 && trimmed[end - 1] == '}') end--;
-            if (end == trimmed.Length || end == 0 || trimmed[end - 1] != ']' || trimmed.Length - end > 2) throw;
-            return JsonDocument.Parse(trimmed[..end]);
+            if (trimmed.Length - end is 1 or 2 && end > 0 && trimmed[end - 1] == ']') return JsonDocument.Parse(trimmed[..end]);
+            if (trimmed.StartsWith('[') && trimmed.EndsWith('}')) return JsonDocument.Parse(trimmed + "]");
+            throw;
         }
     }
 
