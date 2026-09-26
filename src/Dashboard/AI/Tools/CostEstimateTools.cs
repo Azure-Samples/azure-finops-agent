@@ -21,13 +21,13 @@ public static class CostEstimateTools
         yield return AIFunctionFactory.Create(EstimateTokenCost, "EstimateTokenCost",
             """
             Deterministic token-cost calculator for monthly or volume LLM estimates and model comparisons; use it instead of computing token costs yourself.
-            Pass per-1M-token rates from GetAzureRetailPricing for only the requested models (with their deployment tier, region and currency) and one shared set of token assumptions, then report the returned figures verbatim as an estimate, not measured billing.
+            Pass per-1M-token rates from a filtered Retail Prices API QueryAzure call for only the requested models (with their deployment tier, region and currency) and one shared set of token assumptions, then report the returned figures verbatim as an estimate, not measured billing.
             Label each model with the pricing basis it was priced on, for example "gpt-4o, Global Standard".
             """);
     }
 
     internal static string EstimateTokenCost(
-        [Description(@"JSON array of only the requested 1-20 models/variants, not an unfiltered price catalogue. Include label, per-1M rates and known provenance. Schema: [{""label"":""a nano model, Global Standard"",""inputPricePer1M"":0.20,""outputPricePer1M"":1.25,""cachedInputPricePer1M"":0.02}]. cachedInputPricePer1M is optional when not modeling cache hits. Rates come from filtered GetAzureRetailPricing results.")] string modelsJson,
+        [Description(@"JSON array of only the requested 1-20 models/variants, not an unfiltered price catalogue. Include label, per-1M rates and known provenance. Schema: [{""label"":""a nano model, Global Standard"",""inputPricePer1M"":0.20,""outputPricePer1M"":1.25,""cachedInputPricePer1M"":0.02}]. cachedInputPricePer1M is optional when not modeling cache hits. Rates come from filtered Retail Prices API results.")] string modelsJson,
         [Description("Average input (prompt) tokens per conversation/request. Applies to ALL models. e.g. '1500'.")] string inputTokensPerConversation,
         [Description("Average output (completion) tokens per conversation/request. Applies to ALL models. e.g. '500'.")] string outputTokensPerConversation,
         [Description("Number of conversations/requests per month. Applies to ALL models. e.g. '8000'.")] string conversationsPerMonth,

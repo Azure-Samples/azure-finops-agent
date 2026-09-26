@@ -25,11 +25,10 @@ public sealed class RuntimePolicyTests
                 .Take(dimensions).Select(name => new { type = "Dimension", name })
             }
         });
-        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create()
-            .Single(candidate => candidate.Name == (bulk ? "BulkAzureRequest" : "QueryAzure"));
+        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().Single();
         var arguments = bulk
-            ? new AIFunctionArguments { ["requestsJson"] = JsonSerializer.Serialize(new[] { new { method = "POST", path, body } }) }
-            : new AIFunctionArguments { ["method"] = "POST", ["path"] = path, ["body"] = body };
+            ? new AIFunctionArguments { ["requests"] = JsonSerializer.Serialize(new[] { new { method = "POST", url = path, body } }) }
+            : new AIFunctionArguments { ["method"] = "POST", ["url"] = path, ["body"] = body };
         var result = (await tool.InvokeAsync(arguments))!.ToString()!;
         Assert.Contains("at most two grouping dimensions", result);
         Assert.Contains("No request was sent", result);
@@ -54,9 +53,8 @@ public sealed class RuntimePolicyTests
     [Fact]
     public async Task NullBatchItemsAreRejectedBeforeDispatch()
     {
-        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create()
-            .Single(candidate => candidate.Name == "BulkAzureRequest");
-        var result = (await tool.InvokeAsync(new AIFunctionArguments { ["requestsJson"] = "[null]" }))!.ToString()!;
+        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().Single();
+        var result = (await tool.InvokeAsync(new AIFunctionArguments { ["requests"] = "[null]" }))!.ToString()!;
         Assert.Contains("Every batch item must be a request object", result);
         Assert.Contains("No request was sent", result);
     }
@@ -83,37 +81,32 @@ public sealed class RuntimePolicyTests
     [Theory]
     [InlineData("QueryAzure", null, "$filter")]
     [InlineData("QueryAzure", null, "look it up instead of guessing")]
-    [InlineData("BulkAzureRequest", null, "sequentially")]
-    [InlineData("QueryGraph", null, "learn.microsoft.com/graph")]
-    [InlineData("QueryLogAnalytics", "query", "summarize")]
-    [InlineData("ListCostExportBlobs", "prefix", "prefix")]
-    [InlineData("ReadCostExportBlob", "blobPath", "exact")]
+    [InlineData("QueryAzure", null, "sequentially")]
+    [InlineData("QueryAzure", null, "learn.microsoft.com/graph")]
+    [InlineData("QueryAzure", null, "summarize")]
+    [InlineData("QueryAzure", null, "prefix")]
+    [InlineData("QueryAzure", null, "connectivityCheck from an existing VM")]
+    [InlineData("QueryAzure", null, "OData")]
+    [InlineData("QueryAzure", null, "pricesheet download")]
+    [InlineData("QueryAzure", null, "not tenant-specific")]
+    [InlineData("QueryAzure", "requests", "1-200")]
+    [InlineData("QueryAzure", "resultQuery", "QueryToolResult")]
+    [InlineData("QueryAzure", "grepFor", "long")]
     [InlineData("QueryUploadedFile", "paramsJson", "filters")]
-    [InlineData("CheckVmConnectivity", "sourceVmResourceId", "VM")]
-    [InlineData("GetAzureRetailPricing", "filter", "OData")]
     [InlineData("GetSavingsLedger", "status", "filter")]
     [InlineData("GetSavingsLedger", "limit", "limit")]
-    [InlineData("StartPricesheetDownload", "billingScope", "billing scope")]
-    [InlineData("GetPricesheetStatus", "operationStatusUrl", "returned")]
     [InlineData("GetOperationStatus", "operationId", "exact")]
-    [InlineData("ListOperationResults", null, "current conversation")]
-    [InlineData("GetAzureServiceHealth", null, "no service/region filtering")]
+    [InlineData("GetOperationStatus", null, "in this conversation")]
+    [InlineData("GetOperationStatus", null, "pricesheet")]
     public void QueryGuidanceIsPresentInToolAndParameterSchemas(string toolName, string? parameterName, string guidance)
     {
         var tokens = new UserTokens { UserId = 101 };
         var tools = toolName switch
         {
-            "QueryAzure" or "BulkAzureRequest" => new AzureQueryTools(tokens).Create(),
-            "QueryGraph" => new GraphQueryTools(tokens).Create(),
-            "QueryLogAnalytics" => new LogAnalyticsQueryTools(tokens).Create(),
-            "ListCostExportBlobs" or "ReadCostExportBlob" => new StorageQueryTools(tokens).Create(),
+            "QueryAzure" => new AzureQueryTools(tokens).Create(),
             "QueryUploadedFile" => new UploadedFileTools(tokens).Create(),
-            "CheckVmConnectivity" => new ComputeDiagnosticTools(tokens).Create(),
-            "GetAzureRetailPricing" => RetailPricingTools.Create(),
             "GetSavingsLedger" => new SavingsLedgerTools(tokens).Create(),
-            "StartPricesheetDownload" or "GetPricesheetStatus" => new PricesheetTools(tokens).Create(),
-            "GetOperationStatus" or "ListOperationResults" => new OperationTools(tokens).Create(),
-            "GetAzureServiceHealth" => HealthTools.Create(),
+            "GetOperationStatus" => new OperationTools(tokens).Create(),
             _ => throw new InvalidOperationException("Unexpected query tool.")
         };
         var tool = tools.Single(candidate => candidate.Name == toolName);

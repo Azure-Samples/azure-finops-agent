@@ -15,14 +15,16 @@ public sealed class ThinToolBoundaryTests
     public void UnprovisionedReportServiceIsADeterminateResult()
     {
         const string path = "/v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(period='D30')";
-        Assert.True(GraphQueryTools.IsReportServiceAbsent(path, UnknownTenant));
+        Assert.True(AzureQueryTools.IsReportServiceAbsent(path, UnknownTenant));
 
-        var result = GraphQueryTools.ReportServiceAbsent(UnknownTenant, null);
+        var result = AzureQueryTools.ReportServiceAbsent(UnknownTenant, null);
         var lines = result.Split('\n');
-        Assert.Equal("Current UTC time: 2026-09-25 20:20:56", lines[0].Trim());
-        using var json = JsonDocument.Parse(lines[1]);
+        Assert.Equal("HTTP 200 OK", lines[0].Trim());
+        Assert.Equal("Current UTC time: 2026-09-25 20:20:56", lines[1].Trim());
+        using var json = JsonDocument.Parse(lines[2]);
         Assert.False(json.RootElement.GetProperty("reportServiceProvisioned").GetBoolean());
         Assert.False(json.RootElement.TryGetProperty("error", out _));
+        Assert.True(ProtectedTool.InspectEvidence(result).Success);
     }
 
     [Theory]
@@ -30,7 +32,7 @@ public sealed class ThinToolBoundaryTests
     [InlineData("/v1.0/reports/getOffice365ActiveUserDetail(period='D30')", "HTTP 404 NotFound\n{\"error\":{\"code\":\"ResourceNotFound\"}}")]
     [InlineData("/v1.0/reports/getOffice365ActiveUserDetail(period='D30')", "HTTP 403 Forbidden\n{\"error\":{\"code\":\"UnknownTenantId\"}}")]
     public void OtherFailuresStayFailures(string path, string result) =>
-        Assert.False(GraphQueryTools.IsReportServiceAbsent(path, result));
+        Assert.False(AzureQueryTools.IsReportServiceAbsent(path, result));
 
     [Fact]
     public void JsonObjectForStringParameterIsPassedAsRawJson()

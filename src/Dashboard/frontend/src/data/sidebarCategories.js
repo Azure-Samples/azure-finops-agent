@@ -629,17 +629,17 @@ const maturityCategories = [
       {
         label: "Download EA pricesheet",
         prompt:
-          "Start a negotiated pricesheet download for my EA billing account using StartPricesheetDownload, then poll with GetPricesheetStatus until ready (back off ~10s between polls). When done, give me the SAS download link and tell me how it differs from public retail rates for my top 5 SKUs.",
+          "Start a negotiated pricesheet download for my EA billing account (POST {billingScope}/providers/Microsoft.CostManagement/pricesheets/default/download), then poll it with GetOperationStatus until ready (respect nextPollUtc). When done, tell me how to download the file and how it differs from public retail rates for my top 5 SKUs.",
       },
       {
         label: "Download MCA pricesheet",
         prompt:
-          "List my MCA billing profiles, ask which one, then start a negotiated pricesheet download with StartPricesheetDownload and poll with GetPricesheetStatus until ready. Return the SAS link.",
+          "List my MCA billing profiles, ask which one, then start a negotiated pricesheet download (POST {billingProfile}/providers/Microsoft.CostManagement/pricesheets/default/download) and poll it with GetOperationStatus until ready. Tell me how to download the file.",
       },
       {
         label: "Re-price top VMs at negotiated rates",
         prompt:
-          "List my top 10 most expensive VMs by monthly cost. Then download my negotiated pricesheet (StartPricesheetDownload + GetPricesheetStatus). Compare each VM's billed rate to its negotiated rate AND to retail. Show a table — flag any case where the negotiated rate inverts the public-retail recommendation (e.g. retail says move regions, but negotiated says stay).",
+          "List my top 10 most expensive VMs by monthly cost. Then download my negotiated pricesheet (Cost Management pricesheets/default/download + GetOperationStatus). Compare each VM's billed rate to its negotiated rate AND to retail. Show a table — flag any case where the negotiated rate inverts the public-retail recommendation (e.g. retail says move regions, but negotiated says stay).",
       },
       {
         label: "Right-size VMs (commitment-aware)",

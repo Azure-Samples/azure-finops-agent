@@ -41,6 +41,11 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("GetChargebackReport")]
     [InlineData("DetectCostAnomalies")]
     [InlineData("FindIdleResources")]
+    [InlineData("BulkAzureRequest")]
+    [InlineData("QueryGraph")]
+    [InlineData("QueryLogAnalytics")]
+    [InlineData("GetAzureRetailPricing")]
+    [InlineData("FetchPublicWebPage")]
     public void PromptDoesNotReferenceRemovedTools(string tool) =>
         Assert.DoesNotContain(tool, Prompt);
 
@@ -55,11 +60,14 @@ public sealed class SessionQualityGuidanceTests
     [Fact]
     public void QueryToolsPointAtAuthoritativeApiReferences()
     {
-        var tokens = new UserTokens { UserId = 101 };
-        var azure = new AzureQueryTools(tokens).Create().Single(tool => tool.Name == "QueryAzure");
+        var azure = new AzureQueryTools(new UserTokens { UserId = 101 }).Create().Single();
+        Assert.Equal("QueryAzure", azure.Name);
         Assert.Contains("azure-rest-api-specs", azure.Description);
         Assert.Contains("apiVersions", azure.Description);
-        Assert.Contains("learn.microsoft.com/graph", new GraphQueryTools(tokens).Create().Single().Description);
-        Assert.Contains("learn.microsoft.com/rest/api/cost-management/retail-prices", RetailPricingTools.Create().Single().Description);
+        Assert.Contains("learn.microsoft.com/graph", azure.Description);
+        Assert.Contains("learn.microsoft.com/rest/api/cost-management/retail-prices", azure.Description);
+        Assert.Contains("learn.microsoft.com/kusto", azure.Description);
+        Assert.Contains("learn.microsoft.com/rest/api/storageservices", azure.Description);
+        Assert.Contains("azure.status.microsoft", azure.Description);
     }
 }

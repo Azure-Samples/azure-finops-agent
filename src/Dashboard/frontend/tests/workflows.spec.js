@@ -345,13 +345,13 @@ for (const outcome of [
     const { requests, errors } = await arrange(page, [
       {
         type: "tool_start",
-        tool: "BulkAzureRequest",
+        tool: "QueryAzure",
         id: "synthetic-bulk",
-        args: '{"requests":[{},{}]}',
+        args: '{"requests":"[{},{}]"}',
       },
       {
         type: "tool_done",
-        tool: "BulkAzureRequest",
+        tool: "QueryAzure",
         id: "synthetic-bulk",
         success: true,
         result: JSON.stringify(result),

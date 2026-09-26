@@ -5452,7 +5452,7 @@ function formatDuration(ms) {
 }
 
 // ── Friendly tool labels ──
-// Detect which Azure API a generic QueryAzure / BulkAzureRequest call is hitting
+// Detect which Azure API a generic QueryAzure call is hitting
 // based on the URL path, and return a short user-facing label that highlights
 // the breadth of APIs the agent uses (Cost Management, Resource Graph, etc.).
 const AZURE_API_LABELS = [
@@ -5556,6 +5556,51 @@ function isThrottledTool(tc) {
   return tc?.done && toolHttpStatus(tc.result) === 429;
 }
 
+// QueryAzure reaches every API; label it by the request's host and path.
+function _query_label(args) {
+  let batch = args?.requests;
+  if (typeof batch === "string" && batch.trim()) {
+    try {
+      batch = JSON.parse(batch);
+    } catch {
+      batch = null;
+    }
+  }
+  if (batch && !Array.isArray(batch) && Array.isArray(batch.requests))
+    batch = batch.requests;
+  if (batch) return Array.isArray(batch) && batch.length ? `Batch ×${batch.length}` : "Batch";
+  const url = String(args?.url || args?.path || "");
+  if (!url) return "Azure";
+  if (url.startsWith("/")) return _arm_label(url) || "Azure";
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "Web";
+  }
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname + parsed.search;
+  if (host === "management.azure.com") return _arm_label(path) || "Azure";
+  if (host === "graph.microsoft.com") return _graph_label(path) || "Graph";
+  if (
+    host === "api.loganalytics.io" ||
+    host === "api.loganalytics.azure.com" ||
+    host === "api.applicationinsights.io"
+  )
+    return "KQL";
+  if (host.endsWith(".blob.core.windows.net"))
+    return /[?&]comp=list/i.test(parsed.search) ? "Exports" : "Export";
+  if (host === "prices.azure.com") {
+    const filter = parsed.searchParams.get("$filter") || "";
+    const sku = (filter.match(/(?:armSkuName|serviceName)\s+eq\s+'([^']+)'/i) || [])[1];
+    return sku ? `Pricing · ${sku}` : "Pricing";
+  }
+  if (host === "azure.status.microsoft") return "Health";
+  if (host === "learn.microsoft.com") return "Docs";
+  if (host === "api.github.com" || host === "raw.githubusercontent.com") return "Specs";
+  return `Web · ${host.replace(/^www\./, "")}`;
+}
+
 function friendlyToolLabel(tc) {
   if (!tc) return "";
   // Live 429 backoff — set by cooling_down SSE event mid-flight.
@@ -5580,25 +5625,7 @@ function friendlyToolLabel(tc) {
       args = null;
     }
   }
-  if (tool === "QueryAzure") {
-    const path = args?.path || args?.url || "";
-    return _arm_label(path) || "Azure";
-  }
-  if (tool === "BulkAzureRequest") {
-    const items = args?.requests || args?.items || [];
-    const n = Array.isArray(items) ? items.length : 0;
-    return n ? `Bulk ×${n}` : "Bulk";
-  }
-  if (tool === "QueryGraph") {
-    return _graph_label(args?.path || args?.url || "") || "Graph";
-  }
-  if (tool === "QueryLogAnalytics") return "KQL";
-  if (tool === "GetAzureRetailPricing") {
-    const sku = args?.armSkuName || args?.skuName || args?.serviceName || "";
-    const head = String(sku).split(/[\s_]/)[0];
-    return head ? `Pricing · ${head}` : "Pricing";
-  }
-  if (tool === "GetAzureServiceHealth") return "Health";
+  if (tool === "QueryAzure") return _query_label(args);
   if (tool === "GenerateHtmlPresentation") {
     let n = 0;
     try {
@@ -5626,8 +5653,6 @@ function friendlyToolLabel(tc) {
     return lvl ? `Score · ${lvl}` : "Score";
   }
   if (tool === "GetScoreHistory") return "History";
-  if (tool === "ListCostExportBlobs") return "Exports";
-  if (tool === "ReadCostExportBlob") return "Export";
   if (tool === "SaveReportSchedule") return "Schedule +";
   if (tool === "ListReportSchedules") return "Schedules";
   if (tool === "DeleteReportSchedule") return "Schedule −";

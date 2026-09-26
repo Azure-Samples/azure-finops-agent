@@ -188,7 +188,7 @@ public static class HttpHelper
         // wrong conversation. Missing baggage means no SSE status event.
 
         // Gate Cost Management / Consumption / Billing calls behind a small global
-        // semaphore (2 concurrent). Without this, the LLM (esp. via BulkAzureRequest
+        // semaphore (2 concurrent). Without this, the LLM (esp. via a QueryAzure requests batch
         // parallelism=20) fan-fires parallel /query calls that all collide on the
         // per-tenant throttle. While queued we emit cooling_down so the UI shows
         // "waiting in queue" instead of a frozen tool row. The opt-out is ONLY

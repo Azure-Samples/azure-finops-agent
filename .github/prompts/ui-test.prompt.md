@@ -141,7 +141,7 @@ Assert against these. Anything over budget must be explained by its tool sequenc
 | ------------------------ | --------------------- | -------------------------------------------- |
 | Trivial                  | `hi`, `thanks`        | ≤ 3s, **0 tools**                            |
 | Single-fact public       | one SKU in one region | ≤ 8s                                         |
-| Multi-region compare     | 3 regions             | ≤ 20s, **exactly 1** `GetAzureRetailPricing` |
+| Multi-region compare     | 3 regions             | ≤ 20s, **exactly 1** Retail Prices `QueryAzure` call |
 | Tenant query             | MTD spend             | ≤ 25s                                        |
 | Deck / script generation | —                     | ≤ 60s                                        |
 | Maturity score           | Crawl                 | ≤ 120s                                       |
@@ -162,10 +162,10 @@ Install `page.on('console'|'pageerror'|'requestfailed')` capture first. Assert *
 3. **All 14 starter prompts** in `Pricing & Estimates` — click each, assert an answer commits and no console error. These are the primary entry point.
 4. **Follow-up chips** — click the offered chip; must run in the SAME conversation.
 5. **Prompt chips** (`.prompt-chip`) inside answers route correctly.
-6. **Multi-region** — "Compare X in A, B and C" → **exactly 1** `GetAzureRetailPricing`.
+6. **Multi-region** — "Compare X in A, B and C" → **exactly 1** `QueryAzure` call to the Retail Prices API.
 7. **Arithmetic** — TCO with known inputs; verify independently (rate × hours × N). A wrong total is a real bug.
 8. **Foundry pricing trap** — ask for GPT model pricing; the answer must quote Standard+Global, not the minimum row across Batch/DataZone/cached variants.
-9. **Service health** — `GetAzureServiceHealth` (no auth) returns and renders.
+9. **Service health** — `QueryAzure` reads the public Azure status feed (no auth) and renders it, while noting it is not tenant-specific.
 10. **Charts** — bar, line, pie and a world map all render; resize and confirm they re-layout.
 11. **Composer actions** — Attach, Clear, Presentation, Script enable/disable correctly; Clear empties the view.
 12. **Uploads** — drag-drop a CSV and an XLSX (`onDrop`), paste an image (`ClipboardEvent` + `DataTransfer`), then ask about each. Data files must route to `QueryUploadedFile`; images go to vision. `GET /api/uploads` lists, `DELETE /api/uploads/{fileId}` removes.
@@ -198,8 +198,8 @@ Click **Connect Azure** via JS, then STOP and ask me to sign in. Poll `/auth/azu
 1. **Identity** — `/auth/me` and `/auth/azure/status` return the right user, subscriptions, management groups and `apis` list.
 2. **Tenant picker** — `/auth/azure/tenants`; the Tenant ID box routes to a specific tenant.
 3. **Conversations pane** — create, switch, delete, reload persistence, per-pane collapse (all three panes), `N saved` count correct, job run-logs HIDDEN from this list.
-4. **Consent tiers** — each add-on (`licenses`, `chargeback`, `loganalytics`, `storage`) triggers its OWN consent screen; `graphTier` accumulates; the "grant all remaining" chain walks tiers in sequence. After each, the matching tool works (`QueryGraph`, `QueryLogAnalytics`, `ListCostExportBlobs`).
-5. **Real tenant queries** — MTD spend, top resources, Advisor, budgets, tagging coverage, reservations, idle-resource patterns and anomaly investigations through `QueryAzure`/`BulkAzureRequest`, plus `StartPricesheetDownload` + `GetPricesheetStatus`. Verify at least one figure against `az` directly.
+4. **Consent tiers** — each add-on (`licenses`, `chargeback`, `loganalytics`, `storage`) triggers its OWN consent screen; `graphTier` accumulates; the "grant all remaining" chain walks tiers in sequence. After each, the matching `QueryAzure` route works (Graph URL, Log Analytics/Application Insights URL, Blob Storage URL).
+5. **Real tenant queries** — MTD spend, top resources, Advisor, budgets, tagging coverage, reservations, idle-resource patterns and anomaly investigations through `QueryAzure` `url`/`requests`, plus pricesheet `QueryAzure` POST + `GetOperationStatus`. Verify at least one figure against `az` directly.
 6. **Maturity scoring** — click Score for Crawl; assert the `maturity_score` SSE arrives and sidebar stars update; `GetScoreHistory` returns the prior score.
 7. **Savings ledger** — `RecordSavingsAction` → `UpdateSavingsAction` → `GetSavingsLedger` round-trips.
 8. **Security gates** (all must be refused):

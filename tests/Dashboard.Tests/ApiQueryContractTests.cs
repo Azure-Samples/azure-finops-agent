@@ -52,12 +52,11 @@ public sealed class ApiQueryContractTests
     [InlineData(true)]
     public async Task SingleAndBulkResourceGraphReadsRejectMissingScopeBeforeDispatch(bool bulk)
     {
-        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create()
-            .Single(candidate => candidate.Name == (bulk ? "BulkAzureRequest" : "QueryAzure"));
+        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().Single();
         const string body = "{\"query\":\"resources | summarize count()\"}";
         var arguments = bulk
-            ? new AIFunctionArguments { ["requestsJson"] = JsonSerializer.Serialize(new[] { new { method = "POST", path = ResourceGraphPath, body } }) }
-            : new AIFunctionArguments { ["method"] = "POST", ["path"] = ResourceGraphPath, ["body"] = body };
+            ? new AIFunctionArguments { ["requests"] = JsonSerializer.Serialize(new[] { new { method = "POST", url = ResourceGraphPath, body } }) }
+            : new AIFunctionArguments { ["method"] = "POST", ["url"] = ResourceGraphPath, ["body"] = body };
         var result = (await tool.InvokeAsync(arguments))!.ToString()!;
         Assert.Contains("Implicit tenant-wide scope is not supported", result);
         Assert.Contains("No request was sent", result);

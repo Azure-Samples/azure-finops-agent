@@ -1,7 +1,12 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.AI;
 
 using AzureFinOps.Dashboard.Auth;
@@ -10,96 +15,478 @@ using AzureFinOps.Dashboard.Infrastructure;
 namespace AzureFinOps.Dashboard.AI.Tools;
 
 /// <summary>
-/// Single tool for querying any Azure ARM API using the user's delegated access token.
-/// The LLM constructs the URL and optional body; this tool executes the HTTP request.
-/// All calls are traced via OpenTelemetry → Application Insights for analysis.
+/// The single HTTP evidence tool. The model authors the URL, method and body for every supported API;
+/// the host resolves the service from the exact URL host, attaches only that service's delegated token
+/// and enforces its method, scope, throttling, pagination, redaction and approval rules. Unknown hosts
+/// are public, credential-free GETs. All calls are traced via OpenTelemetry → Application Insights.
 ///
-/// Security model: GET, PUT, and PATCH are allowed; POST is restricted to known
-/// read-only query/report/calculation endpoints. Mutating action POSTs and DELETE
-/// are blocked at the code level. Beyond that, the user's Entra RBAC role is the security boundary —
-/// assign Reader / Cost Management Reader for read-only access.
+/// Security model: DELETE is blocked everywhere. ARM POST is restricted to known read-only
+/// query/report/calculation/diagnostic endpoints; ARM PUT/PATCH only create owner-bound proposals that
+/// the user approves in the UI. Storage, Retail Prices and public pages are GET-only. Beyond that the
+/// user's Entra RBAC and delegated consent are the security boundary.
 /// </summary>
-public class AzureQueryTools
+public sealed partial class AzureQueryTools(UserTokens tokens)
 {
-    private readonly UserTokens _tokens;
+    internal enum Service { Arm, Graph, LogAnalytics, Storage, RetailPrices, PublicWeb }
 
-    public AzureQueryTools(UserTokens tokens) => _tokens = tokens;
+    private const string ArmHost = "management.azure.com";
+    private const string RetailBase = "https://prices.azure.com/api/retail/prices";
+    private const string StorageVersion = "2026-02-06";
+    internal const int MaxStorageBytes = 6 * 1024 * 1024;
+    private const int RetailAttempts = 4;
+
+    private static readonly HttpClient StorageHttp = new(new SocketsHttpHandler { AllowAutoRedirect = false, ConnectTimeout = TimeSpan.FromSeconds(10) })
+    { Timeout = TimeSpan.FromSeconds(60) };
+    private static readonly HttpClient RetailHttp = new(new SocketsHttpHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(30) };
+
+    internal const string ToolDescription = """
+        The one HTTP tool for every API. You author url, method and body; the host picks the credential from the exact host (the signed-in user's delegated token, so their RBAC and consent are the boundary) and returns the raw response: JSON as-is, CSV and XML converted to JSON tables/objects, HTML as text. The Current UTC time line (or retrievedAtUtc) is the retrieval time, not the source data-as-of time.
+        Endpoints and where to look up their contracts (look it up instead of guessing: a failed call does not answer the question):
+        - Azure Resource Manager: url is an ARM path starting with / (https://management.azure.com is implied) including api-version. Covers Cost Management, Consumption, Billing, Advisor, Resource Graph, Compute, Monitor, Policy, Network, Resource Health and every provider. Live apiVersions: GET /subscriptions/{id}/providers/{namespace}?api-version=2021-04-01. Schemas: the official OpenAPI specs; list folders and versions with https://api.github.com/repos/Azure/azure-rest-api-specs/contents/specification/{service}/resource-manager, then read the spec JSON on raw.githubusercontent.com with grepFor (or resultQuery {"mode":"keys","path":"$.paths"}). Reference: https://learn.microsoft.com/rest/api/{service}/.
+        - Microsoft Graph: https://graph.microsoft.com/v1.0/... or /beta/... Reference: https://learn.microsoft.com/graph/api/{resource}-{verb}?view=graph-rest-1.0 and https://github.com/microsoftgraph/msgraph-metadata. Many endpoints, such as subscribedSkus and report functions, reject $filter/$top/$select; report functions return CSV, converted to a rows table. Follow @odata.nextLink via maxPages.
+        - Log Analytics: POST https://api.loganalytics.io/v1/workspaces/{customerId}/query; Application Insights: POST https://api.applicationinsights.io/v1/apps/{appId}/query; body {"query":"<KQL>","timespan":"P7D"}. KQL: https://learn.microsoft.com/kusto/query/. Discover populated tables with `Usage | summarize GB=sum(Quantity)/1024 by DataType` and columns with `<Table> | getschema`; filter by time first, summarize and project inside KQL, and take/top only after aggregation. FinOps signals: Usage and _BilledSize (ingestion cost), Perf/InsightsMetrics (utilization), Heartbeat and AzureActivity (who changed what).
+        - Blob Storage (cost exports): GET https://{account}.blob.core.windows.net/{container}?restype=container&comp=list&prefix={export/period} lists blobs (use the narrowest prefix; a NextMarker means more blobs); GET https://{account}.blob.core.windows.net/{container}/{blob} reads the first 6 MiB of one blob (CSV becomes rows; complete=false when the blob is larger). Never use a SAS or other credential-bearing URL; for complete analysis of a large export ask for an upload and use QueryUploadedFile. Reference: https://learn.microsoft.com/rest/api/storageservices/list-blobs.
+        - Azure Retail Prices (public list prices, no auth): GET https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=<OData>. Fields and operators (eq, and, or, contains(field,'x')): https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices. Values are case-sensitive; armRegionName is lowercase (eastus); Azure OpenAI and other Foundry models use serviceName 'Foundry Models'. Meter, product and SKU names are not derivable from ARM SKU names: start with structural fields (serviceName, armRegionName, armSkuName, priceType) and read the returned values. Compare regions or SKUs with 'or' in one filter. The host follows NextPageLink (maxPages); never send $top. Zero Items means the filter matched nothing, not a zero price; tierMinimumUnits marks volume bands. Quote each rate with productName, meterName, unitOfMeasure, currency and retrievedAtUtc.
+        - Any other public https URL, GET only and without credentials: Microsoft Learn (search https://learn.microsoft.com/api/search?search=<terms>&locale=en-us, then fetch only returned URLs), GitHub, vendor pricing pages, and the public Azure status feed https://azure.status.microsoft/en-us/status/feed/ (not tenant-specific: an empty feed does not prove a resource is healthy; use ARM Microsoft.ResourceHealth for a named resource). Use grepFor on long pages.
+        Host rules:
+        - DELETE is blocked. ARM POST is limited to read-only endpoints: Cost Management query/forecast/report generation/pricesheet download, Resource Graph, reservation and savings-plan price calculation, Advisor summarize, management-group entities, carbon reports, Spot placement scores and Network Watcher connectivityCheck from an existing VM (body {source:{resourceId:<VM id>},destination:{address,port}}). Action POSTs such as start, restart, deallocate, power off or return are blocked. PUT/PATCH never execute directly: they create a proposal that the user must approve in the UI; never claim a change was applied. Asynchronous (202) results return an operationId for GetOperationStatus. Standard Graph consent is read-only, so writes return 403: report that instead of retrying.
+        - Cost Management, Consumption and PolicyInsights paths need a scope prefix (/subscriptions/{id}, a resource group, a management group or a billing account). Resource Graph bodies list the requested scope in an explicit subscriptions or managementGroups array.
+        - Cost Management /query and /forecast are tenant-throttled: the host runs them one at a time and retries once after a short cooldown. After a returned 429, make no further Cost Management calls this turn and report the retry deadline.
+        - requests (instead of url) runs 1-200 requests in one call; use it rather than repeating similar calls, for example one cost query per subscription or one quota read per region. Batches containing Cost Management /query or /forecast run sequentially and stop after a final 429. Each result has index, status, outcome, body and error, plus total/succeeded/failed counts; one failed item fails the batch, so include only requests you have verified.
+        - Paginated GET results (nextLink, @odata.nextLink, NextPageLink) are followed on the same host up to maxPages; complete=false means more pages remained.
+        - Results over 32 KB return a resultId with a schema for QueryToolResult. Pass resultQuery (the same JSON query QueryToolResult accepts) to receive only the rows, fields, groups or totals you need from the complete result in this same call.
+        Filter, aggregate and limit at the source ($filter/$top where supported, KQL summarize/project, Cost Management grouping), aggregating before limiting. Preserve scope, dates, currency, cost type, pagination and partial coverage in the answer.
+        """;
 
     public IEnumerable<AIFunction> Create() =>
     [
-        AIFunctionFactory.Create(QueryAzure, nameof(QueryAzure), """
-            Calls Azure Resource Manager (https://management.azure.com) with the signed-in user's delegated token and returns the raw JSON. The Current UTC time line is the retrieval time, not the source data-as-of time. The user's RBAC is the access boundary.
-            You choose the resource provider, path, api-version and body. When unsure, look it up instead of guessing (a failed call does not answer the question):
-            - GET /subscriptions/{id}/providers/{namespace}?api-version=2021-04-01 lists each resource type's live apiVersions.
-            - Request and response schemas are in the official OpenAPI specs at https://github.com/Azure/azure-rest-api-specs: list folders and versions with FetchPublicWebPage on https://api.github.com/repos/Azure/azure-rest-api-specs/contents/specification/{service}/resource-manager, then read the JSON from raw.githubusercontent.com using grepFor. The REST reference is at https://learn.microsoft.com/rest/api/.
-            Host rules:
-            - GET is allowed. POST is limited to read-only endpoints: Cost Management query/forecast/report generation, Resource Graph, reservation and savings-plan price calculation, Advisor summarize, management-group entities, carbon reports and Spot placement scores. Action POSTs and DELETE are blocked.
-            - PUT/PATCH never execute directly; they create a proposal that the user must approve in the UI. Never claim a change was applied.
-            - Cost Management, Consumption and PolicyInsights paths need a scope prefix (/subscriptions/{id}, a resource group, a management group or a billing account). Resource Graph bodies must list the requested scope in an explicit subscriptions or managementGroups array.
-            - Cost Management /query and /forecast are tenant-throttled: the host runs them one at a time and retries once after a short cooldown. After a returned 429, make no further Cost Management calls this turn and report the retry deadline. For several cost scopes use one BulkAzureRequest with parallelism=1.
-            - Large results are retained: use QueryToolResult with the returned resultId for exact totals, grouping and sorting.
-            Filter, aggregate and limit at the source ($filter/$top where supported, KQL summarize/project, Cost Management grouping), aggregating before limiting. Preserve scope, dates, currency, cost type, pagination and partial coverage in the answer. For public list prices use GetAzureRetailPricing.
-            """),
-        AIFunctionFactory.Create(BulkAzureRequest, nameof(BulkAzureRequest), """
-            Runs up to 200 QueryAzure-style requests in one call with the same host rules; use it instead of looping QueryAzure over similar reads or writes (for example one cost query per subscription).
-            Batches containing Cost Management /query or /forecast run sequentially and stop after a final 429. Returns indexed results with status, body and error plus total/succeeded/failed counts; large batches return a resultId for QueryToolResult. PUT/PATCH items become approval proposals, never applied writes.
-            """),
+        AIFunctionFactory.Create(QueryAzure, nameof(QueryAzure), ToolDescription),
     ];
+
     private async Task<string> QueryAzure(
-        [Description("HTTP method: GET, POST, PUT, or PATCH (DELETE is blocked)")] string method,
-        [Description("ARM path starting with / and including api-version.")] string path,
-        [Description("JSON request body for POST/PUT/PATCH; omit for GET.")] string? body = null)
+        [Description("One request: an ARM path starting with / (with api-version), or a full https URL for Microsoft Graph, Log Analytics, Application Insights, Blob Storage, Retail Prices or a public page. Omit when requests is used.")] string url = "",
+        [Description("GET (default), POST, PUT or PATCH. DELETE is blocked.")] string method = "GET",
+        [Description("JSON request body for POST/PUT/PATCH, preferably passed as a JSON object rather than an escaped string; omit for GET.")] string body = "",
+        [Description("Batch instead of url: JSON array of 1-200 {\"method\",\"url\",\"body\"} objects; body may be a JSON object or a JSON string. Example: [{\"method\":\"GET\",\"url\":\"/subscriptions/{id}/providers/Microsoft.Compute/locations/eastus/usages?api-version=2024-07-01\"}].")] string requests = "",
+        [Description("Optional QueryToolResult query applied to the complete retained result before it is returned, so only needed data comes back, e.g. {\"path\":\"$.value[*]\",\"select\":{\"name\":\"$.name\",\"sku\":\"$.sku.name\"}}. Columnar tables (columns + rows: Cost Management, Log Analytics, CSV) are addressable by column name: {\"path\":\"$.properties.rows[*]\",\"groupBy\":{\"service\":\"$.ServiceName\"},\"aggregates\":[{\"op\":\"sum\",\"path\":\"$.Cost\",\"as\":\"cost\"}],\"sort\":[{\"path\":\"$.cost\",\"direction\":\"desc\"}]}. For a batch the rows are $.results[*] (fields $.index, $.status, $.body...). An invalid query returns the schema instead and does not repeat the request.")] string resultQuery = "",
+        [Description("Maximum pages to follow for a paginated GET, 1-10. Default 5. Use 1 when the first page answers the question.")] string maxPages = "5",
+        [Description("Public web pages only: return only the lines that contain this text, for long documentation, specs or pricing pages.")] string grepFor = "",
+        [Description("Batch only: maximum parallel requests, 1-50, default 20. Batches containing Cost Management /query or /forecast always run one at a time.")] string parallelism = "20",
+        CancellationToken cancellationToken = default)
     {
+        // resultQuery is applied by ProtectedTool after the complete redacted result is retained.
+        _ = resultQuery;
         using var activity = HttpHelper.Telemetry.StartActivity("QueryAzure");
-        activity?.SetTag("azure.method", method);
-        activity?.SetTag("azure.path", path);
-        activity?.SetTag("azure.has_body", !string.IsNullOrWhiteSpace(body));
-        if (!string.IsNullOrWhiteSpace(body))
-            activity?.SetTag("azure.body_length", body.Length);
+        var pages = int.TryParse(maxPages, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPages) ? Math.Clamp(parsedPages, 1, 10) : 5;
+        var single = !string.IsNullOrWhiteSpace(url);
+        if (single == !string.IsNullOrWhiteSpace(requests))
+            return "HTTP 400 BadRequest\nProvide exactly one of url (one request) or requests (a batch). No request was sent.";
+        if (single) return await SendAsync(url, method, body, pages, grepFor, timestamp: true, activity, cancellationToken);
 
-        var token = _tokens.AzureToken;
-        if (string.IsNullOrEmpty(token))
-            return HttpHelper.TokenMissing("AzureToken", activity, "azure");
+        List<BulkRequestItem> items;
+        try { items = ParseBatch(requests); }
+        catch (FormatException exception) { return "HTTP 400 BadRequest\n" + exception.Message + " No request was sent."; }
+        activity?.SetTag("query.batch_size", items.Count);
+        var concurrency = int.TryParse(parallelism, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedParallelism) ? parsedParallelism : 20;
+        return await ExecuteBulkAsync(items, concurrency, stopOnFirstError: false,
+            (item, requestToken) => SendAsync(item.Path, item.Method, item.Body, pages, null, timestamp: false, activity, requestToken),
+            cancellationToken);
+    }
 
-        if (string.IsNullOrWhiteSpace(path) || !path.StartsWith('/'))
+    internal static List<BulkRequestItem> ParseBatch(string requests)
+    {
+        JsonDocument document;
+        try { document = JsonDocument.Parse(requests, LenientJson); }
+        catch (JsonException) { throw new FormatException("requests must be one complete JSON array of {\"method\",\"url\",\"body\"} objects."); }
+        using (document)
         {
-            activity?.SetTag("azure.result", "invalid_path");
-            activity?.SetStatus(ActivityStatusCode.Error, "Invalid path");
-            return $"HTTP 400 BadRequest\nInvalid path: '{path}'. Path must start with /.";
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("requests", out var nested)) root = nested;
+            if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0)
+                throw new FormatException("requests must be a non-empty JSON array.");
+            if (root.GetArrayLength() > 200) throw new FormatException("A batch supports at most 200 requests; split larger work explicitly.");
+            var items = new List<BulkRequestItem>();
+            foreach (var item in root.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) throw new FormatException("Every batch item must be a request object.");
+                string? Field(string name)
+                {
+                    foreach (var property in item.EnumerateObject())
+                        if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                            return property.Value.ValueKind switch
+                            {
+                                JsonValueKind.String => property.Value.GetString(),
+                                JsonValueKind.Null or JsonValueKind.Undefined => null,
+                                _ => property.Value.GetRawText()
+                            };
+                    return null;
+                }
+                items.Add(new BulkRequestItem { Method = Field("method") ?? "GET", Path = Field("url") ?? Field("path") ?? "", Body = Field("body") });
+            }
+            return items;
         }
+    }
 
-        // Scope-prefix preflight: catches the #1 production failure pattern observed in App Insights —
-        // the LLM emitting bare /providers/Microsoft.CostManagement|Consumption|... paths without the
-        // required {scope} prefix (subscriptions / resourceGroups / managementGroups / billingAccounts).
-        // ARM responds 404 InvalidResourceType in that case; we return a precise 400 with the grammar
-        // so the LLM corrects on the next turn instead of burning a round-trip.
-        var scopeError = ValidateScopePrefix(path);
-        if (scopeError is not null)
+    private async Task<string> SendAsync(string? url, string? method, string? body, int maxPages, string? grepFor,
+        bool timestamp, Activity? activity, CancellationToken cancellationToken)
+    {
+        var uri = ResolveTarget(url);
+        if (uri is null)
+            return "HTTP 400 BadRequest\nurl must be an ARM path starting with / or an absolute https:// URL without credentials, fragment or custom port. No request was sent.";
+        var service = Classify(uri);
+        var prefix = service.ToString().ToLowerInvariant();
+        activity?.SetTag("query.service", prefix);
+        var (httpMethod, methodError) = HttpHelper.ResolveMethod(string.IsNullOrWhiteSpace(method) ? "GET" : method, activity, prefix);
+        if (methodError is not null) return methodError;
+        body = string.IsNullOrWhiteSpace(body) ? null : body;
+        return service switch
+        {
+            Service.Arm => await ArmAsync(uri, httpMethod!, body, maxPages, timestamp, activity, cancellationToken),
+            Service.Graph => await GraphAsync(uri, httpMethod!, body, maxPages, timestamp, activity, cancellationToken),
+            Service.LogAnalytics => await LogAnalyticsAsync(uri, httpMethod!, body, timestamp, activity, cancellationToken),
+            Service.Storage => await StorageAsync(uri, httpMethod!, timestamp, activity, cancellationToken),
+            Service.RetailPrices => await RetailAsync(uri, httpMethod!, maxPages, timestamp, activity, cancellationToken),
+            _ => await PublicAsync(uri, httpMethod!, grepFor, timestamp, cancellationToken),
+        };
+    }
+
+    internal static Uri? ResolveTarget(string? url)
+    {
+        var text = url?.Trim() ?? "";
+        if (text.Length == 0 || text.Contains('\\') || text.Contains('#') || text.Any(char.IsControl)) return null;
+        if (text[0] == '/')
+        {
+            if (text.StartsWith("//", StringComparison.Ordinal)) return null;
+            text = "https://" + ArmHost + text;
+        }
+        return Uri.TryCreate(text, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
+            && uri.UserInfo.Length == 0 && uri.IsDefaultPort && uri.IdnHost.Length > 0 ? uri : null;
+    }
+
+    // Credentials are chosen from the exact host only; any other host is a public, credential-free GET.
+    internal static Service Classify(Uri uri) => uri.IdnHost.ToLowerInvariant() switch
+    {
+        ArmHost => Service.Arm,
+        "graph.microsoft.com" => Service.Graph,
+        "api.loganalytics.io" or "api.loganalytics.azure.com" or "api.applicationinsights.io" => Service.LogAnalytics,
+        "prices.azure.com" => Service.RetailPrices,
+        var host when StorageHost().IsMatch(host) => Service.Storage,
+        _ => Service.PublicWeb,
+    };
+
+    [GeneratedRegex(@"^[a-z0-9]{3,24}\.blob\.core\.windows\.net$", RegexOptions.CultureInvariant)]
+    private static partial Regex StorageHost();
+
+    private async Task<string> ArmAsync(Uri uri, HttpMethod method, string? body, int maxPages, bool timestamp,
+        Activity? activity, CancellationToken cancellationToken)
+    {
+        var path = uri.PathAndQuery;
+        activity?.SetTag("azure.method", method.Method);
+        activity?.SetTag("azure.path", path);
+        activity?.SetTag("azure.has_body", body is not null);
+        var token = tokens.AzureToken;
+        if (string.IsNullOrEmpty(token)) return HttpHelper.TokenMissing("AzureToken", activity, "azure");
+
+        // Scope-prefix preflight: bare /providers/Microsoft.CostManagement|Consumption|... paths without a
+        // {scope} prefix return a precise 400 with the grammar instead of an ARM 404 round-trip.
+        if (ValidateScopePrefix(path) is { } scopeError)
         {
             activity?.SetTag("azure.result", "missing_scope");
             activity?.SetStatus(ActivityStatusCode.Error, "Missing scope prefix");
             return scopeError;
         }
-
-        var (httpMethod, methodError) = HttpHelper.ResolveMethod(method, activity, "azure");
-        if (methodError is not null) return methodError;
-        if (httpMethod == HttpMethod.Post)
+        if (method == HttpMethod.Post)
         {
             body = CanonicalJsonBody(body);
-            var postError = ValidateReadOnlyPostPath(path, activity);
-            if (postError is not null) return postError;
-            var queryError = ValidateQueryBody(path, body);
-            if (queryError is not null) return queryError;
+            path = CanonicalResourceGraphPath(path, body);
+            if (ValidateReadOnlyPostPath(path, activity) is { } postError) return postError;
+            if (ValidateQueryBody(path, body) is { } queryError) return queryError;
         }
-
-        var hasBody = !string.IsNullOrWhiteSpace(body);
-        return await HttpHelper.SendWithRetryAsync(
-            $"https://management.azure.com{path}",
-            token, activity, "azure",
-            method: httpMethod,
-            jsonBody: hasBody && httpMethod != HttpMethod.Get ? body : null,
-            includeTimestamp: true);
+        var url = "https://" + ArmHost + path;
+        var sendBody = method == HttpMethod.Get ? null : body;
+        var response = await HttpHelper.SendWithRetryAsync(url, token, activity, "azure", method,
+            sendBody, timestamp, cancellationToken: cancellationToken);
+        string? requestedVersion = null, usedVersion = null;
+        if ((method == HttpMethod.Get || method == HttpMethod.Post) && SupportedApiVersion(path, response) is { } supported)
+        {
+            var correctedPath = WithApiVersion(path, supported);
+            var corrected = await HttpHelper.SendWithRetryAsync("https://" + ArmHost + correctedPath, token, activity, "azure", method,
+                sendBody, timestamp, cancellationToken: cancellationToken);
+            if (corrected.StartsWith("HTTP 2", StringComparison.Ordinal))
+            {
+                requestedVersion = Uri.UnescapeDataString(ApiVersionParameter().Match(path).Groups[1].Value);
+                usedVersion = supported;
+                response = corrected;
+                uri = new Uri("https://" + ArmHost + correctedPath);
+                activity?.SetTag("azure.api_version_corrected", supported);
+            }
+        }
+        var result = method == HttpMethod.Get
+            ? await PaginateAsync(response, uri, maxPages, next => HttpHelper.SendWithRetryAsync(next.AbsoluteUri, token, activity, "azure",
+                HttpMethod.Get, cancellationToken: cancellationToken))
+            : response;
+        return usedVersion is null ? result : AnnotateApiVersion(result, requestedVersion!, usedVersion);
     }
+
+    private async Task<string> GraphAsync(Uri uri, HttpMethod method, string? body, int maxPages, bool timestamp,
+        Activity? activity, CancellationToken cancellationToken)
+    {
+        activity?.SetTag("graph.method", method.Method);
+        activity?.SetTag("graph.path", uri.AbsolutePath);
+        var token = tokens.GraphToken;
+        if (string.IsNullOrEmpty(token)) return HttpHelper.TokenMissing("GraphToken", activity, "graph");
+        if (!uri.AbsolutePath.StartsWith("/v1.0/", StringComparison.OrdinalIgnoreCase) && !uri.AbsolutePath.StartsWith("/beta/", StringComparison.OrdinalIgnoreCase))
+            return "HTTP 400 BadRequest\nMicrosoft Graph paths start with /v1.0/ or /beta/. No request was sent.";
+        var response = await HttpHelper.SendWithRetryAsync(uri.AbsoluteUri, token, activity, "graph", method,
+            method == HttpMethod.Get ? null : body, timestamp, cancellationToken: cancellationToken);
+        if (IsReportServiceAbsent(uri.AbsolutePath, response)) return ReportServiceAbsent(response, activity);
+        if (method == HttpMethod.Get)
+            response = await PaginateAsync(response, uri, maxPages, next => HttpHelper.SendWithRetryAsync(next.AbsoluteUri, token, activity, "graph",
+                HttpMethod.Get, cancellationToken: cancellationToken));
+        return ResponseShaper.Normalize(response);
+    }
+
+    // Graph answers report functions with 404 UnknownTenantId when Microsoft 365 usage reporting is not
+    // provisioned for the tenant. That is a determinate source state, not a failed request.
+    internal static bool IsReportServiceAbsent(string path, string result) =>
+        result.StartsWith("HTTP 404", StringComparison.Ordinal)
+        && result.Contains("UnknownTenantId", StringComparison.Ordinal)
+        && path.Contains("/reports/", StringComparison.OrdinalIgnoreCase);
+
+    internal static string ReportServiceAbsent(string result, Activity? activity)
+    {
+        activity?.SetTag("graph.result", "report_service_absent");
+        var retrieved = result.Split('\n').FirstOrDefault(line => line.StartsWith(ResponseShaper.TimestampPrefix, StringComparison.Ordinal))?.Trim();
+        return "HTTP 200 OK\n" + (retrieved is null ? "" : retrieved + "\n") +
+            """{"reportServiceProvisioned":false,"sourceStatus":404,"sourceCode":"UnknownTenantId","meaning":"Microsoft 365 usage reporting has no data service for this tenant, so no per-user activity rows exist from this source. Activity for licensed users is unknown from reports; combine with subscribedSkus/assignedLicenses to state what is determinate (for example zero assigned seats means zero licensed users to be active or inactive)."}""";
+    }
+
+    private async Task<string> LogAnalyticsAsync(Uri uri, HttpMethod method, string? body, bool timestamp,
+        Activity? activity, CancellationToken cancellationToken)
+    {
+        activity?.SetTag("la.host", uri.Host);
+        activity?.SetTag("la.query_length", body?.Length ?? 0);
+        var token = tokens.LogAnalyticsToken;
+        if (string.IsNullOrEmpty(token)) return HttpHelper.TokenMissing("LogAnalyticsToken", activity, "la");
+        if (method != HttpMethod.Get && method != HttpMethod.Post)
+            return "HTTP 405 MethodNotAllowed\nLog Analytics and Application Insights queries use GET or POST. No request was sent.";
+        if (!uri.AbsolutePath.StartsWith("/v1/", StringComparison.Ordinal))
+            return "HTTP 400 BadRequest\nUse POST /v1/workspaces/{customerId}/query or /v1/apps/{appId}/query with body {\"query\":\"<KQL>\",\"timespan\":\"P1D\"}. No request was sent.";
+        return await HttpHelper.SendWithRetryAsync(uri.AbsoluteUri, token, activity, "la", method,
+            method == HttpMethod.Post ? CanonicalJsonBody(body) ?? "{}" : null, timestamp, cancellationToken: cancellationToken);
+    }
+
+    private async Task<string> StorageAsync(Uri uri, HttpMethod method, bool timestamp, Activity? activity, CancellationToken cancellationToken)
+    {
+        activity?.SetTag("storage.account", uri.Host.Split('.')[0]);
+        activity?.SetTag("storage.path", uri.AbsolutePath);
+        var token = tokens.StorageToken;
+        if (string.IsNullOrEmpty(token)) return HttpHelper.TokenMissing("StorageToken", activity, "storage");
+        if (method != HttpMethod.Get)
+            return "HTTP 405 MethodNotAllowed\nBlob Storage is read-only here: GET lists or reads blobs. No request was sent.";
+        var listing = Regex.IsMatch(uri.Query, @"[?&]comp=list", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.UserAgent.ParseAdd("FinOps-Dashboard/1.0");
+        request.Headers.TryAddWithoutValidation("x-ms-version", StorageVersion);
+        if (!listing) request.Headers.TryAddWithoutValidation("x-ms-range", $"bytes=0-{MaxStorageBytes - 1}");
+        using var response = await StorageHttp.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
+        var (text, bytes, capped) = await ReadBoundedAsync(response.Content, listing ? 16_000_000 : MaxStorageBytes, cancellation.Token);
+        var total = response.Content.Headers.ContentRange?.Length;
+        var truncated = capped || total > bytes;
+        var status = (int)response.StatusCode == 206 && !truncated ? "HTTP 200 OK" : $"HTTP {(int)response.StatusCode} {response.StatusCode}";
+        activity?.SetTag("storage.status_code", (int)response.StatusCode);
+        activity?.SetTag("storage.bytes", bytes);
+        activity?.SetTag("storage.truncated", truncated);
+        var result = status + "\n" + (timestamp ? ResponseShaper.TimestampLine() : "");
+        if (!response.IsSuccessStatusCode) return result + (text.Length > 4000 ? text[..4000] : text);
+        var shaped = ResponseShaper.Normalize(result + text, truncated);
+        if (!shaped.EndsWith(text, StringComparison.Ordinal) || !truncated && IsJson(text)) return shaped;
+        // Other bodies (truncated JSON, text, binary formats such as Parquet) are never inlined whole.
+        const int maxText = 100_000;
+        var shown = text.Length > maxText ? text[..maxText] : text;
+        return result + shown + (truncated || shown.Length < text.Length
+            ? $"\n\n[PARTIAL RESULT: showing {shown.Length} characters of a {(total is { } length ? length.ToString(CultureInfo.InvariantCulture) : "larger")}-byte blob. Aggregate from an export upload or a narrower blob before a complete-coverage claim.]"
+            : "");
+    }
+
+    private static bool IsJson(string text)
+    {
+        var lead = text.AsSpan().TrimStart();
+        if (lead.IsEmpty || lead[0] is not ('{' or '[')) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            return true;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    private static async Task<(string Text, int Bytes, bool Capped)> ReadBoundedAsync(HttpContent content, int maxBytes, CancellationToken cancellationToken)
+    {
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[65_536];
+        int read;
+        while (buffer.Length < maxBytes && (read = await stream.ReadAsync(chunk.AsMemory(0, (int)Math.Min(chunk.Length, maxBytes - buffer.Length)), cancellationToken)) > 0)
+            buffer.Write(chunk, 0, read);
+        var capped = buffer.Length >= maxBytes && await stream.ReadAsync(chunk.AsMemory(0, 1), cancellationToken) > 0;
+        return (Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length), (int)buffer.Length, capped);
+    }
+
+    private static async Task<string> RetailAsync(Uri uri, HttpMethod method, int maxPages, bool timestamp,
+        Activity? activity, CancellationToken cancellationToken)
+    {
+        if (method != HttpMethod.Get)
+            return "HTTP 405 MethodNotAllowed\nThe Retail Prices API is GET only. No request was sent.";
+        if (!uri.AbsolutePath.TrimEnd('/').Equals("/api/retail/prices", StringComparison.OrdinalIgnoreCase))
+            return "HTTP 400 BadRequest\nUse https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=<OData>. No request was sent.";
+        var query = QueryHelpers.ParseQuery(uri.Query);
+        var filter = query.FirstOrDefault(pair => pair.Key.Equals("$filter", StringComparison.OrdinalIgnoreCase)).Value.ToString();
+        if (string.IsNullOrWhiteSpace(filter))
+            return "HTTP 400 BadRequest\nAdd an OData $filter; the unfiltered catalogue has millions of rows. No request was sent.";
+        var currency = query.FirstOrDefault(pair => pair.Key.Equals("currencyCode", StringComparison.OrdinalIgnoreCase)).Value.ToString().Trim('\'', '"', ' ').ToUpperInvariant();
+        if (currency.Length == 0) currency = "USD";
+        if (currency.Length != 3 || !currency.All(char.IsAsciiLetter))
+            return "HTTP 400 BadRequest\ncurrencyCode must be a three-letter ISO code. No request was sent.";
+
+        JsonArray items = [];
+        var next = BuildRetailUrl(query, filter, currency);
+        var pages = 0;
+        for (; next is not null && pages < maxPages; pages++)
+        {
+            var (status, reason, body) = await FetchRetailPageAsync(next, activity, cancellationToken);
+            if (status is < 200 or >= 300)
+                return $"HTTP {status} {reason}\n{(body.Length > 800 ? body[..800] : body)}";
+            var root = JsonNode.Parse(body);
+            if (root?["Items"] is JsonArray pageItems)
+                foreach (var item in pageItems.ToArray())
+                {
+                    pageItems.Remove(item);
+                    items.Add(item);
+                }
+            next = root?["NextPageLink"] is JsonValue link && link.TryGetValue<string>(out var value)
+                && value.StartsWith(RetailBase, StringComparison.OrdinalIgnoreCase) ? value : null;
+        }
+        activity?.SetTag("pricing.pages", pages);
+        activity?.SetTag("pricing.rows", items.Count);
+        return "HTTP 200 OK\n" + (timestamp ? ResponseShaper.TimestampLine() : "") + new JsonObject
+        {
+            ["source"] = "Azure Retail Prices API",
+            ["retrievedAtUtc"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+            ["filter"] = filter,
+            ["currencyCode"] = currency,
+            ["pages"] = pages,
+            ["complete"] = next is null,
+            ["count"] = items.Count,
+            ["Items"] = items,
+        }.ToJsonString();
+    }
+
+    // Rebuilds the pinned origin with the model's own filter and options; the host owns paging ($top/$skip).
+    internal static string BuildRetailUrl(IDictionary<string, Microsoft.Extensions.Primitives.StringValues> query, string filter, string currency)
+    {
+        var parameters = new List<KeyValuePair<string, string?>>
+        {
+            new("api-version", query.FirstOrDefault(pair => pair.Key.Equals("api-version", StringComparison.OrdinalIgnoreCase)).Value.ToString() is { Length: > 0 } version ? version : "2023-01-01-preview"),
+            new("currencyCode", currency),
+            new("$filter", filter),
+        };
+        foreach (var pair in query)
+            if (pair.Key.ToLowerInvariant() is not ("api-version" or "currencycode" or "$filter" or "$top" or "$skip"))
+                parameters.Add(new(pair.Key, pair.Value.ToString()));
+        return QueryHelpers.AddQueryString(RetailBase, parameters);
+    }
+
+    private static async Task<(int Status, string Reason, string Body)> FetchRetailPageAsync(string url, Activity? activity, CancellationToken cancellationToken)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
+        for (var attempt = 1; ; attempt++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.UserAgent.ParseAdd("FinOps-Dashboard/1.0");
+            using var response = await RetailHttp.SendAsync(request, cancellation.Token);
+            var body = await response.Content.ReadAsStringAsync(cancellation.Token);
+            var status = (int)response.StatusCode;
+            if (status is not (429 or >= 500) || attempt == RetailAttempts)
+                return (status, response.ReasonPhrase ?? response.StatusCode.ToString(), body);
+
+            var waitSeconds = Math.Max(1, response.Headers.RetryAfter?.Delta?.TotalSeconds
+                ?? Math.Min(Math.Pow(2, attempt) + Random.Shared.NextDouble(), 30));
+            activity?.SetTag($"pricing.retry_{attempt}", $"{status}, waiting {waitSeconds:F0}s");
+            if (Activity.Current?.GetBaggageItem("finops.turn.id") is { } turnKey
+                && HttpHelper.RetryReporters.TryGetValue(turnKey, out var report))
+            {
+                try { await report(new(attempt, waitSeconds, url, "pricing", status)); }
+                catch (Exception ex) { HttpHelper.Logger?.LogWarning(ex, "SSE cooling_down emit failed for pricing attempt={Attempt}", attempt); }
+            }
+            await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellation.Token);
+        }
+    }
+
+    private static async Task<string> PublicAsync(Uri uri, HttpMethod method, string? grepFor, bool timestamp, CancellationToken cancellationToken)
+    {
+        if (method != HttpMethod.Get)
+            return "HTTP 405 MethodNotAllowed\nPublic web requests are GET only and never carry credentials. No request was sent.";
+        if (PublicWebReader.IsBlockedHost(uri))
+            return "HTTP 403 Forbidden\nPrivate, loopback and link-local hosts are not reachable. No request was sent.";
+        var cancellation = ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cancellation);
+        return await PublicWebReader.FetchPageAsync(PublicWebReader.Http, PublicWebReader.Canonicalize(uri),
+            string.IsNullOrWhiteSpace(grepFor) ? null : grepFor, PublicWebReader.MaxOutputChars, linked.Token, timestamp);
+    }
+
+    /// <summary>
+    /// Follows same-origin nextLink/@odata.nextLink pages of a successful GET, merging their value arrays.
+    /// Adds pagesRead and complete only when a next link exists; a failed later page keeps earlier pages
+    /// and reports partial coverage instead of failing the call.
+    /// </summary>
+    internal static async Task<string> PaginateAsync(string response, Uri origin, int maxPages, Func<Uri, Task<string>> fetch)
+    {
+        var (preamble, body) = ResponseShaper.SplitPreamble(response);
+        if (!preamble.StartsWith("HTTP 2", StringComparison.Ordinal) || !body.StartsWith('{')) return response;
+        JsonObject? root;
+        try { root = JsonNode.Parse(body) as JsonObject; }
+        catch (JsonException) { return response; }
+        if (root?["value"] is not JsonArray items) return response;
+        var linkName = new[] { "nextLink", "@odata.nextLink" }.FirstOrDefault(name => NextLink(root, name, origin) is not null);
+        if (linkName is null) return response;
+        var next = NextLink(root, linkName, origin);
+        var pages = 1;
+        string? failure = null;
+        while (next is not null && pages < maxPages)
+        {
+            var page = await fetch(next);
+            var (pagePreamble, pageBody) = ResponseShaper.SplitPreamble(page);
+            JsonObject? pageRoot = null;
+            if (pagePreamble.StartsWith("HTTP 2", StringComparison.Ordinal))
+                try { pageRoot = JsonNode.Parse(pageBody) as JsonObject; }
+                catch (JsonException) { }
+            if (pageRoot?["value"] is not JsonArray pageItems)
+            {
+                failure = page.Split('\n')[0];
+                break;
+            }
+            foreach (var item in pageItems.ToArray())
+            {
+                pageItems.Remove(item);
+                items.Add(item);
+            }
+            pages++;
+            next = NextLink(pageRoot, linkName, origin);
+        }
+        root[linkName] = next?.AbsoluteUri;
+        root["pagesRead"] = pages;
+        root["complete"] = next is null;
+        if (failure is not null) root["pageFailure"] = failure + " on a later page; earlier pages are included and coverage is partial.";
+        return preamble + root.ToJsonString();
+    }
+
+    private static Uri? NextLink(JsonObject root, string name, Uri origin) =>
+        root[name] is JsonValue value && value.TryGetValue<string>(out var text)
+        && Uri.TryCreate(text, UriKind.Absolute, out var link) && link.Scheme == Uri.UriSchemeHttps && link.IsDefaultPort
+        && link.UserInfo.Length == 0 && string.Equals(link.IdnHost, origin.IdnHost, StringComparison.OrdinalIgnoreCase) ? link : null;
 
     internal static JsonElement ReadCostSourceEvidence(string response)
     {
@@ -211,6 +598,8 @@ public class AzureQueryTools
             $@"^{subscriptionScope}/providers/Microsoft\.Advisor/recommendations/summarize$",
             // Read-only placement-likelihood diagnostic; creates no resources.
             @"^/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/providers/Microsoft\.Compute/locations/[a-z0-9]+/placementScores/spot/generate$",
+            // Diagnostic probe from an existing VM; the body is restricted by ValidateConnectivityBody.
+            $@"^{ConnectivityCheckPath}$",
         ];
         if (allowedPatterns.Any(pattern => Regex.IsMatch(
                 clean,
@@ -238,7 +627,101 @@ public class AzureQueryTools
             using var lenient = JsonDocument.Parse(body, LenientJson);
             return JsonSerializer.Serialize(lenient.RootElement);
         }
-        catch (JsonException) { return body; }
+        catch (JsonException) { }
+        // Read-only query bodies written as escaped strings often lose only their final closing brace.
+        try
+        {
+            using var closed = JsonDocument.Parse(body.TrimEnd() + "}", LenientJson);
+            if (closed.RootElement.ValueKind == JsonValueKind.Object) return JsonSerializer.Serialize(closed.RootElement);
+        }
+        catch (JsonException) { }
+        return body;
+    }
+
+    [GeneratedRegex(@"[?&]api-version=([^&#]*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ApiVersionParameter();
+
+    [GeneratedRegex(@"^/subscriptions/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(/providers/Microsoft\.ResourceGraph/resources(?:\?.*)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SubscriptionScopedResourceGraph();
+
+    /// <summary>
+    /// Resource Graph takes its scope from the body, so a subscription path prefix that names a subscription
+    /// already listed in the body's subscriptions array is dropped. Any other prefix is left for the allowlist to reject.
+    /// </summary>
+    internal static string CanonicalResourceGraphPath(string path, string? body)
+    {
+        var match = SubscriptionScopedResourceGraph().Match(path);
+        if (!match.Success || string.IsNullOrWhiteSpace(body)) return path;
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("subscriptions", out var subscriptions)
+                && subscriptions.ValueKind == JsonValueKind.Array
+                && subscriptions.EnumerateArray().Any(subscription => subscription.ValueKind == JsonValueKind.String
+                    && string.Equals(subscription.GetString(), match.Groups[1].Value, StringComparison.OrdinalIgnoreCase)))
+                return match.Groups[2].Value;
+        }
+        catch (JsonException) { }
+        return path;
+    }
+
+    [GeneratedRegex(@"supported (?:api-)?versions are '([^']+)'", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SupportedVersionList();
+
+    [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}(-[a-z]+)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ApiVersionValue();
+
+    /// <summary>
+    /// When ARM rejects the requested api-version and names the supported ones, returns the newest stable
+    /// listed version (or newest preview when no stable exists) so a read can be retried once. Otherwise null.
+    /// </summary>
+    internal static string? SupportedApiVersion(string path, string response)
+    {
+        if (!response.StartsWith("HTTP 400", StringComparison.Ordinal) && !response.StartsWith("HTTP 404", StringComparison.Ordinal)) return null;
+        var requested = ApiVersionParameter().Match(path);
+        if (!requested.Success) return null;
+        string? code, message;
+        try
+        {
+            using var document = JsonDocument.Parse(ResponseShaper.SplitPreamble(response).Body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object) return null;
+            code = error.TryGetProperty("code", out var codeValue) && codeValue.ValueKind == JsonValueKind.String ? codeValue.GetString() : null;
+            message = error.TryGetProperty("message", out var messageValue) && messageValue.ValueKind == JsonValueKind.String ? messageValue.GetString() : null;
+        }
+        catch (JsonException) { return null; }
+        if (code is null || message is null
+            || !(code is "InvalidResourceType" or "NoRegisteredProviderFound" || code.Contains("ApiVersion", StringComparison.OrdinalIgnoreCase)))
+            return null;
+        var list = SupportedVersionList().Match(message);
+        if (!list.Success) return null;
+        var versions = list.Groups[1].Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(version => ApiVersionValue().IsMatch(version)).ToList();
+        var stable = versions.Where(version => version.Length == 10).ToList();
+        var chosen = (stable.Count > 0 ? stable : versions).Max(StringComparer.Ordinal);
+        return chosen is null || chosen.Equals(Uri.UnescapeDataString(requested.Groups[1].Value), StringComparison.OrdinalIgnoreCase)
+            ? null
+            : chosen;
+    }
+
+    internal static string WithApiVersion(string path, string version) =>
+        ApiVersionParameter().Replace(path, match => match.Value[..(match.Value.IndexOf('=') + 1)] + Uri.EscapeDataString(version), 1);
+
+    /// <summary>Adds a leading root _apiVersion note to a JSON object body; other bodies are unchanged.</summary>
+    internal static string AnnotateApiVersion(string response, string requested, string used)
+    {
+        var (preamble, body) = ResponseShaper.SplitPreamble(response);
+        var trimmed = body.TrimStart();
+        if (!trimmed.StartsWith('{')) return response;
+        var note = JsonSerializer.Serialize(new Dictionary<string, string>
+        {
+            ["requested"] = requested,
+            ["used"] = used,
+            ["reason"] = "ARM rejected the requested api-version for this resource type; the newest supported version (stable preferred) answered.",
+        });
+        var rest = trimmed[1..].TrimStart();
+        return preamble + "{\"_apiVersion\":" + note + (rest.StartsWith('}') ? "" : ",") + rest;
     }
 
     internal static string? ValidateCostQueryBody(string path, string? body)
@@ -271,6 +754,8 @@ public class AzureQueryTools
     {
         var queryIndex = path.IndexOf('?');
         var requestPath = (queryIndex < 0 ? path : path[..queryIndex]).TrimEnd('/');
+        if (Regex.IsMatch(requestPath, $"^{ConnectivityCheckPath}$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return ValidateConnectivityBody(body);
         if (!requestPath.Equals("/providers/Microsoft.ResourceGraph/resources", StringComparison.OrdinalIgnoreCase))
             return ValidateCostQueryBody(path, body);
 
@@ -299,6 +784,39 @@ public class AzureQueryTools
         }
     }
 
+    private const string ConnectivityCheckPath =
+        @"/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/resourceGroups/[^/?#%]+/providers/Microsoft\.Network/networkWatchers/[^/?#%]+/connectivityCheck";
+
+    [GeneratedRegex(@"^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/\\?#%]+/providers/Microsoft\.Compute/virtualMachines/[^/\\?#%]+$", RegexOptions.IgnoreCase)]
+    private static partial Regex VirtualMachineId();
+
+    // Only a probe from an existing VM to one destination: no other source types, captures or settings.
+    internal static string? ValidateConnectivityBody(string? body)
+    {
+        const string error = "HTTP 400 BadRequest\nconnectivityCheck body must be {\"source\":{\"resourceId\":\"<existing VM resource ID>\"},\"destination\":{\"address\":\"<host or IP>\",\"port\":<1-65535>},\"protocol\":\"Tcp\"}. No request was sent.";
+        try
+        {
+            using var document = JsonDocument.Parse(body ?? "");
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || root.EnumerateObject().Any(property => property.Name is not ("source" or "destination" or "protocol" or "preferredIPVersion" or "protocolConfiguration"))
+                || !root.TryGetProperty("source", out var source) || source.ValueKind != JsonValueKind.Object
+                || source.EnumerateObject().Any(property => property.Name is not ("resourceId" or "port"))
+                || !source.TryGetProperty("resourceId", out var vm) || vm.ValueKind != JsonValueKind.String
+                || !VirtualMachineId().IsMatch(vm.GetString() ?? "")
+                || !root.TryGetProperty("destination", out var destination) || destination.ValueKind != JsonValueKind.Object
+                || destination.EnumerateObject().Any(property => property.Name is not ("address" or "resourceId" or "port"))
+                || !destination.TryGetProperty("address", out _) && !destination.TryGetProperty("resourceId", out _))
+                return error;
+            if (destination.TryGetProperty("port", out var port)
+                && !(port.ValueKind == JsonValueKind.Number && port.TryGetInt32(out var number) && number is >= 1 and <= 65535
+                    || port.ValueKind == JsonValueKind.String && int.TryParse(port.GetString(), out number) && number is >= 1 and <= 65535))
+                return error;
+            return null;
+        }
+        catch (JsonException) { return error; }
+    }
+
     private static string BlockMutatingPost(Activity? activity)
     {
         activity?.SetTag("azure.result", "blocked_mutating_post");
@@ -306,52 +824,6 @@ public class AzureQueryTools
         return "HTTP 403 Forbidden\nThis agent only performs allowlisted read-only Azure POST operations. Mutating actions such as start, restart, deallocate, power off, or return are blocked.";
     }
 
-    private async Task<string> BulkAzureRequest(
-        [Description("JSON array of 1-200 {\"method\",\"path\",\"body\"} objects; body is a JSON string.")] string requestsJson,
-        [Description("Max parallel requests in flight. Default 20, max 50. Request 1 for Cost Management; any batch containing /query or /forecast is forced to 1 by the host.")] int parallelism = 20,
-        [Description("Stop the whole bulk run on the first failure. Default false (continue and report all failures). A final Cost Management 429 always stops the batch regardless of this setting.")] bool stopOnFirstError = false,
-        CancellationToken cancellationToken = default)
-    {
-        using var activity = HttpHelper.Telemetry.StartActivity("BulkAzureRequest");
-        var token = _tokens.AzureToken;
-        if (string.IsNullOrEmpty(token))
-            return HttpHelper.TokenMissing("AzureToken", activity, "bulk");
-
-        if (string.IsNullOrWhiteSpace(requestsJson))
-            return "HTTP 400 BadRequest\nrequestsJson is empty.";
-
-        List<BulkRequestItem>? items;
-        try
-        {
-            items = JsonSerializer.Deserialize<List<BulkRequestItem>>(
-                requestsJson,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        }
-        catch (JsonException ex)
-        {
-            return $"HTTP 400 BadRequest\nInvalid requestsJson: {ex.Message}";
-        }
-        if (items is null || items.Count == 0)
-            return "HTTP 400 BadRequest\nrequestsJson must be a non-empty JSON array.";
-        if (items.Any(item => item is null))
-            return "HTTP 400 BadRequest\nEvery batch item must be a request object. No request was sent.";
-
-        if (items.Count > 200) return "HTTP 400 BadRequest\nA batch supports at most 200 requests; split larger work explicitly.";
-        return await ExecuteBulkAsync(items, parallelism, stopOnFirstError, async (item, requestToken) =>
-        {
-            var (method, methodError) = HttpHelper.ResolveMethod(item.Method, activity, "bulk");
-            if (methodError is not null) return methodError;
-            if (string.IsNullOrWhiteSpace(item.Path) || !item.Path.StartsWith('/') || item.Path.StartsWith("//")
-                || item.Path.Contains('#') || item.Path.Contains('\\')) return "HTTP 400 BadRequest\nInvalid ARM path.";
-            if (ValidateScopePrefix(item.Path) is { } scopeError) return scopeError;
-            if (method == HttpMethod.Post && ValidateReadOnlyPostPath(item.Path, activity) is { } postError) return postError;
-            var body = method == HttpMethod.Post ? CanonicalJsonBody(item.Body) : item.Body;
-            if (method == HttpMethod.Post && ValidateQueryBody(item.Path, body) is { } queryError) return queryError;
-            return await HttpHelper.SendWithRetryAsync($"https://management.azure.com{item.Path}", token, activity, "bulk",
-                method: method, jsonBody: method == HttpMethod.Get ? null : body,
-                cancellationToken: requestToken);
-        }, cancellationToken);
-    }
 
     internal static async Task<string> ExecuteBulkAsync(IReadOnlyList<BulkRequestItem> items, int parallelism, bool stopOnFirstError,
         Func<BulkRequestItem, CancellationToken, Task<string>> send, CancellationToken cancellationToken)
@@ -427,6 +899,7 @@ public class AzureQueryTools
             cancelled = results.Count(item => item!.Outcome == "cancelled"),
             stopped = Volatile.Read(ref stop) != 0,
             complete = results.All(item => item is { Outcome: "succeeded", Partial: false }),
+            retrievedAtUtc = DateTimeOffset.UtcNow,
             results
         }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
     }

@@ -44,11 +44,11 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
             var identifier = resultText.Split(':').ElementAtOrDefault(1);
             if (owner is not null && identifier is not null && ArtifactStore.Default.Find(identifier, owner.Value) is not null) turn?.ArtifactIds.Enqueue(identifier);
         }
-        if (result is string text) return PrepareResult(text, evidence);
+        if (result is string text) return PrepareResult(text, evidence, arguments);
         if (result is JsonElement { ValueKind: JsonValueKind.String } scalar)
-            return JsonSerializer.SerializeToElement(PrepareResult(scalar.GetString() ?? "", evidence));
+            return JsonSerializer.SerializeToElement(PrepareResult(scalar.GetString() ?? "", evidence, arguments));
         if (result is JsonElement element)
-            return JsonSerializer.Deserialize<JsonElement>(PrepareResult(element.GetRawText(), evidence));
+            return JsonSerializer.Deserialize<JsonElement>(PrepareResult(element.GetRawText(), evidence, arguments));
         return result;
     }
 
@@ -83,25 +83,70 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         }
     }
 
-    private string PrepareResult(string text, (bool Success, bool Fresh, bool Partial) evidence)
+    private string PrepareResult(string text, (bool Success, bool Fresh, bool Partial) evidence, AIFunctionArguments arguments)
     {
         var redacted = SensitiveContent.Redact(text);
-        if (owner is null || sessionId is null || !evidence.Success || !EvidenceTools.Contains(Name)
+        if (owner is null || sessionId is null || !EvidenceTools.Contains(Name)
             || redacted.Contains("__HTML_READY__:", StringComparison.Ordinal) || redacted.Contains("__SCRIPT_READY__:", StringComparison.Ordinal)) return redacted;
         var large = System.Text.Encoding.UTF8.GetByteCount(redacted) > ToolResultStore.InlineBytes;
-        if (Name == "BulkAzureRequest" && large && redacted.Contains("\"operationId\"", StringComparison.Ordinal)) return redacted;
+        var batch = Name == "QueryAzure" && !string.IsNullOrWhiteSpace(Argument(arguments, "requests"));
+        var operation = redacted.Contains("\"operationId\"", StringComparison.Ordinal);
+        // A single failed call stays verbatim; a large failed batch keeps its successful items queryable.
+        if (!evidence.Success && !(batch && large)) return redacted;
+        // Approval proposals and accepted operations must reach the UI unchanged.
+        if (batch && large && operation) return redacted;
         var entry = ToolResultStore.Default.Retain(owner.Value, sessionId, redacted,
             new(Name, DateTimeOffset.UtcNow, evidence.Success, evidence.Fresh, evidence.Partial, ""));
         if (entry is null) return redacted;
+        if (!evidence.Success) return JsonSerializer.Serialize(ToolResultStore.Describe(entry, failedResults: FailedItems(entry.Data)));
+        var resultQuery = Name == "QueryAzure" ? Argument(arguments, "resultQuery") : null;
+        if (!string.IsNullOrWhiteSpace(resultQuery) && !operation)
+        {
+            var output = ToolResultQueryTools.Execute(entry, resultQuery, ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
+            if (!output.StartsWith("Error", StringComparison.Ordinal)) return output;
+            var problem = "resultQuery was not applied: " + output["Error: ".Length..];
+            return large ? JsonSerializer.Serialize(ToolResultStore.Describe(entry, problem)) : ToolResultStore.AnnotateInline(redacted, entry, problem);
+        }
         return large ? JsonSerializer.Serialize(ToolResultStore.Describe(entry)) : ToolResultStore.AnnotateInline(redacted, entry);
     }
 
-    private static readonly HashSet<string> EvidenceTools =
-    [
-        "QueryAzure", "QueryGraph", "QueryLogAnalytics", "BulkAzureRequest", "GetAzureRetailPricing",
-        "QueryUploadedFile", "ReadCostExportBlob", "ListCostExportBlobs", "FetchPublicWebPage",
-        "CheckVmConnectivity", "GetOperationStatus",
-    ];
+    private static string? Argument(AIFunctionArguments arguments, string name) =>
+        arguments.TryGetValue(name, out var value) ? value switch
+        {
+            string text => text,
+            JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
+            JsonElement { ValueKind: JsonValueKind.Object or JsonValueKind.Array } element => element.GetRawText(),
+            null => null,
+            var other => other.ToString()
+        } : null;
+
+    private static List<object> FailedItems(JsonElement data)
+    {
+        var failed = new List<object>();
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("results", out var results) || results.ValueKind != JsonValueKind.Array) return failed;
+        foreach (var item in results.EnumerateArray())
+        {
+            if (failed.Count == 20) break;
+            var outcome = item.TryGetProperty("outcome", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+            if (outcome is "succeeded" or "accepted" or "awaitingApproval" or "inProgress") continue;
+            var error = item.TryGetProperty("error", out var message) && message.ValueKind == JsonValueKind.String ? message.GetString() : null;
+            if (error is null && item.TryGetProperty("body", out var body))
+            {
+                var raw = body.ValueKind == JsonValueKind.String ? body.GetString() ?? "" : body.GetRawText();
+                error = raw.Length > 300 ? raw[..300] : raw;
+            }
+            failed.Add(new
+            {
+                index = item.TryGetProperty("index", out var index) ? (object?)index.Clone() : null,
+                status = item.TryGetProperty("status", out var status) ? (object?)status.Clone() : null,
+                outcome,
+                error = error ?? outcome ?? "failed"
+            });
+        }
+        return failed;
+    }
+
+    private static readonly HashSet<string> EvidenceTools = ["QueryAzure", "QueryUploadedFile", "GetOperationStatus"];
 
     internal static (bool Success, bool Fresh, bool Partial) InspectEvidence(string text)
     {

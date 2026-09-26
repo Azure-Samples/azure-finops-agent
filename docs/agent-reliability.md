@@ -136,7 +136,7 @@ The descriptive review classified 25 histories as pass, 38 partial, 16 blocked, 
 | Chart/schema rejection | Canonical `type` with a guarded legacy `chart` adapter; documented optional inputs have real defaults. Real SDK/CLI and omitted-argument tests cover the boundary. |
 | Pricing rows hidden by verbose output | Global top-N selection happens after pagination and within compatible variants. Facets omit irrelevant identifiers; ranking/detail completeness and volume thresholds remain explicit. |
 | Unsupported Graph query options and stale report guidance | Endpoint-specific preflight and current Copilot report routes/response formats replace generic query-option guessing. |
-| Copilot reports too large for model context | Raw `QueryGraph` report calls can be retained and summarized with `QueryToolResult`; malformed, duplicate, mixed-period and mixed-date reports fail explicitly. |
+| Copilot reports too large for model context | Raw Microsoft Graph report calls through `QueryAzure` can be retained and summarized with `QueryToolResult`; malformed, duplicate, mixed-period and mixed-date reports fail explicitly. |
 | Reservation-utilization scope errors | Single and bulk paths require discovered billing/reservation scope; guidance no longer prescribes a provider-root call or cycles versions to repair it. |
 | Currency/unit corruption | Calculator currency matching, preserved pricing bands and explicit source-currency/unit instructions; no inferred FX or taxes. |
 | Incompatible report and inventory cohorts | Activity classification uses the report's own date and identities. Current assignments must not be subtracted from older aggregate activity. |

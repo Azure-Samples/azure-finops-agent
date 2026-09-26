@@ -8,22 +8,25 @@ Perform a complete security audit of this agent to verify it is strictly read-on
 
 Scan `AzureQueryTools.cs` and confirm:
 
-- Only `GET` and `POST` are accepted — `PUT`, `PATCH`, `DELETE` must be rejected (HTTP 400).
-- POST requests are validated against the `SafePostSuffixes` allowlist.
-- List every suffix in the allowlist and verify each is a read-only query/report endpoint.
-- Search for any code path that could bypass the allowlist (e.g. direct `HttpClient` usage outside `HttpHelper`).
+- `DELETE` is centrally blocked. `GET` is read-only. `PUT`/`PATCH` create owner-bound approval proposals only and never apply directly.
+- ARM `POST` requests are validated by the read-only allowlist in `ValidateReadOnlyPostPath`, plus `ValidateConnectivityBody` for Network Watcher `connectivityCheck`.
+- List every allowlisted POST pattern and verify each is a read-only query/report/calculation/diagnostic endpoint.
+- Verify `ResolveTarget` and `Classify` route credentials by exact host and reject unsafe URLs without echoing them.
+- Search for any code path that could bypass the allowlist or host routing (e.g. direct ARM `HttpClient` usage outside the guarded helpers).
 
-### 2. Graph and Log Analytics Tools
+### 2. Host-routed Graph, Log Analytics, Storage, Retail and Public Reads
 
-Scan `GraphQueryTools.cs` and confirm:
+Scan `AzureQueryTools.cs` and confirm:
 
-- Only `GET` requests are made — no method parameter exposed to the LLM.
-- The URL is hardcoded to `https://graph.microsoft.com`.
+- Microsoft Graph is restricted to `https://graph.microsoft.com/v1.0/...` or `/beta/...` and uses only the delegated Graph token for that exact host.
+- Log Analytics and Application Insights are restricted to `/v1/...` on their exact hosts and only `GET`/`POST`.
+- Blob Storage is restricted to `GET` on `{account}.blob.core.windows.net`, uses the storage token only for that exact host, and applies bounded reads/listing caps.
+- Retail Prices are public `GET` only on `prices.azure.com/api/retail/prices`.
 
-Scan `LogAnalyticsQueryTools.cs` and confirm:
+Scan `PublicWebReader.cs` and confirm:
 
-- Only `POST` to `/query` endpoints (`api.loganalytics.io` and `api.applicationinsights.io`).
-- KQL is inherently read-only — no write commands exist in the Log Analytics query API.
+- Public reads never send tokens, disable proxy/cookies, block literal private/loopback/link-local/metadata hosts before DNS, and connect only to public IPs after DNS and redirects.
+- JSON/XML/CSV shaping does not execute code and XML DTDs are prohibited in `ResponseShaper.cs`.
 
 ### 3. OAuth Scopes
 
@@ -42,7 +45,7 @@ Scan `setup-entra-app.ps1` and confirm:
 
 ### 5. Other Tools
 
-Scan all remaining tool files (`ChartTools.cs`, `HealthTools.cs`, `FaqTools.cs`, `FollowUpTools.cs`, `HtmlPresentationTools.cs`) and confirm:
+Scan all remaining tool files (`ChartTools.cs`, `FaqTools.cs`, `FollowUpTools.cs`, `HtmlPresentationTools.cs`, `MaturityReportTools.cs`, `ReportTools.cs`, `SavingsLedgerTools.cs`, `UploadedFileTools.cs`) and confirm:
 
 - No tool makes authenticated HTTP calls to Azure management APIs.
 - Any external HTTP calls (e.g. RSS feeds, IndexNow) do not use Azure tokens.
@@ -68,8 +71,8 @@ Print a summary table:
 | Tool              | Methods Allowed | Write Capability | Scope |
 | ----------------- | --------------- | ---------------- | ----- |
 | QueryAzure        | ...             | ...              | ...   |
-| QueryGraph        | ...             | ...              | ...   |
-| QueryLogAnalytics | ...             | ...              | ...   |
+| GetOperationStatus | ...            | ...              | ...   |
+| QueryUploadedFile | ...             | ...              | ...   |
 | (etc.)            | ...             | ...              | ...   |
 
 Then print the full list of OAuth scopes with their access level (read/write).

@@ -53,6 +53,54 @@ public sealed class ToolResultTests
 
     private static readonly ToolResultStore.Source Source = new("SyntheticRead", DateTimeOffset.UtcNow, true, false, true, "");
 
+    private const string CostTable = """{"properties":{"columns":[{"name":"Cost","type":"Number"},{"name":"Service Name","type":"String"},{"name":"Currency","type":"String"}],"rows":[[1.5,"Storage","USD"],[3,"Compute","USD"],[0.5,"Storage","USD"]]}}""";
+
+    [Fact]
+    public void ColumnarRowsAreAddressableByColumnName()
+    {
+        var entry = ToolResultStore.Default.Retain(101, "columnar-session", CostTable, Source)!;
+        using var grouped = JsonDocument.Parse(ToolResultQueryTools.Execute(entry,
+            """{"path":"$.properties.rows[*]","groupBy":{"service":"$['Service Name']"},"aggregates":[{"op":"sum","path":"$.Cost","as":"cost"}],"sort":[{"path":"$.cost","direction":"desc"}]}"""));
+        var rows = grouped.RootElement.GetProperty("rows");
+        Assert.Equal(("Compute", 3m), (rows[0].GetProperty("service").GetString(), rows[0].GetProperty("cost").GetDecimal()));
+        Assert.Equal(("Storage", 2.0m), (rows[1].GetProperty("service").GetString(), rows[1].GetProperty("cost").GetDecimal()));
+
+        using var positional = JsonDocument.Parse(ToolResultQueryTools.Execute(entry,
+            """{"path":"$.properties.rows[*]","select":{"cost":"$[0]","service":"$[1]"},"where":[{"path":"$.Cost","op":"gt","value":1}]}"""));
+        Assert.Equal(["Storage", "Compute"], positional.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("service").GetString()));
+
+        using var totals = JsonDocument.Parse(ToolResultQueryTools.Execute(entry,
+            """{"path":"$.properties.rows[*]","aggregates":[{"op":"sum","path":"$.Cost","as":"total"}],"limit":0}"""));
+        Assert.Equal(5m, totals.RootElement.GetProperty("totals").GetProperty("total").GetDecimal());
+
+        var schema = JsonSerializer.Serialize(ToolResultStore.Describe(entry));
+        Assert.Contains("Service Name", schema);
+        Assert.Contains("\"rowCount\":3", schema);
+    }
+
+    [Fact]
+    public void CommonQueryDialectsAreAcceptedOrRejectedPrecisely()
+    {
+        var entry = ToolResultStore.Default.Retain(101, "dialect-session", CostTable, Source)!;
+        using var aliased = JsonDocument.Parse(ToolResultQueryTools.Execute(entry,
+            """{"path":"properties.rows[*]","fields":["Cost","$['Service Name']"],"filter":[{"path":"@.Currency","op":"eq","value":"USD"}],"orderBy":[{"path":"Cost","direction":"desc"}],"top":2}"""));
+        var rows = aliased.RootElement.GetProperty("rows");
+        Assert.Equal(2, rows.GetArrayLength());
+        Assert.Equal(3m, rows[0].GetProperty("Cost").GetDecimal());
+        Assert.Equal("Compute", rows[0].GetProperty("Service Name").GetString());
+
+        Assert.StartsWith("Error:", ToolResultQueryTools.Execute(entry, """{"path":"$.properties.rows[*]","bogus":1}"""));
+        Assert.StartsWith("Error:", ToolResultQueryTools.Execute(entry, """{"where":[],"filter":[]}"""));
+    }
+
+    [Fact]
+    public void KeysModeListsPropertyNamesForLargeMaps()
+    {
+        var entry = ToolResultStore.Default.Retain(101, "keys-session", """{"paths":{"/a":{"get":{}},"/b":{"post":{}}},"definitions":{"X":{}}}""", Source)!;
+        using var keys = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"mode":"keys","path":"$.paths"}"""));
+        Assert.Equal(["/a", "/b"], keys.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetString()));
+    }
+
     [Theory]
     [InlineData(false, 0)]
     [InlineData(true, 0)]
@@ -248,10 +296,17 @@ public sealed class ToolResultTests
         using var names = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"names":"$.body.value[*].name.value"}}"""));
         Assert.Equal(["cores", "lowPriorityCores"], names.RootElement.GetProperty("rows")[0].GetProperty("names").EnumerateArray().Select(name => name.GetString()));
         Assert.Equal("lowPriorityCores", names.RootElement.GetProperty("rows")[1].GetProperty("names").GetString());
-        Assert.StartsWith("Error: Per-row field paths", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","where":[{"path":"$.body.value[*].limit","op":"gt","value":1}]}"""));
+        using var existential = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"where":[{"path":"$.body.value[*].limit","op":"gt","value":1}]}"""));
+        Assert.Equal([0], existential.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
+        using var universal = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"where":[{"path":"$.body.value[*].limit","op":"ne","value":10}]}"""));
+        Assert.Equal([1], universal.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
+        Assert.StartsWith("Error: Group keys must be scalar", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","groupBy":{"limit":"$.body.value[*].limit"},"aggregates":[{"op":"count","as":"n"}]}"""));
+        Assert.StartsWith("Error: Per-row field paths", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","sort":[{"path":"$.body.value[*].limit"}]}"""));
+        using var distinct = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*].body.value[*]","groupBy":{"name":"$.name.value"}}"""));
+        Assert.Equal(2, distinct.RootElement.GetProperty("rows").EnumerateArray().Single(row => row.GetProperty("name").GetString() == "lowPriorityCores").GetProperty("count").GetInt32());
         using var capped = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"limit":250}"""));
         Assert.Equal(2, capped.RootElement.GetProperty("returned").GetInt32());
-        Assert.StartsWith("Error: Query paging", ToolResultQueryTools.Execute(entry, """{"limit":-1}"""));
+        Assert.StartsWith("Error: Query paging", ToolResultQueryTools.Execute(entry, """{"offset":200000}"""));
     }
 
     [Fact]

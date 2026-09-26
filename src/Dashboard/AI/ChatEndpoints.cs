@@ -252,10 +252,10 @@ public static class ChatEndpoints
                 tokens.LogAnalyticsToken is not null, tokens.StorageToken is not null);
 
             var connectedApis = new List<string>();
-            if (tokens.AzureToken is not null) connectedApis.Add("Azure ARM (QueryAzure)");
-            if (tokens.GraphToken is not null) connectedApis.Add("Microsoft Graph (QueryGraph)");
-            if (tokens.LogAnalyticsToken is not null) connectedApis.Add("Log Analytics (QueryLogAnalytics)");
-            if (tokens.StorageToken is not null) connectedApis.Add("Azure Storage (ListCostExportBlobs, ReadCostExportBlob)");
+            if (tokens.AzureToken is not null) connectedApis.Add("Azure ARM (QueryAzure with an ARM path)");
+            if (tokens.GraphToken is not null) connectedApis.Add("Microsoft Graph (QueryAzure https://graph.microsoft.com)");
+            if (tokens.LogAnalyticsToken is not null) connectedApis.Add("Log Analytics and Application Insights (QueryAzure https://api.loganalytics.io, https://api.applicationinsights.io)");
+            if (tokens.StorageToken is not null) connectedApis.Add("Azure Blob Storage (QueryAzure https://{account}.blob.core.windows.net)");
             var cachedAzureScopes = ctx.Session.GetString("azure_scope_context");
             if (!string.IsNullOrWhiteSpace(cachedAzureScopes))
             {
@@ -1229,13 +1229,15 @@ public static class ChatEndpoints
         if (consentActions.Length > 0)
             await emit(JsonSerializer.Serialize(new { type = "consent_required", actions = consentActions }));
 
-        if (resultText is not null && (resultText.StartsWith("HTTP 409 ApprovalRequired\n", StringComparison.Ordinal) || toolName == "BulkAzureRequest"))
+        if (resultText is not null && (resultText.StartsWith("HTTP 409 ApprovalRequired\n", StringComparison.Ordinal)
+            || toolName == "QueryAzure" && resultText.StartsWith('{') && resultText.Contains("\"operationId\"", StringComparison.Ordinal)))
         {
             try
             {
                 using var proposal = JsonDocument.Parse(resultText.StartsWith("HTTP ") ? resultText[(resultText.IndexOf('\n') + 1)..] : resultText);
-                var bodies = toolName == "BulkAzureRequest" && proposal.RootElement.TryGetProperty("results", out var results)
-                    ? results.EnumerateArray().Where(item => item.TryGetProperty("body", out var value) && value.ValueKind == JsonValueKind.Object).Select(item => item.GetProperty("body")).ToArray()
+                var bodies = proposal.RootElement.ValueKind == JsonValueKind.Object && proposal.RootElement.TryGetProperty("results", out var results)
+                    && results.ValueKind == JsonValueKind.Array
+                    ? results.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object && item.TryGetProperty("body", out var value) && value.ValueKind == JsonValueKind.Object).Select(item => item.GetProperty("body")).ToArray()
                     : [proposal.RootElement];
                 foreach (var body in bodies)
                     if (body.TryGetProperty("operationId", out var operationId)
