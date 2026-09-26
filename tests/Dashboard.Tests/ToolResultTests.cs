@@ -108,6 +108,8 @@ public sealed class ToolResultTests
         Assert.Equal(2, answers.GetArrayLength());
         Assert.Equal(5m, answers[0].GetProperty("totals").GetProperty("total").GetDecimal());
         Assert.Equal("Compute", answers[1].GetProperty("rows")[0].GetProperty("service").GetString());
+        Assert.Equal(ToolResultQueryTools.ExecuteMany(entry, "[" + single + "]"), ToolResultQueryTools.ExecuteMany(entry, """{"queries":[""" + single + "]}"));
+        Assert.StartsWith("Error:", ToolResultQueryTools.ExecuteMany(entry, """{"queries":[],"limit":1}"""));
 
         Assert.Equal("Error: Query 1: Mode must be query, schema or keys.",
             ToolResultQueryTools.ExecuteMany(entry, "[" + single + """,{"mode":"bogus"}]"""));
@@ -125,6 +127,8 @@ public sealed class ToolResultTests
         Assert.Equal(0, miss.RootElement.GetProperty("totalMatches").GetInt32());
         Assert.Equal("path $[0].properties.rows[*] matched no values. Paths start at the retained root, an object with top-level keys properties.",
             miss.RootElement.GetProperty("note").GetString());
+        using var hit = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.properties.rows[*]","limit":1}"""));
+        Assert.Equal("$.properties.rows[*]", hit.RootElement.GetProperty("rowsFrom").GetString());
 
         using var schema = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"mode":"schema","path":"$.properties.rows[*]"}"""));
         Assert.Contains("keep path $.properties.rows[*]", schema.RootElement.GetProperty("queryPaths").GetString());
@@ -457,6 +461,7 @@ public sealed class ToolResultTests
         Assert.Equal("two", root.GetProperty("rows")[0].GetProperty("location").GetString());
         Assert.Equal(1, root.GetProperty("nextOffset").GetInt32());
         Assert.False(root.GetProperty("complete").GetBoolean());
+        Assert.Contains("This page is partial", root.GetProperty("guidance").GetString());
         Assert.False(root.GetProperty("source").GetProperty("Fresh").GetBoolean());
     }
 

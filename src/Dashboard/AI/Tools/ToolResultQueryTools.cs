@@ -36,8 +36,15 @@ public sealed class ToolResultQueryTools(long owner)
     // Any invalid query fails the whole call, naming its index, rather than hiding an error among successful answers.
     internal static string ExecuteMany(ToolResultStore.Entry entry, string queryJson, CancellationToken cancellationToken = default)
     {
-        if (!queryJson.TrimStart().StartsWith('[')) return Execute(entry, queryJson, cancellationToken);
         if (queryJson.Length > 16000) return "Error: Query exceeds the 16000-character budget.";
+        if (!queryJson.TrimStart().StartsWith('['))
+        {
+            // Answers come back as {"queries":[...]}; the same wrapper is accepted as the input spelling of a query array.
+            using var wrapper = ModelJson.TryParse(queryJson, JsonValueKind.Object);
+            if (wrapper?.RootElement.EnumerateObject().Count() == 1 && wrapper.RootElement.TryGetProperty("queries", out var list) && list.ValueKind == JsonValueKind.Array)
+                return ExecuteMany(entry, list.GetRawText(), cancellationToken);
+            return Execute(entry, queryJson, cancellationToken);
+        }
         using var document = ModelJson.TryParse(queryJson, JsonValueKind.Array);
         if (document is null) return "Error: Invalid or over-budget JSON query. Use the returned schema and documented query parameters.";
         var queries = document.RootElement.EnumerateArray().ToArray();
@@ -280,8 +287,10 @@ public sealed class ToolResultQueryTools(long owner)
                 invalidNumeric,
                 totals,
                 note,
+                rowsFrom = Shorten(path),
                 rows = page,
                 guidance = "Counts and aggregates cover the entire retained selection before paging. Source metadata describes original API coverage; query complete describes this local result only. Missing/non-numeric aggregate values are counted, never silently zero-filled. Project narrower fields if requiresProjection is true."
+                    + (complete ? "" : " This page is partial: narrow where/select or read nextOffset before stating any value that is not in rows.")
             });
         }
         catch (QueryException exception) { return "Error: " + exception.Message; }

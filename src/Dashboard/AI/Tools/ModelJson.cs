@@ -6,7 +6,7 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 
 // Models writing long JSON inside a string argument sometimes garble only its structural brackets.
 // Repairs never add, drop or change data: they close containers the text left open, drop trailing
-// brackets, commas or one bare leaked token, drop a closer that matches no open container, and close
+// brackets, commas, one bare leaked token or leaked tool-channel text, drop a closer that matches no open container, and close
 // the open objects before a sibling item that the text starts inside an array. A repair must still parse
 // as the expected root kind; callers validate the result exactly as they validate any other input.
 internal static partial class ModelJson
@@ -45,7 +45,7 @@ internal static partial class ModelJson
                 continue;
             }
             if (started && stack.Count == 0)
-                return TrailingNoise().IsMatch(text[index..]) ? output.ToString() : null;
+                return TrailingNoise().IsMatch(text[index..]) || LeakedToolChannel().IsMatch(text[index..]) ? output.ToString() : null;
             switch (character)
             {
                 case '"':
@@ -101,4 +101,9 @@ internal static partial class ModelJson
     // Leaked brackets, commas and at most one bare token (such as an argument name) carry no data.
     [GeneratedRegex(@"^[\s\[\]{},]*[A-Za-z0-9_?]*[\s\[\]{},]*$", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 100)]
     private static partial Regex TrailingNoise();
+
+    // The model's own tool-call channel text ("... assistant to=functions.<tool> ...") leaked after a complete root:
+    // text that starts as prose rather than a JSON value and carries that marker is never part of the single root.
+    [GeneratedRegex(@"^[\s\[\]{},]*[A-Za-z][\s\S]*?to=functions\.", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 100)]
+    private static partial Regex LeakedToolChannel();
 }

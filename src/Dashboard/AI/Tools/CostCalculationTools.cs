@@ -12,7 +12,7 @@ public static class CostCalculationTools
     {
         yield return AIFunctionFactory.Create(CalculateCost, "CalculateCost",
             "Deterministic non-token cost arithmetic for storage, backup, VM estimates and spend run-rates. " +
-            "Use after obtaining the exact rates and assumptions; quote the returned total, tax and annualization instead of recomputing in prose. " +
+            "Use after obtaining the exact rates and assumptions: call it in a later response than the lookups that supply its inputs, never alongside them or with an empty list; quote the returned total, tax and annualization instead of recomputing in prose. " +
             "Each line is quantity / unitsPerRate * unitPrice * multiplier. Only supplied numbers are calculated; no source, price tier, capacity, retention, FX or discount is invented. " +
             "For run-rate extrapolation use observed spend as quantity, unitPrice=1, unitsPerRate=elapsed days and multiplier=days in the requested period. " +
             "For growth, calculate each requested period with its own explicit quantities; an exit-month annualization is not cumulative annual spend. " +

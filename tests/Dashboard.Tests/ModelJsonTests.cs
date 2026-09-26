@@ -19,12 +19,17 @@ public sealed class ModelJsonTests
     [InlineData("[{\"method\":\"POST\",\"url\":\"/u\",\"body\":{\"q\":\"x\", {\"method\":\"GET\",\"url\":\"/v\"}]", "[{\"method\":\"POST\",\"url\":\"/u\",\"body\":{\"q\":\"x\"}},{\"method\":\"GET\",\"url\":\"/v\"}]")]
     [InlineData("{\"q\":\"where name == '{x}' and tag == \\\"}]\\\"\"", "{\"q\":\"where name == '{x}' and tag == \\\"}]\\\"\"}")]
     [InlineData("{\"a\":[1,2}", "{\"a\":[1,2]}")]
+    [InlineData("[{\"path\":\"$.x\",\"limit\":50}]}}]}]}imuhamedassistant to=functions.QueryAzure? no, response multi tool. Let's see. The \"", "[{\"path\":\"$.x\",\"limit\":50}]")]
+    [InlineData("{\"a\":1} assistant to=functions.QueryToolResult {\"b\":2}", "{\"a\":1}")]
+    [InlineData("[{\"limit\":100}]} Hm tool call syntax JSON array is queryJson string yes. Transcript: assistant to=functions.QueryToolResult ... \"", "[{\"limit\":100}]")]
     public void RepairsOnlyStructuralBrackets(string text, string expected) => Assert.Equal(expected, ModelJson.Repair(text));
 
     [Theory]
     [InlineData("{\"a\":")]
     [InlineData("{\"a\":\"unterminated")]
     [InlineData("{\"a\":1} | take 5")]
+    [InlineData("{\"a\":1} note: to=functions is mentioned later")]
+    [InlineData("{\"a\":1} ,\"limit\":50} to=functions.X")]
     [InlineData("{\"a\":1}{\"b\":2}")]
     [InlineData("{\"a\":1,{\"b\":2}}")]
     [InlineData("{{\"a\":1}}")]
