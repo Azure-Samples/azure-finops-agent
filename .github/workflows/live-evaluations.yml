@@ -2,6 +2,12 @@ name: Live AI evaluation gate
 
 on:
   workflow_call:
+    inputs:
+      fail-fast:
+        description: Stop at the first failed case (the gate still requires every case to pass)
+        type: boolean
+        required: false
+        default: false
     secrets:
       # Environment-scoped secrets are resolved on the job, not by its caller.
       # The configuration step below still requires every value.
@@ -60,6 +66,7 @@ jobs:
       EVAL_TOKEN_RESOURCES: ${{ vars.EVAL_TOKEN_RESOURCES }}
       EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
       EVAL_RUNNER_DLL: tests/LiveEvaluations/bin/Release/net10.0/LiveEvaluations.dll
+      EVAL_FAIL_FAST: ${{ inputs.fail-fast && 'true' || 'false' }}
       FINOPS_PYTHON: /usr/bin/python3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

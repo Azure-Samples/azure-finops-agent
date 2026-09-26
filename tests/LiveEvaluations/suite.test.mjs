@@ -801,6 +801,42 @@ test("CI obtains a new scoped OIDC login for each case without exposing tokens",
     );
 });
 
+test("fail-fast stops after the first failed case and never accepts the partial suite", async () => {
+    const directory = await createDirectory();
+    try {
+        let executed = 0;
+        await assert.rejects(
+            runCases(
+                cases, directory, sha, suiteHash,
+                async (scenario, path) => {
+                    executed++;
+                    const result = pass(scenario);
+                    if (executed === 3) {
+                        result.accepted = false;
+                        result.judge.accepted = false;
+                        result.reasons = ["Unsupported claim."];
+                    }
+                    await writeFile(path, JSON.stringify(result));
+                    return executed === 3 ? 1 : 0;
+                },
+                async () => {},
+                true,
+                0,
+                { failFast: true },
+            ),
+            (error) => error.message.includes("Fail-fast") && error.message.includes("17 cases were not run"),
+        );
+        assert.equal(executed, 3);
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        assert.equal(report.results.length, 3);
+        assert.equal(report.verdict.accepted, false);
+        assert.ok(report.verdict.failures.some((failure) => failure.includes("Fail-fast")));
+        assert.match(await readFile(join(directory, "summary.md"), "utf8"), /Suite failure:.*Fail-fast/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test("suite execution writes all results but rejects one failed answer", async () => {
     const directory = await createDirectory();
     try {

@@ -528,6 +528,7 @@ export async function runCases(
         privateDiagnosticsDirectory,
         environment = process.env,
         diagnosticsSourceRoot = repositoryRoot,
+        failFast = false,
     } = {},
 ) {
     const results = [];
@@ -693,6 +694,13 @@ export async function runCases(
             console.log(
                 `[${index + 1}/${cases.length}] ${scenario.id} ${failures.length ? "FAIL" : "PASS"} tools=${published?.toolCount ?? "?"} durationMs=${published?.durationMs ?? "?"} ${scenario.label}`,
             );
+            // The gate already failed; fail-fast skips the remaining cases instead of spending their full runtime.
+            if (failFast && failures.length > 0) {
+                runFailure = new Error(
+                    `Fail-fast: ${scenario.id} failed; the remaining ${cases.length - index - 1} cases were not run.`,
+                );
+                break;
+            }
         }
     } catch {
         runFailure ??= new Error(
@@ -928,6 +936,7 @@ async function main() {
         {
             privateDiagnosticsDirectory:
                 process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY,
+            failFast: process.env.EVAL_FAIL_FAST === "true",
         },
     );
     if (!verdict.accepted) process.exitCode = 1;
