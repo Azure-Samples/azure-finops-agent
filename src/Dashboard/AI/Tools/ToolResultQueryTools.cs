@@ -18,7 +18,7 @@ public sealed class ToolResultQueryTools(long owner)
 
     private async Task<string> QueryToolResult(
         [Description("Opaque resultId returned in this conversation. Copy it exactly, including case, from queryable_tool_result, _resultQuery or its query response; never reconstruct, shorten or alter it. Never a file path or URL.")] string resultId,
-        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\",\"items\":\"$.body.value.length()\"}; a trailing .length() counts an array. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path and as defaults to the op name. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (pages hold at most 200 rows; follow nextOffset; 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
+        [Description("JSON object: mode=query (default) or schema; path is JSONPath, default $. Select array rows with $.rows[*]. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\",\"items\":\"$.body.value.length()\"}; a trailing .length() counts an array, and a select path matching several values (wildcard or filter) returns them as an array. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path and as defaults to the op name. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (pages hold at most 200 rows; follow nextOffset; 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. Schema mode supports a path; several matches are described as one array. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
         CancellationToken cancellationToken = default)
     {
         var context = ToolExecutionContext.Current;
@@ -331,12 +331,21 @@ public sealed class ToolResultQueryTools(long owner)
         return values.FirstOrDefault();
     }
 
+    // Projection keeps every match of a wildcard or filter path as an array; where, groupBy,
+    // aggregates and sort still need one comparable value per row.
+    private static JToken? Field(JToken row, string path, Action check)
+    {
+        if (path.EndsWith(".length()", StringComparison.Ordinal)) return Single(row, path, check);
+        var values = Select(row, path, check).ToArray();
+        return values.Length switch { 0 => null, 1 => values[0], _ => new JArray(values) };
+    }
+
     private static JObject Project(JToken row, Dictionary<string, string> paths, Action check, Action<int> reserve)
     {
         var result = new JObject();
         foreach (var field in paths)
         {
-            var value = Single(row, field.Value, check);
+            var value = Field(row, field.Value, check);
             var length = value?.ToString(Newtonsoft.Json.Formatting.None).Length ?? 0;
             reserve(Math.Min(length, 16000));
             result[field.Key] = length <= 16000

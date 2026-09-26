@@ -245,6 +245,10 @@ public sealed class ToolResultTests
         using var counted = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index","items":"$.body.value.length()"}}"""));
         Assert.Equal(2, counted.RootElement.GetProperty("rows")[0].GetProperty("items").GetInt32());
         Assert.Equal(1, counted.RootElement.GetProperty("rows")[1].GetProperty("items").GetInt32());
+        using var names = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"names":"$.body.value[*].name.value"}}"""));
+        Assert.Equal(["cores", "lowPriorityCores"], names.RootElement.GetProperty("rows")[0].GetProperty("names").EnumerateArray().Select(name => name.GetString()));
+        Assert.Equal("lowPriorityCores", names.RootElement.GetProperty("rows")[1].GetProperty("names").GetString());
+        Assert.StartsWith("Error: Per-row field paths", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","where":[{"path":"$.body.value[*].limit","op":"gt","value":1}]}"""));
         using var capped = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"limit":250}"""));
         Assert.Equal(2, capped.RootElement.GetProperty("returned").GetInt32());
         Assert.StartsWith("Error: Query paging", ToolResultQueryTools.Execute(entry, """{"limit":-1}"""));
