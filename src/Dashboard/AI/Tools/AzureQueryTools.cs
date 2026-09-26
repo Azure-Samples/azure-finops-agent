@@ -46,7 +46,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         - Microsoft Graph: https://graph.microsoft.com/v1.0/... or /beta/... Reference: https://learn.microsoft.com/graph/api/{resource}-{verb}?view=graph-rest-1.0 and https://github.com/microsoftgraph/msgraph-metadata. Many endpoints, such as subscribedSkus and report functions, reject $filter/$top/$select; report functions return CSV, converted to a rows table. The host sends ConsistencyLevel: eventual, so directory advanced queries work when they also include $count=true (for example users?$filter=assignedLicenses/$count ne 0&$count=true). Follow @odata.nextLink via maxPages.
         - Log Analytics: POST https://api.loganalytics.io/v1/workspaces/{customerId}/query; Application Insights: POST https://api.applicationinsights.io/v1/apps/{appId}/query; body {"query":"<KQL>","timespan":"P7D"}. KQL: https://learn.microsoft.com/kusto/query/. Discover populated tables with `Usage | summarize GB=sum(Quantity)/1024 by DataType` and columns with `<Table> | getschema`; filter by time first, summarize and project inside KQL, and take/top only after aggregation. FinOps signals: Usage and _BilledSize (ingestion cost), Perf/InsightsMetrics (utilization), Heartbeat and AzureActivity (who changed what).
         - Blob Storage (cost exports): GET https://{account}.blob.core.windows.net/{container}?restype=container&comp=list&prefix={export/period} lists blobs (use the narrowest prefix; a NextMarker means more blobs); GET https://{account}.blob.core.windows.net/{container}/{blob} reads the first 6 MiB of one blob (CSV becomes rows; complete=false when the blob is larger). Never use a SAS or other credential-bearing URL; for complete analysis of a large export ask for an upload and use QueryUploadedFile. Reference: https://learn.microsoft.com/rest/api/storageservices/list-blobs.
-        - Azure Retail Prices (public list prices, no auth): GET https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=<OData>. Fields and operators (eq, and, or, contains(field,'x')): https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices. Values are case-sensitive; armRegionName is lowercase (eastus); Azure OpenAI and other Foundry models use serviceName 'Foundry Models'. Meter, product and SKU names are not derivable from ARM SKU names: start with structural fields (serviceName, armRegionName, armSkuName, priceType) and read the returned values. Compare regions or SKUs with 'or' in one filter; for a multi-service estimate, fetch every component in the first round as one requests batch with one structural filter per service, then select rows locally. Some services publish one worldwide rate under armRegionName 'Global' rather than per region (for example Load Balancer), so filter those with (armRegionName eq '<region>' or armRegionName eq 'Global'). The host follows NextPageLink (maxPages); never send $top. Zero Items means the filter matched nothing, not a zero price; tierMinimumUnits marks volume bands. Quote each rate with productName, skuName, meterName, unitOfMeasure, currency and retrievedAtUtc; a sized skuName (for example '4 vCore' with unitOfMeasure '1 Hour') prices that whole size per unit, not each vCore, so say so and never multiply it by the size.
+        - Azure Retail Prices (public list prices, no auth): GET https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=<OData>. Fields and operators (eq, and, or, contains(field,'x')): https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices. Values are case-sensitive; armRegionName is lowercase (eastus); Azure OpenAI and other Foundry models use serviceName 'Foundry Models'. Meter, product and SKU names are not derivable from ARM SKU names: start with structural fields (serviceName, armRegionName, armSkuName, priceType) and read the returned values. Compare regions or SKUs with 'or' in one filter; for a multi-service estimate, fetch every component in the first round as one requests batch with one structural filter per service, then select rows locally. Some services publish one worldwide rate under armRegionName 'Global' rather than per region (for example Load Balancer), so filter those with (armRegionName eq '<region>' or armRegionName eq 'Global'). The host follows NextPageLink (maxPages); never send $top. Zero Items means the filter matched nothing, not a zero price; tierMinimumUnits marks volume bands. Quote each rate with productName, skuName, meterName, unitOfMeasure, currency and retrievedAtUtc, and state the lookup's coverage (complete or partial, from its complete flag); a sized skuName (for example '4 vCore' with unitOfMeasure '1 Hour') prices that whole size per unit, not each vCore, so say so and never multiply it by the size.
         - Any other public https URL, GET only and without credentials: Microsoft Learn (search https://learn.microsoft.com/api/search?search=<terms>&locale=en-us, then fetch only returned URLs), GitHub, vendor pricing pages, and the public Azure status feed https://azure.status.microsoft/en-us/status/feed/ (not tenant-specific: an empty feed does not prove a resource is healthy; use ARM Microsoft.ResourceHealth for a named resource). Use grepFor on long pages.
         Host rules:
         - DELETE is blocked. ARM POST is limited to read-only endpoints: Cost Management query/forecast/report generation/pricesheet download, Resource Graph, reservation and savings-plan price calculation, Advisor summarize, PolicyInsights policy-state summarize/queryResults and policy-event queryResults, management-group entities, carbon reports, Spot placement scores and Network Watcher connectivityCheck from an existing VM (body {source:{resourceId:<VM id>},destination:{address,port}}). Action POSTs such as start, restart, deallocate, power off or return are blocked. PUT/PATCH never execute directly: they create a proposal that the user must approve in the UI; never claim a change was applied. Asynchronous (202) results return an operationId for GetOperationStatus. Standard Graph consent is read-only, so writes return 403: report that instead of retrying.
@@ -68,7 +68,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         [Description("GET (default), POST, PUT or PATCH. DELETE is blocked.")] string method = "GET",
         [Description("JSON request body for POST/PUT/PATCH, preferably passed as a JSON object rather than an escaped string; omit for GET.")] string body = "",
         [Description("Batch instead of url: JSON array of 1-200 {\"method\",\"url\",\"body\"} objects; body may be a JSON object or a JSON string. Example: [{\"method\":\"GET\",\"url\":\"/subscriptions/{id}/providers/Microsoft.Compute/locations/eastus/usages?api-version=2024-07-01\"}].")] string requests = "",
-        [Description("Optional QueryToolResult query applied to the complete retained result before it is returned, so only needed data comes back, e.g. {\"path\":\"$.value[*]\",\"select\":{\"name\":\"$.name\",\"sku\":\"$.sku.name\"}}. Columnar tables (columns + rows: Cost Management, Log Analytics, CSV) are addressable by column name: {\"path\":\"$.properties.rows[*]\",\"groupBy\":{\"service\":\"$.ServiceName\"},\"aggregates\":[{\"op\":\"sum\",\"path\":\"$.Cost\",\"as\":\"cost\"}],\"sort\":[{\"path\":\"$.cost\",\"direction\":\"desc\"}]}. For a batch the rows are $.results[*] (fields $.index, $.status, $.body...). An array of up to 8 queries returns queries[i] for each. An invalid query returns the schema instead and does not repeat the request.")] string resultQuery = "",
+        [Description("Optional QueryToolResult query applied to the complete retained result before it is returned, so only needed data comes back, e.g. {\"path\":\"$.value[*]\",\"select\":{\"name\":\"$.name\",\"sku\":\"$.sku.name\"}}. Columnar tables (columns + rows: Cost Management, Log Analytics, CSV) are addressable by column name: {\"path\":\"$.properties.rows[*]\",\"groupBy\":{\"service\":\"$.ServiceName\"},\"aggregates\":[{\"op\":\"sum\",\"path\":\"$.Cost\",\"as\":\"cost\"}],\"sort\":[{\"path\":\"$.cost\",\"direction\":\"desc\"}]}. For a batch the rows are $.results[*] (fields $.index, $.status, $.body...). An array of up to 16 queries returns queries[i] for each. An invalid query returns the schema instead and does not repeat the request.")] string resultQuery = "",
         [Description("Maximum pages to follow for a paginated GET, 1-10. Default 5. Use 1 when the first page answers the question.")] string maxPages = "5",
         [Description("Public web pages only: return only the lines that contain this text, for long documentation, specs or pricing pages.")] string grepFor = "",
         [Description("Batch only: maximum parallel requests, 1-50, default 20. Batches containing Cost Management /query or /forecast always run one at a time.")] string parallelism = "20",
@@ -210,11 +210,10 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         string? requestedVersion = null, usedVersion = null;
         if (method == HttpMethod.Get || method == HttpMethod.Post)
         {
-            // ARM names the supported versions; a resource provider's own rejection does not, so its
-            // manifest supplies the older stable versions (the manifest can list versions the provider does not yet serve).
-            List<string> candidates = [];
-            if (SupportedApiVersion(path, response) is { } supported) candidates.Add(supported);
-            else if (IsUnlistedApiVersionRejection(response) && ResourceTypeOf(path) is { } resource)
+            // ARM names the supported versions but can list ones the provider does not serve yet; a provider's own
+            // rejection names none, so its manifest supplies the older stable versions.
+            List<string> candidates = [.. SupportedApiVersions(path, response)];
+            if (candidates.Count == 0 && IsUnlistedApiVersionRejection(response) && ResourceTypeOf(path) is { } resource)
             {
                 var manifest = await HttpHelper.SendWithRetryAsync($"https://{ArmHost}{resource.Scope}/providers/{resource.Namespace}?api-version=2021-04-01",
                     token, activity, "azure", HttpMethod.Get, cancellationToken: cancellationToken);
@@ -702,33 +701,41 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     /// When ARM rejects the requested api-version and names the supported ones, returns the newest stable
     /// listed version (or newest preview when no stable exists) so a read can be retried once. Otherwise null.
     /// </summary>
-    internal static string? SupportedApiVersion(string path, string response)
+    internal static string? SupportedApiVersion(string path, string response) => SupportedApiVersions(path, response).FirstOrDefault();
+
+    /// <summary>
+    /// The newest three stable listed versions, newest first (previews when no stable exists). ARM's list can name
+    /// versions the provider does not serve yet, so a provider UnsupportedApiVersion reply moves on to the next one.
+    /// </summary>
+    internal static IReadOnlyList<string> SupportedApiVersions(string path, string response)
     {
-        if (!response.StartsWith("HTTP 400", StringComparison.Ordinal) && !response.StartsWith("HTTP 404", StringComparison.Ordinal)) return null;
+        if (!response.StartsWith("HTTP 400", StringComparison.Ordinal) && !response.StartsWith("HTTP 404", StringComparison.Ordinal)) return [];
         var requested = ApiVersionParameter().Match(path);
-        if (!requested.Success) return null;
+        if (!requested.Success) return [];
         string? code, message;
         try
         {
             using var document = JsonDocument.Parse(ResponseShaper.SplitPreamble(response).Body);
             if (document.RootElement.ValueKind != JsonValueKind.Object
-                || !document.RootElement.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object) return null;
+                || !document.RootElement.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object) return [];
             code = error.TryGetProperty("code", out var codeValue) && codeValue.ValueKind == JsonValueKind.String ? codeValue.GetString() : null;
             message = error.TryGetProperty("message", out var messageValue) && messageValue.ValueKind == JsonValueKind.String ? messageValue.GetString() : null;
         }
-        catch (JsonException) { return null; }
+        catch (JsonException) { return []; }
         if (code is null || message is null
             || !(code is "InvalidResourceType" or "NoRegisteredProviderFound" || code.Contains("ApiVersion", StringComparison.OrdinalIgnoreCase)))
-            return null;
+            return [];
         var list = SupportedVersionList().Match(message);
-        if (!list.Success) return null;
+        if (!list.Success) return [];
         var versions = list.Groups[1].Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .Where(version => ApiVersionValue().IsMatch(version)).ToList();
         var stable = versions.Where(version => version.Length == 10).ToList();
-        var chosen = (stable.Count > 0 ? stable : versions).Max(StringComparer.Ordinal);
-        return chosen is null || chosen.Equals(Uri.UnescapeDataString(requested.Groups[1].Value), StringComparison.OrdinalIgnoreCase)
-            ? null
-            : chosen;
+        var ordered = (stable.Count > 0 ? stable : versions).OrderByDescending(version => version, StringComparer.Ordinal).ToList();
+        var rejected = Uri.UnescapeDataString(requested.Groups[1].Value);
+        // A rejected newest version means the problem is not the version, so nothing is retried.
+        return ordered.Count == 0 || ordered[0].Equals(rejected, StringComparison.OrdinalIgnoreCase)
+            ? []
+            : ordered.Where(version => !version.Equals(rejected, StringComparison.OrdinalIgnoreCase)).Take(3).ToList();
     }
 
     internal static string WithApiVersion(string path, string version) =>

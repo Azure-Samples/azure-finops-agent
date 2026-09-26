@@ -308,6 +308,15 @@ public sealed class QueryAzureRoutingTests
         Assert.Equal(expected, SupportedApiVersion("/subscriptions/x/providers/Microsoft.CostManagement/scheduledActions?api-version=2023-08-01-preview", response));
 
     [Fact]
+    public void ListedVersionsTheProviderDoesNotServeFallBackToOlderListedVersions()
+    {
+        const string response = "HTTP 404 NotFound\n{\"error\":{\"code\":\"InvalidResourceType\",\"message\":\"The resource type 'ScheduledActions' could not be found in the namespace 'Microsoft.CostManagement' for api version '2023-08-01-preview'. The supported api-versions are '2022-04-01-preview,2023-08-01,2024-10-01-preview,2025-03-01,2026-06-01,2026-08-01'.\"}}";
+        Assert.Equal(["2026-08-01", "2026-06-01", "2025-03-01"], SupportedApiVersions("/subscriptions/x/providers/Microsoft.CostManagement/scheduledActions?api-version=2023-08-01-preview", response));
+        Assert.Equal(["2026-08-01", "2025-03-01", "2023-08-01"], SupportedApiVersions("/subscriptions/x/providers/Microsoft.CostManagement/scheduledActions?api-version=2026-06-01", response));
+        Assert.Empty(SupportedApiVersions("/subscriptions/x/providers/Microsoft.CostManagement/scheduledActions?api-version=2026-08-01", response));
+    }
+
+    [Fact]
     public void CorrectedApiVersionsAreRewrittenAndAnnotated()
     {
         Assert.Equal("/subscriptions/x/providers/A/b?$top=5&api-version=2025-03-01&x=1",

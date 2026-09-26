@@ -114,9 +114,9 @@ public sealed class ToolResultTests
         Assert.Equal("Error: Query 1: Mode must be query, schema or keys.",
             ToolResultQueryTools.ExecuteMany(entry, "[" + single + """,{"mode":"bogus"}]"""));
         Assert.StartsWith("Error: Query 0 must be a JSON object", ToolResultQueryTools.ExecuteMany(entry, "[1]"));
-        Assert.StartsWith("Error: A query array holds 1 to 8", ToolResultQueryTools.ExecuteMany(entry, "[]"));
-        Assert.StartsWith("Error: A query array holds 1 to 8",
-            ToolResultQueryTools.ExecuteMany(entry, "[" + string.Join(",", Enumerable.Repeat(single, 9)) + "]"));
+        Assert.StartsWith("Error: A query array holds 1 to 16", ToolResultQueryTools.ExecuteMany(entry, "[]"));
+        Assert.StartsWith("Error: A query array holds 1 to 16",
+            ToolResultQueryTools.ExecuteMany(entry, "[" + string.Join(",", Enumerable.Repeat(single, 17)) + "]"));
     }
 
     [Fact]

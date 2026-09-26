@@ -30,7 +30,7 @@ public sealed class ScoreTools
         yield return AIFunctionFactory.Create(GetScoreHistory);
     }
 
-    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores. Each dimension must include status=observed|unknown|notApplicable. Observed dimensions get 0-5; unknown and notApplicable get score=null and a reason. Missing permission is unknown, not zero. An absent workload makes workload-specific controls notApplicable. Auto-saved to history for trend analysis.
+    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores: submit once, by itself, in a later response than every evidence read it scores, never alongside QueryAzure or QueryToolResult calls. Each dimension must include status=observed|unknown|notApplicable. Observed dimensions get 0-5; unknown and notApplicable get score=null and a reason. Missing permission is unknown, not zero. An absent workload makes workload-specific controls notApplicable. Auto-saved to history for trend analysis.
 
 Evaluate ALL the dimensions for the requested level via QueryAzure (ARM, and Microsoft Graph or Log Analytics URLs where relevant) and score each 0-5 with a one-line `detail`. Don't ask which to score — score them all. Plan the whole level first: fetch its independent evidence in one QueryAzure requests batch (Cost Management query/forecast reads stay separate and sequential), then read each retained result path once with QueryToolResult; a level should need about 15 tool calls, not 30.
 

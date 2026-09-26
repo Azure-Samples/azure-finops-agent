@@ -12,6 +12,7 @@ public static class FollowUpTools
         Optionally offers 1-3 clickable next actions after a tenant-data, remediation or file-analysis answer. At most one call per turn.
         Never substitute a follow-up offer for a deliverable the user already requested. For a single simple next question, a prompt link in the answer is enough.
         Each action names a concrete entity from this turn (resource, resource group, service, amount, region or window) and is a complete instruction with its essential scope; labels are at most 60 characters.
+        Pair every label with its own prompt: label describes prompt, label2 describes prompt2, label3 describes prompt3, and a label without its prompt is dropped.
         Skip it for greetings, public pricing, hypothetical estimates and clarifications. Never offer a Cost Management retry before its returned deadline.
         """)]
     private static string SuggestFollowUp(
