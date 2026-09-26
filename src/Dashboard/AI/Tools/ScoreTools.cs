@@ -43,7 +43,7 @@ CRAWL — Visibility & Baseline (id slug — label — what to check):
   2. tagging — 'Tagging for accountability' — Resource Graph: total resources + % carrying CostCenter, Owner, Environment (exact key names). Flag inconsistent casing ('department' vs 'Department') and placeholder values ('unassigned', 'unknown').
   3. exports — 'Cost data exports' — list Cost Mgmt exports (Microsoft.CostManagement/exports). Score 0 if none.
   4. alerts — 'Cost alerts & scheduled actions' — list Microsoft.CostManagement/scheduledActions (anomaly alerts are kind InsightAlert). Score 0 if none.
-  5. policy — 'Governance guardrails' — management-group/subscription policy assignments enforcing FinOps tagging or cost controls.
+  5. policy — 'Governance guardrails' — policy assignments visible at the connected subscription scope (atScope() includes inherited management-group assignments) enforcing FinOps tagging or cost controls; effects come from policyStates summarize.
   6. waste — 'Waste identification & cleanup' — counts of unattached disks, orphaned public IPs, empty App Service plans, empty resource groups.
   7. visibility — 'Cost visibility & ownership' — MTD spend grouped by RG and by top services.
 
@@ -51,7 +51,7 @@ WALK — Optimization & Governance (id slug — label — what to check):
   1. commitments — 'Reservations & Savings Plans' — RI/SP coverage % and utilization; Advisor RI/SP recommendations + their $ savings. Score 0 if no commitments and recommendations are being ignored.
   2. rightsizing — 'Right-sizing' — Advisor cost right-sizing/SKU recommendations: count + estimated $ savings; underutilized VMs/disks.
   3. devtest — 'Dev/Test scheduling' — auto-shutdown / start-stop schedules on non-prod VMs; count of non-prod VMs running 24x7 with no schedule.
-  4. tagpolicy — 'Tag policy enforcement' — Azure Policy assignments that require/append/deny on tags (effects: Require, Modify, Deny) and their compliance %.
+  4. tagpolicy — 'Tag policy enforcement' — Azure Policy assignments that require/append/deny on tags (effects: Require, Modify, Deny) and their compliance % (both from policyStates summarize at the connected scope).
   5. ahub — 'Hybrid Benefit & licensing' — Windows/SQL Azure Hybrid Benefit applied vs eligible; SQL license type; reserved capacity for licensing.
   6. storageopt — 'Storage & lifecycle optimization' — blob lifecycle management policies, access-tier distribution (Hot/Cool/Archive), stale snapshots, premium disks on deallocated VMs.
 
