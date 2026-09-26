@@ -15,11 +15,11 @@ public static class FollowUpTools
         Skip it for greetings, public pricing, hypothetical estimates and clarifications. Never offer a Cost Management retry before its returned deadline.
         """)]
     private static string SuggestFollowUp(
-        [Description("Button label, at most 60 characters.")] string label,
+        [Description("Button label, at most 60 characters. It must describe exactly the action its prompt performs: same entity, scope and analysis, promising nothing the prompt does not request.")] string label,
         [Description("Complete instruction sent when clicked, with the concrete target and scope. Do not paste tool output or the transcript.")] string prompt,
-        [Description("Optional second label.")] string? label2 = null,
+        [Description("Optional second label, describing exactly what prompt2 performs.")] string? label2 = null,
         [Description("Optional second prompt, paired with label2.")] string? prompt2 = null,
-        [Description("Optional third label.")] string? label3 = null,
+        [Description("Optional third label, describing exactly what prompt3 performs.")] string? label3 = null,
         [Description("Optional third prompt, paired with label3.")] string? prompt3 = null)
     {
         (string? Label, string? Prompt)[] pairs = [(label, prompt), (label2, prompt2), (label3, prompt3)];

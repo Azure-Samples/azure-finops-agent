@@ -94,6 +94,51 @@ public sealed class ToolResultTests
     }
 
     [Fact]
+    public void QueryArraysAnswerSeveralViewsOfOneResultInOneCall()
+    {
+        var entry = ToolResultStore.Default.Retain(101, "many-session", CostTable, Source)!;
+        const string single = """{"path":"$.properties.rows[*]","aggregates":[{"op":"sum","path":"$.Cost","as":"total"}],"limit":0}""";
+        Assert.Equal(ToolResultQueryTools.Execute(entry, single), ToolResultQueryTools.ExecuteMany(entry, single));
+
+        using var many = JsonDocument.Parse(ToolResultQueryTools.ExecuteMany(entry,
+            " [" + single + """,{"path":"$.properties.rows[*]","groupBy":{"service":"$['Service Name']"},"aggregates":[{"op":"sum","path":"$.Cost","as":"cost"}],"sort":[{"path":"$.cost","direction":"desc"}]}]"""));
+        Assert.Equal(entry.Id, many.RootElement.GetProperty("resultId").GetString());
+        Assert.True(many.RootElement.GetProperty("source").GetProperty("Success").GetBoolean());
+        var answers = many.RootElement.GetProperty("queries");
+        Assert.Equal(2, answers.GetArrayLength());
+        Assert.Equal(5m, answers[0].GetProperty("totals").GetProperty("total").GetDecimal());
+        Assert.Equal("Compute", answers[1].GetProperty("rows")[0].GetProperty("service").GetString());
+
+        Assert.Equal("Error: Query 1: Mode must be query, schema or keys.",
+            ToolResultQueryTools.ExecuteMany(entry, "[" + single + """,{"mode":"bogus"}]"""));
+        Assert.StartsWith("Error: Query 0 must be a JSON object", ToolResultQueryTools.ExecuteMany(entry, "[1]"));
+        Assert.StartsWith("Error: A query array holds 1 to 8", ToolResultQueryTools.ExecuteMany(entry, "[]"));
+        Assert.StartsWith("Error: A query array holds 1 to 8",
+            ToolResultQueryTools.ExecuteMany(entry, "[" + string.Join(",", Enumerable.Repeat(single, 9)) + "]"));
+    }
+
+    [Fact]
+    public void SelectionMissesAndSchemaViewsShowWhereQueryPathsStart()
+    {
+        var entry = ToolResultStore.Default.Retain(101, "paths-session", CostTable, Source)!;
+        using var miss = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$[0].properties.rows[*]"}"""));
+        Assert.Equal(0, miss.RootElement.GetProperty("totalMatches").GetInt32());
+        Assert.Equal("path $[0].properties.rows[*] matched no values. Paths start at the retained root, an object with top-level keys properties.",
+            miss.RootElement.GetProperty("note").GetString());
+
+        using var schema = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"mode":"schema","path":"$.properties.rows[*]"}"""));
+        Assert.Contains("keep path $.properties.rows[*]", schema.RootElement.GetProperty("queryPaths").GetString());
+        Assert.Equal(JsonValueKind.Null, schema.RootElement.GetProperty("note").ValueKind);
+
+        using var rootSchema = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"mode":"schema"}"""));
+        Assert.Equal(JsonValueKind.Null, rootSchema.RootElement.GetProperty("queryPaths").ValueKind);
+
+        var empty = ToolResultStore.Default.Retain(101, "paths-session", """{"count":0,"Items":[]}""", Source)!;
+        using var none = JsonDocument.Parse(ToolResultQueryTools.Execute(empty, """{"path":"$.Items[*]"}"""));
+        Assert.StartsWith("path $.Items[*] selects an empty array", none.RootElement.GetProperty("note").GetString());
+    }
+
+    [Fact]
     public void KeysModeListsPropertyNamesForLargeMaps()
     {
         var entry = ToolResultStore.Default.Retain(101, "keys-session", """{"paths":{"/a":{"get":{}},"/b":{"post":{}}},"definitions":{"X":{}}}""", Source)!;
@@ -300,7 +345,14 @@ public sealed class ToolResultTests
         Assert.Equal([0], existential.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
         using var universal = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"where":[{"path":"$.body.value[*].limit","op":"ne","value":10}]}"""));
         Assert.Equal([1], universal.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
-        Assert.StartsWith("Error: Group keys must be scalar", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","groupBy":{"limit":"$.body.value[*].limit"},"aggregates":[{"op":"count","as":"n"}]}"""));
+        using var elements = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","groupBy":{"limit":"$.body.value[*].limit"},"aggregates":[{"op":"count","as":"n"}]}"""));
+        Assert.Equal([0m, 10m, 100m], elements.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("limit").GetDecimal()).Order());
+        Assert.Contains("$.body.value[*]", elements.RootElement.GetProperty("note").GetString());
+        using var filtered = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","where":[{"path":"$.index","op":"eq","value":0}],"groupBy":{"name":"$.body.value[*].name.value"},"aggregates":[{"op":"max","path":"$.body.value[*].limit","as":"maxLimit"},{"op":"count","as":"n"}]}"""));
+        var filteredRows = filtered.RootElement.GetProperty("rows").EnumerateArray().ToDictionary(row => row.GetProperty("name").GetString()!, row => row.GetProperty("maxLimit").GetDecimal());
+        Assert.Equal(new Dictionary<string, decimal> { ["cores"] = 100m, ["lowPriorityCores"] = 10m }, filteredRows);
+        Assert.StartsWith("Error: Group keys must be scalar", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","groupBy":{"index":"$.index","limit":"$.body.value[*].limit"}}"""));
+        Assert.StartsWith("Error: Group keys must be scalar", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","groupBy":{"limit":"$.body.value[*].limit"},"aggregates":[{"op":"sum","path":"$.index","as":"s"}]}"""));
         Assert.StartsWith("Error: Per-row field paths", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","sort":[{"path":"$.body.value[*].limit"}]}"""));
         using var distinct = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*].body.value[*]","groupBy":{"name":"$.name.value"}}"""));
         Assert.Equal(2, distinct.RootElement.GetProperty("rows").EnumerateArray().Single(row => row.GetProperty("name").GetString() == "lowPriorityCores").GetProperty("count").GetInt32());

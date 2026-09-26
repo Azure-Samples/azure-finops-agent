@@ -49,7 +49,7 @@ public sealed class EvaluationGateTests
         ["GetCrawlMaturityEvidence"], ["QueryAzure"]);
     private static readonly RunCapture Success = new("Evidence-backed answer", [new("GetCrawlMaturityEvidence", true, "{}", null)],
         true, [], 1000, 100);
-    private const string Accepted = """{"accepted":true,"grounded":true,"complete":true,"reason":"Supported by the supplied evidence."}""";
+    private const string Accepted = """{"accepted":true,"grounded":true,"complete":true,"efficient":true,"efficiencyScore":5,"reason":"Supported by the supplied evidence."}""";
 
     [Fact]
     public void CompleteRunWithValidJudgeVerdictPasses() => Assert.True(EvaluationGate.Assess(Scenario, Success, Accepted).Accepted);
@@ -87,14 +87,116 @@ public sealed class EvaluationGateTests
         Assert.Equal("xhigh", root.GetProperty("reasoning").GetProperty("effort").GetString());
         Assert.True(root.GetProperty("text").GetProperty("format").GetProperty("strict").GetBoolean());
 
-        using var evidence = JsonDocument.Parse(root.GetProperty("input")[1].GetProperty("content").GetString()!);
+        using var evidence = JsonDocument.Parse(root.GetProperty("input")[2].GetProperty("content").GetString()!);
         Assert.Equal(Scenario.Question, evidence.RootElement.GetProperty("question").GetString());
         Assert.Equal(Scenario.Rubric, evidence.RootElement.GetProperty("rubric").GetString());
-        Assert.Equal(run.Answer, evidence.RootElement.GetProperty("Answer").GetString());
+        Assert.Equal(run.Answer, evidence.RootElement.GetProperty("answer").GetString());
         Assert.Equal(run.HostContext, evidence.RootElement.GetProperty("hostContext").GetString());
         Assert.Equal(run.VisibleOutputs[0], evidence.RootElement.GetProperty("visibleOutputs")[0].GetString());
-        Assert.Equal(run.Tools[0].Result, evidence.RootElement.GetProperty("Tools")[0].GetProperty("Result").GetString());
-        Assert.Equal(run.Tools[0].Arguments, evidence.RootElement.GetProperty("Tools")[0].GetProperty("Arguments").GetString());
+        Assert.Equal(run.Tools[0].Result, evidence.RootElement.GetProperty("tools")[0].GetProperty("result").GetString());
+        Assert.Equal(run.Tools[0].Arguments, evidence.RootElement.GetProperty("tools")[0].GetProperty("arguments").GetString());
+    }
+
+    [Fact]
+    public async Task JudgeReceivesTheEndToEndTimelineAndGradesEfficiency()
+    {
+        using var handler = new JudgeRequestHandler();
+        using var http = new HttpClient(handler);
+        var judge = new JudgeClient(http, new JudgeCredential(), new Uri("https://example.openai.azure.com/"), "test-model");
+        // Two overlapping reads (round 1), a later read (round 2) and a gap of model time between and after them.
+        var run = Success with
+        {
+            DurationMs = 10000,
+            FirstTokenMs = 7500,
+            ThrottleNotices = 1,
+            AgentProfile = "synthetic-model, reasoning effort xhigh",
+            Tools =
+            [
+                new("QueryAzure", true, "{}", null, "{\"url\":\"/a\"}", 1000, 3000),
+                new("QueryAzure", true, "HTTP 403 Forbidden\n{}", null, "{\"url\":\"/b\"}", 1500, 2500),
+                new("QueryToolResult", true, "{}", null, "{\"resultId\":\"x\"}", 4000, 5000)
+            ]
+        };
+        await judge.AssessAsync(Scenario with { MaxToolCalls = 12, MaxDurationSeconds = 240 }, run, CancellationToken.None);
+        using var request = JsonDocument.Parse(handler.RequestJson);
+        var root = request.RootElement;
+        var efficiency = root.GetProperty("input")[1].GetProperty("content").GetString()!;
+        Assert.Contains("whole end-to-end session for efficiency", efficiency);
+        Assert.Contains("Cost Management query and forecast calls running one after another", efficiency);
+        Assert.Contains("efficient must be true exactly when efficiencyScore is 3 or higher", efficiency);
+        var schema = root.GetProperty("text").GetProperty("format").GetProperty("schema");
+        Assert.Equal(["accepted", "grounded", "complete", "efficient", "efficiencyScore", "reason"],
+            schema.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal([1, 2, 3, 4, 5], schema.GetProperty("properties").GetProperty("efficiencyScore").GetProperty("enum").EnumerateArray().Select(item => item.GetInt32()));
+
+        using var evidence = JsonDocument.Parse(root.GetProperty("input")[2].GetProperty("content").GetString()!);
+        var session = evidence.RootElement.GetProperty("session");
+        Assert.Equal("synthetic-model, reasoning effort xhigh", session.GetProperty("agent").GetString());
+        Assert.Equal(10, session.GetProperty("totalSeconds").GetDouble());
+        Assert.Equal(7.5, session.GetProperty("firstTokenSeconds").GetDouble());
+        Assert.Equal(3, session.GetProperty("toolCalls").GetInt32());
+        Assert.Equal(1, session.GetProperty("failedToolCalls").GetInt32());
+        Assert.Equal(2, session.GetProperty("rounds").GetInt32());
+        Assert.Equal(2, session.GetProperty("maxConcurrentTools").GetInt32());
+        Assert.Equal(3, session.GetProperty("toolWallSeconds").GetDouble());
+        Assert.Equal(7, session.GetProperty("modelSeconds").GetDouble());
+        Assert.Equal(1, session.GetProperty("serviceThrottleNotices").GetInt32());
+        Assert.Equal(12, session.GetProperty("budgets").GetProperty("maxToolCalls").GetInt32());
+        Assert.Equal(240, session.GetProperty("budgets").GetProperty("maxDurationSeconds").GetInt32());
+        var tools = evidence.RootElement.GetProperty("tools").EnumerateArray().ToArray();
+        Assert.Equal([1, 2, 3], tools.Select(tool => tool.GetProperty("order").GetInt32()));
+        Assert.Equal([1, 1, 2], tools.Select(tool => tool.GetProperty("round").GetInt32()));
+        Assert.Equal(["/a", "/b", "x"], tools.Select(tool => JsonDocument.Parse(tool.GetProperty("arguments").GetString()!).RootElement.EnumerateObject().First().Value.GetString()));
+        Assert.Equal([true, false, true], tools.Select(tool => tool.GetProperty("succeeded").GetBoolean()));
+        Assert.Equal(1.5, tools[1].GetProperty("startSeconds").GetDouble());
+        Assert.Equal(2.5, tools[1].GetProperty("endSeconds").GetDouble());
+        Assert.Equal(1, tools[1].GetProperty("durationSeconds").GetDouble());
+    }
+
+    [Fact]
+    public void TimelineOrdersCallsByStartAndKeepsUntimedCallsVisible()
+    {
+        var timeline = SessionTimeline.From(Success with
+        {
+            DurationMs = 5000,
+            Tools =
+            [
+                new("Later", true, "{}", null, "", 3000, 4000),
+                new("Untimed", true, "{}", null),
+                new("First", true, "{}", null, "", 500, 1000),
+                new("Adjacent", true, "{}", null, "", 1000, 2000)
+            ]
+        });
+        Assert.Equal(["First", "Adjacent", "Later", "Untimed"], timeline.Calls.Select(call => call.Tool.Name));
+        Assert.Equal([1, 2, 3, 0], timeline.Calls.Select(call => call.Round));
+        Assert.Equal(3, timeline.Rounds);
+        Assert.Equal(1, timeline.MaxConcurrentTools);
+        Assert.Equal(2.5, timeline.ToolWallSeconds);
+        Assert.Equal(2.5, timeline.ModelSeconds);
+        Assert.Null(timeline.Calls[3].StartSeconds);
+        Assert.Equal(4, timeline.ToolCalls);
+    }
+
+    [Theory]
+    [InlineData(false, 4)]
+    [InlineData(true, 2)]
+    [InlineData(false, 1)]
+    public void AnInefficientSessionFailsEvenWhenTheAnswerIsAccepted(bool efficient, int score)
+    {
+        var verdict = EvaluationGate.Assess(Scenario, Success,
+            $$"""{"accepted":true,"grounded":true,"complete":true,"efficient":{{(efficient ? "true" : "false")}},"efficiencyScore":{{score}},"reason":"Calls 2-4 repeated call 1."}""");
+        Assert.False(verdict.Accepted);
+        Assert.Contains($"Judge rated the session inefficient ({score}/5): Calls 2-4 repeated call 1.", verdict.Reasons);
+        Assert.Equal(score, verdict.Judge!.EfficiencyScore);
+    }
+
+    [Fact]
+    public void TheLowestPassingEfficiencyScoreIsThree()
+    {
+        var verdict = EvaluationGate.Assess(Scenario, Success,
+            """{"accepted":true,"grounded":true,"complete":true,"efficient":true,"efficiencyScore":3,"reason":"Some overhead."}""");
+        Assert.True(verdict.Accepted);
+        Assert.Equal(EvaluationGate.MinimumEfficiencyScore, verdict.Judge!.EfficiencyScore);
     }
 
     [Theory]
@@ -230,9 +332,14 @@ public sealed class EvaluationGateTests
     [InlineData("not json")]
     [InlineData("{}")]
     [InlineData("{\"accepted\":true}")]
-    [InlineData("{\"accepted\":true,\"grounded\":false,\"complete\":true,\"reason\":\"Missing evidence\"}")]
-    [InlineData("{\"accepted\":\"true\",\"grounded\":true,\"complete\":true,\"reason\":\"Invalid type\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"reason\":\"\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":false,\"complete\":true,\"efficient\":true,\"efficiencyScore\":5,\"reason\":\"Missing evidence\"}")]
+    [InlineData("{\"accepted\":\"true\",\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":5,\"reason\":\"Invalid type\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":5,\"reason\":\"\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"reason\":\"Legacy verdict without efficiency\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":\"true\",\"efficiencyScore\":5,\"reason\":\"Invalid type\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":0,\"reason\":\"Out of range\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":4.5,\"reason\":\"Not an integer\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":\"5\",\"reason\":\"Invalid type\"}")]
     public void MissingMalformedOrNegativeJudgeFailsClosed(string judge) => Assert.False(EvaluationGate.Assess(Scenario, Success, judge).Accepted);
 
     private sealed class JudgeCredential : TokenCredential

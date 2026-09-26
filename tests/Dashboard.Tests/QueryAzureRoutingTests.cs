@@ -312,4 +312,75 @@ public sealed class QueryAzureRoutingTests
         Assert.Equal("a", empty.RootElement.GetProperty("_apiVersion").GetProperty("requested").GetString());
         Assert.Equal("HTTP 200 OK\n[1]", AnnotateApiVersion("HTTP 200 OK\n[1]", "a", "b"));
     }
+
+    [Fact]
+    public void RedundantCurrencyDimensionGroupingIsRemovedVisiblyFromCostQueriesOnly()
+    {
+        const string query = "/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement/query?api-version=2025-03-01";
+        var (body, removed) = WithoutCurrencyGrouping(query,
+            """{"type":"ActualCost","dataset":{"grouping":[{"type":"Dimension","name":"ServiceName"},{"type":"dimension","name":"currency"},{"type":"TagKey","name":"Currency"}]}}""");
+        Assert.True(removed);
+        using (var document = JsonDocument.Parse(body!))
+        {
+            var grouping = document.RootElement.GetProperty("dataset").GetProperty("grouping");
+            Assert.Equal(["Dimension:ServiceName", "TagKey:Currency"],
+                grouping.EnumerateArray().Select(item => item.GetProperty("type").GetString() + ":" + item.GetProperty("name").GetString()));
+            Assert.Equal("ActualCost", document.RootElement.GetProperty("type").GetString());
+        }
+        Assert.Null(ValidateQueryBody(query, body));
+
+        const string unchanged = """{"dataset":{"grouping":[{"type":"TagKey","name":"Currency"}]}}""";
+        Assert.Equal((unchanged, false), WithoutCurrencyGrouping(query, unchanged));
+        const string grouped = """{"dataset":{"grouping":[{"type":"Dimension","name":"Currency"}]}}""";
+        Assert.Equal((grouped, false), WithoutCurrencyGrouping(query.Replace("/query", "/forecast"), grouped));
+        Assert.Equal(("not json", false), WithoutCurrencyGrouping(query, "not json"));
+
+        var annotated = AnnotateRoot("HTTP 200 OK\n{\"properties\":{}}", "_request", new Dictionary<string, string> { ["removedGrouping"] = "Currency" });
+        using var result = JsonDocument.Parse(ResponseShaper.SplitPreamble(annotated).Body);
+        Assert.Equal("Currency", result.RootElement.GetProperty("_request").GetProperty("removedGrouping").GetString());
+        Assert.True(result.RootElement.TryGetProperty("properties", out _));
+    }
+
+    [Theory]
+    [InlineData("HTTP 400 BadRequest\n{\"error\":{\"code\":\"UnsupportedApiVersion\",\"message\":\"The HTTP resource that matches the request URI 'x' does not support the API version '2026-08-01'.\",\"innerError\":null}}", true)]
+    [InlineData("HTTP 400 BadRequest\n{\"error\":{\"code\":\"UnsupportedApiVersion\",\"message\":\"The supported api-versions are '2025-03-01'.\"}}", false)]
+    [InlineData("HTTP 400 BadRequest\n{\"error\":{\"code\":\"BadRequest\",\"message\":\"Invalid body.\"}}", false)]
+    [InlineData("HTTP 404 NotFound\n{\"error\":{\"code\":\"UnsupportedApiVersion\",\"message\":\"x\"}}", false)]
+    [InlineData("HTTP 400 BadRequest\nnot json", false)]
+    public void ProviderApiVersionRejectionsWithoutAListAreRecognized(string response, bool expected) =>
+        Assert.Equal(expected, IsUnlistedApiVersionRejection(response));
+
+    [Theory]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement/scheduledActions?api-version=2026-08-01", "/subscriptions/11111111-1111-1111-1111-111111111111", "Microsoft.CostManagement", "scheduledActions")]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm/extensions?api-version=2024-07-01", "/subscriptions/11111111-1111-1111-1111-111111111111", "Microsoft.Compute", "virtualMachines/extensions")]
+    [InlineData("/providers/Microsoft.Billing/billingAccounts/a/providers/Microsoft.CostManagement/exports/e?api-version=2026-08-01", "", "Microsoft.CostManagement", "exports")]
+    public void ResourceTypesComeFromTheLastProviderSegment(string path, string scope, string provider, string type) =>
+        Assert.Equal((scope, provider, type), ResourceTypeOf(path));
+
+    [Theory]
+    [InlineData("/subscriptions/x/resourcegroups?api-version=2021-04-01")]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement?api-version=2021-04-01")]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement/a%2Fb?api-version=1")]
+    public void PathsWithoutAResourceTypeHaveNone(string path) => Assert.Null(ResourceTypeOf(path));
+
+    [Fact]
+    public void OlderStableManifestVersionsAreTriedNewestFirst()
+    {
+        const string manifest = "HTTP 200 OK\n{\"namespace\":\"Microsoft.CostManagement\",\"resourceTypes\":[{\"resourceType\":\"Exports\",\"apiVersions\":[\"2026-08-01\"]},{\"resourceType\":\"ScheduledActions\",\"apiVersions\":[\"2026-08-01\",\"2026-06-01\",\"2025-03-01\",\"2024-10-01-preview\",\"2024-08-01\"]}]}";
+        Assert.Equal(["2026-06-01", "2025-03-01"], OlderStableVersions(manifest, "scheduledActions", "2026-08-01"));
+        Assert.Equal(["2024-08-01"], OlderStableVersions(manifest, "scheduledActions", "2025-03-01"));
+        Assert.Empty(OlderStableVersions(manifest, "exports", "2026-08-01"));
+        Assert.Empty(OlderStableVersions(manifest, "views", "2026-08-01"));
+        Assert.Empty(OlderStableVersions("HTTP 403 Forbidden\n{}", "scheduledActions", "2026-08-01"));
+    }
+
+    [Theory]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.PolicyInsights/policyStates/latest/summarize?api-version=2019-10-01", true)]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg/providers/Microsoft.PolicyInsights/policyStates/default/queryResults?api-version=2019-10-01", true)]
+    [InlineData("/providers/Microsoft.Management/managementGroups/mg/providers/Microsoft.PolicyInsights/policyEvents/default/queryResults?api-version=2019-10-01", true)]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.PolicyInsights/policyStates/latest/triggerEvaluation?api-version=2019-10-01", false)]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.PolicyInsights/remediations/r/cancel?api-version=2021-10-01", false)]
+    [InlineData("/providers/Microsoft.PolicyInsights/policyStates/latest/summarize?api-version=2019-10-01", false)]
+    public void PolicyComplianceQueriesAreReadOnlyPosts(string path, bool allowed) =>
+        Assert.Equal(allowed, ValidateReadOnlyPostPath(path, null) is null);
 }

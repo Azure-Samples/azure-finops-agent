@@ -63,6 +63,7 @@ public static class HttpHelper
     }
 
     private const int MaxThrottleRetries = 5;
+    private const int MaxTransportRetries = 2;
     private const int MaxInteractiveCostAttempts = 2;
 
     private const int MaxRetryWaitSeconds = 60;
@@ -177,6 +178,7 @@ public static class HttpHelper
         var totalSw = Stopwatch.StartNew();
         var totalWaitSec = 0.0;
         var retryCount = 0;
+        var transportRetries = 0;
         HttpResponseMessage res = null!;
 
         // Resolve the per-turn SSE reporter ONCE up front — used for queue waits,
@@ -237,6 +239,16 @@ public static class HttpHelper
                 try
                 {
                     res = await Http.SendAsync(req, requestToken);
+                }
+                // A dropped connection on an idempotent read is transient; writes and POSTs are never re-sent.
+                catch (HttpRequestException) when (method == HttpMethod.Get && transportRetries < MaxTransportRetries
+                    && attempt < maxAttempts - 1 && !requestToken.IsCancellationRequested)
+                {
+                    transportRetries++;
+                    retryCount++;
+                    Logger?.LogWarning("HTTP transport retry {Tool} attempt={Attempt}", telemetryPrefix, attempt + 1);
+                    await Task.Delay(TimeSpan.FromSeconds(transportRetries), requestToken);
+                    continue;
                 }
                 finally
                 {

@@ -92,8 +92,10 @@ internal static class Program
         var logger = logging.CreateLogger("LiveEvaluation");
         var identity = new PersistentIdentity(app.Services.GetRequiredService<IDataProtectionProvider>(), logging.CreateLogger<PersistentIdentity>());
         var tokens = new SessionTokenStore(options, new EntraClientCredentials(options, logging.CreateLogger<EntraClientCredentials>()), identity, logging.CreateLogger<SessionTokenStore>());
+        var reasoningEffort = Environment.GetEnvironmentVariable("EVAL_REASONING_EFFORT") ?? "xhigh";
+        state.AgentProfile = $"{model}, reasoning effort {reasoningEffort}";
         await using var factory = await CopilotSessionFactory.CreateAsync(credential, telemetry, identity, options, endpoint, model,
-            Environment.GetEnvironmentVariable("EVAL_REASONING_EFFORT") ?? "xhigh", logging, tenant);
+            reasoningEffort, logging, tenant);
         app.UseSession();
         app.Use(async (context, next) =>
         {
@@ -136,6 +138,7 @@ internal static class Program
         var answers = state.Answers;
         var visible = state.VisibleOutputs;
         var toolArguments = new Dictionary<string, string>(StringComparer.Ordinal);
+        var toolStarts = new Dictionary<string, long>(StringComparer.Ordinal);
         string? sessionId = null;
         while (await reader.ReadLineAsync(deadline.Token) is { } line)
         {
@@ -160,6 +163,7 @@ internal static class Program
             {
                 var id = Text(item, "id");
                 toolArguments[id] = Text(item, "args");
+                toolStarts.TryAdd(id, started.ElapsedMilliseconds);
                 if (id.Length == 0 || !pendingTools.Add(id) || completedTools.Contains(id)) errors.Add("Invalid or duplicate tool start.");
                 if (pendingTools.Count + tools.Count > maxToolCalls) throw new InvalidOperationException("Tool-call budget exceeded.");
                 Console.WriteLine(JsonSerializer.Serialize(new { type, tool = Text(item, "tool"), elapsedMs = started.ElapsedMilliseconds }));
@@ -169,7 +173,7 @@ internal static class Program
                 var id = Text(item, "id");
                 if (!pendingTools.Remove(id) || !completedTools.Add(id)) errors.Add("Tool completion did not match exactly one start.");
                 var result = new ToolResult(Text(item, "tool"), item.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.True, Text(item, "result"), Text(item, "error"),
-                    toolArguments.GetValueOrDefault(id, ""));
+                    toolArguments.GetValueOrDefault(id, ""), toolStarts.GetValueOrDefault(id, -1), started.ElapsedMilliseconds);
                 tools.Add(result);
                 Console.WriteLine(JsonSerializer.Serialize(new { type, result.Name, Success = EvaluationGate.ToolSucceeded(result), elapsedMs = started.ElapsedMilliseconds }));
             }
@@ -208,6 +212,7 @@ internal static class Program
         var capture = state.Capture();
         var tools = state.Tools;
         var subscriptions = state.Subscriptions;
+        var timeline = SessionTimeline.From(capture);
         string Bounded(string text, int limit)
         {
             var redacted = Redact(text, subscriptions);
@@ -226,8 +231,17 @@ internal static class Program
             tools = tools.Select(tool => new
             {
                 name = tool.Name,
-                success = EvaluationGate.ToolSucceeded(tool)
+                success = EvaluationGate.ToolSucceeded(tool),
+                startMs = tool.StartedMs >= 0 ? tool.StartedMs : (long?)null,
+                durationMs = tool.StartedMs >= 0 && tool.CompletedMs >= tool.StartedMs ? tool.CompletedMs - tool.StartedMs : (long?)null
             }),
+            timeline = new
+            {
+                rounds = timeline.Rounds,
+                maxConcurrentTools = timeline.MaxConcurrentTools,
+                toolWallMs = (long)Math.Round(timeline.ToolWallSeconds * 1000),
+                modelMs = (long)Math.Round(timeline.ModelSeconds * 1000)
+            },
             failedTools = tools.Count(tool => !EvaluationGate.ToolSucceeded(tool)),
             failedToolDetails = tools.Where(tool => !EvaluationGate.ToolSucceeded(tool)).Select(tool => new
             {
@@ -268,6 +282,8 @@ internal static class Program
                 accepted = judge.Accepted,
                 grounded = judge.Grounded,
                 complete = judge.Complete,
+                efficient = judge.Efficient,
+                efficiencyScore = judge.EfficiencyScore,
                 reason = Redact(judge.Reason, subscriptions)
             } : null,
             answer = Redact(capture.Answer, subscriptions),

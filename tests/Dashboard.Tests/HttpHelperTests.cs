@@ -50,6 +50,39 @@ public sealed class HttpHelperTests
         }
     }
 
+    [Fact]
+    public async Task DroppedConnectionsRetryOnlyIdempotentReads()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var server = builder.Build();
+        var reads = 0;
+        var posts = 0;
+        server.MapGet("/flaky", async context =>
+        {
+            if (Interlocked.Increment(ref reads) == 1) { context.Abort(); return; }
+            await context.Response.WriteAsync("{\"ok\":true}");
+        });
+        server.MapPost("/flaky", context =>
+        {
+            Interlocked.Increment(ref posts);
+            context.Abort();
+            return Task.CompletedTask;
+        });
+        await server.StartAsync();
+        try
+        {
+            var url = server.Urls.Single() + "/flaky";
+            Assert.Equal("HTTP 200 OK\n{\"ok\":true}", await HttpHelper.SendWithRetryAsync(url, "synthetic-test-only", null, "arm-test"));
+            Assert.Equal(2, reads);
+            await Assert.ThrowsAsync<HttpRequestException>(() =>
+                HttpHelper.SendWithRetryAsync(url, "synthetic-test-only", null, "arm-test", HttpMethod.Post, "{}"));
+            Assert.Equal(1, posts);
+        }
+        finally { await server.StopAsync(); }
+    }
+
     [Theory]
     [InlineData(false, 1, "query")]
     [InlineData(true, 1, "query")]

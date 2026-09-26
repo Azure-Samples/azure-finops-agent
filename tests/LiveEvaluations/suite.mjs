@@ -246,6 +246,10 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
         typeof result.judge?.accepted !== "boolean" ||
         typeof result.judge?.grounded !== "boolean" ||
         typeof result.judge?.complete !== "boolean" ||
+        typeof result.judge?.efficient !== "boolean" ||
+        !Number.isInteger(result.judge?.efficiencyScore) ||
+        result.judge.efficiencyScore < 1 ||
+        result.judge.efficiencyScore > 5 ||
         typeof result.judge?.reason !== "string" ||
         !result.judge.reason.trim()
     )
@@ -256,8 +260,16 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
         !result.judge.complete
     )
         failures.push("Structured judge rejected the answer.");
+    else if (
+        !result.judge.efficient ||
+        result.judge.efficiencyScore < MINIMUM_EFFICIENCY_SCORE
+    )
+        failures.push("Structured judge rated the session inefficient.");
     return failures;
 }
+
+// Judge scores 1-2 mean clear waste; they fail the gate even when the efficient flag disagrees.
+export const MINIMUM_EFFICIENCY_SCORE = 3;
 
 export function evaluateSuite(cases, results, sha, suiteHash) {
     const failures = [];
@@ -411,13 +423,25 @@ export function publishableResult(result, publishAnswers) {
             ? result.tools.map((tool) => ({
                   name: typeof tool?.name === "string" ? tool.name : "unknown",
                   success: tool?.success === true,
+                  durationMs: Number.isFinite(tool?.durationMs) ? tool.durationMs : null,
               }))
             : [],
+        timeline: {
+            rounds: Number.isInteger(result.timeline?.rounds) ? result.timeline.rounds : null,
+            maxConcurrentTools: Number.isInteger(result.timeline?.maxConcurrentTools)
+                ? result.timeline.maxConcurrentTools : null,
+            toolWallMs: Number.isFinite(result.timeline?.toolWallMs) ? result.timeline.toolWallMs : null,
+            modelMs: Number.isFinite(result.timeline?.modelMs) ? result.timeline.modelMs : null,
+        },
         judge: judge
             ? {
                   accepted: judge.accepted === true,
                   grounded: judge.grounded === true,
                   complete: judge.complete === true,
+                  efficient: judge.efficient === true,
+                  efficiencyScore: Number.isInteger(judge.efficiencyScore)
+                      && judge.efficiencyScore >= 1 && judge.efficiencyScore <= 5
+                      ? judge.efficiencyScore : null,
               }
             : null,
         attempts: Number.isInteger(result.attempts) ? result.attempts : 1,

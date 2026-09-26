@@ -46,10 +46,10 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         - Microsoft Graph: https://graph.microsoft.com/v1.0/... or /beta/... Reference: https://learn.microsoft.com/graph/api/{resource}-{verb}?view=graph-rest-1.0 and https://github.com/microsoftgraph/msgraph-metadata. Many endpoints, such as subscribedSkus and report functions, reject $filter/$top/$select; report functions return CSV, converted to a rows table. Follow @odata.nextLink via maxPages.
         - Log Analytics: POST https://api.loganalytics.io/v1/workspaces/{customerId}/query; Application Insights: POST https://api.applicationinsights.io/v1/apps/{appId}/query; body {"query":"<KQL>","timespan":"P7D"}. KQL: https://learn.microsoft.com/kusto/query/. Discover populated tables with `Usage | summarize GB=sum(Quantity)/1024 by DataType` and columns with `<Table> | getschema`; filter by time first, summarize and project inside KQL, and take/top only after aggregation. FinOps signals: Usage and _BilledSize (ingestion cost), Perf/InsightsMetrics (utilization), Heartbeat and AzureActivity (who changed what).
         - Blob Storage (cost exports): GET https://{account}.blob.core.windows.net/{container}?restype=container&comp=list&prefix={export/period} lists blobs (use the narrowest prefix; a NextMarker means more blobs); GET https://{account}.blob.core.windows.net/{container}/{blob} reads the first 6 MiB of one blob (CSV becomes rows; complete=false when the blob is larger). Never use a SAS or other credential-bearing URL; for complete analysis of a large export ask for an upload and use QueryUploadedFile. Reference: https://learn.microsoft.com/rest/api/storageservices/list-blobs.
-        - Azure Retail Prices (public list prices, no auth): GET https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=<OData>. Fields and operators (eq, and, or, contains(field,'x')): https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices. Values are case-sensitive; armRegionName is lowercase (eastus); Azure OpenAI and other Foundry models use serviceName 'Foundry Models'. Meter, product and SKU names are not derivable from ARM SKU names: start with structural fields (serviceName, armRegionName, armSkuName, priceType) and read the returned values. Compare regions or SKUs with 'or' in one filter. The host follows NextPageLink (maxPages); never send $top. Zero Items means the filter matched nothing, not a zero price; tierMinimumUnits marks volume bands. Quote each rate with productName, meterName, unitOfMeasure, currency and retrievedAtUtc.
+        - Azure Retail Prices (public list prices, no auth): GET https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=<OData>. Fields and operators (eq, and, or, contains(field,'x')): https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices. Values are case-sensitive; armRegionName is lowercase (eastus); Azure OpenAI and other Foundry models use serviceName 'Foundry Models'. Meter, product and SKU names are not derivable from ARM SKU names: start with structural fields (serviceName, armRegionName, armSkuName, priceType) and read the returned values. Compare regions or SKUs with 'or' in one filter; for a multi-service estimate, fetch every component in the first round as one requests batch with one structural filter per service, then select rows locally. Some services publish one worldwide rate under armRegionName 'Global' rather than per region (for example Load Balancer), so filter those with (armRegionName eq '<region>' or armRegionName eq 'Global'). The host follows NextPageLink (maxPages); never send $top. Zero Items means the filter matched nothing, not a zero price; tierMinimumUnits marks volume bands. Quote each rate with productName, meterName, unitOfMeasure, currency and retrievedAtUtc.
         - Any other public https URL, GET only and without credentials: Microsoft Learn (search https://learn.microsoft.com/api/search?search=<terms>&locale=en-us, then fetch only returned URLs), GitHub, vendor pricing pages, and the public Azure status feed https://azure.status.microsoft/en-us/status/feed/ (not tenant-specific: an empty feed does not prove a resource is healthy; use ARM Microsoft.ResourceHealth for a named resource). Use grepFor on long pages.
         Host rules:
-        - DELETE is blocked. ARM POST is limited to read-only endpoints: Cost Management query/forecast/report generation/pricesheet download, Resource Graph, reservation and savings-plan price calculation, Advisor summarize, management-group entities, carbon reports, Spot placement scores and Network Watcher connectivityCheck from an existing VM (body {source:{resourceId:<VM id>},destination:{address,port}}). Action POSTs such as start, restart, deallocate, power off or return are blocked. PUT/PATCH never execute directly: they create a proposal that the user must approve in the UI; never claim a change was applied. Asynchronous (202) results return an operationId for GetOperationStatus. Standard Graph consent is read-only, so writes return 403: report that instead of retrying.
+        - DELETE is blocked. ARM POST is limited to read-only endpoints: Cost Management query/forecast/report generation/pricesheet download, Resource Graph, reservation and savings-plan price calculation, Advisor summarize, PolicyInsights policy-state summarize/queryResults and policy-event queryResults, management-group entities, carbon reports, Spot placement scores and Network Watcher connectivityCheck from an existing VM (body {source:{resourceId:<VM id>},destination:{address,port}}). Action POSTs such as start, restart, deallocate, power off or return are blocked. PUT/PATCH never execute directly: they create a proposal that the user must approve in the UI; never claim a change was applied. Asynchronous (202) results return an operationId for GetOperationStatus. Standard Graph consent is read-only, so writes return 403: report that instead of retrying.
         - Cost Management, Consumption and PolicyInsights paths need a scope prefix (/subscriptions/{id}, a resource group, a management group or a billing account). Resource Graph bodies list the requested scope in an explicit subscriptions or managementGroups array.
         - Cost Management /query and /forecast are tenant-throttled: the host runs them one at a time and retries once after a short cooldown. After a returned 429, make no further Cost Management calls this turn and report the retry deadline.
         - requests (instead of url) runs 1-200 requests in one call; use it rather than repeating similar calls, for example one cost query per subscription or one quota read per region. Batches containing Cost Management /query or /forecast run sequentially and stop after a final 429. Each result has index, status, outcome, body and error, plus total/succeeded/failed counts; one failed item fails the batch, so include only requests you have verified.
@@ -68,7 +68,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         [Description("GET (default), POST, PUT or PATCH. DELETE is blocked.")] string method = "GET",
         [Description("JSON request body for POST/PUT/PATCH, preferably passed as a JSON object rather than an escaped string; omit for GET.")] string body = "",
         [Description("Batch instead of url: JSON array of 1-200 {\"method\",\"url\",\"body\"} objects; body may be a JSON object or a JSON string. Example: [{\"method\":\"GET\",\"url\":\"/subscriptions/{id}/providers/Microsoft.Compute/locations/eastus/usages?api-version=2024-07-01\"}].")] string requests = "",
-        [Description("Optional QueryToolResult query applied to the complete retained result before it is returned, so only needed data comes back, e.g. {\"path\":\"$.value[*]\",\"select\":{\"name\":\"$.name\",\"sku\":\"$.sku.name\"}}. Columnar tables (columns + rows: Cost Management, Log Analytics, CSV) are addressable by column name: {\"path\":\"$.properties.rows[*]\",\"groupBy\":{\"service\":\"$.ServiceName\"},\"aggregates\":[{\"op\":\"sum\",\"path\":\"$.Cost\",\"as\":\"cost\"}],\"sort\":[{\"path\":\"$.cost\",\"direction\":\"desc\"}]}. For a batch the rows are $.results[*] (fields $.index, $.status, $.body...). An invalid query returns the schema instead and does not repeat the request.")] string resultQuery = "",
+        [Description("Optional QueryToolResult query applied to the complete retained result before it is returned, so only needed data comes back, e.g. {\"path\":\"$.value[*]\",\"select\":{\"name\":\"$.name\",\"sku\":\"$.sku.name\"}}. Columnar tables (columns + rows: Cost Management, Log Analytics, CSV) are addressable by column name: {\"path\":\"$.properties.rows[*]\",\"groupBy\":{\"service\":\"$.ServiceName\"},\"aggregates\":[{\"op\":\"sum\",\"path\":\"$.Cost\",\"as\":\"cost\"}],\"sort\":[{\"path\":\"$.cost\",\"direction\":\"desc\"}]}. For a batch the rows are $.results[*] (fields $.index, $.status, $.body...). An array of up to 8 queries returns queries[i] for each. An invalid query returns the schema instead and does not repeat the request.")] string resultQuery = "",
         [Description("Maximum pages to follow for a paginated GET, 1-10. Default 5. Use 1 when the first page answers the question.")] string maxPages = "5",
         [Description("Public web pages only: return only the lines that contain this text, for long documentation, specs or pricing pages.")] string grepFor = "",
         [Description("Batch only: maximum parallel requests, 1-50, default 20. Batches containing Cost Management /query or /forecast always run one at a time.")] string parallelism = "20",
@@ -95,9 +95,8 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
 
     internal static List<BulkRequestItem> ParseBatch(string requests)
     {
-        JsonDocument document;
-        try { document = JsonDocument.Parse(requests, LenientJson); }
-        catch (JsonException) { throw new FormatException("requests must be one complete JSON array of {\"method\",\"url\",\"body\"} objects."); }
+        var document = ModelJson.TryParse(requests, JsonValueKind.Array) ?? ModelJson.TryParse(requests, JsonValueKind.Object);
+        if (document is null) throw new FormatException("requests must be one complete JSON array of {\"method\",\"url\",\"body\"} objects.");
         using (document)
         {
             var root = document.RootElement;
@@ -186,6 +185,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         activity?.SetTag("azure.has_body", body is not null);
         var token = tokens.AzureToken;
         if (string.IsNullOrEmpty(token)) return HttpHelper.TokenMissing("AzureToken", activity, "azure");
+        var removedCurrencyGrouping = false;
 
         // Scope-prefix preflight: bare /providers/Microsoft.CostManagement|Consumption|... paths without a
         // {scope} prefix return a precise 400 with the grammar instead of an ARM 404 round-trip.
@@ -200,6 +200,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
             body = CanonicalJsonBody(body);
             path = CanonicalResourceGraphPath(path, body);
             if (ValidateReadOnlyPostPath(path, activity) is { } postError) return postError;
+            (body, removedCurrencyGrouping) = WithoutCurrencyGrouping(path, body);
             if (ValidateQueryBody(path, body) is { } queryError) return queryError;
         }
         var url = "https://" + ArmHost + path;
@@ -207,24 +208,48 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         var response = await HttpHelper.SendWithRetryAsync(url, token, activity, "azure", method,
             sendBody, timestamp, cancellationToken: cancellationToken);
         string? requestedVersion = null, usedVersion = null;
-        if ((method == HttpMethod.Get || method == HttpMethod.Post) && SupportedApiVersion(path, response) is { } supported)
+        if (method == HttpMethod.Get || method == HttpMethod.Post)
         {
-            var correctedPath = WithApiVersion(path, supported);
-            var corrected = await HttpHelper.SendWithRetryAsync("https://" + ArmHost + correctedPath, token, activity, "azure", method,
-                sendBody, timestamp, cancellationToken: cancellationToken);
-            if (corrected.StartsWith("HTTP 2", StringComparison.Ordinal))
+            // ARM names the supported versions; a resource provider's own rejection does not, so its
+            // manifest supplies the older stable versions (the manifest can list versions the provider does not yet serve).
+            List<string> candidates = [];
+            if (SupportedApiVersion(path, response) is { } supported) candidates.Add(supported);
+            else if (IsUnlistedApiVersionRejection(response) && ResourceTypeOf(path) is { } resource)
             {
-                requestedVersion = Uri.UnescapeDataString(ApiVersionParameter().Match(path).Groups[1].Value);
-                usedVersion = supported;
-                response = corrected;
-                uri = new Uri("https://" + ArmHost + correctedPath);
-                activity?.SetTag("azure.api_version_corrected", supported);
+                var manifest = await HttpHelper.SendWithRetryAsync($"https://{ArmHost}{resource.Scope}/providers/{resource.Namespace}?api-version=2021-04-01",
+                    token, activity, "azure", HttpMethod.Get, cancellationToken: cancellationToken);
+                candidates.AddRange(OlderStableVersions(manifest, resource.Type, Uri.UnescapeDataString(ApiVersionParameter().Match(path).Groups[1].Value)));
+            }
+            foreach (var version in candidates)
+            {
+                var correctedPath = WithApiVersion(path, version);
+                var corrected = await HttpHelper.SendWithRetryAsync("https://" + ArmHost + correctedPath, token, activity, "azure", method,
+                    sendBody, timestamp, cancellationToken: cancellationToken);
+                if (corrected.StartsWith("HTTP 2", StringComparison.Ordinal))
+                {
+                    requestedVersion = Uri.UnescapeDataString(ApiVersionParameter().Match(path).Groups[1].Value);
+                    usedVersion = version;
+                    response = corrected;
+                    uri = new Uri("https://" + ArmHost + correctedPath);
+                    activity?.SetTag("azure.api_version_corrected", version);
+                    break;
+                }
+                if (!IsUnlistedApiVersionRejection(corrected)) break;
             }
         }
         var result = method == HttpMethod.Get
             ? await PaginateAsync(response, uri, maxPages, next => HttpHelper.SendWithRetryAsync(next.AbsoluteUri, token, activity, "azure",
                 HttpMethod.Get, cancellationToken: cancellationToken))
             : response;
+        if (removedCurrencyGrouping)
+        {
+            activity?.SetTag("azure.currency_grouping_removed", true);
+            result = AnnotateRoot(result, "_request", new Dictionary<string, string>
+            {
+                ["removedGrouping"] = "Currency",
+                ["reason"] = "Cost Management rejects Currency as a grouping dimension and every row already carries a Currency column, so the grouping was removed; read each row's Currency.",
+            });
+        }
         return usedVersion is null ? result : AnnotateApiVersion(result, requestedVersion!, usedVersion);
     }
 
@@ -574,7 +599,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         return null;
     }
 
-    private static string? ValidateReadOnlyPostPath(string path, Activity? activity)
+    internal static string? ValidateReadOnlyPostPath(string path, Activity? activity)
     {
         if (path.Contains('\\')
             || path.Contains('#')
@@ -596,6 +621,8 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
             @"^/providers/Microsoft\.Carbon/carbonEmissionReports$",
             @"^/providers/Microsoft\.Management/getEntities$",
             $@"^{subscriptionScope}/providers/Microsoft\.Advisor/recommendations/summarize$",
+            // Read-only policy compliance queries; triggerEvaluation stays blocked.
+            $@"^(?:{subscriptionScope}|{managementGroupScope})/providers/Microsoft\.PolicyInsights/(?:policyStates/latest/summarize|policyStates/(?:latest|default)/queryResults|policyEvents/default/queryResults)$",
             // Read-only placement-likelihood diagnostic; creates no resources.
             @"^/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/providers/Microsoft\.Compute/locations/[a-z0-9]+/placementScores/spot/generate$",
             // Diagnostic probe from an existing VM; the body is restricted by ValidateConnectivityBody.
@@ -628,14 +655,9 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
             return JsonSerializer.Serialize(lenient.RootElement);
         }
         catch (JsonException) { }
-        // Read-only query bodies written as escaped strings often lose only their final closing brace.
-        try
-        {
-            using var closed = JsonDocument.Parse(body.TrimEnd() + "}", LenientJson);
-            if (closed.RootElement.ValueKind == JsonValueKind.Object) return JsonSerializer.Serialize(closed.RootElement);
-        }
-        catch (JsonException) { }
-        return body;
+        // Read-only query bodies written as escaped strings often garble only their closing brackets.
+        using var repaired = ModelJson.TryParse(body, JsonValueKind.Object);
+        return repaired is null ? body : JsonSerializer.Serialize(repaired.RootElement);
     }
 
     [GeneratedRegex(@"[?&]api-version=([^&#]*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
@@ -708,20 +730,112 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     internal static string WithApiVersion(string path, string version) =>
         ApiVersionParameter().Replace(path, match => match.Value[..(match.Value.IndexOf('=') + 1)] + Uri.EscapeDataString(version), 1);
 
+    /// <summary>True when a resource provider rejects the api-version with UnsupportedApiVersion without naming supported versions.</summary>
+    internal static bool IsUnlistedApiVersionRejection(string response)
+    {
+        if (!response.StartsWith("HTTP 400", StringComparison.Ordinal)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(ResponseShaper.SplitPreamble(response).Body);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object
+                && error.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String
+                && string.Equals(code.GetString(), "UnsupportedApiVersion", StringComparison.OrdinalIgnoreCase)
+                && !(error.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String
+                    && SupportedVersionList().IsMatch(message.GetString()!));
+        }
+        catch (JsonException) { return false; }
+    }
+
+    [GeneratedRegex(@"^/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=/)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SubscriptionPrefix();
+
+    /// <summary>
+    /// The provider namespace and resource type addressed by an ARM path (for example Microsoft.CostManagement and
+    /// scheduledActions), with the subscription prefix used to read that provider's manifest; null when the path names no provider.
+    /// </summary>
+    internal static (string Scope, string Namespace, string Type)? ResourceTypeOf(string path)
+    {
+        var queryIndex = path.IndexOf('?');
+        var clean = queryIndex < 0 ? path : path[..queryIndex];
+        var index = clean.LastIndexOf("/providers/", StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return null;
+        var segments = clean[(index + "/providers/".Length)..].Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 2 || segments.Any(segment => !ResourceSegment().IsMatch(segment))) return null;
+        var type = string.Join('/', segments.Skip(1).Where((_, position) => position % 2 == 0));
+        var scope = SubscriptionPrefix().Match(clean) is { Success: true } subscription ? subscription.Value : "";
+        return (scope, segments[0], type);
+    }
+
+    [GeneratedRegex(@"^[A-Za-z0-9._()~-]{1,260}$", RegexOptions.CultureInvariant)]
+    private static partial Regex ResourceSegment();
+
+    /// <summary>Stable manifest api-versions of a resource type older than the rejected one, newest first (at most two).</summary>
+    internal static IReadOnlyList<string> OlderStableVersions(string manifestResponse, string type, string requested)
+    {
+        if (!manifestResponse.StartsWith("HTTP 2", StringComparison.Ordinal)) return [];
+        try
+        {
+            using var document = JsonDocument.Parse(ResponseShaper.SplitPreamble(manifestResponse).Body);
+            if (!document.RootElement.TryGetProperty("resourceTypes", out var types) || types.ValueKind != JsonValueKind.Array) return [];
+            foreach (var entry in types.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object || !entry.TryGetProperty("resourceType", out var name) || name.ValueKind != JsonValueKind.String
+                    || !string.Equals(name.GetString(), type, StringComparison.OrdinalIgnoreCase)
+                    || !entry.TryGetProperty("apiVersions", out var versions) || versions.ValueKind != JsonValueKind.Array) continue;
+                return versions.EnumerateArray()
+                    .Where(version => version.ValueKind == JsonValueKind.String)
+                    .Select(version => version.GetString()!)
+                    .Where(version => version.Length == 10 && ApiVersionValue().IsMatch(version) && string.CompareOrdinal(version, requested) < 0)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderDescending(StringComparer.Ordinal)
+                    .Take(2)
+                    .ToList();
+            }
+        }
+        catch (JsonException) { }
+        return [];
+    }
+
     /// <summary>Adds a leading root _apiVersion note to a JSON object body; other bodies are unchanged.</summary>
-    internal static string AnnotateApiVersion(string response, string requested, string used)
+    internal static string AnnotateApiVersion(string response, string requested, string used) =>
+        AnnotateRoot(response, "_apiVersion", new Dictionary<string, string>
+        {
+            ["requested"] = requested,
+            ["used"] = used,
+            ["reason"] = "The service rejected the requested api-version for this resource type; a supported version (stable preferred) answered.",
+        });
+
+    /// <summary>Adds a leading root note to a JSON object body; other bodies are unchanged.</summary>
+    internal static string AnnotateRoot(string response, string name, IReadOnlyDictionary<string, string> note)
     {
         var (preamble, body) = ResponseShaper.SplitPreamble(response);
         var trimmed = body.TrimStart();
         if (!trimmed.StartsWith('{')) return response;
-        var note = JsonSerializer.Serialize(new Dictionary<string, string>
-        {
-            ["requested"] = requested,
-            ["used"] = used,
-            ["reason"] = "ARM rejected the requested api-version for this resource type; the newest supported version (stable preferred) answered.",
-        });
         var rest = trimmed[1..].TrimStart();
-        return preamble + "{\"_apiVersion\":" + note + (rest.StartsWith('}') ? "" : ",") + rest;
+        return preamble + "{" + JsonSerializer.Serialize(name) + ":" + JsonSerializer.Serialize(note) + (rest.StartsWith('}') ? "" : ",") + rest;
+    }
+
+    // Cost Management rows always carry a Currency column and the service rejects a Currency dimension grouping,
+    // so that grouping is redundant: it is removed (and reported through _request) rather than failing the query.
+    // A TagKey grouping named Currency is a real tag and is kept.
+    internal static (string? Body, bool Removed) WithoutCurrencyGrouping(string path, string? body)
+    {
+        var queryIndex = path.IndexOf('?');
+        var requestPath = (queryIndex < 0 ? path : path[..queryIndex]).TrimEnd('/');
+        if (body is null || !requestPath.EndsWith("/Microsoft.CostManagement/query", StringComparison.OrdinalIgnoreCase)) return (body, false);
+        try
+        {
+            if (JsonNode.Parse(body) is not JsonObject root || root["dataset"] is not JsonObject dataset
+                || dataset["grouping"] is not JsonArray grouping) return (body, false);
+            static bool Text(JsonNode? node, string expected) =>
+                node is JsonValue value && value.TryGetValue<string>(out var text) && text.Equals(expected, StringComparison.OrdinalIgnoreCase);
+            var currency = grouping.Where(item => item is JsonObject entry && Text(entry["type"], "Dimension") && Text(entry["name"], "Currency")).ToList();
+            if (currency.Count == 0) return (body, false);
+            foreach (var item in currency) grouping.Remove(item);
+            return (root.ToJsonString(), true);
+        }
+        catch (JsonException) { return (body, false); }
     }
 
     internal static string? ValidateCostQueryBody(string path, string? body)

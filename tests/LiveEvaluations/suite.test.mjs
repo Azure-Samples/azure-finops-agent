@@ -18,6 +18,7 @@ import {
     buildSuite,
     evaluateSuite,
     executeCase,
+    MINIMUM_EFFICIENCY_SCORE,
     preparePrivateDiagnostics,
     publishableResult,
     refreshEvaluationIdentity,
@@ -72,6 +73,8 @@ const pass = (scenario) => ({
         accepted: true,
         grounded: true,
         complete: true,
+        efficient: true,
+        efficiencyScore: 5,
         reason: "Evidence supports the answer.",
     },
 });
@@ -518,13 +521,40 @@ test("valid negative judge criteria reject the gate without claiming malformed o
     }
 });
 test("judge criteria must be booleans and include a nonempty reason", () => {
-    for (const criterion of ["accepted", "grounded", "complete", "reason"]) {
+    for (const criterion of ["accepted", "grounded", "complete", "efficient", "reason"]) {
         const result = pass(cases[0]);
         result.judge[criterion] = criterion === "reason" ? " " : "true";
         const failures = validateResult(cases[0], result, 0, sha, suiteHash);
         assert.ok(failures.includes("Missing or invalid structured judge verdict."));
         assert.ok(!failures.includes("Structured judge rejected the answer."));
     }
+});
+test("the judge efficiency verdict gates the case and requires a 1-5 integer score", () => {
+    for (const score of [undefined, 0, 6, 3.5, "5", null]) {
+        const result = pass(cases[0]);
+        result.judge.efficiencyScore = score;
+        const failures = validateResult(cases[0], result, 0, sha, suiteHash);
+        assert.ok(failures.includes("Missing or invalid structured judge verdict."));
+    }
+    for (const [efficient, score] of [[false, 4], [true, 2], [false, 1]]) {
+        const results = rows();
+        Object.assign(results[0].result.judge, { efficient, efficiencyScore: score });
+        const failures = validateResult(cases[0], results[0].result, 0, sha, suiteHash);
+        assert.ok(failures.includes("Structured judge rated the session inefficient."));
+        assert.ok(!failures.includes("Missing or invalid structured judge verdict."));
+        assert.equal(evaluateSuite(cases, results, sha, suiteHash).accepted, false);
+    }
+    const result = pass(cases[0]);
+    result.judge.efficiencyScore = MINIMUM_EFFICIENCY_SCORE;
+    assert.deepEqual(validateResult(cases[0], result, 0, sha, suiteHash), []);
+    result.timeline = { rounds: 2, maxConcurrentTools: 3, toolWallMs: 400, modelMs: 600 };
+    result.tools[0].durationMs = 250;
+    const published = publishableResult(result, false);
+    assert.equal(published.judge.efficient, true);
+    assert.equal(published.judge.efficiencyScore, MINIMUM_EFFICIENCY_SCORE);
+    assert.equal(published.tools[0].durationMs, 250);
+    assert.deepEqual(published.timeline, result.timeline);
+    assert.ok(!("reason" in published.judge));
 });
 test("summary escapes model HTML and shows question, count and verdict", () => {
     const results = rows();

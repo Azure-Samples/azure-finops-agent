@@ -17,6 +17,7 @@ public sealed class EvaluationRunState
     public bool Terminal { get; set; }
     public bool TranscriptVerified { get; set; }
     public string HostContext { get; set; } = "";
+    public string AgentProfile { get; set; } = "";
     public int ThrottleNotices { get; set; }
     public bool FinalThrottle { get; set; }
     public DateTimeOffset? ThrottleRetryAtUtc { get; set; }
@@ -30,7 +31,8 @@ public sealed class EvaluationRunState
     }
 
     public RunCapture Capture() => new(string.Join("\n\n", Answers.Values), Tools.ToArray(), Terminal,
-        Errors.ToArray(), DurationMs ?? Clock.ElapsedMilliseconds, FirstTokenMs, VisibleOutputs.ToArray(), HostContext);
+        Errors.ToArray(), DurationMs ?? Clock.ElapsedMilliseconds, FirstTokenMs, VisibleOutputs.ToArray(), HostContext,
+        ThrottleNotices, AgentProfile);
 
     public void RecordFailure(Exception exception)
     {

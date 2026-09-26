@@ -18,7 +18,7 @@ public sealed class ToolResultQueryTools(long owner)
 
     private async Task<string> QueryToolResult(
         [Description("Opaque resultId returned in this conversation. Copy it exactly, including case, from queryable_tool_result, _resultQuery or its query response; never reconstruct, shorten or alter it. Never a file path or URL.")] string resultId,
-        [Description("JSON object: mode=query (default), schema (shape of the selected values) or keys (property names of the selected objects, filterable with where on $, e.g. an OpenAPI spec's $.paths); path is JSONPath, default $. Select array rows with $.rows[*]; table rows with columns become records such as {\"Cost\":1.2,\"ServiceName\":\"Storage\"}. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex; a path matching several values passes when any value matches, or every value for ne/notIn), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\",\"items\":\"$.body.value.length()\"}, or lists paths [\"$.name\",\"$.sku.name\"] named by their last segment; a trailing .length() counts an array, and a select path matching several values (wildcard or filter) returns them as an array. Optional groupBy maps up to 6 names to per-row paths and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path, as defaults to the op name, and sum/avg/min/max include every numeric value (numbers or numeric strings) the path matches. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (pages hold at most 200 rows; follow nextOffset; 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
+        [Description("JSON object, or an array of up to 8 such objects answered together as queries[i] (several views of one result in one call; any invalid query fails the call): mode=query (default), schema (shape of the selected values) or keys (property names of the selected objects, filterable with where on $, e.g. an OpenAPI spec's $.paths); path is JSONPath, default $. Select array rows with $.rows[*]; table rows with columns become records such as {\"Cost\":1.2,\"ServiceName\":\"Storage\"}. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex; a path matching several values passes when any value matches, or every value for ne/notIn), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\",\"items\":\"$.body.value.length()\"}, or lists paths [\"$.name\",\"$.sku.name\"] named by their last segment; a trailing .length() counts an array, and a select path matching several values (wildcard or filter) returns them as an array. Optional groupBy maps up to 12 names to per-row paths (paths that all run through one array wildcard, such as $.body.value[*].x, group that array's elements) and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path, as defaults to the op name, and sum/avg/min/max include every numeric value (numbers or numeric strings) the path matches. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (pages hold at most 200 rows; follow nextOffset; 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
         CancellationToken cancellationToken = default)
     {
         var context = ToolExecutionContext.Current;
@@ -26,8 +26,41 @@ public sealed class ToolResultQueryTools(long owner)
         var entry = ToolResultStore.Default.Find(owner, context.SessionId, resultId);
         if (entry is null) return Unavailable;
         await QuerySlots.WaitAsync(cancellationToken);
-        try { return Execute(entry, queryJson, cancellationToken); }
+        try { return ExecuteMany(entry, queryJson, cancellationToken); }
         finally { QuerySlots.Release(); }
+    }
+
+    internal const int MaxQueriesPerCall = 8;
+
+    // Several views of one retained result travel in one call, so the handle is copied once and no extra round is spent.
+    // Any invalid query fails the whole call, naming its index, rather than hiding an error among successful answers.
+    internal static string ExecuteMany(ToolResultStore.Entry entry, string queryJson, CancellationToken cancellationToken = default)
+    {
+        if (!queryJson.TrimStart().StartsWith('[')) return Execute(entry, queryJson, cancellationToken);
+        if (queryJson.Length > 16000) return "Error: Query exceeds the 16000-character budget.";
+        using var document = ModelJson.TryParse(queryJson, JsonValueKind.Array);
+        if (document is null) return "Error: Invalid or over-budget JSON query. Use the returned schema and documented query parameters.";
+        var queries = document.RootElement.EnumerateArray().ToArray();
+        if (queries.Length is 0 or > MaxQueriesPerCall) return $"Error: A query array holds 1 to {MaxQueriesPerCall} query objects.";
+        var answers = new List<JsonElement>(queries.Length);
+        long bytes = 0;
+        for (var index = 0; index < queries.Length; index++)
+        {
+            if (queries[index].ValueKind != JsonValueKind.Object) return $"Error: Query {index} must be a JSON object.";
+            var output = Execute(entry, queries[index].GetRawText(), cancellationToken);
+            if (output.StartsWith("Error: ", StringComparison.Ordinal)) return $"Error: Query {index}: {output["Error: ".Length..]}";
+            bytes += Encoding.UTF8.GetByteCount(output);
+            if (bytes > 96 * 1024) return "Error: Combined query answers exceed 96 KB; send fewer queries or narrower projections.";
+            using var answer = JsonDocument.Parse(output);
+            answers.Add(answer.RootElement.Clone());
+        }
+        return JsonSerializer.Serialize(new
+        {
+            resultId = entry.Id,
+            source = entry.Source,
+            queries = answers,
+            guidance = "queries[i] answers query i of the array; each keeps its own totals, paging and completeness."
+        });
     }
 
     private const string Unavailable = "Error: This result is unavailable or expired for this conversation.";
@@ -45,7 +78,7 @@ public sealed class ToolResultQueryTools(long owner)
         try
         {
             if (queryJson.Length > 16000) return "Error: Query exceeds the 16000-character budget.";
-            using var document = JsonDocument.Parse(queryJson);
+            using var document = ModelJson.TryParse(queryJson, JsonValueKind.Object) ?? JsonDocument.Parse(queryJson);
             var query = Canonical(document.RootElement);
             var mode = String(query, "mode", "query");
             Require(mode is "query" or "schema" or "keys", "Mode must be query, schema or keys.");
@@ -74,6 +107,20 @@ public sealed class ToolResultQueryTools(long owner)
             var root = JToken.Load(jsonReader, new JsonLoadSettings { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error });
             var path = String(query, "path", "$");
             var selected = Select(root, path, CheckBudget).ToArray();
+            string? note = null;
+            // A selector that misses shows where paths start, so the next query needs no separate discovery call.
+            if (selected.Length == 0 && path != "$")
+            {
+                var container = path.EndsWith("[*]", StringComparison.Ordinal) ? Select(root, path[..^3], CheckBudget).FirstOrDefault() : null;
+                note = container is JArray { Count: 0 }
+                    ? $"path {Shorten(path)} selects an empty array: the source returned no items there, so the path is correct and the source request matched nothing."
+                    : $"path {Shorten(path)} matched no values. Paths start at the retained root" + root switch
+                    {
+                        JObject rootObject => $", an object with top-level keys {string.Join(", ", rootObject.Properties().Take(20).Select(property => property.Name))}.",
+                        JArray => ", an array ($[*] is each element).",
+                        _ => "."
+                    };
+            }
             selected = mode == "keys" ? Keys(selected, CheckBudget) : Records(selected, CheckBudget);
             if (query.TryGetProperty("where", out var where))
             {
@@ -93,16 +140,17 @@ public sealed class ToolResultQueryTools(long owner)
                     expiresUtc = entry.ExpiresUtc,
                     selectedValues = selected.Length,
                     schemaRoot = selected.Length == 1 ? "selected value" : "array of all selected values ($[*] is each match)",
+                    queryPaths = path == "$" ? null : $"Schema paths are relative to the selection. Queries still start at the retained root: keep path {Shorten(path)} and address fields relative to each selected row (for example $.body, not $[0].body).",
+                    note,
                     schema = ToolResultStore.Discover(selectedDocument.RootElement)
                 });
             }
             var projection = Paths(query, "select", 30);
-            var groups = Paths(query, "groupBy", 6);
-            string? note = null;
+            var groups = Paths(query, "groupBy", 12);
             if (projection.Count > 0 && groups.Count > 0)
             {
                 projection.Clear();
-                note = "select was not applied because groupBy is present; each output row holds the groupBy keys and aggregates.";
+                note = (note is null ? "" : note + " ") + "select was not applied because groupBy is present; each output row holds the groupBy keys and aggregates.";
             }
             var aggregates = query.TryGetProperty("aggregates", out var aggregateArray) ? aggregateArray : default;
             if (aggregates.ValueKind != JsonValueKind.Undefined)
@@ -112,6 +160,14 @@ public sealed class ToolResultQueryTools(long owner)
                 aggregates = JsonSerializer.SerializeToElement(new[] { new { op = "count", @as = groups.ContainsKey("count") ? "rowCount" : "count" } });
             var hasAggregates = aggregates.ValueKind == JsonValueKind.Array && aggregates.GetArrayLength() > 0;
             if (groups.Count > 0) Require(hasAggregates, "groupBy with an explicit aggregates array needs at least one aggregate; omit aggregates to count each group.");
+            // Group paths that all run through one array (e.g. $.body.value[*].x) mean "group that array's elements".
+            var unnest = groups.Count > 0 ? SharedArrayPrefix(groups.Values, AggregatePaths(aggregates)) : null;
+            if (unnest is not null)
+            {
+                selected = selected.SelectMany(row => Select(row, unnest, CheckBudget)).ToArray();
+                foreach (var name in groups.Keys.ToList()) groups[name] = RelativeTo(groups[name], unnest);
+                note = (note is null ? "" : note + " ") + $"Rows are the elements of {unnest} because every groupBy path runs through it; counts are element counts.";
+            }
             var invalidNumeric = new Dictionary<string, int>();
             List<JToken> rows;
             JsonElement? totals = null;
@@ -126,14 +182,14 @@ public sealed class ToolResultQueryTools(long owner)
                     Require(alias.Length is > 0 and <= 80, "Aggregate names (as) must be 1-80 characters.");
                     Require(!groups.ContainsKey(alias) && !invalidNumeric.ContainsKey(alias), "Aggregate names (as) must be distinct from each other and from group names.");
                     invalidNumeric.Add(alias, 0);
-                    return (Operation: operation, Alias: alias, Path: String(aggregate, "path", "$"));
+                    return (Operation: operation, Alias: alias, Path: unnest is null ? String(aggregate, "path", "$") : RelativeTo(String(aggregate, "path", "$"), unnest));
                 }).ToArray();
                 var grouped = new Dictionary<string, (JObject Key, List<JToken> Rows)>(StringComparer.Ordinal);
                 foreach (var row in selected)
                 {
                     CheckBudget();
                     var key = Project(row, groups, CheckBudget, ReserveProjection);
-                    Require(key.Properties().All(property => property.Value is JValue), "Group keys must be scalar values.");
+                    Require(key.Properties().All(property => property.Value is JValue), "Group keys must be scalar values; put the array wildcard in path (for example path $.value[*]) so each row is one element.");
                     var fingerprint = key.ToString(Newtonsoft.Json.Formatting.None);
                     if (!grouped.TryGetValue(fingerprint, out var group)) { group = (key, []); grouped.Add(fingerprint, group); }
                     group.Rows.Add(row);
@@ -341,6 +397,8 @@ public sealed class ToolResultQueryTools(long owner)
 
     private sealed record ColumnNames(string[] Names);
 
+    private static string Shorten(string text) => text.Length <= 200 ? text : text[..200] + "…";
+
     // Accepts the common relative spellings (name, .name, @.name, [0]) as paths from the current row.
     private static string NormalizePath(string path)
     {
@@ -348,6 +406,43 @@ public sealed class ToolResultQueryTools(long owner)
         if (path.StartsWith('@')) return "$" + path[1..];
         if (path.StartsWith('.') && !path.StartsWith("..", StringComparison.Ordinal) || path.StartsWith('[')) return "$" + path;
         return path.Length > 0 && path[0] != '$' ? "$." + path : path;
+    }
+
+    // Non-count aggregate paths; malformed entries are left for the aggregate validation to reject.
+    private static List<string> AggregatePaths(JsonElement aggregates)
+    {
+        var paths = new List<string>();
+        if (aggregates.ValueKind != JsonValueKind.Array) return paths;
+        foreach (var aggregate in aggregates.EnumerateArray())
+        {
+            if (aggregate.ValueKind != JsonValueKind.Object
+                || aggregate.TryGetProperty("op", out var op) && op.ValueKind == JsonValueKind.String && string.Equals(op.GetString(), "count", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (aggregate.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.String) paths.Add(path.GetString()!);
+            else paths.Add("$");
+        }
+        return paths;
+    }
+
+    /// <summary>The longest prefix ending in [*] shared by every group path and every non-count aggregate path, or null.</summary>
+    private static string? SharedArrayPrefix(IEnumerable<string> groupPaths, IEnumerable<string> aggregatePaths)
+    {
+        var groups = groupPaths.Select(NormalizePath).ToArray();
+        var aggregates = aggregatePaths.Select(NormalizePath).ToArray();
+        var first = groups[0];
+        for (var end = first.LastIndexOf("[*]", StringComparison.Ordinal); end > 0; end = first.LastIndexOf("[*]", end - 1, StringComparison.Ordinal))
+        {
+            var prefix = first[..(end + 3)];
+            bool Under(string path) => path.StartsWith(prefix, StringComparison.Ordinal) && path.Length > prefix.Length && path[prefix.Length] is '.' or '[';
+            if (groups.All(Under) && aggregates.All(Under)) return prefix;
+        }
+        return null;
+    }
+
+    private static string RelativeTo(string path, string prefix)
+    {
+        var normalized = NormalizePath(path);
+        return normalized.StartsWith(prefix, StringComparison.Ordinal) ? "$" + normalized[prefix.Length..] : path;
     }
 
     // Columnar tables (Cost Management, Log Analytics, converted CSV) become records keyed by column name
@@ -505,7 +600,7 @@ public sealed class ToolResultQueryTools(long owner)
             Require(property.Name.Length is > 0 and <= 80 && property.Value.ValueKind == JsonValueKind.String && !paths.ContainsKey(property.Name), "Field names and paths must be distinct strings.");
             paths.Add(property.Name, property.Value.GetString()!);
         }
-        Require(paths.Count <= max, "Field selection count exceeds its limit.");
+        Require(paths.Count <= max, $"{name} supports at most {max} fields.");
         return paths;
     }
 

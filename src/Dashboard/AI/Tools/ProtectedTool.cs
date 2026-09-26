@@ -9,6 +9,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
 {
     protected override async ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
+        UnwrapCallEnvelope(Name, arguments);
         CoerceScalarStrings(JsonSchema, arguments);
         var argumentJson = JsonSerializer.Serialize(arguments);
         if (SensitiveContent.ContainsSecret(argumentJson))
@@ -50,6 +51,42 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         if (result is JsonElement element)
             return JsonSerializer.Deserialize<JsonElement>(PrepareResult(element.GetRawText(), evidence, arguments));
         return result;
+    }
+
+    // Models occasionally serialize a parallel call as {"recipient_name":"functions.<tool>","parameters":{...}}.
+    // Unwrap only that exact envelope, and only when it names the tool the SDK actually invoked.
+    internal static void UnwrapCallEnvelope(string toolName, AIFunctionArguments arguments)
+    {
+        if (arguments.Count != 2
+            || !arguments.TryGetValue("recipient_name", out var recipient)
+            || !arguments.TryGetValue("parameters", out var parameters)) return;
+        var recipientName = recipient switch
+        {
+            string text => text,
+            JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
+            _ => null
+        };
+        if (recipientName != toolName && recipientName != "functions." + toolName) return;
+        JsonElement inner;
+        switch (parameters)
+        {
+            case JsonElement { ValueKind: JsonValueKind.Object } element:
+                inner = element;
+                break;
+            case string text when text.TrimStart().StartsWith('{'):
+                try { using var document = JsonDocument.Parse(text); inner = document.RootElement.Clone(); }
+                catch (JsonException) { return; }
+                break;
+            case JsonElement { ValueKind: JsonValueKind.String } element when element.GetString()!.TrimStart().StartsWith('{'):
+                try { using var document = JsonDocument.Parse(element.GetString()!); inner = document.RootElement.Clone(); }
+                catch (JsonException) { return; }
+                break;
+            default:
+                return;
+        }
+        if (inner.ValueKind != JsonValueKind.Object) return;
+        arguments.Clear();
+        foreach (var property in inner.EnumerateObject()) arguments[property.Name] = property.Value.Clone();
     }
 
     // Models often send a JSON number, boolean, object or array for a string parameter (for example
@@ -102,7 +139,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         var resultQuery = Name == "QueryAzure" ? Argument(arguments, "resultQuery") : null;
         if (!string.IsNullOrWhiteSpace(resultQuery) && !operation)
         {
-            var output = ToolResultQueryTools.Execute(entry, resultQuery, ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
+            var output = ToolResultQueryTools.ExecuteMany(entry, resultQuery, ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
             if (!output.StartsWith("Error", StringComparison.Ordinal)) return output;
             var problem = "resultQuery was not applied: " + output["Error: ".Length..];
             return large ? JsonSerializer.Serialize(ToolResultStore.Describe(entry, problem)) : ToolResultStore.AnnotateInline(redacted, entry, problem);
