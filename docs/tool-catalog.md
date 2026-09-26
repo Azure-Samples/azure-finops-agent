@@ -67,7 +67,7 @@ Smaller successful evidence objects are also retained and stay inline with one i
 
 `QueryAzure.resultQuery` accepts the same query JSON as `QueryToolResult` and is applied after the complete result is retained. Use it when the shape is already known to return only needed rows, fields, groups or totals in the same tool call. If it is invalid, the host returns the complete schema/annotation with `resultQueryProblem` or `_resultQuery.problem`; it does not repeat the HTTP request.
 
-`queryJson` is a JSON object with `mode` (`query`, `schema`, or `keys`) and a JSONPath `path` (default `$`). `keys` lists property names of selected objects, useful for large OpenAPI specs (for example `path: $.paths`). Common aliases are accepted and canonicalized: `filter`→`where`, `orderBy`/`order`→`sort`, `top`/`take`→`limit`, `skip`→`offset`, and `fields`/`project`→`select`. Unknown or duplicate keys are rejected.
+`queryJson` is a JSON object with `mode` (`query`, `schema`, or `keys`) and a JSONPath `path` (default `$`). Path filters such as `[?(@.name.value=='x')]` compare only with `==`, `!=`, `<`, `<=`, `>` or `>=`; text matching belongs in `where`, and the invalid-path error says so. `keys` lists property names of selected objects, useful for large OpenAPI specs (for example `path: $.paths`). Common aliases are accepted and canonicalized: `filter`→`where`, `orderBy`/`order`→`sort`, `top`/`take`→`limit`, `skip`→`offset`, and `fields`/`project`→`select`. Unknown or duplicate keys are rejected.
 
 Schema discovery reports fields with paths, types, observation counts, min/max array lengths and an `example` for scalar values. It also reports `tables` for columnar data (`rowsPath`, `rowCount`, `columns`, `usage`). Cost Management, Log Analytics and converted CSV rows can be addressed by column name (`$.Cost`) or original position (`$[0]`). Relative row paths such as `name`, `.name`, `@.name` and `[0]` normalize to the current row.
 
@@ -194,7 +194,7 @@ Retail rows also retain `tierMinimumUnits` and currency. Volume bands are separa
 | Calculator | `EstimateTokenCost`, `CalculateCost`, `CompareAmounts` | Only requested models/variants and compatible selected rates, not a whole price catalogue; deterministic arithmetic over verified inputs. |
 | Charts | `RenderChart`, `RenderAdvancedChart` | Already filtered aggregates and only needed series/display fields; preserve top-N caveats and units. |
 | Reports | `GenerateDataReport`, `GenerateHtmlPresentation`, `GenerateMaturityReport` | Only relevant fields and aggregates, but retain all explicitly requested rows, findings or capabilities. Renderers cannot recover omitted data. |
-| Code | `GenerateScript` | Complete code for the requested scope; generated queries use supported source filters. Packaging never executes code. |
+| Code | `GenerateScript` | Complete code for the requested scope; generated queries use supported source filters. A requested cleanup or remediation script contains the dry-run-guarded change commands for the identified targets, not only an inventory. Packaging never executes code. |
 | Follow-ups | `SuggestFollowUp` | Concrete target/action/scope, no embedded raw results or transcripts. |
 | Scheduled outcomes | `ReportJobOutcome` | Concise scoped outcome and exact evidence tool names; never drop failed scopes to claim success. |
 | Public publication | `PublishFAQ` | Only concise, verified public facts for one question; no tenant data or tool-result dumps. |

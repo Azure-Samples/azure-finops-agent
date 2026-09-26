@@ -259,6 +259,16 @@ public sealed class ToolResultTests
         Assert.Contains("JSONPath", result);
     }
 
+    [Fact]
+    public void UnsupportedFilterOperatorsPointToComparisonsAndWhere()
+    {
+        var entry = new ToolResultStore().Retain(101, "session", """{"rows":[{"body":{"value":[{"name":{"localizedValue":"Standard H200 Family"}}]}}]}""", Source)!;
+        var result = ToolResultQueryTools.Execute(entry, """{"path":"$.rows[*]","select":{"h200":"$.body.value[?(@.name.localizedValue contains 'H200')]"}}""");
+        Assert.StartsWith("Error:", result);
+        Assert.Contains("==, !=, <, <=, >, >=", result);
+        Assert.Contains("use where", result);
+    }
+
     [Theory]
     [InlineData("""{"where":null}""")]
     [InlineData("""{"where":{}}""")]
