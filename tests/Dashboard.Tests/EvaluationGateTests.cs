@@ -81,6 +81,8 @@ public sealed class EvaluationGateTests
         Assert.Contains("Reject unsupported paid-seat or actual-waste claims", instructions);
         Assert.Contains("If invoice or contract evidence supplies a purchased quantity or rate, require it", instructions);
         Assert.Contains("unavailable required activity report still leaves an activity task incomplete", instructions);
+        Assert.Contains("The single exception is zero seats", instructions);
+        Assert.Contains("was actually requested and is unavailable", instructions);
         Assert.Contains("Reject invented facts", instructions);
         Assert.Equal("xhigh", root.GetProperty("reasoning").GetProperty("effort").GetString());
         Assert.True(root.GetProperty("text").GetProperty("format").GetProperty("strict").GetBoolean());
