@@ -1,3 +1,4 @@
+using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Infrastructure;
 
 namespace AzureFinOps.Dashboard.Tests;
@@ -90,7 +91,8 @@ public class ResultDatabaseTests
 
         var output = database.Query(sql, null, CancellationToken.None);
 
-        Assert.True(output.StartsWith("Error: SQL failed", StringComparison.Ordinal) || output.StartsWith("1\n1\n", StringComparison.Ordinal), output);
+        Assert.True(output.StartsWith("Error: SQL failed", StringComparison.Ordinal)
+            || output.StartsWith("PARTIAL RESULT: 1 of 2 SQL statements failed", StringComparison.Ordinal) && output.Contains("statement 2 failed: SQLite Error 23: 'not authorized'", StringComparison.Ordinal), output);
         Assert.Equal("n\n1\n(1 rows)", database.Query("SELECT count(*) AS n FROM responses", null, CancellationToken.None));
         Assert.False(File.Exists("copy.db"));
         Assert.False(File.Exists("file.db"));
@@ -147,6 +149,33 @@ public class ResultDatabaseTests
 
         Assert.Equal("n\n1\n(1 rows)\n\nname\nvm-a\nvm-b\n(2 rows)", output);
     }
+
+    [Fact]
+    public void AFailedStatementIsReportedBesideTheOtherTables()
+    {
+        var database = Fresh();
+        database.Present("/x", "GET", Vms, null, CancellationToken.None);
+
+        var partial = database.Query("SELECT count(*) AS n FROM responses; SELECT t.value FROM (SELECT 1 AS x) t; SELECT 2 AS two", null, CancellationToken.None);
+        var failed = database.Query("SELECT nope FROM responses; SELECT t.value FROM (SELECT 1 AS x) t", null, CancellationToken.None);
+
+        Assert.StartsWith("PARTIAL RESULT: 1 of 3 SQL statements failed; a failed statement is unknown, not empty.", partial);
+        Assert.Contains("\n\nn\n1\n(1 rows)\n\nstatement 2 failed: SQLite Error 1: 'no such column: t.value'.\n\ntwo\n2\n(1 rows)", partial);
+        Assert.True(ProtectedTool.InspectEvidence(partial) is { Success: true, Partial: true });
+        Assert.StartsWith("Error: SQL failed: all 2 statements failed.\n\nstatement 1 failed: SQLite Error 1: 'no such column: nope'.", failed);
+        Assert.False(ProtectedTool.InspectEvidence(failed).Success);
+    }
+
+    [Theory]
+    [InlineData("SELECT 'a;b' AS s; SELECT \"x;y\" FROM (SELECT 2 AS \"x;y\")", "s\na;b\n(1 rows)\n\nx;y\n2\n(1 rows)")]
+    [InlineData("-- totals; then names\nSELECT 'it''s' AS s; /* ; */ ;", "s\nit's\n(1 rows)")]
+    [InlineData("SELECT [a;b] FROM (SELECT 3 AS [a;b]);;", "a;b\n3\n(1 rows)")]
+    public void StatementsSplitOnlyOutsideLiteralsAndComments(string sql, string expected) =>
+        Assert.Equal(expected, Fresh().Query(sql, null, CancellationToken.None));
+
+    [Fact]
+    public void SqlWithoutAStatementFails() =>
+        Assert.Equal("Error: SQL failed: the sql holds no statement.", Fresh().Query(" -- nothing ; ", null, CancellationToken.None));
 
     [Fact]
     public void SharedShapesAreShownOnceWithinOneCall()

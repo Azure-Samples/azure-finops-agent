@@ -81,29 +81,92 @@ internal sealed class ResultDatabase : IDisposable
         return first == id ? shape : $"the same paths and types as responses.id = {first}.";
     }
 
-    /// <summary>Runs the model's read-only SQL; $id is the response stored by the same call.</summary>
+    /// <summary>Runs the model's read-only SQL; $id is the response stored by the same call. Several statements
+    /// run independently under one deadline: a failed one is reported as a partial result beside the others' tables.</summary>
     internal string Query(string sql, long? id, CancellationToken cancellationToken)
     {
         _gate.Wait(cancellationToken);
         try
         {
             _lastUsed = DateTime.UtcNow;
-            using var command = _connection.CreateCommand();
-            command.CommandText = sql;
-            if (id is not null && sql.Contains("$id", StringComparison.Ordinal)) command.Parameters.AddWithValue("$id", id);
             (_untrusted, _deadline, _cancellation) = (true, DateTime.UtcNow + QueryTimeout, cancellationToken);
-            using var reader = command.ExecuteReader();
-            return Render(reader);
-        }
-        catch (Exception exception) when (exception is SqliteException or InvalidOperationException)
-        {
-            return "Error: SQL failed: " + exception.Message + (_untrusted && DateTime.UtcNow > _deadline ? " (the query exceeded 15 seconds; filter with json_each before joining or aggregating)" : "");
+            var statements = Statements(sql);
+            if (statements.Count == 0) return "Error: SQL failed: the sql holds no statement.";
+            var results = statements.Select(statement => Run(statement, id)).ToList();
+            if (results.Count == 1) return results[0].Text;
+            var failed = results.Count(result => result.Failed);
+            var tables = results.Select((result, index) => result.Failed ? $"statement {index + 1} failed: {result.Text[FailurePrefix.Length..]}" : result.Text)
+                .Where(text => text.Length > 0);
+            var header = failed == 0 ? null
+                : failed == results.Count ? $"{FailurePrefix}all {failed} statements failed."
+                : $"PARTIAL RESULT: {failed} of {results.Count} SQL statements failed; a failed statement is unknown, not empty. The other statements' tables follow in order.";
+            return string.Join("\n\n", header is null ? tables : tables.Prepend(header));
         }
         finally
         {
             _untrusted = false;
             _gate.Release();
         }
+    }
+
+    private const string FailurePrefix = "Error: SQL failed: ";
+
+    private (string Text, bool Failed) Run(string statement, long? id)
+    {
+        try
+        {
+            using var command = _connection.CreateCommand();
+            command.CommandText = statement;
+            if (id is not null && statement.Contains("$id", StringComparison.Ordinal)) command.Parameters.AddWithValue("$id", id);
+            using var reader = command.ExecuteReader();
+            return (Render(reader), false);
+        }
+        catch (Exception exception) when (exception is SqliteException or InvalidOperationException)
+        {
+            return (FailurePrefix + exception.Message + (DateTime.UtcNow > _deadline ? " (the query exceeded 15 seconds; filter with json_each before joining or aggregating)" : ""), true);
+        }
+    }
+
+    // Splits on ; outside string literals, quoted identifiers and comments; chunks holding only comments are dropped.
+    internal static List<string> Statements(string sql)
+    {
+        var statements = new List<string>();
+        int start = 0, i = 0;
+        var content = false;
+        while (i < sql.Length)
+        {
+            var c = sql[i];
+            if (c is '\'' or '"' or '`' or '[')
+            {
+                var close = c == '[' ? ']' : c;
+                var j = i + 1;
+                while (j < sql.Length && !(sql[j] == close && (close == ']' || j + 1 >= sql.Length || sql[j + 1] != close)))
+                    j += sql[j] == close ? 2 : 1;
+                (i, content) = (j + 1, true);
+            }
+            else if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+            {
+                var end = sql.IndexOf('\n', i);
+                i = end < 0 ? sql.Length : end + 1;
+            }
+            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+            {
+                var end = sql.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                i = end < 0 ? sql.Length : end + 2;
+            }
+            else if (c == ';')
+            {
+                if (content) statements.Add(sql[start..i]);
+                (start, content, i) = (i + 1, false, i + 1);
+            }
+            else
+            {
+                content |= !char.IsWhiteSpace(c);
+                i++;
+            }
+        }
+        if (content) statements.Add(sql[start..]);
+        return statements;
     }
 
     private long Store(string url, string method, string head, string body)
@@ -163,7 +226,6 @@ internal sealed class ResultDatabase : IDisposable
         return command.ExecuteScalar() is var value and not DBNull ? value : null;
     }
 
-    // Several SELECT statements separated by ; return one table each, so one call can carry every view.
     private static string Render(SqliteDataReader reader)
     {
         var text = new StringBuilder();
