@@ -55,25 +55,25 @@ public sealed class ThinToolBoundaryTests
         using var envelope = JsonDocument.Parse("""{"resultId":"abc","queryJson":"{\"path\":\"$\"}"}""");
         var arguments = new Microsoft.Extensions.AI.AIFunctionArguments
         {
-            ["recipient_name"] = "functions.QueryToolResult",
+            ["recipient_name"] = "functions.QueryUploadedFile",
             ["parameters"] = envelope.RootElement.Clone(),
         };
-        ProtectedTool.UnwrapCallEnvelope("QueryToolResult", arguments);
+        ProtectedTool.UnwrapCallEnvelope("QueryUploadedFile", arguments);
         Assert.Equal(["queryJson", "resultId"], arguments.Keys.Order());
         Assert.Equal("abc", ((JsonElement)arguments["resultId"]!).GetString());
 
         var stringified = new Microsoft.Extensions.AI.AIFunctionArguments
         {
-            ["recipient_name"] = JsonDocument.Parse("\"QueryToolResult\"").RootElement.Clone(),
+            ["recipient_name"] = JsonDocument.Parse("\"QueryUploadedFile\"").RootElement.Clone(),
             ["parameters"] = """{"resultId":"abc"}""",
         };
-        ProtectedTool.UnwrapCallEnvelope("QueryToolResult", stringified);
+        ProtectedTool.UnwrapCallEnvelope("QueryUploadedFile", stringified);
         Assert.Equal(["resultId"], stringified.Keys);
     }
 
     [Theory]
     [InlineData("functions.QueryAzure")]
-    [InlineData("functions.QueryToolResult.extra")]
+    [InlineData("functions.QueryUploadedFile.extra")]
     [InlineData("")]
     public void EnvelopesForOtherToolsOrWithExtraKeysAreLeftForBindingToReject(string recipient)
     {
@@ -82,16 +82,16 @@ public sealed class ThinToolBoundaryTests
             ["recipient_name"] = recipient,
             ["parameters"] = JsonDocument.Parse("""{"resultId":"abc"}""").RootElement.Clone(),
         };
-        ProtectedTool.UnwrapCallEnvelope("QueryToolResult", arguments);
+        ProtectedTool.UnwrapCallEnvelope("QueryUploadedFile", arguments);
         Assert.True(arguments.ContainsKey("recipient_name"));
 
         var extra = new Microsoft.Extensions.AI.AIFunctionArguments
         {
-            ["recipient_name"] = "functions.QueryToolResult",
+            ["recipient_name"] = "functions.QueryUploadedFile",
             ["parameters"] = JsonDocument.Parse("""{"resultId":"abc"}""").RootElement.Clone(),
             ["resultId"] = "other",
         };
-        ProtectedTool.UnwrapCallEnvelope("QueryToolResult", extra);
+        ProtectedTool.UnwrapCallEnvelope("QueryUploadedFile", extra);
         Assert.Equal("other", extra["resultId"]);
         Assert.True(extra.ContainsKey("parameters"));
     }

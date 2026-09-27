@@ -24,28 +24,6 @@ public sealed class JobOutcomeTests
     {
         Assert.Equal((success, fresh, partial), ProtectedTool.InspectEvidence(text));
     }
-
-    [Fact]
-    public void CrossSubscriptionProjectionPreservesCacheProvenance()
-    {
-        var evidence = AzureQueryTools.ReadCostSourceEvidence("HTTP 200 OK\n{\"properties\":{},\"_finops\":{\"cacheStatus\":\"stale_during_cooldown\",\"retrievedAtUtc\":\"2026-01-01T00:00:00Z\"}}");
-        Assert.Equal("stale_during_cooldown", evidence.GetProperty("cacheStatus").GetString());
-        Assert.Equal("2026-01-01T00:00:00Z", evidence.GetProperty("retrievedAtUtc").GetString());
-        Assert.False(ProtectedTool.InspectEvidence(evidence.GetRawText()).Fresh);
-        Assert.False(ProtectedTool.InspectEvidence(AzureQueryTools.ReadCostSourceEvidence("HTTP 200 OK\n{}").GetRawText()).Fresh);
-    }
-
-    [Theory]
-    [InlineData("[]")]
-    [InlineData("null")]
-    [InlineData("\"Unavailable\"")]
-    public void NonObjectCostResponsesHaveUnknownEvidence(string body)
-    {
-        var evidence = AzureQueryTools.ReadCostSourceEvidence("HTTP 400 BadRequest\n" + body);
-        Assert.Equal("unknown", evidence.GetProperty("cacheStatus").GetString());
-        Assert.False(ProtectedTool.InspectEvidence(evidence.GetRawText()).Fresh);
-    }
-
     [Fact]
     public async Task AGoodReadCannotHideAnotherIncompleteReadOfTheSameTool()
     {
@@ -68,9 +46,9 @@ public sealed class JobOutcomeTests
         Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
         try
         {
-            turn.ToolEvidence.Enqueue(new("GetOperationStatus", true, true, true, DateTimeOffset.UtcNow, "same-scope"));
-            turn.ToolEvidence.Enqueue(new("GetOperationStatus", true, true, false, DateTimeOffset.UtcNow, nextScope));
-            var reported = new JobRunOutcome("completed", "Synthetic result", ["GetOperationStatus"], null, null);
+            turn.ToolEvidence.Enqueue(new("QueryAzure", true, true, true, DateTimeOffset.UtcNow, "same-scope"));
+            turn.ToolEvidence.Enqueue(new("QueryAzure", true, true, false, DateTimeOffset.UtcNow, nextScope));
+            var reported = new JobRunOutcome("completed", "Synthetic result", ["QueryAzure"], null, null);
             Assert.Equal(expected, JobRunOutcome.Validate(reported, turn, "Synthetic answer", DateTimeOffset.UtcNow).Status);
         }
         finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }

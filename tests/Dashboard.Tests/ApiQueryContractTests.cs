@@ -46,22 +46,15 @@ public sealed class ApiQueryContractTests
     [InlineData("{\"managementGroups\":[\"synthetic-group\"],\"query\":\"resources | summarize count()\"}")]
     public void ResourceGraphPreservesExplicitScopes(string body) =>
         Assert.Null(AzureQueryTools.ValidateQueryBody(ResourceGraphPath, body));
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SingleAndBulkResourceGraphReadsRejectMissingScopeBeforeDispatch(bool bulk)
+    [Fact]
+    public async Task ResourceGraphReadsRejectMissingScopeBeforeDispatch()
     {
         var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().Single();
         const string body = "{\"query\":\"resources | summarize count()\"}";
-        var arguments = bulk
-            ? new AIFunctionArguments { ["requests"] = JsonSerializer.Serialize(new[] { new { method = "POST", url = ResourceGraphPath, body } }) }
-            : new AIFunctionArguments { ["method"] = "POST", ["url"] = ResourceGraphPath, ["body"] = body };
-        var result = (await tool.InvokeAsync(arguments))!.ToString()!;
+        var result = (await tool.InvokeAsync(new AIFunctionArguments { ["method"] = "POST", ["url"] = ResourceGraphPath, ["body"] = body }))!.ToString()!;
         Assert.Contains("Implicit tenant-wide scope is not supported", result);
         Assert.Contains("No request was sent", result);
     }
-
     [Theory]
     [InlineData("/providers/Microsoft.Consumption/reservationSummaries?api-version=2024-08-01&grain=monthly")]
     [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.Consumption/reservationSummaries?grain=monthly")]

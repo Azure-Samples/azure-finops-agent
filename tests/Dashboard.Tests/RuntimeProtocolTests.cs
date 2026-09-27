@@ -303,92 +303,93 @@ finally { await turn.FinishAsync(); }
     if (Directory.Exists(root)) Directory.Delete(root, true);
 }
     }
-
     [Fact]
-public async Task RuntimeQueriesLargeSourceAfterDiscoveringItsSchema()
-{
-    var root = Path.Combine(Path.GetTempPath(), "finops-query-protocol-" + Guid.NewGuid().ToString("N"));
-    var calls = 0;
-    var observedResults = new ConcurrentQueue<JsonElement>();
-    var source = JsonSerializer.Serialize(new
+    public async Task RuntimeQueriesStoredSourceWithSqlAfterDiscoveringItsShape()
     {
-        complete = false,
-        rows = Enumerable.Range(0, 1000).Select(index => new { region = "region" + index, value = index, detail = new string('x', 100) })
-    });
-    var builder = WebApplication.CreateBuilder();
-    builder.Logging.ClearProviders();
-    builder.WebHost.UseUrls("http://127.0.0.1:0");
-    await using var server = builder.Build();
-    server.MapPost("/v1/responses", async context =>
-    {
-        using var request = await JsonDocument.ParseAsync(context.Request.Body);
-        var streaming = request.RootElement.TryGetProperty("stream", out var stream) && stream.ValueKind == JsonValueKind.True;
-        var stage = Interlocked.Increment(ref calls);
-        if (stage == 1) { await WriteResponse(context.Response, true, streaming, "QueryAzure"); return; }
-        var output = request.RootElement.GetProperty("input").EnumerateArray()
-            .Last(item => item.GetProperty("type").GetString() == "function_call_output").GetProperty("output").GetString()!;
-        using var result = JsonDocument.Parse(output);
-        observedResults.Enqueue(result.RootElement.Clone());
-        if (stage == 2)
+        var root = Path.Combine(Path.GetTempPath(), "finops-query-protocol-" + Guid.NewGuid().ToString("N"));
+        var calls = 0;
+        var observedResults = new ConcurrentQueue<string>();
+        var source = JsonSerializer.Serialize(new
         {
-            var resultId = result.RootElement.GetProperty("resultId").GetString();
-            var queryJson = JsonSerializer.Serialize(new { path = "$.rows[?(@.value == 999)]", select = new { region = "$.region", value = "$.value" } });
-            await WriteResponse(context.Response, true, streaming, "QueryToolResult", JsonSerializer.Serialize(new { resultId, queryJson }), "call_query");
-        }
-        else await WriteResponse(context.Response, false, streaming);
-    });
-    await server.StartAsync();
-    try
-    {
-        await using var client = new CopilotClient(new CopilotClientOptions { Mode = CopilotClientMode.Empty, BaseDirectory = root, UseLoggedInUser = false });
-        await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(30));
-        var config = new SessionConfig
+            complete = false,
+            rows = Enumerable.Range(0, 1000).Select(index => new { region = "region" + index, value = index, detail = new string('x', 100) })
+        });
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var server = builder.Build();
+        server.MapPost("/v1/responses", async context =>
         {
-            SessionId = Guid.NewGuid().ToString(),
-            Model = "synthetic-test-model",
-            Streaming = true,
-            WorkingDirectory = root,
-            Provider = new ProviderConfig { Type = "openai", BaseUrl = server.Urls.Single() + "/v1/", ApiKey = "synthetic-test-only", WireApi = "responses" }
-        };
-        config.Tools = [new ProtectedTool(AIFunctionFactory.Create(() => source, "QueryAzure"), 101, config.SessionId),
-            new ProtectedTool(new ToolResultQueryTools(101).Create().Single(), 101, config.SessionId)];
-        RuntimePolicy.Apply(config);
-        await using var session = await client.CreateSessionAsync(config);
-        Assert.True(TurnExecution.TryBegin(session.SessionId, 101, session, out var turn));
+            using var request = await JsonDocument.ParseAsync(context.Request.Body);
+            var streaming = request.RootElement.TryGetProperty("stream", out var stream) && stream.ValueKind == JsonValueKind.True;
+            var stage = Interlocked.Increment(ref calls);
+            if (stage == 1)
+            {
+                await WriteResponse(context.Response, true, streaming, "QueryAzure", "{\"url\":\"/synthetic\"}", "call_query_source");
+                return;
+            }
+            var output = request.RootElement.GetProperty("input").EnumerateArray()
+                .Last(item => item.GetProperty("type").GetString() == "function_call_output").GetProperty("output").GetString()!;
+            observedResults.Enqueue(output);
+            if (stage == 2)
+            {
+                const string sql = "SELECT json_extract(v.value,'$.region') AS region, json_extract(v.value,'$.value') AS value FROM responses r, json_each(r.body,'$.rows') v WHERE r.id = 1 AND json_extract(v.value,'$.value') = 999";
+                await WriteResponse(context.Response, true, streaming, "QueryAzure", JsonSerializer.Serialize(new { sql }), "call_query_sql");
+            }
+            else await WriteResponse(context.Response, false, streaming);
+        });
+        await server.StartAsync();
         try
         {
-            await session.SendAsync(new MessageOptions { Prompt = "Read the last synthetic region using the source schema." });
-            await turn.Terminal.Task.WaitAsync(TimeSpan.FromSeconds(30));
-            var events = await session.GetEventsAsync();
-            var completed = events.OfType<ToolExecutionCompleteEvent>().ToArray();
-            Assert.Equal(2, completed.Length);
-            Assert.All(completed, item => Assert.True(item.Data.Success));
-            Assert.Equal(0, turn.ToolsFailed);
-            var responses = observedResults.ToArray();
-            Assert.Equal(2, responses.Length);
-            Assert.Equal("queryable_tool_result", responses[0].GetProperty("kind").GetString());
-            Assert.Contains(responses[0].GetProperty("schema").GetProperty("fields").EnumerateArray(), field => field.GetProperty("path").GetString()!.EndsWith("[\"region\"]"));
-            Assert.Equal(999, responses[1].GetProperty("rows")[0].GetProperty("value").GetInt32());
-            Assert.True(responses[1].GetProperty("source").GetProperty("Partial").GetBoolean());
-            Assert.True(responses[1].GetProperty("complete").GetBoolean());
-            Assert.DoesNotContain("Output too large", string.Join("", completed.Select(item => item.Data.Result?.Content)));
+            await using var client = new CopilotClient(new CopilotClientOptions { Mode = CopilotClientMode.Empty, BaseDirectory = root, UseLoggedInUser = false });
+            await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            var config = new SessionConfig
+            {
+                SessionId = Guid.NewGuid().ToString(),
+                Model = "synthetic-test-model",
+                Streaming = true,
+                WorkingDirectory = root,
+                Provider = new ProviderConfig { Type = "openai", BaseUrl = server.Urls.Single() + "/v1/", ApiKey = "synthetic-test-only", WireApi = "responses" }
+            };
+            config.Tools = [new ProtectedTool(AIFunctionFactory.Create((string url = "", string method = "GET", JsonElement? body = null, string sql = "") => source, "QueryAzure"), 101, config.SessionId)];
+            RuntimePolicy.Apply(config);
+            await using var session = await client.CreateSessionAsync(config);
+            Assert.True(TurnExecution.TryBegin(session.SessionId, 101, session, out var turn));
+            try
+            {
+                await session.SendAsync(new MessageOptions { Prompt = "Read the last synthetic region using SQL over the stored response." });
+                await turn.Terminal.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                var events = await session.GetEventsAsync();
+                var completed = events.OfType<ToolExecutionCompleteEvent>().ToArray();
+                Assert.Equal(2, completed.Length);
+                Assert.All(completed, item => Assert.True(item.Data.Success));
+                Assert.Equal(0, turn.ToolsFailed);
+                var responses = observedResults.ToArray();
+                Assert.Equal(2, responses.Length);
+                Assert.Contains("[Stored as responses.id = 1.]", responses[0]);
+                Assert.Contains("too large to return", responses[0]);
+                Assert.Contains("$.rows[0].region", responses[0]);
+                var rows = responses[1].Trim();
+                if (rows.StartsWith('"')) rows = JsonSerializer.Deserialize<string>(rows)!;
+                Assert.Equal("region\tvalue\nregion999\t999\n(1 rows)", rows.TrimEnd());
+                Assert.DoesNotContain("Output too large", string.Join("", completed.Select(item => item.Data.Result?.Content)));
+            }
+            finally { await turn.FinishAsync(); }
         }
-        finally { await turn.FinishAsync(); }
+        finally
+        {
+            await server.StopAsync();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
-    finally
-    {
-        await server.StopAsync();
-        if (Directory.Exists(root)) Directory.Delete(root, true);
-    }
-}
-
     [Theory]
     [InlineData(true, true)]
     [InlineData(true, false)]
+    [InlineData(false, true)]
     [InlineData(false, false)]
-    public async Task ResultQueryShapesTheCompleteResultInTheSameCall(bool large, bool validQuery)
+    public async Task QueryAzureSqlShapesTheCompleteResultInTheSameCall(bool large, bool validSql)
     {
-        var root = Path.Combine(Path.GetTempPath(), "finops-result-query-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "finops-result-sql-" + Guid.NewGuid().ToString("N"));
         var calls = 0;
         var observed = new ConcurrentQueue<string>();
         var count = large ? 1000 : 3;
@@ -400,9 +401,9 @@ public async Task RuntimeQueriesLargeSourceAfterDiscoveringItsSchema()
                 rows = Enumerable.Range(0, count).Select(index => new object[] { index % 2 == 0 ? 1.5m : 2m, index % 2 == 0 ? "Storage" : "Compute" + new string('x', large ? 80 : 0) })
             }
         });
-        var resultQuery = validQuery
-            ? """{"path":"$.properties.rows[*]","groupBy":{"service":"$.ServiceName"},"aggregates":[{"op":"sum","path":"$.Cost","as":"cost"}],"sort":[{"path":"$.cost","direction":"desc"}]}"""
-            : """{"path":"$.properties.rows[*]","unsupported":true}""";
+        var sql = validSql
+            ? "SELECT json_extract(v.value,'$[1]') AS service, round(sum(json_extract(v.value,'$[0]')), 2) AS cost FROM responses r, json_each(r.body,'$.properties.rows') v WHERE r.id = $id GROUP BY service ORDER BY cost DESC"
+            : "SELECT nope FROM responses WHERE id = $id";
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -413,7 +414,7 @@ public async Task RuntimeQueriesLargeSourceAfterDiscoveringItsSchema()
             var streaming = request.RootElement.TryGetProperty("stream", out var stream) && stream.ValueKind == JsonValueKind.True;
             if (Interlocked.Increment(ref calls) == 1)
             {
-                await WriteResponse(context.Response, true, streaming, "QueryAzure", JsonSerializer.Serialize(new { url = "/synthetic", resultQuery }));
+                await WriteResponse(context.Response, true, streaming, "QueryAzure", JsonSerializer.Serialize(new { url = "/synthetic", sql }));
                 return;
             }
             observed.Enqueue(request.RootElement.GetProperty("input").EnumerateArray()
@@ -433,38 +434,30 @@ public async Task RuntimeQueriesLargeSourceAfterDiscoveringItsSchema()
                 WorkingDirectory = root,
                 Provider = new ProviderConfig { Type = "openai", BaseUrl = server.Urls.Single() + "/v1/", ApiKey = "synthetic-test-only", WireApi = "responses" }
             };
-            config.Tools = [new ProtectedTool(AIFunctionFactory.Create((string url = "", string resultQuery = "") => source, "QueryAzure"), 101, config.SessionId)];
+            config.Tools = [new ProtectedTool(AIFunctionFactory.Create((string url = "", string method = "GET", JsonElement? body = null, string sql = "") => source, "QueryAzure"), 101, config.SessionId)];
             RuntimePolicy.Apply(config);
             await using var session = await client.CreateSessionAsync(config);
             Assert.True(TurnExecution.TryBegin(session.SessionId, 101, session, out var turn));
             try
             {
-                await session.SendAsync(new MessageOptions { Prompt = "Total the synthetic cost by service." });
+                await session.SendAsync(new MessageOptions { Prompt = "Total the synthetic cost by service with sql." });
                 await turn.Terminal.Task.WaitAsync(TimeSpan.FromSeconds(30));
                 Assert.Equal(0, turn.ToolsFailed);
-                using var output = JsonDocument.Parse(ResponseShaper.SplitPreamble(Assert.Single(observed)).Body);
-                var result = output.RootElement;
-                if (validQuery)
+                var output = Assert.Single(observed);
+                Assert.Contains("[Stored as responses.id = 1.]", output);
+                if (validSql)
                 {
-                    var rows = result.GetProperty("rows");
-                    Assert.Equal(2, rows.GetArrayLength());
-                    Assert.Equal("Compute" + new string('x', 80), rows[0].GetProperty("service").GetString());
-                    Assert.Equal(1000m, rows[0].GetProperty("cost").GetDecimal());
-                    Assert.Equal(750m, rows[1].GetProperty("cost").GetDecimal());
-                }
-                else if (large)
-                {
-                    Assert.Equal("queryable_tool_result", result.GetProperty("kind").GetString());
-                    Assert.Contains("resultQuery was not applied", result.GetProperty("resultQueryProblem").GetString());
-                    Assert.Contains(result.GetProperty("schema").GetProperty("tables").EnumerateArray(),
-                        table => table.GetProperty("rowCount").GetInt32() == 1000 && table.GetProperty("columns")[1].GetString() == "ServiceName");
+                    Assert.Contains("service\tcost", output);
+                    Assert.Contains(("Compute" + new string('x', large ? 80 : 0)) + "\t" + (large ? "1000" : "2"), output);
+                    Assert.Contains("Storage\t" + (large ? "750" : "3"), output);
                 }
                 else
                 {
-                    Assert.Equal(3, result.GetProperty("properties").GetProperty("rows").GetArrayLength());
-                    Assert.Contains("resultQuery was not applied", result.GetProperty("_resultQuery").GetProperty("problem").GetString());
+                    Assert.Contains("Error: SQL failed", output);
+                    Assert.Contains("Correct the sql against this shape", output);
+                    Assert.Contains("$.properties.rows", output);
                 }
-                Assert.True(ProtectedTool.InspectEvidence(observed.Single()).Success);
+                Assert.True(ProtectedTool.InspectEvidence(output).Success);
             }
             finally { await turn.FinishAsync(); }
         }
@@ -474,8 +467,7 @@ public async Task RuntimeQueriesLargeSourceAfterDiscoveringItsSchema()
             if (Directory.Exists(root)) Directory.Delete(root, true);
         }
     }
-
-private sealed class InvocationProbe(AIFunction inner) : DelegatingAIFunction(inner)
+    private sealed class InvocationProbe(AIFunction inner) : DelegatingAIFunction(inner)
     {
         protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
 {

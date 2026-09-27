@@ -90,7 +90,7 @@ const privateResult = (scenario) => {
     result.answer = "tenant-answer-must-not-publish";
     result.judge.reason = "tenant-rationale-must-not-publish";
     result.tools.push({
-        name: "CalculateCost",
+        name: "QueryAzure",
         success: true,
         arguments: "tenant-arguments-must-not-publish",
         result: "tenant-tool-output-must-not-publish",
@@ -370,7 +370,7 @@ test("full catalog retains every frontend template and both concrete incident ca
         ...(pricingCategory.connectedPrompts ?? []).map((prompt) => prompt.prompt),
         ...JOB_TEMPLATES.map((template) => template.prompt),
         "in which regions can I get h200 on spot quota?",
-        "Use CalculateCost for 2 units at USD 3 per unit, period month, zero discount and tax. Report the total in English. Do not look up prices.",
+        "Calculate the monthly total for 2 units at USD 3 per unit with zero discount and tax, using QueryAzure sql rather than mental arithmetic. Report the total in English. Do not look up prices.",
     ].map((question) => question.trim()));
     assert.deepEqual(new Set(catalog.map((item) => item.question)), questions);
     assert.equal(catalog.length, questions.size);
@@ -388,7 +388,7 @@ test("live gate selects exactly 20 stable representative questions without chang
         "eac3ecb5ceb83c4b", "84206ed740e28de4", "979163d9aeedc2b8",
         "e4e6c2296f2dfc97", "095d1c30190c1015", "f9b2c97a215d8923",
         "160eca54c580c4f8", "126bedbbf645cbd1", "f75b5b6527c41d5c",
-        "062a296be5be951f", "552f572706ca51cd",
+        "062a296be5be951f", "ce95482a745e0a66",
     ]);
     assert.notDeepEqual(cases, catalog.slice(0, 20));
     assert.equal(
@@ -402,7 +402,7 @@ test("live gate selects exactly 20 stable representative questions without chang
     assert.deepEqual(cases[0].requiredTools, ["ReportMaturityScore"]);
     assert.deepEqual(cases[0].forbiddenTools, []);
     assert.deepEqual(cases.at(-2).requiredTools, ["QueryAzure"]);
-    assert.deepEqual(cases.at(-1).requiredTools, ["CalculateCost"]);
+    assert.deepEqual(cases.at(-1).requiredTools, ["QueryAzure"]);
 });
 
 test("curated selection fails if a pinned catalog case is missing, duplicated or has a duplicate question", () => {

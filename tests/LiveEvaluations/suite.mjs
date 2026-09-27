@@ -50,7 +50,7 @@ const CURATED_CASE_IDS = Object.freeze([
     "126bedbbf645cbd1", // Batched token pricing per million tokens
     "f75b5b6527c41d5c", // Waste evidence and a reviewable script
     "062a296be5be951f", // H200 Spot incident
-    "552f572706ca51cd", // English deterministic CalculateCost incident
+    "ce95482a745e0a66", // English deterministic SQL calculation incident
 ]);
 
 export async function assertCandidateRevision(
@@ -160,10 +160,10 @@ export function buildCatalog() {
         ["QueryAzure"],
     );
     add(
-        "Use CalculateCost for 2 units at USD 3 per unit, period month, zero discount and tax. Report the total in English. Do not look up prices.",
-        "English calculator result",
+        "Calculate the monthly total for 2 units at USD 3 per unit with zero discount and tax, using QueryAzure sql rather than mental arithmetic. Report the total in English. Do not look up prices.",
+        "English calculation result",
         "incident:language",
-        ["CalculateCost"],
+        ["QueryAzure"],
     );
     return [...cases.values()];
 }

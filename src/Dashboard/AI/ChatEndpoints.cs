@@ -1235,15 +1235,10 @@ public static class ChatEndpoints
             try
             {
                 using var proposal = JsonDocument.Parse(resultText.StartsWith("HTTP ") ? resultText[(resultText.IndexOf('\n') + 1)..] : resultText);
-                var bodies = proposal.RootElement.ValueKind == JsonValueKind.Object && proposal.RootElement.TryGetProperty("results", out var results)
-                    && results.ValueKind == JsonValueKind.Array
-                    ? results.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object && item.TryGetProperty("body", out var value) && value.ValueKind == JsonValueKind.Object).Select(item => item.GetProperty("body")).ToArray()
-                    : [proposal.RootElement];
-                foreach (var body in bodies)
-                    if (body.TryGetProperty("operationId", out var operationId)
-                        && OperationStore.Default.Find(operationId.GetString() ?? "", userId) is { Status: "awaitingApproval" } operation
-                        && operation.SessionId == sessionId)
-                        await emit(JsonSerializer.Serialize(new { type = "approval_required", change = OperationStore.Review(operation) }));
+                if (proposal.RootElement.ValueKind == JsonValueKind.Object && proposal.RootElement.TryGetProperty("operationId", out var operationId)
+                    && OperationStore.Default.Find(operationId.GetString() ?? "", userId) is { Status: "awaitingApproval" } operation
+                    && operation.SessionId == sessionId)
+                    await emit(JsonSerializer.Serialize(new { type = "approval_required", change = OperationStore.Review(operation) }));
             }
             catch (JsonException) { }
         }

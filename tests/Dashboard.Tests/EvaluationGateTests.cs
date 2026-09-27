@@ -114,7 +114,7 @@ public sealed class EvaluationGateTests
             [
                 new("QueryAzure", true, "{}", null, "{\"url\":\"/a\"}", 1000, 3000),
                 new("QueryAzure", true, "HTTP 403 Forbidden\n{}", null, "{\"url\":\"/b\"}", 1500, 2500),
-                new("QueryToolResult", true, "{}", null, "{\"resultId\":\"x\"}", 4000, 5000)
+                new("QueryAzure", true, "{}", null, "{\"sql\":\"SELECT 1\"}", 4000, 5000)
             ]
         };
         await judge.AssessAsync(Scenario with { MaxToolCalls = 12, MaxDurationSeconds = 240 }, run, CancellationToken.None);
@@ -146,7 +146,7 @@ public sealed class EvaluationGateTests
         var tools = evidence.RootElement.GetProperty("tools").EnumerateArray().ToArray();
         Assert.Equal([1, 2, 3], tools.Select(tool => tool.GetProperty("order").GetInt32()));
         Assert.Equal([1, 1, 2], tools.Select(tool => tool.GetProperty("round").GetInt32()));
-        Assert.Equal(["/a", "/b", "x"], tools.Select(tool => JsonDocument.Parse(tool.GetProperty("arguments").GetString()!).RootElement.EnumerateObject().First().Value.GetString()));
+        Assert.Equal(["/a", "/b", "SELECT 1"], tools.Select(tool => JsonDocument.Parse(tool.GetProperty("arguments").GetString()!).RootElement.EnumerateObject().First().Value.GetString()));
         Assert.Equal([true, false, true], tools.Select(tool => tool.GetProperty("succeeded").GetBoolean()));
         Assert.Equal(1.5, tools[1].GetProperty("startSeconds").GetDouble());
         Assert.Equal(2.5, tools[1].GetProperty("endSeconds").GetDouble());

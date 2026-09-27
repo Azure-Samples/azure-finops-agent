@@ -10,11 +10,9 @@ namespace Dashboard.Tests;
 public sealed class RuntimePolicyTests
 {
     [Theory]
-    [InlineData(false, 3)]
-    [InlineData(false, 4)]
-    [InlineData(true, 3)]
-    [InlineData(true, 4)]
-    public async Task CostQueriesRejectExcessGroupingBeforeDispatch(bool bulk, int dimensions)
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task CostQueriesRejectExcessGroupingBeforeDispatch(int dimensions)
     {
         const string path = "/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement/query?api-version=2026-08-01";
         var body = JsonSerializer.Serialize(new
@@ -22,14 +20,11 @@ public sealed class RuntimePolicyTests
             dataset = new
             {
                 grouping = new[] { "SubscriptionName", "ResourceGroupName", "ResourceId", "ServiceName" }
-                .Take(dimensions).Select(name => new { type = "Dimension", name })
+                    .Take(dimensions).Select(name => new { type = "Dimension", name })
             }
         });
         var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().Single();
-        var arguments = bulk
-            ? new AIFunctionArguments { ["requests"] = JsonSerializer.Serialize(new[] { new { method = "POST", url = path, body } }) }
-            : new AIFunctionArguments { ["method"] = "POST", ["url"] = path, ["body"] = body };
-        var result = (await tool.InvokeAsync(arguments))!.ToString()!;
+        var result = (await tool.InvokeAsync(new AIFunctionArguments { ["method"] = "POST", ["url"] = path, ["body"] = body }))!.ToString()!;
         Assert.Contains("at most two grouping dimensions", result);
         Assert.Contains("No request was sent", result);
     }
@@ -48,15 +43,6 @@ public sealed class RuntimePolicyTests
         Assert.Equal("ActualCost", document.RootElement.GetProperty("type").GetString());
         Assert.Null(AzureQueryTools.ValidateCostQueryBody("/providers/Microsoft.CostManagement/query", canonical));
         Assert.Equal("{not json", AzureQueryTools.CanonicalJsonBody("{not json"));
-    }
-
-    [Fact]
-    public async Task NullBatchItemsAreRejectedBeforeDispatch()
-    {
-        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().Single();
-        var result = (await tool.InvokeAsync(new AIFunctionArguments { ["requests"] = "[null]" }))!.ToString()!;
-        Assert.Contains("Every batch item must be a request object", result);
-        Assert.Contains("No request was sent", result);
     }
 
     [Theory]
@@ -81,7 +67,7 @@ public sealed class RuntimePolicyTests
     [Theory]
     [InlineData("QueryAzure", null, "$filter")]
     [InlineData("QueryAzure", null, "look it up instead of guessing")]
-    [InlineData("QueryAzure", null, "sequentially")]
+    [InlineData("QueryAzure", null, "one at a time")]
     [InlineData("QueryAzure", null, "learn.microsoft.com/graph")]
     [InlineData("QueryAzure", null, "summarize")]
     [InlineData("QueryAzure", null, "prefix")]
@@ -89,15 +75,11 @@ public sealed class RuntimePolicyTests
     [InlineData("QueryAzure", null, "OData")]
     [InlineData("QueryAzure", null, "pricesheet download")]
     [InlineData("QueryAzure", null, "not tenant-specific")]
-    [InlineData("QueryAzure", "requests", "1-200")]
-    [InlineData("QueryAzure", "resultQuery", "QueryToolResult")]
-    [InlineData("QueryAzure", "grepFor", "long")]
+    [InlineData("QueryAzure", "sql", "read-only")]
+    [InlineData("QueryAzure", "url", "operation:")]
     [InlineData("QueryUploadedFile", "paramsJson", "filters")]
     [InlineData("GetSavingsLedger", "status", "filter")]
     [InlineData("GetSavingsLedger", "limit", "limit")]
-    [InlineData("GetOperationStatus", "operationId", "exact")]
-    [InlineData("GetOperationStatus", null, "in this conversation")]
-    [InlineData("GetOperationStatus", null, "pricesheet")]
     public void QueryGuidanceIsPresentInToolAndParameterSchemas(string toolName, string? parameterName, string guidance)
     {
         var tokens = new UserTokens { UserId = 101 };
@@ -106,7 +88,6 @@ public sealed class RuntimePolicyTests
             "QueryAzure" => new AzureQueryTools(tokens).Create(),
             "QueryUploadedFile" => new UploadedFileTools(tokens).Create(),
             "GetSavingsLedger" => new SavingsLedgerTools(tokens).Create(),
-            "GetOperationStatus" => new OperationTools(tokens).Create(),
             _ => throw new InvalidOperationException("Unexpected query tool.")
         };
         var tool = tools.Single(candidate => candidate.Name == toolName);
@@ -144,7 +125,6 @@ public sealed class RuntimePolicyTests
     [Theory]
     [InlineData("RenderChart", "data", "scoped")]
     [InlineData("RenderAdvancedChart", "options", "scoped")]
-    [InlineData("EstimateTokenCost", "modelsJson", "requested")]
     [InlineData("GenerateDataReport", "dataJson", "sourceRowCount")]
     [InlineData("GenerateHtmlPresentation", "slidesJson", "scope")]
     [InlineData("GenerateMaturityReport", "reportJson", "source aggregates")]
@@ -155,7 +135,6 @@ public sealed class RuntimePolicyTests
         var tools = toolName switch
         {
             "RenderChart" or "RenderAdvancedChart" => ChartTools.Create(),
-            "EstimateTokenCost" => CostEstimateTools.Create(),
             "GenerateDataReport" => new ReportTools(101).Create(),
             "GenerateHtmlPresentation" => new HtmlPresentationTools(101).Create(),
             "GenerateMaturityReport" => new MaturityReportTools(101).Create(),

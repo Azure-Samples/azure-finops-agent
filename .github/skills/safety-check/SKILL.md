@@ -72,7 +72,7 @@ Print a summary table:
 | Tool              | Methods Allowed | Write Capability | Scope |
 | ----------------- | --------------- | ---------------- | ----- |
 | QueryAzure        | ...             | ...              | ...   |
-| GetOperationStatus | ...            | ...              | ...   |
+| QueryAzure operation polling | ... | ... | ... |
 | QueryUploadedFile | ...             | ...              | ...   |
 | (etc.)            | ...             | ...              | ...   |
 

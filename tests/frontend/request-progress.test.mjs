@@ -147,91 +147,7 @@ test('SDK success cannot hide an explicit tool validation error', () => {
   assert.equal(toolResultSucceeded(true, 'Error rates were measured over the requested period.'), true);
 });
 
-function bulkResult(overrides = {}) {
-  return {
-    total: 2, succeeded: 2, failed: 0, pending: 0, unattempted: 0, cancelled: 0,
-    stopped: false, complete: true,
-    results: [
-      { index: 0, status: 200, outcome: 'succeeded', partial: false, body: { cost: 12 } },
-      { index: 1, status: 200, outcome: 'succeeded', partial: false, body: { cost: 34 } },
-    ],
-    ...overrides,
-  };
-}
-
-test('SDK success does not hide failed or cancelled bulk requests', () => {
-  for (const counter of ['failed', 'cancelled']) {
-    const result = bulkResult({ succeeded: 1, [counter]: 1, complete: false });
-    assert.equal(toolResultSucceeded(true, JSON.stringify(result)), false, counter);
-    assert.equal(toolResultSucceeded(true, result), false, counter);
-    assert.equal(toolResultSucceeded(true, { ...result, complete: true }), false, counter);
-  }
-});
-
-test('pending, unattempted, stopped, and incomplete bulk requests are not successful', () => {
-  for (const overrides of [
-    { succeeded: 1, pending: 1 },
-    { succeeded: 1, unattempted: 1 },
-    { stopped: true },
-    { complete: false },
-    { complete: undefined },
-  ]) {
-    assert.equal(toolResultSucceeded(true, JSON.stringify(bulkResult(overrides))), false, JSON.stringify(overrides));
-  }
-});
-
-test('bulk completion requires accounted results and consistent counters', () => {
-  for (const overrides of [
-    { succeeded: 1 },
-    { succeeded: 3 },
-    { succeeded: '2' },
-    { failed: -1 },
-    { cancelled: '1' },
-    { pending: null },
-    { total: 3 },
-    { results: [] },
-  ]) {
-    assert.equal(toolResultSucceeded(true, JSON.stringify(bulkResult(overrides))), false, JSON.stringify(overrides));
-  }
-});
-
-test('bulk row evidence prevents pending operations and partial data from looking complete', () => {
-  for (const row of [
-    { status: 202, outcome: 'accepted', partial: false },
-    { status: 409, outcome: 'awaitingApproval', partial: false },
-    { status: 200, outcome: 'inProgress', partial: false },
-    { status: 200, outcome: 'unknown', partial: false },
-    { status: 429, outcome: 'failed', partial: false },
-    { status: 0, outcome: 'cancelled', partial: false },
-    { status: 200, outcome: 'succeeded', partial: true },
-    { status: 202, outcome: 'succeeded', partial: false },
-    null,
-  ]) {
-    const result = bulkResult();
-    result.results[1] = row;
-    assert.equal(toolResultSucceeded(true, JSON.stringify(result)), false, JSON.stringify(row));
-  }
-});
-
-test('fully completed bulk responses remain successful only when the SDK also succeeded', () => {
-  const result = bulkResult();
-  assert.equal(toolResultSucceeded(true, result), true);
-  assert.equal(toolResultSucceeded(true, JSON.stringify(result)), true);
-  assert.equal(toolResultSucceeded(false, result), false);
-  assert.equal(toolResultSucceeded(false, JSON.stringify(result)), false);
-});
-
-test('HTTP-wrapped bulk results retain both transport and batch completion checks', () => {
-  const complete = JSON.stringify(bulkResult());
-  const incomplete = JSON.stringify(bulkResult({ failed: 1, complete: false }));
-  assert.equal(toolResultSucceeded(true, `HTTP 200 OK\n${complete}`), true);
-  assert.equal(toolResultSucceeded(true, `HTTP 200 OK\n${incomplete}`), false);
-  assert.equal(toolResultSucceeded(true, `HTTP 202 Accepted\n${complete}`), false);
-  assert.equal(toolResultSucceeded(true, `HTTP 400 BadRequest\n${complete}`), false);
-  assert.equal(toolResultSucceeded(true, `HTTP 429 TooManyRequests\n${complete}`), false);
-});
-
-test('ordinary financial JSON is not mistaken for a bulk envelope by its total', () => {
+test('ordinary financial JSON with total, failed or results fields stays successful', () => {
   for (const result of [
     { total: 200 },
     { total: 200, failed: 3, cancelled: 1 },
@@ -240,7 +156,7 @@ test('ordinary financial JSON is not mistaken for a bulk envelope by its total',
     { total: 12.34, complete: false, results: [{ cost: 12.34 }] },
     { total: 2, failed: 1, results: { cost: 12 } },
     { properties: { total: 2, failed: 1, results: [] } },
-    [bulkResult({ failed: 1, complete: false })],
+    [{ total: 2, failed: 1, complete: false, results: [] }],
     null,
     200,
   ]) {

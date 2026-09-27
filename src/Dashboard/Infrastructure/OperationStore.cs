@@ -182,7 +182,7 @@ internal sealed class OperationStore
         code = operation.Status == "awaitingApproval" ? "approval_required" : null,
         nextAction = operation.Status == "awaitingApproval" ? "No write was sent. The user must review and approve the exact change in the application."
             : operation.Status is "dispatching" or "accepted" or "inProgress" or "unknown"
-            ? "Use GetOperationStatus with this operationId. Do not re-submit the write or claim completion."
+            ? "Check it with QueryAzure url operation:" + operation.Id + ". Do not re-submit the write or claim completion."
             : operation.Status == "failed" ? "Report the failure and list any created prerequisite resources. Generate a reviewed cleanup script; never delete automatically."
             : operation.Status == "expired" ? "The approval proposal expired. No write was sent. Request a fresh plan."
             : operation.Status == "rejected" ? "The user rejected this change. No write was sent." : "Terminal success observed."

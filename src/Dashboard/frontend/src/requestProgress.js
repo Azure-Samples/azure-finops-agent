@@ -114,32 +114,5 @@ export function toolHttpStatus(result) {
 export function toolResultSucceeded(sdkSuccess, result) {
   const status = toolHttpStatus(result);
   if (sdkSuccess === false || status >= 400) return false;
-  if (typeof result === "string" && /^\s*Error:/i.test(result)) return false;
-
-  let batch = result;
-  if (typeof batch === "string") {
-    try {
-      batch = JSON.parse(status === null ? batch : batch.slice(batch.indexOf("\n") + 1));
-    } catch {
-      return true;
-    }
-  }
-  const counters = ["succeeded", "failed", "pending", "unattempted", "cancelled"];
-  const isBulkEnvelope = batch && !Array.isArray(batch)
-    && Array.isArray(batch.results)
-    && Number.isSafeInteger(batch.total) && batch.total >= 0
-    && [...counters, "complete", "stopped"].some((key) => Object.hasOwn(batch, key));
-  if (!isBulkEnvelope) return true;
-
-  // SDK completion only means the batch tool returned, not that its work completed.
-  return status !== 202
-    && batch.complete === true
-    && batch.stopped !== true
-    && batch.succeeded === batch.total
-    && batch.results.length === batch.total
-    && counters.slice(1).every((key) => batch[key] === undefined || batch[key] === 0)
-    && batch.results.every((item) => item?.outcome === "succeeded"
-      && item.partial === false
-      && Number.isInteger(item.status) && item.status >= 200 && item.status < 300
-      && item.status !== 202);
+  return !(typeof result === "string" && /^\s*Error:/i.test(result));
 }

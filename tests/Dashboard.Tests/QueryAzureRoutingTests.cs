@@ -30,7 +30,7 @@ public sealed class QueryAzureRoutingTests
         var tool = Assert.Single(new AzureQueryTools(Tokens).Create());
         Assert.Equal("QueryAzure", tool.Name);
         Assert.False(tool.JsonSchema.TryGetProperty("required", out var required) && required.GetArrayLength() > 0);
-        foreach (var parameter in new[] { "url", "method", "body", "requests", "resultQuery", "maxPages", "grepFor" })
+        foreach (var parameter in new[] { "url", "method", "body", "sql" })
             Assert.True(tool.JsonSchema.GetProperty("properties").TryGetProperty(parameter, out _), parameter);
     }
 
@@ -72,36 +72,7 @@ public sealed class QueryAzureRoutingTests
         Assert.Equal("management.azure.com", uri.Host);
         Assert.Equal("/subscriptions/s/resourceGroups?api-version=2021-04-01", uri.PathAndQuery);
     }
-
-    [Fact]
-    public void BatchesAcceptUrlOrPathObjectBodiesAndAWrapper()
-    {
-        var items = ParseBatch("""{"requests":[{"URL":"/a"},{"method":"POST","path":"/b","body":{"query":"x"}},{"url":"/c","body":"{\"k\":1}"}]}""");
-        Assert.Equal(3, items.Count);
-        Assert.Equal(("GET", "/a", (string?)null), (items[0].Method, items[0].Path, items[0].Body));
-        Assert.Equal(("POST", "/b"), (items[1].Method, items[1].Path));
-        Assert.Equal("x", JsonDocument.Parse(items[1].Body!).RootElement.GetProperty("query").GetString());
-        Assert.Equal("{\"k\":1}", items[2].Body);
-    }
-
     [Theory]
-    [InlineData("[]", "non-empty")]
-    [InlineData("[null]", "request object")]
-    [InlineData("[\"/a\"]", "request object")]
-    [InlineData("{not json", "complete JSON array")]
-    [InlineData("{\"url\":\"/a\"}", "non-empty JSON array")]
-    public void MalformedBatchesAreRejected(string requests, string error) =>
-        Assert.Contains(error, Assert.Throws<FormatException>(() => ParseBatch(requests)).Message);
-
-    [Fact]
-    public void OversizedBatchesAreRejected() =>
-        Assert.Contains("at most 200", Assert.Throws<FormatException>(() =>
-            ParseBatch(JsonSerializer.Serialize(Enumerable.Range(0, 201).Select(index => new { url = "/x" + index })))).Message);
-
-    [Theory]
-    [InlineData("{}", "exactly one of url")]
-    [InlineData("{\"url\":\"/a\",\"requests\":\"[{\\\"url\\\":\\\"/b\\\"}]\"}", "exactly one of url")]
-    [InlineData("{\"requests\":\"[null]\"}", "request object")]
     [InlineData("{\"url\":\"http://example.com/x\"}", "absolute https://")]
     [InlineData("{\"url\":\"https://example.com/x\",\"method\":\"POST\"}", "GET only")]
     [InlineData("{\"url\":\"https://169.254.169.254/metadata/instance\"}", "not reachable")]
@@ -121,6 +92,19 @@ public sealed class QueryAzureRoutingTests
         Assert.StartsWith("HTTP 4", result);
         Assert.Contains(error, result);
         Assert.False(ProtectedTool.InspectEvidence(result).Success);
+    }
+    [Fact]
+    public async Task EmptyUrlWithoutSqlReturnsBadRequest()
+    {
+        var result = await InvokeAsync(new AIFunctionArguments());
+        Assert.Equal("HTTP 400 BadRequest\nProvide url for a request, or sql alone to read stored responses. No request was sent.", result);
+    }
+
+    [Fact]
+    public async Task OperationListRequiresActiveConversation()
+    {
+        var result = await InvokeAsync(new AIFunctionArguments { ["url"] = "operation:" });
+        Assert.Equal("Error: no active conversation.", result);
     }
 
     [Fact]

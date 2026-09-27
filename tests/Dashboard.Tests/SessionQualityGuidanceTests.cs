@@ -20,7 +20,7 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("azure-rest-api-specs")]
     [InlineData("apiVersions")]
     [InlineData("one at a time")]
-    [InlineData("QueryToolResult")]
+    [InlineData("query rows")]
     [InlineData("retrievedAtUtc")]
     [InlineData("Never delete resources")]
     [InlineData("approves in the UI")]

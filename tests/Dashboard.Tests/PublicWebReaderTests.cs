@@ -21,7 +21,7 @@ public sealed class PublicWebReaderTests
             Timeout = callerCancels ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(1)
         };
         using var cancellation = new CancellationTokenSource();
-        var pending = PublicWebReader.FetchPageAsync(client, Source, null, 60_000, cancellation.Token);
+        var pending = PublicWebReader.FetchPageAsync(client, Source, cancellation.Token);
         await body.Reading.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         if (callerCancels)
@@ -42,7 +42,7 @@ public sealed class PublicWebReaderTests
     }
 
     [Fact]
-    public async Task SuccessfulReadPreservesFilteringAndInvariantRetrievalTime()
+    public async Task SuccessfulReadPreservesWholeStrippedPageAndInvariantRetrievalTime()
     {
         using var body = new MemoryStream(Encoding.UTF8.GetBytes(
             "<html><script>remove-me</script><p>License A &amp; B</p>\n<p>Unrelated</p></html>"));
@@ -52,11 +52,11 @@ public sealed class PublicWebReaderTests
         {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fi-FI");
             var before = DateTimeOffset.UtcNow;
-            var result = await PublicWebReader.FetchPageAsync(client, Source, "License", 60_000, CancellationToken.None);
+            var result = await PublicWebReader.FetchPageAsync(client, Source, CancellationToken.None);
 
             Assert.StartsWith("HTTP 200 OK", result);
             Assert.Contains("License A & B", result);
-            Assert.DoesNotContain("Unrelated", result);
+            Assert.Contains("Unrelated", result);
             Assert.DoesNotContain("remove-me", result);
             var timestamp = result.Split('\n').Single(line => line.StartsWith("UTC: ", StringComparison.Ordinal));
             Assert.True(DateTimeOffset.TryParseExact(timestamp[5..].Trim(), "O", CultureInfo.InvariantCulture,
@@ -69,26 +69,12 @@ public sealed class PublicWebReaderTests
             CultureInfo.CurrentCulture = originalCulture;
         }
     }
-
-    [Fact]
-    public async Task BodyDownloadAndOutputRetainSeparateCaps()
-    {
-        using var body = new MemoryStream(Encoding.UTF8.GetBytes(new string('x', 700_000)));
-        using var client = new HttpClient(new ResponseHandler(body));
-        var result = await PublicWebReader.FetchPageAsync(client, Source, null, 1000, CancellationToken.None);
-
-        Assert.Contains("Bytes on wire: 600000 (HARD CAP", result);
-        Assert.Contains("[TRUNCATED to 1000 chars", result);
-        Assert.EndsWith(new string('x', 1000), result);
-        Assert.False(body.CanRead);
-    }
-
     [Fact]
     public async Task StructuredBodiesBecomeRetainableJson()
     {
         using var json = new MemoryStream(Encoding.UTF8.GetBytes("{\"paths\":{\"/a\":{}}}"));
         using var jsonClient = new HttpClient(new ResponseHandler(json, "text/plain"));
-        var result = await PublicWebReader.FetchPageAsync(jsonClient, Source, null, 60_000, CancellationToken.None);
+        var result = await PublicWebReader.FetchPageAsync(jsonClient, Source, CancellationToken.None);
         var lines = result.Split('\n');
         Assert.Equal("HTTP 200 OK", lines[0]);
         Assert.StartsWith("Current UTC time: ", lines[1]);
@@ -96,7 +82,7 @@ public sealed class PublicWebReaderTests
 
         using var csv = new MemoryStream(Encoding.UTF8.GetBytes("Name,Cost\nvm1,1.5\nvm2,2\n"));
         using var csvClient = new HttpClient(new ResponseHandler(csv, "text/csv"));
-        var table = (await PublicWebReader.FetchPageAsync(csvClient, Source, null, 60_000, CancellationToken.None, timestamp: false)).Split('\n', 2);
+        var table = (await PublicWebReader.FetchPageAsync(csvClient, Source, CancellationToken.None, timestamp: false)).Split('\n', 2);
         Assert.Equal("HTTP 200 OK", table[0]);
         using var document = JsonDocument.Parse(table[1]);
         Assert.Equal(2, document.RootElement.GetProperty("rowCount").GetInt32());

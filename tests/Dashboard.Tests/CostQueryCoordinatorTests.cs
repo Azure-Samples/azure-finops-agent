@@ -168,21 +168,6 @@ public sealed class CostQueryCoordinatorTests
             await turn.FinishAsync();
         }
     }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ConsolidatedCostEvidenceRetainsProviderAndHostRetryDeadlines(bool providerResponse)
-    {
-        const string retryAt = "2026-01-01T00:05:00+00:00";
-        var response = providerResponse
-            ? "HTTP 429 TooManyRequests\nCurrent UTC time: 2026-01-01 00:00:00\n{\"error\":{\"code\":\"429\"},\"_finops\":{\"cacheStatus\":\"not_available\",\"retryAtUtc\":\"" + retryAt + "\"}}"
-            : "HTTP 429 TooManyRequests\n{\"error\":{\"code\":\"CostManagementCooldown\"},\"retryAtUtc\":\"" + retryAt + "\"}";
-        var evidence = AzureQueryTools.ReadCostSourceEvidence(response);
-        Assert.Equal("not_available", evidence.GetProperty("cacheStatus").GetString());
-        Assert.Equal(DateTimeOffset.Parse(retryAt), evidence.GetProperty("retryAtUtc").GetDateTimeOffset());
-    }
-
     private sealed class TestClock : TimeProvider
     {
         private DateTimeOffset _now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);

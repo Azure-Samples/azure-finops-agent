@@ -273,16 +273,16 @@ test("tool validation errors remain failures when the SDK callback succeeded", a
   const { requests, errors } = await arrange(page, [
     {
       type: "tool_start",
-      tool: "CalculateCost",
+      tool: "QueryAzure",
       id: "invalid-calculation",
-      args: "{}",
+      args: '{"sql":"SELECT nope FROM responses"}',
     },
     {
       type: "tool_done",
-      tool: "CalculateCost",
+      tool: "QueryAzure",
       id: "invalid-calculation",
       success: true,
-      result: "Error: Every line requires label and unit.",
+      result: "Error: SQL failed: no such column: nope",
     },
     { type: "message", content: "The calculation input was rejected." },
   ]);
@@ -295,81 +295,6 @@ test("tool validation errors remain failures when the SDK callback succeeded", a
   expect(requests).toHaveLength(1);
   expect(errors).toEqual([]);
 });
-
-for (const outcome of [
-  "failed",
-  "cancelled",
-  "accepted",
-  "partial",
-  "succeeded",
-]) {
-  test(`bulk request ${outcome} is not confused with SDK success`, async ({
-    page,
-  }, testInfo) => {
-    const complete = outcome === "succeeded";
-    const result = {
-      total: 2,
-      succeeded: outcome === "partial" || complete ? 2 : 1,
-      failed: outcome === "failed" ? 1 : 0,
-      cancelled: outcome === "cancelled" ? 1 : 0,
-      pending: outcome === "accepted" ? 1 : 0,
-      unattempted: 0,
-      stopped: outcome === "failed",
-      complete,
-      results: [
-        {
-          index: 0,
-          status: 200,
-          outcome: "succeeded",
-          partial: false,
-          body: { cost: 12 },
-        },
-        {
-          index: 1,
-          status:
-            outcome === "failed"
-              ? 429
-              : outcome === "cancelled"
-                ? 0
-                : outcome === "accepted"
-                  ? 202
-                  : 200,
-          outcome: outcome === "partial" ? "succeeded" : outcome,
-          partial: outcome === "partial",
-        },
-      ],
-    };
-    const answer = complete
-      ? "Both scoped reads completed."
-      : "The batch did not fully complete.";
-    const { requests, errors } = await arrange(page, [
-      {
-        type: "tool_start",
-        tool: "QueryAzure",
-        id: "synthetic-bulk",
-        args: '{"requests":"[{},{}]"}',
-      },
-      {
-        type: "tool_done",
-        tool: "QueryAzure",
-        id: "synthetic-bulk",
-        success: true,
-        result: JSON.stringify(result),
-      },
-      { type: "message", content: answer },
-    ]);
-    await send(page, "Read both cost scopes");
-    await expect(page.getByText(answer, { exact: true })).toBeVisible();
-    await expect(page.locator(".st-icon--ok")).toHaveCount(complete ? 1 : 0);
-    await expect(page.locator(".st-icon--fail")).toHaveCount(complete ? 0 : 1);
-    if (testInfo.project.name === "desktop")
-      await expect(
-        page.locator(complete ? ".st-icon--ok" : ".st-icon--fail"),
-      ).toBeVisible();
-    expect(requests).toHaveLength(1);
-    expect(errors).toEqual([]);
-  });
-}
 
 test("later follow-up messages do not replace an already visible cost table", async ({
   page,

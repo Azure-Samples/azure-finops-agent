@@ -29,9 +29,7 @@ internal static class PublicWebReader
         DefaultRequestVersion = HttpVersion.Version20,
     };
 
-    private const int MaxHtmlBytes = 600_000;         // pages are read as text
-    private const int MaxStructuredBytes = 8_000_000; // JSON/XML/CSV/specs are retained and queried instead of inlined
-    internal const int MaxOutputChars = 60_000;
+    private const int MaxBytes = 8_000_000; // pages, JSON/XML/CSV and specs are stored whole and read with SQL
 
     static PublicWebReader()
     {
@@ -96,13 +94,11 @@ internal static class PublicWebReader
         }
     }
 
-    internal static async Task<string> FetchPageAsync(HttpClient client, Uri uri, string? grepFor,
-        int maxChars, CancellationToken cancellationToken, bool timestamp = true)
+    internal static async Task<string> FetchPageAsync(HttpClient client, Uri uri, CancellationToken cancellationToken, bool timestamp = true)
     {
         using var activity = HttpHelper.Telemetry.StartActivity("PublicWebRequest");
         activity?.SetTag("fetch.host", uri.Host);
         activity?.SetTag("fetch.path", uri.AbsolutePath);
-        activity?.SetTag("fetch.has_grep", !string.IsNullOrWhiteSpace(grepFor));
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (client.Timeout != Timeout.InfiniteTimeSpan) deadline.CancelAfter(client.Timeout);
 
@@ -113,8 +109,7 @@ internal static class PublicWebReader
 
             var contentType = res.Content.Headers.ContentType?.MediaType ?? "unknown";
             var html = contentType.Contains("html", StringComparison.OrdinalIgnoreCase);
-            var grep = !string.IsNullOrWhiteSpace(grepFor);
-            var cap = html || grep ? MaxHtmlBytes : MaxStructuredBytes;
+            const int cap = MaxBytes;
             activity?.SetTag("fetch.status_code", (int)res.StatusCode);
             activity?.SetTag("fetch.content_type", contentType);
 
@@ -133,7 +128,7 @@ internal static class PublicWebReader
             activity?.SetTag("fetch.bytes", total);
             var status = $"HTTP {(int)res.StatusCode} {res.StatusCode}\n";
 
-            if (res.IsSuccessStatusCode && !html && !grep && total < cap
+            if (res.IsSuccessStatusCode && !html && total < cap
                 && Structured(raw, contentType) is { } structured)
             {
                 activity?.SetTag("fetch.structured", true);
@@ -141,37 +136,14 @@ internal static class PublicWebReader
             }
 
             var body = html ? StripHtml(raw) : raw;
-
-            if (grep)
-            {
-                var needle = grepFor!.Trim();
-                var matched = body.Split('\n')
-                    .Where(l => l.Contains(needle, StringComparison.OrdinalIgnoreCase))
-                    .Take(500)
-                    .ToList();
-                body = matched.Count == 0
-                    ? $"[grep '{needle}' returned 0 matches in {body.Length} chars of body]"
-                    : string.Join('\n', matched);
-                activity?.SetTag("fetch.grep_matches", matched.Count);
-            }
-
-            var truncated = false;
-            if (body.Length > maxChars)
-            {
-                body = body[..maxChars];
-                truncated = true;
-            }
-
             activity?.SetTag("fetch.output_chars", body.Length);
-            activity?.SetTag("fetch.truncated", truncated);
 
             var sb = new StringBuilder();
             sb.Append(status);
             sb.AppendLine($"Final URL: {res.RequestMessage?.RequestUri ?? uri}");
             sb.AppendLine($"Content-Type: {contentType}");
-            sb.AppendLine($"Bytes on wire: {total}{(total >= cap ? " (HARD CAP — refine URL or use grepFor)" : "")}");
+            sb.AppendLine($"Bytes on wire: {total}{(total >= cap ? " (size cap reached; the rest of the page was not read)" : "")}");
             sb.AppendLine($"UTC: {DateTimeOffset.UtcNow:O}");
-            if (truncated) sb.AppendLine($"[TRUNCATED to {maxChars} chars — pass grepFor or a more specific URL to narrow]");
             sb.AppendLine();
             sb.Append(body);
             return sb.ToString();

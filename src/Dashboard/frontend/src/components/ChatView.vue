@@ -1364,7 +1364,7 @@
                   :disabled="streaming"
                   @click="
                     sendQuestion(
-                      `Check GetOperationStatus for operationId ${change.operationId} and report its actual state.`,
+                      `Check operation:${change.operationId} with QueryAzure and report its actual state.`,
                     )
                   "
                 >
