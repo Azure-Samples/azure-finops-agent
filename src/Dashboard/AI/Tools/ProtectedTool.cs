@@ -126,7 +126,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         if (owner is null || sessionId is null || !EvidenceTools.Contains(Name)
             || redacted.Contains("__HTML_READY__:", StringComparison.Ordinal) || redacted.Contains("__SCRIPT_READY__:", StringComparison.Ordinal)) return redacted;
         var large = System.Text.Encoding.UTF8.GetByteCount(redacted) > ToolResultStore.InlineBytes;
-        var batch = Name == "QueryAzure" && (!string.IsNullOrWhiteSpace(Argument(arguments, "requests")) || !string.IsNullOrWhiteSpace(Argument(arguments, "forEach")));
+        var batch = Name == "QueryAzure" && !string.IsNullOrWhiteSpace(Argument(arguments, "requests"));
         var operation = redacted.Contains("\"operationId\"", StringComparison.Ordinal);
         // A single failed call stays verbatim; a large failed batch keeps its successful items queryable.
         if (!evidence.Success && !(batch && large)) return redacted;

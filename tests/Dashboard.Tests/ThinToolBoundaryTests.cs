@@ -101,7 +101,7 @@ public sealed class ThinToolBoundaryTests
     {
         const string item = """[{"id":"tagging","label":"Tagging","status":"observed","score":3,"detail":"45% tagged"}]""";
         Assert.NotNull(ScoreTools.NormalizeScores(item));
-        Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(" " + item + "\u001E\n"));
+        Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(" " + item + "\n"));
         Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(ModelJson.Text(JsonDocument.Parse(item).RootElement)));
         Assert.Null(ScoreTools.NormalizeScores(item + "}"));
         Assert.Null(ScoreTools.NormalizeScores(item[..^1]));

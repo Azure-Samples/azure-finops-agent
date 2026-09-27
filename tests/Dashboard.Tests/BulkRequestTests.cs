@@ -62,53 +62,6 @@ public sealed class BulkRequestTests
     }
 
     [Fact]
-    public void ForEachExpandsExactlyTheQueriedRows()
-    {
-        var source = new ToolResultStore.Source("QueryAzure", DateTimeOffset.UtcNow, true, true, false, "");
-        var entry = ToolResultStore.Default.Retain(101, "fan-out-session",
-            """{"results":[{"body":{"Items":[{"armRegionName":"eastus"},{"armRegionName":"westus"},{"armRegionName":"eastus"}]}},{"body":{"value":[{"name":"eastus"},{"name":"westus"},{"name":"northeurope"}]}}]}""", source)!;
-        using var context = new ToolExecutionContext("fan-out-session", 101, default);
-        var spec = "{\"resultId\":\"" + entry.Id + "\",\"query\":{\"path\":\"$.results[1].body.value[*]\",\"where\":[{\"path\":\"$.name\",\"op\":\"in\",\"value\":\"$.results[0].body.Items[*].armRegionName\"}],\"select\":{\"region\":\"$.name\"}}}";
-        var items = AzureQueryTools.ExpandForEach("/locations/{value}/usages?api-version=1", "GET", null, spec, 101, default);
-        Assert.Equal(["/locations/eastus/usages?api-version=1", "/locations/westus/usages?api-version=1"], items.Select(item => item.Path));
-        Assert.Throws<FormatException>(() => AzureQueryTools.ExpandForEach("/locations/{value}", "GET", null, spec, 102, default));
-        Assert.Throws<FormatException>(() => AzureQueryTools.ExpandForEach("/locations/eastus", "GET", null, spec, 101, default));
-
-        var ids = ToolResultStore.Default.Retain(101, "fan-out-session", """{"rows":[{"id":"/subscriptions/s/resourceGroups/r?x=1 #"},{"id":"b","name":"extra"}]}""", source)!;
-        var escaped = AzureQueryTools.ExpandForEach("{value}/providers/Microsoft.Insights/metrics", "GET", null,
-            "{\"resultId\":\"" + ids.Id + "\",\"query\":{\"path\":\"$.rows[0]\",\"select\":{\"id\":\"$.id\"}}}", 101, default);
-        Assert.Equal("/subscriptions/s/resourceGroups/r%3Fx%3D1%20%23/providers/Microsoft.Insights/metrics", Assert.Single(escaped).Path);
-        Assert.Throws<FormatException>(() => AzureQueryTools.ExpandForEach("/x/{value}", "GET", null, "{\"resultId\":\"" + ids.Id + "\",\"query\":{\"path\":\"$.rows[*]\"}}", 101, default));
-    }
-
-    [Fact]
-    public async Task ForEachUsesEveryRowGroupKeysAndEchoesEachValue()
-    {
-        var source = new ToolResultStore.Source("QueryAzure", DateTimeOffset.UtcNow, true, true, false, "");
-        var regions = Enumerable.Range(0, 30).SelectMany(index => new[] { new { armRegionName = $"region{index}" }, new { armRegionName = $"region{index}" } });
-        var entry = ToolResultStore.Default.Retain(103, "fan-out-defaults", JsonSerializer.Serialize(new { Items = regions }), source)!;
-        using var context = new ToolExecutionContext("fan-out-defaults", 103, default);
-        var selected = AzureQueryTools.ExpandForEach("/l/{value}", "GET", null,
-            "{\"resultId\":\"" + entry.Id + "\",\"query\":{\"path\":\"$.Items[*]\",\"select\":{\"r\":\"$.armRegionName\"}}}", 103, default);
-        Assert.Equal(30, selected.Count);
-        var grouped = AzureQueryTools.ExpandForEach("/l/{value}", "GET", null,
-            "{\"resultId\":\"" + entry.Id + "\",\"query\":{\"path\":\"$.Items[*]\",\"groupBy\":{\"r\":\"$.armRegionName\"},\"aggregates\":[{\"op\":\"count\",\"as\":\"n\"}]}}", 103, default);
-        Assert.Equal(selected.Select(item => item.Value).Order(), grouped.Select(item => item.Value).Order());
-        Assert.Equal("/l/region0", grouped.Single(item => item.Value == "region0").Path);
-
-        var (url, method, body) = AzureQueryTools.LiftNestedTemplate("{\"resultId\":\"x\",\"url\":\"/l/{value}\",\"method\":\"POST\",\"body\":{\"a\":1}}", "GET", null);
-        Assert.Equal(("/l/{value}", "POST", "{\"a\":1}"), (url, method, body));
-        Assert.Equal(("", "GET", (string?)null), AzureQueryTools.LiftNestedTemplate("{\"resultId\":\"x\"}", "GET", null));
-
-        var result = await AzureQueryTools.ExecuteBulkAsync([selected[0], new() { Path = "/plain" }], 1, false,
-            (item, token) => Task.FromResult("HTTP 200 OK\n{}"), default);
-        using var document = JsonDocument.Parse(result);
-        var rows = document.RootElement.GetProperty("results");
-        Assert.Equal("region0", rows[0].GetProperty("value").GetString());
-        Assert.False(rows[1].TryGetProperty("value", out _));
-    }
-
-    [Fact]
     public async Task OversizedBodiesAreExplicitlyPartial()
     {
         var result = await AzureQueryTools.ExecuteBulkAsync([new()], 1, false,

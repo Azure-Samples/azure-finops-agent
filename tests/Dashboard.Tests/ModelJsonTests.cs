@@ -49,7 +49,7 @@ public sealed class ModelJsonTests
     public void JsonParametersAdvertiseNativeJson()
     {
         var properties = new AzureQueryTools(new AzureFinOps.Dashboard.Auth.UserTokens { UserId = 101 }).Create().Single().JsonSchema.GetProperty("properties");
-        foreach (var name in new[] { "body", "requests", "forEach", "resultQuery" })
+        foreach (var name in new[] { "body", "requests", "resultQuery" })
             Assert.False(properties.GetProperty(name).TryGetProperty("type", out _), name);
         Assert.False(new ToolResultQueryTools(101).Create().Single().JsonSchema.GetProperty("properties").GetProperty("queryJson").TryGetProperty("type", out _));
     }

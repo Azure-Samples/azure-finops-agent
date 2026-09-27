@@ -113,9 +113,7 @@ public sealed class ToolResultTests
 
         Assert.Equal("Error: Query 1: Mode must be query, schema or keys.",
             ToolResultQueryTools.ExecuteMany(entry, "[" + single + """,{"mode":"bogus"}]"""));
-        // A mode naming one of the query's own operations labels an ordinary query.
-        Assert.Equal(ToolResultQueryTools.Execute(entry, single), ToolResultQueryTools.Execute(entry, """{"mode":"groupBy",""" + single[1..]));
-        Assert.Equal(ToolResultQueryTools.Execute(entry, single), ToolResultQueryTools.Execute(entry, """{"mode":"aggregate",""" + single[1..]));
+        Assert.Equal("Error: Mode must be query, schema or keys.", ToolResultQueryTools.Execute(entry, """{"mode":"groupBy",""" + single[1..]));
         Assert.StartsWith("Error: Query 0 must be a JSON object", ToolResultQueryTools.ExecuteMany(entry, "[1]"));
         Assert.StartsWith("Error: A query array holds 1 to 16", ToolResultQueryTools.ExecuteMany(entry, "[]"));
         Assert.StartsWith("Error: A query array holds 1 to 16",
@@ -362,9 +360,10 @@ public sealed class ToolResultTests
         Assert.Equal([0], existential.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
         using var universal = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"where":[{"path":"$.body.value[*].limit","op":"ne","value":10}]}"""));
         Assert.Equal([1], universal.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
-        using var present = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"where":[{"path":"$.body.value[?(@.name.value=='cores')]","op":"exists"}]}"""));
+        using var present = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"where":[{"path":"$.body.value[?(@.name.value=='cores')]","op":"exists","value":true}]}"""));
         Assert.Equal([0], present.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
         Assert.StartsWith("Error: Each where condition requires a value", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","where":[{"path":"$.index","op":"eq"}]}"""));
+        Assert.StartsWith("Error: Each where condition requires a value", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","where":[{"path":"$.index","op":"exists"}]}"""));
         using var elements = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","groupBy":{"limit":"$.body.value[*].limit"},"aggregates":[{"op":"count","as":"n"}]}"""));
         Assert.Equal([0m, 10m, 100m], elements.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("limit").GetDecimal()).Order());
         Assert.Contains("$.body.value[*]", elements.RootElement.GetProperty("note").GetString());

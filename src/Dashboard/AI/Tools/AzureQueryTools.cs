@@ -46,7 +46,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         - Microsoft Graph: https://graph.microsoft.com/v1.0/... or /beta/... Reference: https://learn.microsoft.com/graph/api/{resource}-{verb}?view=graph-rest-1.0 and https://github.com/microsoftgraph/msgraph-metadata. Many endpoints, such as subscribedSkus and report functions, reject $filter/$top/$select; report functions return CSV, converted to a rows table. The host sends ConsistencyLevel: eventual, so directory advanced queries work when they also include $count=true (for example users?$filter=assignedLicenses/$count ne 0&$count=true). Follow @odata.nextLink via maxPages.
         - Log Analytics: POST https://api.loganalytics.io/v1/workspaces/{customerId}/query; Application Insights: POST https://api.applicationinsights.io/v1/apps/{appId}/query; body {"query":"<KQL>","timespan":"P7D"}. KQL: https://learn.microsoft.com/kusto/query/. Discover populated tables with `Usage | summarize GB=sum(Quantity)/1024 by DataType` and columns with `<Table> | getschema`; filter by time first, summarize and project inside KQL, and take/top only after aggregation. FinOps signals: Usage and _BilledSize (ingestion cost), Perf/InsightsMetrics (utilization), Heartbeat and AzureActivity (who changed what).
         - Blob Storage (cost exports): GET https://{account}.blob.core.windows.net/{container}?restype=container&comp=list&prefix={export/period} lists blobs (use the narrowest prefix; a NextMarker means more blobs); GET https://{account}.blob.core.windows.net/{container}/{blob} reads the first 6 MiB of one blob (CSV becomes rows; complete=false when the blob is larger). Never use a SAS or other credential-bearing URL; for complete analysis of a large export ask for an upload and use QueryUploadedFile. Reference: https://learn.microsoft.com/rest/api/storageservices/list-blobs.
-        - Azure Retail Prices (public list prices, no auth): GET https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=<OData>. Fields and operators (eq, and, or, contains(field,'x')): https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices. Values are case-sensitive; armRegionName is lowercase (eastus); Azure OpenAI and other Foundry models use serviceName 'Foundry Models'. Meter, product and SKU names are not derivable from ARM SKU names: start with structural fields (serviceName, armRegionName, armSkuName, priceType) and read the returned values; armSkuName is the full ARM size name with its prefix (Standard_D4s_v5, never D4s_v5). Compare regions or SKUs with 'or' in one filter; for a multi-service estimate, fetch every component in the first round as one requests batch with one structural filter per service, then select rows locally. Storage and SQL Database publish thousands of rows per region, so their filter also needs a product family term (contains(productName,'Premium SSD'), contains(productName,'General Purpose')); a lookup that returns complete=false has missed rows. Some services publish one worldwide rate under armRegionName 'Global' rather than per region (for example Load Balancer), so filter those with (armRegionName eq '<region>' or armRegionName eq 'Global') and label rows returned as Global as worldwide rates, not the region's. The host follows NextPageLink (maxPages); never send $top. Zero Items means the filter matched nothing, not a zero price; tierMinimumUnits marks volume bands. Quote each rate with productName, skuName, meterName, unitOfMeasure, currency and retrievedAtUtc, and state the lookup's coverage (complete or partial, from its complete flag); a sized skuName (for example '4 vCore' with unitOfMeasure '1 Hour') prices that whole size per unit, not each vCore, so say so and never multiply it by the size.
+        - Azure Retail Prices (public list prices, no auth): GET https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=<OData>. Fields and operators (eq, and, or, contains(field,'x')): https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices. Values are case-sensitive; armRegionName is lowercase (eastus); Azure OpenAI and other Foundry models use serviceName 'Foundry Models'. Meter, product and SKU names are not derivable from ARM SKU names: start with structural fields (serviceName, armRegionName, armSkuName, priceType) and read the returned values; armSkuName is the full ARM size name with its prefix (Standard_D4s_v5, never D4s_v5). Compare regions or SKUs with 'or' in one filter; for a multi-service estimate, fetch every component in the first round as one requests batch with one structural filter per service, then select rows locally. Storage and SQL Database publish thousands of rows per region, so their filter also needs a product family term (contains(productName,'Premium SSD'), contains(productName,'General Purpose')) that still returns every billed component: SQL Database 'General Purpose' returns both the '- Compute Gen5' and the '- Storage' products, while a Compute-only term misses storage. A lookup that returns complete=false has missed rows. Some services publish one worldwide rate under armRegionName 'Global' and no per-region rows (Load Balancer has none in any region), so filter those with (armRegionName eq '<region>' or armRegionName eq 'Global') in the first request and label rows returned as Global as worldwide rates, not the region's. The host follows NextPageLink (maxPages); never send $top. Zero Items means the filter matched nothing, not a zero price; tierMinimumUnits marks volume bands. Quote each rate with productName, skuName, meterName, unitOfMeasure, currency and retrievedAtUtc, and state the lookup's coverage (complete or partial, from its complete flag); a sized skuName (for example '4 vCore' with unitOfMeasure '1 Hour') prices that whole size per unit, not each vCore, so say so and never multiply it by the size.
         - Any other public https URL, GET only and without credentials: Microsoft Learn (search https://learn.microsoft.com/api/search?search=<terms>&locale=en-us, then fetch only returned URLs), GitHub, vendor pricing pages, and the public Azure status feed https://azure.status.microsoft/en-us/status/feed/ (not tenant-specific: an empty feed does not prove a resource is healthy; use ARM Microsoft.ResourceHealth for a named resource). Use grepFor on long pages.
         Host rules:
         - DELETE is blocked. ARM POST is limited to read-only endpoints: Cost Management query/forecast/report generation/pricesheet download, Resource Graph, reservation and savings-plan price calculation, PolicyInsights policy-state summarize/queryResults and policy-event queryResults, management-group entities, carbon reports, Spot placement scores and Network Watcher connectivityCheck from an existing VM (body {source:{resourceId:<VM id>},destination:{address,port}}). Action POSTs such as start, restart, deallocate, power off or return are blocked. PUT/PATCH never execute directly: they create a proposal that the user must approve in the UI; never claim a change was applied. Asynchronous (202) results return an operationId for GetOperationStatus. Standard Graph consent is read-only, so writes return 403: report that instead of retrying.
@@ -67,9 +67,8 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         [Description("One request: an ARM path starting with / (with api-version), or a full https URL for Microsoft Graph, Log Analytics, Application Insights, Blob Storage, Retail Prices or a public page. Omit when requests is used.")] string url = "",
         [Description("GET (default), POST, PUT or PATCH. DELETE is blocked.")] string method = "GET",
         [Description("Request body for POST/PUT/PATCH as a native JSON object, not an escaped string; omit for GET.")] JsonElement? body = null,
-        [Description("Batch instead of url: native JSON array (not a string) of 1-200 HTTP request {\"method\",\"url\",\"body\"} objects, each body a JSON object; call other tools separately. Example: [{\"method\":\"GET\",\"url\":\"/subscriptions/{id}/providers/Microsoft.Compute/locations/eastus/usages?api-version=2024-07-01\"}].")] JsonElement? requests = null,
-        [Description("Batch over the rows of a retained result instead of typing a list: native JSON object {\"resultId\":\"<id>\",\"query\":<QueryToolResult row query whose rows select one field or group by one key>}, given beside url, which is then a template in which {value} becomes each row's value (URL-escaped, duplicates dropped, at most 200; the query limit defaults to 200), sent with method and body as one batch whose results each carry $.value, e.g. url /subscriptions/{id}/providers/Microsoft.Compute/locations/{value}/usages?api-version=2024-07-01 with a query selecting {\"region\":\"$.name\"}.")] JsonElement? forEach = null,
-        [Description("Optional QueryToolResult query, as a native JSON object (not a string), applied to the complete retained result before it is returned, so only needed data comes back, e.g. {\"path\":\"$.value[*]\",\"select\":{\"name\":\"$.name\",\"sku\":\"$.sku.name\"}}. Columnar tables (columns + rows: Cost Management, Log Analytics, CSV) are addressable by column name: {\"path\":\"$.properties.rows[*]\",\"groupBy\":{\"service\":\"$.ServiceName\"},\"aggregates\":[{\"op\":\"sum\",\"path\":\"$.Cost\",\"as\":\"cost\"}],\"sort\":[{\"path\":\"$.cost\",\"direction\":\"desc\"}]}. For a batch the rows are $.results[*] (fields $.index, $.status, $.body..., and $.value for forEach). An array of up to 16 queries returns queries[i] for each. An invalid query returns the schema instead and does not repeat the request.")] JsonElement? resultQuery = null,
+        [Description("Batch instead of url: native JSON array (not a string) of 1-200 HTTP request {\"method\",\"url\",\"body\"} objects, each body a JSON object. Every item is one HTTP request with only those three fields, never a wrapped tool call; call other tools, such as QueryToolResult, directly in the same parallel response. Example: [{\"method\":\"GET\",\"url\":\"/subscriptions/{id}/providers/Microsoft.Compute/locations/eastus/usages?api-version=2024-07-01\"}].")] JsonElement? requests = null,
+        [Description("Optional QueryToolResult query, as a native JSON object (not a string), applied to the complete retained result before it is returned, so only needed data comes back, e.g. {\"path\":\"$.value[*]\",\"select\":{\"name\":\"$.name\",\"sku\":\"$.sku.name\"}}. Columnar tables (columns + rows: Cost Management, Log Analytics, CSV) are addressable by column name: {\"path\":\"$.properties.rows[*]\",\"groupBy\":{\"service\":\"$.ServiceName\"},\"aggregates\":[{\"op\":\"sum\",\"path\":\"$.Cost\",\"as\":\"cost\"}],\"sort\":[{\"path\":\"$.cost\",\"direction\":\"desc\"}]}. For a batch the rows are $.results[*] (fields $.index, $.status, $.body...; select paths are plain JSONPath, never JMESPath .{a:a}, so keep a Resource Graph row array whole with \"$.body.data\"). An array of up to 16 queries returns queries[i] for each. An invalid query returns the schema instead and does not repeat the request.")] JsonElement? resultQuery = null,
         [Description("Maximum pages to follow for a paginated GET, 1-10. Default 5. Use 1 when the first page answers the question.")] string maxPages = "5",
         [Description("Public web pages only: return only the lines that contain this text, for long documentation, specs or pricing pages.")] string grepFor = "",
         [Description("Batch only: maximum parallel requests, 1-50, default 20. Batches containing Cost Management /query or /forecast always run one at a time.")] string parallelism = "20",
@@ -80,49 +79,23 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         using var activity = HttpHelper.Telemetry.StartActivity("QueryAzure");
         var pages = int.TryParse(maxPages, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPages) ? Math.Clamp(parsedPages, 1, 10) : 5;
         var batch = ModelJson.Text(requests);
-        var fanOut = ModelJson.Text(forEach);
         var requestBody = ModelJson.Text(body);
-        if (!string.IsNullOrWhiteSpace(fanOut) && string.IsNullOrWhiteSpace(url) && string.IsNullOrWhiteSpace(batch))
-            (url, method, requestBody) = LiftNestedTemplate(fanOut, method, requestBody);
         var single = !string.IsNullOrWhiteSpace(url);
         if (single == !string.IsNullOrWhiteSpace(batch))
             return "HTTP 400 BadRequest\nProvide exactly one of url (one request) or requests (a batch). No request was sent.";
-        if (!string.IsNullOrWhiteSpace(fanOut) && !single)
-            return "HTTP 400 BadRequest\nforEach expands url, a template containing {value}; omit requests. No request was sent.";
-        if (single && string.IsNullOrWhiteSpace(fanOut)) return await SendAsync(url, method, requestBody, pages, grepFor, timestamp: true, activity, cancellationToken);
+        if (single) return await SendAsync(url, method, requestBody, pages, grepFor, timestamp: true, activity, cancellationToken);
 
         List<BulkRequestItem> items;
-        var skipped = new List<string>();
-        try { items = single ? ExpandForEach(url, method, requestBody, fanOut, tokens.UserId, cancellationToken) : ParseBatch(batch, skipped); }
+        try { items = ParseBatch(batch); }
         catch (FormatException exception) { return "HTTP 400 BadRequest\n" + exception.Message + " No request was sent."; }
-        if (items.Count == 0)
-            return JsonSerializer.Serialize(new { total = 0, complete = true, results = Array.Empty<object>(), note = "forEach.query matched no rows, so no request was needed." });
         activity?.SetTag("query.batch_size", items.Count);
         var concurrency = int.TryParse(parallelism, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedParallelism) ? parsedParallelism : 20;
-        var output = await ExecuteBulkAsync(items, concurrency, stopOnFirstError: false,
+        return await ExecuteBulkAsync(items, concurrency, stopOnFirstError: false,
             (item, requestToken) => SendAsync(item.Path, item.Method, item.Body, pages, null, timestamp: false, activity, requestToken),
             cancellationToken);
-        return skipped.Count == 0 ? output : AnnotateRoot(output, "_skipped", new Dictionary<string, string>
-        {
-            ["tools"] = string.Join(", ", skipped),
-            ["reason"] = "These requests entries were calls to other tools, not HTTP requests. They were removed before sending and did not run; results index the remaining requests. Call those tools directly.",
-        });
     }
 
-    private static string? Field(JsonElement item, string name)
-    {
-        foreach (var property in item.EnumerateObject())
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-                return property.Value.ValueKind switch
-                {
-                    JsonValueKind.String => property.Value.GetString(),
-                    JsonValueKind.Null or JsonValueKind.Undefined => null,
-                    _ => property.Value.GetRawText()
-                };
-        return null;
-    }
-
-    internal static List<BulkRequestItem> ParseBatch(string requests, List<string>? skipped = null)
+    internal static List<BulkRequestItem> ParseBatch(string requests)
     {
         var document = ModelJson.TryParse(requests, JsonValueKind.Array) ?? ModelJson.TryParse(requests, JsonValueKind.Object);
         if (document is null) throw new FormatException("requests must be one complete JSON array of {\"method\",\"url\",\"body\"} objects.");
@@ -134,83 +107,25 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
                 throw new FormatException("requests must be a non-empty JSON array.");
             if (root.GetArrayLength() > 200) throw new FormatException("A batch supports at most 200 requests; split larger work explicitly.");
             var items = new List<BulkRequestItem>();
-            foreach (var entry in root.EnumerateArray())
+            foreach (var item in root.EnumerateArray())
             {
-                if (entry.ValueKind != JsonValueKind.Object) throw new FormatException("Every batch item must be a request object.");
-                var item = entry;
-                // A parallel call can leak into the array as {"recipient_name":"functions.<tool>","parameters":{...}}.
-                if (Field(item, "url") is null && Field(item, "path") is null && Field(item, "recipient_name") is { } recipient)
+                if (item.ValueKind != JsonValueKind.Object) throw new FormatException("Every batch item must be a request object.");
+                string? Field(string name)
                 {
-                    var tool = recipient[(recipient.LastIndexOf('.') + 1)..];
-                    if (tool == nameof(QueryAzure) && item.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Object)
-                        item = parameters;
-                    else { skipped?.Add(tool); continue; }
+                    foreach (var property in item.EnumerateObject())
+                        if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                            return property.Value.ValueKind switch
+                            {
+                                JsonValueKind.String => property.Value.GetString(),
+                                JsonValueKind.Null or JsonValueKind.Undefined => null,
+                                _ => property.Value.GetRawText()
+                            };
+                    return null;
                 }
-                items.Add(new BulkRequestItem { Method = Field(item, "method") ?? "GET", Path = Field(item, "url") ?? Field(item, "path") ?? "", Body = Field(item, "body") });
+                items.Add(new BulkRequestItem { Method = Field("method") ?? "GET", Path = Field("url") ?? Field("path") ?? "", Body = Field("body") });
             }
-            if (items.Count == 0) throw new FormatException("requests held only calls to other tools; call those tools directly.");
             return items;
         }
-    }
-
-    // A template nested inside forEach instead of beside it is unambiguous, so it is used rather than rejected.
-    internal static (string Url, string Method, string? Body) LiftNestedTemplate(string forEach, string method, string? body)
-    {
-        using var spec = ModelJson.TryParse(forEach, JsonValueKind.Object);
-        if (spec is null) return ("", method, body);
-        var root = spec.RootElement;
-        var nestedMethod = Field(root, "method");
-        var liftedMethod = nestedMethod is not null && string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase) ? nestedMethod : method;
-        var liftedBody = body ?? (root.TryGetProperty("body", out var nested) && nested.ValueKind == JsonValueKind.Object ? nested.GetRawText() : null);
-        return (Field(root, "url") ?? "", liftedMethod, liftedBody);
-    }
-
-    // Fan-out values come from query rows, so a list cannot gain or lose an entry by being retyped between calls.
-    internal static List<BulkRequestItem> ExpandForEach(string url, string method, string? body, string forEach, long owner, CancellationToken cancellationToken)
-    {
-        if (!url.Contains("{value}", StringComparison.Ordinal)) throw new FormatException("With forEach, url is a template that contains {value}.");
-        using var spec = ModelJson.TryParse(forEach, JsonValueKind.Object)
-            ?? throw new FormatException("forEach must be one JSON object {\"resultId\",\"query\"}.");
-        var context = ToolExecutionContext.Current;
-        var entry = context?.UserId == owner && spec.RootElement.TryGetProperty("resultId", out var id) && id.ValueKind == JsonValueKind.String
-            ? ToolResultStore.Default.Find(owner, context.SessionId, id.GetString()!) : null;
-        if (entry is null) throw new FormatException("forEach.resultId is unavailable or expired for this conversation; copy it exactly.");
-        var query = spec.RootElement.TryGetProperty("query", out var value) && value.ValueKind == JsonValueKind.Object
-            ? (JsonObject)JsonNode.Parse(value.GetRawText())! : [];
-        // Duplicate rows collapse into one request, so the page defaults to the request cap rather than the query default.
-        if (!query.ContainsKey("limit") && !query.ContainsKey("top") && !query.ContainsKey("take")) query["limit"] = 200;
-        var groupKey = query["groupBy"] is JsonObject { Count: 1 } groupBy ? groupBy.Single().Key : null;
-        var output = ToolResultQueryTools.Execute(entry, query.ToJsonString(), cancellationToken);
-        if (output.StartsWith("Error: ", StringComparison.Ordinal)) throw new FormatException("forEach.query: " + output["Error: ".Length..]);
-        using var answer = JsonDocument.Parse(output);
-        if (!answer.RootElement.TryGetProperty("rows", out var rows) || rows.ValueKind != JsonValueKind.Array)
-            throw new FormatException("forEach.query must be a row query (mode=query).");
-        if (answer.RootElement.TryGetProperty("complete", out var complete) && complete.ValueKind == JsonValueKind.False)
-            throw new FormatException("forEach.query matched more rows than one page of 200; narrow it so every row is used.");
-        var values = new List<string>();
-        foreach (var row in rows.EnumerateArray())
-        {
-            var cell = row;
-            if (row.ValueKind == JsonValueKind.Object)
-            {
-                var fields = row.EnumerateObject().ToArray();
-                if (fields.Length == 1) cell = fields[0].Value;
-                else if (groupKey is null || !row.TryGetProperty(groupKey, out cell))
-                    throw new FormatException("Each forEach row must hold exactly one value; select a single field.");
-            }
-            if (cell.ValueKind is not (JsonValueKind.String or JsonValueKind.Number) || cell.ToString() is not { Length: > 0 } text)
-                throw new FormatException("Each forEach row value must be nonempty text or a number.");
-            if (!values.Contains(text, StringComparer.Ordinal)) values.Add(text);
-        }
-        if (values.Count > 200) throw new FormatException("forEach expands to at most 200 requests; narrow the query.");
-        // Slashes stay so resource IDs can form paths; every other reserved character is escaped, so a value cannot add query parameters.
-        return values.Select(text => new BulkRequestItem
-        {
-            Method = method,
-            Path = url.Replace("{value}", Uri.EscapeDataString(text).Replace("%2F", "/", StringComparison.OrdinalIgnoreCase), StringComparison.Ordinal),
-            Body = body,
-            Value = text
-        }).ToList();
     }
 
     private async Task<string> SendAsync(string? url, string? method, string? body, int maxPages, string? grepFor,
@@ -1096,7 +1011,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         var budget = MaxBulkBatchCharacters;
         for (var index = 0; index < results.Length; index++)
         {
-            var item = results[index]! with { Value = items[index].Value };
+            var item = results[index]!;
             var size = JsonSerializer.Serialize(item.Body).Length;
             if (size > budget) item = item with { Body = null, Partial = true, Error = "Batch data budget reached. Retrieve this indexed item separately." };
             else budget -= size;
@@ -1126,7 +1041,6 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         public string Method { get; set; } = "GET";
         public string Path { get; set; } = "";
         public string? Body { get; set; }
-        public string? Value { get; set; }
     }
 
     private static bool IsCostRead(BulkRequestItem item) =>
@@ -1134,10 +1048,5 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         && !string.IsNullOrEmpty(item.Path) && HttpHelper.IsInteractiveCostQueryUrl(item.Path);
 
     private sealed record BulkResult(int Index, int Status, string Outcome, bool Partial, object? Body, string? Error,
-        JsonElement? SourceEvidence = null)
-    {
-        // The forEach row value, so each result names what it answers without relying on index order.
-        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-        public string? Value { get; init; }
-    }
+        JsonElement? SourceEvidence = null);
 }

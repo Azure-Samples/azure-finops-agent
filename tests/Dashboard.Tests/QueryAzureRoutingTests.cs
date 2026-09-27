@@ -84,22 +84,6 @@ public sealed class QueryAzureRoutingTests
         Assert.Equal("{\"k\":1}", items[2].Body);
     }
 
-    [Fact]
-    public void LeakedToolCallsInABatchAreUnwrappedOrSkippedNeverSent()
-    {
-        var skipped = new List<string>();
-        var items = ParseBatch("""
-            [{"url":"/a"},
-             {"recipient_name":"functions.QueryAzure","parameters":{"method":"POST","url":"/b","body":{"q":1}}},
-             {"recipient_name":"functions.QueryToolResult","parameters":{"resultId":"r","queryJson":[{"mode":"schema"}]}}]
-            """, skipped);
-        Assert.Equal(["/a", "/b"], items.Select(item => item.Path));
-        Assert.Equal(("POST", "{\"q\":1}"), (items[1].Method, items[1].Body));
-        Assert.Equal(["QueryToolResult"], skipped);
-        Assert.Contains("only calls to other tools", Assert.Throws<FormatException>(() =>
-            ParseBatch("""[{"recipient_name":"functions.QueryToolResult","parameters":{}}]""")).Message);
-    }
-
     [Theory]
     [InlineData("[]", "non-empty")]
     [InlineData("[null]", "request object")]

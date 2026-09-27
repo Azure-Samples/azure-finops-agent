@@ -40,11 +40,11 @@ EVIDENCE IS MANDATORY: each observed `detail` cites concrete counts, %, cost or 
 
 CRAWL — Visibility & Baseline (id slug — label — what to check):
   1. budgets — 'Budgets & thresholds' — Cost Mgmt budgets: count, amounts, notification config. Flag unrealistic (≥$1M placeholders) and missing alerts.
-  2. tagging — 'Tagging for accountability' — Resource Graph: total resources + % carrying CostCenter, Owner, Environment (exact key names). Flag inconsistent casing ('department' vs 'Department') and placeholder values ('unassigned', 'unknown').
+  2. tagging — 'Tagging for accountability' — Resource Graph: total resources + % carrying CostCenter, Owner, Environment (exact key names), plus the same keys in any casing (key lookup in tags is case-sensitive, so also count countif(tostring(bag_keys(tags)) contains '""costcenter""'), which matches the whole key case-insensitively), so a key present only in other casing is reported as inconsistent casing, not absent. Flag inconsistent casing ('department' vs 'Department') and placeholder values ('unassigned', 'unknown').
   3. exports — 'Cost data exports' — list Cost Mgmt exports (Microsoft.CostManagement/exports). Score 0 if none.
-  4. alerts — 'Cost alerts & scheduled actions' — list Microsoft.CostManagement/scheduledActions at the subscription scope; cost anomaly alerts are scheduled actions of kind InsightAlert, so that one list covers both (cite it as such). Score 0 if none.
-  5. policy — 'Governance guardrails' — policy assignments visible at the connected subscription scope (atScope() includes inherited management-group assignments) enforcing FinOps tagging or cost controls; effects come from policyStates summarize.
-  6. waste — 'Waste identification & cleanup' — counts of unattached disks, orphaned public IPs, empty App Service plans, empty resource groups.
+  4. alerts — 'Cost alerts & scheduled actions' — list Microsoft.CostManagement/scheduledActions at the subscription scope; cost anomaly alerts are scheduled actions of kind InsightAlert, so that one list covers both, and the detail states that it includes anomaly alerts (kind InsightAlert). Score 0 if none.
+  5. policy — 'Governance guardrails' — policy assignments visible at the connected subscription scope (atScope() includes inherited management-group assignments) enforcing FinOps tagging or cost controls: read every assigned policyDefinitionId (definition or set definition) in one requests batch for its displayName and effect (Resource Graph PolicyResources holds no built-in definitions), take compliance from policyStates summarize, and score from those definitions, never from assignment names.
+  6. waste — 'Waste identification & cleanup' — counts of unattached disks, orphaned public IPs, empty App Service plans, empty resource groups (groups with no resource: ResourceContainers resource groups leftouter-joined to a Resources count by subscriptionId and tolower(resourceGroup), never inferred from provisioningState).
   7. visibility — 'Cost visibility & ownership' — MTD spend grouped by RG and by top services.
 
 WALK — Optimization & Governance (id slug — label — what to check):
