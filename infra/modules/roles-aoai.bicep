@@ -3,18 +3,18 @@
 // account via `existingAoaiResourceId`).
 param aoaiName string
 param webAppPrincipalId string
-param cognitiveServicesOpenAIUserRoleId string
+param foundryUserRoleId string
 
 resource aoai 'Microsoft.CognitiveServices/accounts@2026-03-01' existing = {
   name: aoaiName
 }
 
-resource aoaiOpenAIUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource aoaiFoundryUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: aoai
-  name: guid(aoai.id, webAppPrincipalId, cognitiveServicesOpenAIUserRoleId)
+  name: guid(aoai.id, webAppPrincipalId, foundryUserRoleId)
   properties: {
     principalId: webAppPrincipalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesOpenAIUserRoleId)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryUserRoleId)
   }
 }

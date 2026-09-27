@@ -13,7 +13,7 @@ It is designed for customers to deploy into **their own tenant and subscription*
 - Backend: .NET 10 minimal API in `src/Dashboard`
 - Frontend: Vue 3 + Vite + ECharts in `src/Dashboard/frontend`
 - Agent runtime: Microsoft Agent Framework (`Microsoft.Agents.AI.Foundry`): one `AIProjectClient.AsAIAgent(ChatClientAgentOptions)` agent over the Foundry project Responses API. `AzureOpenAI:Endpoint` is the project endpoint (or the account endpoint plus `AzureOpenAI:ProjectName`).
-- Default model: `gpt-6-sol`, version `2026-09-22`, using the Responses API. Live evaluations use the same model for the agent and the judge. Existing-account reuse requires that deployment to exist and the app identity to have account-scoped inference access. Verify available model-specific quota; deleting a different model does not free Sol quota.
+- Default model: `gpt-6-sol`, version `2026-09-22`, using the Responses API. Live evaluations use the same model for the agent and the judge. Existing-account reuse requires that deployment and a Foundry project to exist and the app identity to have account-scoped **Foundry User** (formerly Azure AI User); **Cognitive Services OpenAI User** does not cover the project Responses endpoint, and the evaluation identity needs the same role. Verify available model-specific quota; deleting a different model does not free Sol quota.
 - Authentication: anonymous chat plus optional multi-tenant Entra OAuth
 - Hosting: Linux container on Azure App Service
 - Infrastructure: `azure.yaml` + Bicep under `infra`
