@@ -105,6 +105,9 @@ param existingAoaiResourceId string = ''
 @description('When reusing an existing account, create or update the configured model deployment on it. Requires deployment rights and unallocated model-specific quota on that account.')
 param deployModelOnExistingAccount bool = false
 
+@description('Foundry project on the reused account (`existingAoaiResourceId`). The app calls that project\'s Responses endpoint; ignored when a new account and project are created.')
+param existingAoaiProjectName string = ''
+
 @description('Entra ID multi-tenant app registration client ID. Created automatically by the preprovision hook if empty.')
 param entraAppId string = ''
 
@@ -159,6 +162,7 @@ module resources 'main-resources.bicep' = {
     aoaiReasoningEffort: aoaiReasoningEffort
     existingAoaiResourceId: existingAoaiResourceId
     deployModelOnExistingAccount: deployModelOnExistingAccount
+    existingAoaiProjectName: existingAoaiProjectName
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId

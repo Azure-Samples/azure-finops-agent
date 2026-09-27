@@ -1,11 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
+using AzureFinOps.Dashboard.AI.Runtime;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Infrastructure;
 using AzureFinOps.Dashboard.Observability;
-using GitHub.Copilot;
 
 namespace AzureFinOps.Dashboard.AI;
 
@@ -16,12 +16,10 @@ namespace AzureFinOps.Dashboard.AI;
 /// </summary>
 public static class ChatEndpoints
 {
-    // One turn per session at a time. Without this gate, a second prompt sent
-    // while a turn is running gets queued into the same CLI session, and the
-    // FIRST SessionIdleEvent closes BOTH subscribers' SSE streams — the second
-    // turn then runs with nobody listening (blinking cursor, answer lost to
-    // disk). The state remains registered after an SSE viewer disconnects and
-    // is released only after SDK idle/error or a confirmed abort.
+    // One turn per session at a time. A second prompt sent while a turn runs is
+    // rejected as busy. The state remains registered after an SSE viewer
+    // disconnects and is released only after the turn's idle/error event or a
+    // confirmed abort.
     private static readonly ConcurrentDictionary<string, TurnExecution> ActiveTurns = TurnExecution.Active;
 
     /// <summary>Upper bound on a single turn, shared by the chat wait and the
@@ -40,8 +38,8 @@ public static class ChatEndpoints
     /// <summary>Drops the per-session context-dedup entries when a session is
     /// deleted. Without this the dictionaries grow unboundedly over the process
     /// lifetime (one entry per session ever chatted in). Called from
-    /// <see cref="CopilotSessionFactory.DeleteUserSessionAsync"/> and the janitor's
-    /// <see cref="CopilotSessionFactory.DeleteSessionByIdAsync"/> sweep.</summary>
+    /// <see cref="AgentSessionFactory.DeleteUserSessionAsync"/> and the janitor's
+    /// <see cref="AgentSessionFactory.DeleteSessionByIdAsync"/> sweep.</summary>
     internal static void ClearSessionContext(string sessionId)
     {
         LastConnectionContext.TryRemove(sessionId, out _);
@@ -56,20 +54,11 @@ public static class ChatEndpoints
     /// background <see cref="Jobs.JobScheduler"/>). Shares the same dictionary as
     /// chat turns so a scheduled run can never race a live chat turn in the same
     /// session — in either direction.</summary>
-    internal static bool TryBeginTurn(string sessionId, long userId, CopilotSession? session, out TurnExecution turn) =>
+    internal static bool TryBeginTurn(string sessionId, long userId, AgentConversation? session, out TurnExecution turn) =>
         TurnExecution.TryBegin(sessionId, userId, session, out turn);
 
     /// <summary>Releases a gate claimed via <see cref="TryBeginTurn"/>.</summary>
     internal static Task<bool> EndTurnAsync(TurnExecution turn, bool dispatchAttempted = true) => turn.FinishAsync(dispatchAttempted);
-
-    private static bool MoveTurn(
-        string oldSessionId,
-        string newSessionId,
-        TurnExecution state,
-        CopilotSession session)
-    {
-        return state.SessionId == oldSessionId && session.SessionId == newSessionId && state.MoveTo(session);
-    }
 
     /// <summary>
     /// Prepended to trivial turns so a greeting costs one model round-trip
@@ -97,7 +86,7 @@ public static class ChatEndpoints
 
     public static void MapChatEndpoints(
         this IEndpointRouteBuilder app,
-        CopilotSessionFactory copilotFactory,
+        AgentSessionFactory agentFactory,
         SessionTokenStore tokenStore,
         AiTelemetry telemetry,
         ILogger logger)
@@ -163,15 +152,15 @@ public static class ChatEndpoints
 
             var chatSw = Stopwatch.StartNew();
             telemetry.ChatRequests.Add(1,
-                new KeyValuePair<string, object?>("model", copilotFactory.Deployment),
+                new KeyValuePair<string, object?>("model", agentFactory.Deployment),
                 new KeyValuePair<string, object?>("user", userLogin));
 
             using var chatActivity = telemetry.ActivitySource.StartActivity("ChatRequest");
             chatActivity?.SetTag("ai.user", userLogin);
-            chatActivity?.SetTag("ai.model", copilotFactory.Deployment);
+            chatActivity?.SetTag("ai.model", agentFactory.Deployment);
             chatActivity?.SetTag("ai.prompt_length", prompt!.Length);
             logger.LogInformation("Chat request from {User} model={Model} promptLen={PromptLen}",
-                userLogin, copilotFactory.Deployment, prompt.Length);
+                userLogin, agentFactory.Deployment, prompt.Length);
 
             // === TIMING HOOKS ===
             // Per-phase stopwatch buffer flushed as SSE `timing` events once
@@ -307,7 +296,7 @@ public static class ChatEndpoints
             // message (vision input) rather than exposed through the Python tool.
             List<UploadedFileTools.UploadEntry> imageUploads = [];
             string uploadsContext = "";
-            List<Attachment>? imageAttachments = null;
+            List<ImageAttachment>? imageAttachments = null;
             void PrepareUploads(string sessionId)
             {
                 var uploads = UploadedFileTools.Catalog.BindAndList(userId, sessionId, attachmentIds);
@@ -327,17 +316,12 @@ public static class ChatEndpoints
                     uploadsContext = sb.ToString();
                 }
                 // Native vision attachments for image uploads (screenshots of the
-                // Azure portal, cost dashboards, architecture diagrams…). Attached on
-                // EVERY turn while listed — the CLI uploads them with the message and
-                // the model sees them directly; no tool round-trip involved.
+                // Azure portal, cost dashboards, architecture diagrams…). The model
+                // sees them directly with the message; no tool round-trip involved.
                 if (imageUploads.Count > 0)
                 {
-                    imageAttachments = imageUploads.Select(Attachment (u) => new AttachmentFile
-                    {
-                        Path = u.Path,
-                        DisplayName = u.FileName,
-                        MimeType = AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ImageMimeType(u.FileName),
-                    }).ToList();
+                    imageAttachments = imageUploads.Select(u => new ImageAttachment(
+                        u.Path, AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.ImageMimeType(u.FileName), u.FileName)).ToList();
                 }
             }
             // NOTE: context blocks are merged into the prompt AFTER session
@@ -364,7 +348,7 @@ public static class ChatEndpoints
             var dispatchAttempted = false;
             try
             {
-                CopilotSession session;
+                AgentConversation session;
                 var sessionSw = Stopwatch.StartNew();
                 string sessionAcquireMode;
                 if (!string.IsNullOrEmpty(requestedSessionId))
@@ -374,24 +358,24 @@ public static class ChatEndpoints
                     // If it doesn't (stale localStorage after a redeploy, or a forged id),
                     // silently fall through to the user's current/new session so the
                     // UX doesn't dead-end &#8212; we never resume someone else's session.
-                    if (!await copilotFactory.UserOwnsSessionAsync(
+                    if (!await agentFactory.UserOwnsSessionAsync(
                         userId, azureTenantId, entraOid, requestedSessionId, ctx.RequestAborted))
                     {
                         logger.LogInformation("Requested sessionId {Sid} not owned by user {Uid}; falling back to current session", requestedSessionId, userId);
-                        session = await copilotFactory.GetCurrentOrCreateAsync(
+                        session = await agentFactory.GetCurrentOrCreateAsync(
                             userId, userLogin!, azureTenantId, entraOid);
                         sessionAcquireMode = "fallback_current";
                     }
                     else
                     {
-                        session = await copilotFactory.GetOrResumeAsync(
+                        session = await agentFactory.GetOrResumeAsync(
                             userId, requestedSessionId, userLogin!, azureTenantId, entraOid);
                         sessionAcquireMode = "resume";
                     }
                 }
                 else
                 {
-                    session = await copilotFactory.GetCurrentOrCreateAsync(
+                    session = await agentFactory.GetCurrentOrCreateAsync(
                         userId, userLogin!, azureTenantId, entraOid);
                     sessionAcquireMode = "current_or_new";
                 }
@@ -417,52 +401,9 @@ public static class ChatEndpoints
                 chatActivity?.SetTag("request.id", turnState.RequestId);
                 PrepareUploads(activeSessionId);
 
-                // Per-turn effort routing: greetings/acknowledgements don't need
-                // deep deliberation — run them at "low" (~2-3s first token vs ~6s).
-                // Real FinOps questions keep the configured default effort.
+                // Greetings run at low reasoning effort (a ~2-3s first token instead of ~6s);
+                // real FinOps questions keep the agent version's configured effort.
                 var trivialTurn = attachmentIds.Length == 0 && imageUploads.Count == 0 && uploadsContext.Length == 0 && IsTrivialPrompt(prompt);
-                var targetEffort = copilotFactory.GetEffortForTurn(trivialTurn);
-                if (targetEffort is not null
-                    && telemetry.LiveSessions.TryGetValue(activeSessionId, out var liveInfo)
-                    && liveInfo.AppliedEffort != targetEffort)
-                {
-                    var effortSw = Stopwatch.StartNew();
-                    try
-                    {
-                        await session.SetModelAsync(copilotFactory.Deployment, targetEffort, null, ctx.RequestAborted);
-                        liveInfo.AppliedEffort = targetEffort;
-                    }
-                    catch (Exception effortEx) when (effortEx.Message.Contains("Session not found", StringComparison.OrdinalIgnoreCase))
-                    {
-                        // The in-memory CLI handle went stale (e.g. the session was
-                        // evicted after a previous turn was aborted mid-flight). This
-                        // is the FIRST call that touches the live handle, so recycle
-                        // to a fresh one NOW — before the streaming subscriptions are
-                        // wired below. Otherwise those subscriptions would bind to the
-                        // dead handle and nothing would stream (the SendAsync recycle
-                        // path can't rebind them). Move the turn gate to the new id.
-                        logger.LogWarning("Effort switch found stale session {SessionId}; recycling before streaming", activeSessionId);
-                        session = await copilotFactory.RecycleSessionAsync(
-                            userId, activeSessionId, userLogin!, azureTenantId, entraOid);
-                        if (turnGateSessionId is null
-                            || turnState is null
-                            || !MoveTurn(turnGateSessionId, session.SessionId, turnState, session))
-                            throw new InvalidOperationException("Could not move the active turn to the recycled session.");
-                        activeSessionId = session.SessionId;
-                        turnGateSessionId = activeSessionId;
-                        // The fresh session runs at the configured default effort,
-                        // which is fine — per-turn effort routing is a best-effort
-                        // optimisation, never worth failing the turn over.
-                    }
-                    catch (Exception effortEx)
-                    {
-                        // Any other failure: log and proceed at the current effort.
-                        // Effort routing must never fail the turn.
-                        logger.LogWarning(effortEx, "Effort switch failed for {SessionId}; proceeding at current effort", activeSessionId);
-                    }
-                    effortSw.Stop();
-                    RecordPhase($"effort.{targetEffort}", effortSw.Elapsed.TotalMilliseconds, new { trivial = trivialTurn });
-                }
 
                 // Context dedup: only prepend [CONTEXT:]/[UPLOADED FILES:] blocks
                 // when their content changed for THIS session — they persist in
@@ -490,17 +431,15 @@ public static class ChatEndpoints
                     prompt = SensitiveContent.Redact(string.Join("\n", contextBits) + "\n" + prompt);
 
                 var done = new TaskCompletionSource();
-                var toolTracker = new ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)>();
+                var toolTracker = new ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime)>();
                 var firstEventLogged = 0;
 
                 // Browser disconnect releases this SSE handler but does NOT
-                // abort the running turn. The Copilot CLI keeps generating
-                // and persists the assistant message + tool results to the
-                // on-disk session state ($COPILOT_HOME/.copilot/session-state).
-                // The user can reload the conversation later and see the full
-                // result via LoadTranscriptAsync. Without this detach, closing
-                // the tab during a long "score my estate" run would silently
-                // kill the work mid-flight.
+                // abort the running turn. The turn keeps generating and appends
+                // the assistant message and tool results to the conversation's
+                // transcript, so a reload replays the full result. Without this
+                // detach, closing the tab during a long "score my estate" run
+                // would silently kill the work mid-flight.
                 ctx.RequestAborted.Register(() =>
                 {
                     Interlocked.Exchange(ref streamDetached, 1);
@@ -511,7 +450,7 @@ public static class ChatEndpoints
                 // SSE write lock + emit helper — declared up here so the
                 // session.On callback below can use SafeEmit for the
                 // sdk.first_event timing ping.
-                // SDK callbacks can outlive handler disposal; GC owns this lock.
+                // Turn events can outlive handler disposal; GC owns this lock.
                 var sseLock = new SemaphoreSlim(1, 1);
                 async Task SafeEmit(string sseData)
                 {
@@ -531,31 +470,24 @@ public static class ChatEndpoints
                     finally { sseLock.Release(); }
                 }
                 // sdkSw measures time from subscription registration to the
-                // first SDK event arrival (time-to-first-byte from model).
+                // first turn event (time-to-first-byte from model).
                 // Started immediately before the subscription so a fast first
                 // event can't be observed before the stopwatch is running
                 // (which would log a misleading ms=0).
                 var sdkSw = Stopwatch.StartNew();
 
                 // Capture the assistant's full reply so we can generate a sidebar
-                // title after the turn completes (the CLI's title_changed event
-                // just echoes the user prompt). Declared before WireHandlers so
-                // both subscriptions are (re)attached together. StringBuilder is
-                // NOT thread-safe — the SDK may dispatch callbacks concurrently —
-                // so we guard every mutation/read.
+                // title after the turn completes. Guarded because the capture
+                // handler and the title reader run on different threads.
                 var assistantBuf = new System.Text.StringBuilder();
                 var completedAssistantMessages = new Dictionary<string, string>(StringComparer.Ordinal);
                 var assistantBufLock = new object();
 
-                // (Re)attaches the streaming + assistant-capture handlers to a
-                // session and returns a disposable that detaches both. Extracted
-                // so the SendAsync recovery path can REBIND onto a recycled
-                // session — otherwise the subscriptions would stay bound to the
-                // dead handle and the recycled session's events would never reach
-                // the SSE stream (a silent hang instead of a streamed answer).
-                IDisposable WireHandlers(CopilotSession s)
+                // Attaches the streaming and assistant-capture handlers and
+                // returns a disposable that detaches both.
+                IDisposable WireHandlers(AgentConversation s)
                 {
-                    var mainSub = s.On(async (SessionEvent evt) =>
+                    var mainSub = s.On(async evt =>
                     {
                         if (System.Threading.Interlocked.Exchange(ref firstEventLogged, 1) == 0)
                         {
@@ -585,29 +517,29 @@ public static class ChatEndpoints
                             // (parallel tool callbacks), and two concurrent writers
                             // on one response stream interleave bytes into
                             // malformed SSE frames.
-                            await HandleSessionEventAsync(evt, SafeEmit, toolTracker, telemetry, copilotFactory.Deployment,
+                            await HandleSessionEventAsync(evt, SafeEmit, toolTracker, telemetry,
                                 userId, userLogin!, activeSessionId, chatActivity, logger, done, turnState);
                         }
                         catch (Exception eventEx)
                         {
                             // Event rendering must never declare the underlying
                             // model turn complete. Keep the subscription alive so
-                            // SessionIdle/Error can release the durable gate.
+                            // the idle/error event can release the durable gate.
                             logger.LogWarning(eventEx, "Session event processing failed for {SessionId}", activeSessionId);
                         }
                     });
-                    var captureSub = s.On(async (SessionEvent evt) =>
+                    var captureSub = s.On(evt =>
                     {
-                        if (evt is AssistantMessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Data.DeltaContent))
-                            lock (assistantBufLock) { assistantBuf.Append(ad.Data.DeltaContent); }
-                        else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Data.Content))
+                        if (evt is MessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Content))
+                            lock (assistantBufLock) { assistantBuf.Append(ad.Content); }
+                        else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Content))
                             lock (assistantBufLock)
                             {
-                                completedAssistantMessages[am.Data.MessageId ?? "legacy"] = am.Data.Content;
+                                completedAssistantMessages[am.MessageId] = am.Content;
                                 assistantBuf.Clear();
                                 assistantBuf.AppendJoin("\n\n", completedAssistantMessages.Values);
                             }
-                        await Task.CompletedTask;
+                        return Task.CompletedTask;
                     });
                     return new CompositeDisposable(mainSub, captureSub);
                 }
@@ -661,10 +593,7 @@ public static class ChatEndpoints
                 // Register the SSE retry hook keyed by *turn id* (userId:sessionId)
                 // — NOT just userId — so concurrent turns from the same user
                 // (two tabs, sidebar score racing chat) don't clobber each
-                // other's reporter. Propagated to all child activities (incl.
-                // across the Copilot CLI JSON-RPC tool-callback boundary) via
-                // Activity Baggage. Earlier we tried AsyncLocal and Activity.RootId
-                // — both failed to flow through that boundary; baggage does.
+                // other's reporter. Propagated to tool activities via Activity baggage.
                 turnKey = $"{userId}:{activeSessionId}";
                 chatActivity?.SetBaggage("finops.turn.id", turnKey);
                 Infrastructure.HttpHelper.RetryReporters[turnKey] = notice =>
@@ -688,52 +617,19 @@ public static class ChatEndpoints
                 var turnKeyForAbort = turnKey;
                 ctx.RequestAborted.Register(() => Infrastructure.HttpHelper.RetryReporters.TryRemove(turnKeyForAbort, out _));
 
-                try
-                {
-                    dispatchAttempted = true;
-                    await session.SendAsync(new MessageOptions { Prompt = prompt, Attachments = imageAttachments });
-                }
-                catch (Exception sendEx) when (sendEx.Message.Contains("Session not found", StringComparison.OrdinalIgnoreCase))
-                {
-                    logger.LogWarning("Copilot session expired for user {User}, recycling. Error: {Error}", userLogin, sendEx.Message);
-                    chatActivity?.SetTag("ai.session_expired", true);
-                    // Detach the handlers from the dead handle, recycle, and REBIND
-                    // them to the live session — otherwise the recycled session's
-                    // events never reach the SSE stream and the turn hangs silently.
-                    handlers?.Dispose();
-                    session = await copilotFactory.RecycleSessionAsync(
-                        userId, activeSessionId, userLogin!, azureTenantId, entraOid);
-                    if (turnGateSessionId is not null && turnGateSessionId != session.SessionId)
-                    {
-                        if (turnState is null
-                            || !MoveTurn(turnGateSessionId, session.SessionId, turnState, session))
-                            throw new InvalidOperationException("Could not move the active turn to the recycled session.");
-                        turnGateSessionId = session.SessionId;
-                    }
-                    else if (turnState is not null)
-                    {
-                        turnState.MoveTo(session);
-                    }
-                    activeSessionId = session.SessionId;
-                    handlers = WireHandlers(session);
-                    // Re-announce the (possibly new) session id so the frontend keeps
-                    // streaming into the right conversation.
-                    await SafeEmit(JsonSerializer.Serialize(new { type = "session", id = activeSessionId }));
-                    await session.SendAsync(new MessageOptions { Prompt = prompt, Attachments = imageAttachments });
-                }
+                dispatchAttempted = true;
+                await session.SendAsync(prompt, imageAttachments, trivialTurn);
 
-                // Images are consumed by the message they rode in on — the CLI has
-                // uploaded them as vision content and they now live in the chat
-                // history. Delist them so subsequent turns don't re-attach the same
-                // screenshots. (RemoveForUser keeps the temp file on disk for the
-                // 30-min TTL so the CLI can finish any lazy read.)
+                // Images are consumed by the message they rode in on and now live in
+                // the model context. Delist them so later turns don't re-attach the
+                // same screenshots. (RemoveForUser keeps the temp file for its TTL.)
                 if (imageUploads.Count > 0)
                 {
                     foreach (var img in imageUploads)
                         AzureFinOps.Dashboard.AI.Tools.UploadedFileTools.RemoveForUser(userId, img.FileId);
                 }
 
-                // The SDK signals completion via SessionIdle/SessionError. If it
+                // The turn signals completion with an idle or error event. If it
                 // dies without either, an unbounded wait would hold the session's
                 // turn gate for the process lifetime, so cap it at the backend's
                 // turn budget and treat the timeout as an abandoned turn.
@@ -823,7 +719,7 @@ public static class ChatEndpoints
                             try
                             {
                                 using var bgCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                                var generated = await copilotFactory.GenerateTitleAsync(bgPrompt, bgReply, bgCts.Token);
+                                var generated = await agentFactory.GenerateTitleAsync(bgPrompt, bgReply, bgCts.Token);
                                 if (!string.IsNullOrWhiteSpace(generated))
                                     telemetry.SaveTitle(bgSessionId, generated);
                                 return generated;
@@ -859,7 +755,7 @@ public static class ChatEndpoints
 
                 chatSw.Stop();
                 telemetry.ChatDuration.Record(chatSw.Elapsed.TotalMilliseconds,
-                    new KeyValuePair<string, object?>("model", copilotFactory.Deployment),
+                    new KeyValuePair<string, object?>("model", agentFactory.Deployment),
                     new KeyValuePair<string, object?>("user", userLogin));
                 chatActivity?.SetTag("ai.duration_ms", chatSw.Elapsed.TotalMilliseconds);
                 try
@@ -875,7 +771,7 @@ public static class ChatEndpoints
             {
                 chatSw.Stop();
                 telemetry.ChatErrors.Add(1,
-                    new KeyValuePair<string, object?>("model", copilotFactory.Deployment),
+                    new KeyValuePair<string, object?>("model", agentFactory.Deployment),
                     new KeyValuePair<string, object?>("user", userLogin),
                     new KeyValuePair<string, object?>("error_type", ex.GetType().Name));
                 var safeError = Infrastructure.SensitiveContent.Redact(ex.Message);
@@ -891,15 +787,14 @@ public static class ChatEndpoints
             {
                 // The response is finished, so this request's HttpContext goes
                 // back to ASP.NET's pool and is reused by the next request on
-                // the connection. SDK callbacks can still arrive after this
+                // the connection. Turn events can still arrive after this
                 // point (handler disposal races an in-flight dispatch), so the
                 // stream must be marked detached BEFORE anything else — without
                 // it a late SafeEmit writes SSE bytes into an unrelated
                 // response, which then fails with "response has already
                 // started" and aborts that connection.
                 Interlocked.Exchange(ref streamDetached, 1);
-                // Detach the streaming subscriptions from whatever session they
-                // ended up bound to (original or recycled).
+                // Detach the streaming subscriptions.
                 handlers?.Dispose();
                 // Release this turn's reporter only — never sweep by userId
                 // prefix, since a concurrent turn from the same user (two tabs,
@@ -907,7 +802,7 @@ public static class ChatEndpoints
                 if (turnKey is not null)
                     Infrastructure.HttpHelper.RetryReporters.TryRemove(turnKey, out _);
                 if (turnState is not null && !await EndTurnAsync(turnState, dispatchAttempted))
-                    logger.LogWarning("Turn remains quarantined until SDK termination and host-tool completion are confirmed.");
+                    logger.LogWarning("Turn remains quarantined until turn termination and host-tool completion are confirmed.");
             }
         });
 
@@ -937,20 +832,16 @@ public static class ChatEndpoints
 
             // "Reset" semantics: start a brand-new conversation. The previous one
             // remains on disk and can be resumed via the Conversations sidebar.
-            var fresh = await copilotFactory.CreateNewAsync(
+            var fresh = await agentFactory.CreateNewAsync(
                 userId, userLogin!, entraTenantId, entraOid);
             logger.LogInformation("Started new conversation for user {UserId} sessionId={SessionId}", userId, fresh.SessionId);
             await ctx.Response.WriteAsJsonAsync(new { sessionId = fresh.SessionId });
         });
 
-        // Pre-warm: create/resume the user's Copilot session in the background
-        // as soon as the chat UI mounts, so the first prompt skips the
-        // session-creation cost (system-prompt + tool-schema upload to the CLI
-        // runtime, ~300 ms) that would otherwise sit on the critical path. The
-        // frontend calls this once on mount / when identity resolves. It is a
-        // no-op-cheap fast path on repeat calls (the live session is cached and
-        // mapped as the user's current). We return immediately — the heavy work
-        // must not block the request or touch the SSE turn gate.
+        // Pre-warm: open the user's current conversation and build their tools in
+        // the background as soon as the chat UI mounts, so the first prompt skips
+        // that setup. Cheap on repeat calls; returns immediately and never touches
+        // the SSE turn gate.
         app.MapPost("/api/chat/warmup", (HttpContext ctx) =>
         {
             var userJson = ctx.Session.GetString("user");
@@ -979,7 +870,7 @@ public static class ChatEndpoints
             {
                 try
                 {
-                    await copilotFactory.GetCurrentOrCreateAsync(
+                    await agentFactory.GetCurrentOrCreateAsync(
                         userId, userLogin!, entraTenantId, entraOid);
                 }
                 catch (Exception ex) { logger.LogWarning(ex, "Session warm-up failed for user {UserId}", userId); }
@@ -991,7 +882,7 @@ public static class ChatEndpoints
         // Explicit user Stop. A bare browser disconnect is deliberately NOT a stop
         // (see the RequestAborted comment in /api/chat) — the turn keeps running so
         // an away user still gets their answer. But a real Stop press must abort the
-        // CLI turn: the one-turn-per-session gate is only released once the turn
+        // turn: the one-turn-per-session gate is only released once the turn
         // ends, so without this the user stays locked out for as long as the model
         // keeps generating and every follow-up prompt bounces as "busy" — which
         // reads as the app silently swallowing messages.
@@ -1028,7 +919,7 @@ public static class ChatEndpoints
 
             if (string.IsNullOrWhiteSpace(sessionId)) { ctx.Response.StatusCode = 400; return; }
 
-            if (!await copilotFactory.UserOwnsSessionAsync(
+            if (!await agentFactory.UserOwnsSessionAsync(
                     userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
             {
                 ctx.Response.StatusCode = 404;
@@ -1036,7 +927,7 @@ public static class ChatEndpoints
             }
 
             // A late Stop can race a completed server turn whose final SSE bytes
-            // are stranded in the browser. Absence from ActiveTurns means the SDK
+            // are stranded in the browser. Absence from ActiveTurns means the turn
             // already reached idle/error and the client should recover the final
             // persisted answer rather than render a false stopped marker.
             if (!ActiveTurns.TryGetValue(sessionId, out var activeTurn))
@@ -1051,14 +942,10 @@ public static class ChatEndpoints
                 return;
             }
 
-            var activeSession = activeTurn.Session;
-            if (activeSession is null && telemetry.LiveSessions.TryGetValue(sessionId, out var live))
-                activeSession = live.Session;
-
             var abortAccepted = await activeTurn.AbortAsync();
 
             // AbortAsync acceptance alone is not enough to free the gate. Wait
-            // until the chat/job event loop observes SDK idle/error and calls
+            // until the chat/job event loop observes the idle/error event and calls
             // EndTurn. A timeout is reported as pending, never as a fake stop.
             if (abortAccepted && !activeTurn.Completion.Task.IsCompleted)
                 await Task.WhenAny(activeTurn.Completion.Task, Task.Delay(TimeSpan.FromSeconds(10), ctx.RequestAborted));
@@ -1074,11 +961,10 @@ public static class ChatEndpoints
     }
 
     private static async Task HandleSessionEventAsync(
-        SessionEvent evt,
+        AgentEvent evt,
         Func<string, Task> emit,
-        ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)> toolTracker,
+        ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime)> toolTracker,
         AiTelemetry telemetry,
-        string deployment,
         long userId,
         string userLogin,
         string activeSessionId,
@@ -1089,86 +975,57 @@ public static class ChatEndpoints
     {
         string? sseData = null;
 
-        if (evt is AssistantMessageDeltaEvent delta)
+        if (evt is MessageDeltaEvent delta)
         {
-            sseData = JsonSerializer.Serialize(new { type = "delta", messageId = delta.Data.MessageId, content = delta.Data.DeltaContent });
+            sseData = JsonSerializer.Serialize(new { type = "delta", messageId = delta.MessageId, content = delta.Content });
         }
-        else if (evt is AssistantReasoningDeltaEvent reasoningDelta)
+        else if (evt is ReasoningDeltaEvent reasoningDelta)
         {
             // Live "thinking" feedback — reasoning models are silent for many
             // seconds while they reason; streaming the concise summary keeps the
             // UI from looking frozen (bare blinking cursor).
-            if (!string.IsNullOrEmpty(reasoningDelta.Data.DeltaContent))
-                sseData = JsonSerializer.Serialize(new { type = "reasoning", content = reasoningDelta.Data.DeltaContent });
+            if (!string.IsNullOrEmpty(reasoningDelta.Content))
+                sseData = JsonSerializer.Serialize(new { type = "reasoning", content = reasoningDelta.Content });
         }
         else if (evt is AssistantMessageEvent msg)
         {
-            sseData = JsonSerializer.Serialize(new { type = "message", messageId = msg.Data.MessageId, content = msg.Data.Content });
+            sseData = JsonSerializer.Serialize(new { type = "message", messageId = msg.MessageId, content = msg.Content });
         }
-        else if (evt is AssistantUsageEvent usage)
+        else if (evt is UsageEvent usage)
         {
-            var finish = usage.Data.FinishReason;
-            if ((!string.IsNullOrEmpty(finish) && finish is not "stop" and not "tool_calls" and not "completed")
-                || usage.Data.ContentFilterTriggered == true)
-            {
-                logger.LogWarning(
-                    "Model call ended without a normal finish (finish={FinishReason}, contentFilter={ContentFilter}, outputTokens={OutputTokens}, maxOutputTokens={MaxOutputTokens})",
-                    finish, usage.Data.ContentFilterTriggered, usage.Data.OutputTokens, usage.Data.MaxOutputTokens);
-            }
+            var finish = usage.FinishReason;
+            if (!string.IsNullOrEmpty(finish) && finish is not "stop" and not "tool_calls" and not "completed")
+                logger.LogWarning("Model call ended without a normal finish (finish={FinishReason}, outputTokens={OutputTokens})",
+                    finish, usage.OutputTokens);
         }
-        else if (evt is ToolExecutionStartEvent toolStart)
+        else if (evt is ToolStartEvent toolStart)
         {
-            var toolId = toolStart.Data.ToolCallId ?? Guid.NewGuid().ToString();
             telemetry.ToolCalls.Add(1,
-                new KeyValuePair<string, object?>("tool", toolStart.Data.ToolName),
+                new KeyValuePair<string, object?>("tool", toolStart.ToolName),
                 new KeyValuePair<string, object?>("user", userLogin));
-            var toolActivity = telemetry.ActivitySource.StartActivity($"Tool:{toolStart.Data.ToolName}");
-            toolActivity?.SetTag("ai.tool.name", toolStart.Data.ToolName);
-            toolActivity?.SetTag("ai.tool.id", toolId);
-            toolTracker[toolId] = (toolStart.Data.ToolName, DateTimeOffset.UtcNow, toolActivity);
-            string? argsJson = null;
-            if (toolStart.Data.Arguments is not null)
-            {
-                try { argsJson = JsonSerializer.Serialize(toolStart.Data.Arguments); }
-                catch (Exception serializeEx)
-                {
-                    logger.LogWarning(serializeEx, "Failed to serialise tool arguments for telemetry (tool={Tool})", toolStart.Data.ToolName);
-                }
-            }
-            toolActivity?.SetTag("ai.tool.args_length", argsJson?.Length);
-            logger.LogInformation("Tool start: {Tool} id={ToolId}", toolStart.Data.ToolName, toolId);
-            sseData = JsonSerializer.Serialize(new { type = "tool_start", tool = toolStart.Data.ToolName, id = toolId, args = argsJson });
+            toolTracker[toolStart.CallId] = (toolStart.ToolName, DateTimeOffset.UtcNow);
+            logger.LogInformation("Tool start: {Tool} id={ToolId}", toolStart.ToolName, toolStart.CallId);
+            sseData = JsonSerializer.Serialize(new { type = "tool_start", tool = toolStart.ToolName, id = toolStart.CallId, args = toolStart.Arguments });
         }
-        else if (evt is ToolExecutionCompleteEvent toolDone)
+        else if (evt is ToolCompleteEvent toolDone)
         {
             sseData = await HandleToolDoneAsync(toolDone, emit, toolTracker, telemetry, userId, activeSessionId, userLogin, logger);
         }
-        else if (evt is SessionTitleChangedEvent titleEvt)
+        else if (evt is TurnErrorEvent error)
         {
-            var newTitle = AzureFinOps.Dashboard.Endpoints.SessionEndpoints.CleanSummary(titleEvt.Data.Title);
-            telemetry.SaveTitle(activeSessionId, newTitle);
-            sseData = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = newTitle });
-        }
-        else if (evt is SessionErrorEvent error)
-        {
-            sseData = JsonSerializer.Serialize(new { type = "error", message = error.Data.Message });
-            logger.LogError("Session error for {User}: {Error}", userLogin, error.Data.Message);
-            chatActivity?.SetTag("ai.error", error.Data.Message);
-            if (telemetry.LiveSessions.TryRemove(activeSessionId, out var dead))
-            {
-                telemetry.ActiveSessions.Add(-1);
-                try { await dead.Session.DisposeAsync(); } catch { }
-            }
+            sseData = JsonSerializer.Serialize(new { type = "error", code = error.Code, message = error.Message });
+            logger.LogError("Turn error for {User}: {Error}", userLogin, error.Message);
+            chatActivity?.SetTag("ai.error", error.Message);
         }
 
         if (sseData is not null)
             await emit(sseData);
 
-        if (evt is SessionIdleEvent || evt is SessionErrorEvent)
+        if (evt is TurnIdleEvent or TurnErrorEvent)
         {
-            if (evt is SessionIdleEvent && turnState is not null && EmptyResultNotice(turnState) is { } notice)
+            if (evt is TurnIdleEvent && turnState is not null && EmptyResultNotice(turnState) is { } notice)
             {
-                logger.LogWarning("Turn {RequestId} reached SDK idle without a user-visible result", turnState.RequestId);
+                logger.LogWarning("Turn {RequestId} went idle without a user-visible result", turnState.RequestId);
                 await emit(notice);
             }
             await emit("[DONE]");
@@ -1187,43 +1044,34 @@ public static class ChatEndpoints
             });
 
     private static async Task<string?> HandleToolDoneAsync(
-        ToolExecutionCompleteEvent toolDone,
+        ToolCompleteEvent toolDone,
         Func<string, Task> emit,
-        ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime, Activity? Activity)> toolTracker,
+        ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime)> toolTracker,
         AiTelemetry telemetry,
         long userId,
         string sessionId,
         string userLogin,
         ILogger logger)
     {
-        var toolId = toolDone.Data.ToolCallId ?? "";
-        var toolName = toolTracker.TryGetValue(toolId, out var info) ? info.Name : "unknown";
-        var durationMs = toolTracker.TryGetValue(toolId, out var info2)
-            ? (long)(DateTimeOffset.UtcNow - info2.StartTime).TotalMilliseconds : (long?)null;
-
-        if (toolTracker.TryRemove(toolId, out var removed))
+        var toolId = toolDone.CallId;
+        var toolName = "unknown";
+        long? durationMs = null;
+        if (toolTracker.TryRemove(toolId, out var info))
         {
-            removed.Activity?.SetTag("ai.tool.success", toolDone.Data.Success);
-            removed.Activity?.SetTag("ai.tool.durationMs", durationMs);
-            if (toolDone.Data.Error?.Message is not null)
-                removed.Activity?.SetTag("ai.tool.error", toolDone.Data.Error.Message);
-            removed.Activity?.Dispose();
+            toolName = info.Name;
+            durationMs = (long)(DateTimeOffset.UtcNow - info.StartTime).TotalMilliseconds;
         }
+        var resultText = toolDone.Result;
+        var errorText = toolDone.Error;
 
-        string? resultText = null;
-        string? errorText = null;
-        if (toolDone.Data.Result?.Content is not null) resultText = toolDone.Data.Result.Content;
-        else if (toolDone.Data.Result?.DetailedContent is not null) resultText = toolDone.Data.Result.DetailedContent;
-        if (toolDone.Data.Error?.Message is not null) errorText = toolDone.Data.Error.Message;
-
-        if (!toolDone.Data.Success)
+        if (!toolDone.Success)
             telemetry.ToolErrors.Add(1,
                 new KeyValuePair<string, object?>("tool", toolName),
                 new KeyValuePair<string, object?>("user", userLogin));
 
-        var sseData = JsonSerializer.Serialize(new { type = "tool_done", tool = toolName, id = toolId, success = toolDone.Data.Success, durationMs, result = resultText, error = errorText });
+        var sseData = JsonSerializer.Serialize(new { type = "tool_done", tool = toolName, id = toolId, success = toolDone.Success, durationMs, result = resultText, error = errorText });
         logger.LogInformation("Tool done: {Tool} id={ToolId} success={Success} durationMs={Duration} resultLen={ResultLen}",
-            toolName, toolId, toolDone.Data.Success, durationMs, resultText?.Length ?? 0);
+            toolName, toolId, toolDone.Success, durationMs, resultText?.Length ?? 0);
 
         var consentActions = HttpHelper.ConsentActions(resultText);
         if (consentActions.Length > 0)
@@ -1246,7 +1094,7 @@ public static class ChatEndpoints
         // Marker-based side channels (chart / html / script / maturity).
         // If a marker is detected we emit the tool_done event followed by the
         // structured event, then return null so the caller skips re-emit.
-        if ((toolName == "RenderChart" || toolName == "RenderAdvancedChart") && toolDone.Data.Success && resultText is not null)
+        if ((toolName == "RenderChart" || toolName == "RenderAdvancedChart") && toolDone.Success && resultText is not null)
         {
             try
             {
@@ -1257,7 +1105,7 @@ public static class ChatEndpoints
             catch (Exception ex) when (IsClientDisconnect(ex)) { /* SSE client gone — nothing to do */ }
             catch (Exception ex) { logger.LogWarning(ex, "Failed to emit chart marker for tool {Tool}", toolName); }
         }
-        else if (toolDone.Data.Success && resultText is not null && resultText.Contains("__CHART__:"))
+        else if (toolDone.Success && resultText is not null && resultText.Contains("__CHART__:"))
         {
             try
             {
@@ -1277,7 +1125,7 @@ public static class ChatEndpoints
             catch (Exception ex) { logger.LogWarning(ex, "Failed to emit __CHART__ marker"); }
         }
 
-        if (toolDone.Data.Success && resultText is not null && resultText.Contains("__HTML_READY__:"))
+        if (toolDone.Success && resultText is not null && resultText.Contains("__HTML_READY__:"))
         {
             try
             {
@@ -1302,7 +1150,7 @@ public static class ChatEndpoints
             catch (Exception ex) { logger.LogWarning(ex, "Failed to emit __HTML_READY__ marker"); }
         }
 
-        if (toolDone.Data.Success && resultText is not null && resultText.Contains("__SCRIPT_READY__:"))
+        if (toolDone.Success && resultText is not null && resultText.Contains("__SCRIPT_READY__:"))
         {
             try
             {
@@ -1331,7 +1179,7 @@ public static class ChatEndpoints
             catch (Exception ex) { logger.LogWarning(ex, "Failed to emit __SCRIPT_READY__ marker"); }
         }
 
-        if (toolDone.Data.Success && resultText is not null && resultText.Contains("__MATURITY_SCORE__:"))
+        if (toolDone.Success && resultText is not null && resultText.Contains("__MATURITY_SCORE__:"))
         {
             try
             {

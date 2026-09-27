@@ -28,7 +28,7 @@ Default target is **local**; follow the `debug-local` skill first. Test a deploy
    ```
    (`started` was a per-request `DateTime.UtcNow` until 2026-08-31 — if it ever tracks "now" again, that regression is back.)
 3. **Record the baseline**: `git log --oneline -5`, plus which commits are built-but-undeployed. State this in the final report.
-4. **If local**: `wwwroot/` must exist BEFORE `dotnet run` — ASP.NET caches `WebRootPath` at startup, so starting without it 404s every asset for the life of the process (`The WebRootPath was not found`). `azd deploy` prunes `obj/`, `wwwroot/` and `frontend/node_modules`, so after a deploy: re-seed the Copilot CLI cache, `npm ci`, `npm run build`, THEN start.
+4. **If local**: `wwwroot/` must exist BEFORE `dotnet run` — ASP.NET caches `WebRootPath` at startup, so starting without it 404s every asset for the life of the process (`The WebRootPath was not found`). `azd deploy` prunes `obj/`, `wwwroot/` and `frontend/node_modules`, so after a deploy: `npm ci`, `npm run build`, THEN start.
 
 ## 1. Browser gotchas — this app breaks naive Playwright
 

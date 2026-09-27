@@ -15,6 +15,8 @@ param serviceTier string = 'Default'
 param existingAoaiResourceId string
 @description('When reusing an existing account, also create or update the model deployment on it. Requires deployment permission and available model-specific quota on that account.')
 param deployModelOnExistingAccount bool = false
+@description('Foundry project on the reused account. The app calls the project Responses endpoint, so reuse requires an existing project.')
+param existingProjectName string = ''
 
 var useExisting = !empty(existingAoaiResourceId)
 
@@ -66,12 +68,9 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2026-
   }
 }
 
-// Foundry project — a workspace under the account for the AI Foundry portal
-// experience (agents, evals, playground). NOT required by the app runtime (the
-// app calls the account's /openai/v1/ endpoint + deployment directly), but
-// provisioning it completes the Foundry reference architecture and gives the
-// deployment a visible project home in ai.azure.com. Only created for a new
-// account; an existing reused account keeps its own project layout.
+// Foundry project — the app's Agent Framework runtime calls this project's
+// Responses endpoint. Only created for a new account; a reused account supplies
+// its own existing project through `existingProjectName`.
 resource project 'Microsoft.CognitiveServices/accounts/projects@2026-03-01' = if (!useExisting) {
   parent: newAccount
   name: 'proj-finops-${resourceToken}'
@@ -119,4 +118,9 @@ output deploymentName string = useExisting && deployModelOnExistingAccount
   : deploymentName
 output resourceGroup string = useExisting ? existingRg : resourceGroup().name
 output subscriptionId string = useExisting ? existingSubId : subscription().subscriptionId
-output projectName string = useExisting ? '' : 'proj-finops-${resourceToken}'
+var projectName = useExisting ? existingProjectName : project.name
+output projectName string = projectName
+// Without a project (reuse mode with no project name) the app fails fast at startup with a clear error.
+output projectEndpoint string = empty(projectName)
+  ? (serviceEndpoints[?'OpenAI Language Model Instance API'] ?? accountProperties.endpoint)
+  : 'https://${accountProperties.customSubDomainName}.services.ai.azure.com/api/projects/${projectName}'

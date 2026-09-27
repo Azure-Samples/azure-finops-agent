@@ -1,6 +1,6 @@
 using System.Text.Json;
 using AzureFinOps.Dashboard.Endpoints;
-using GitHub.Copilot;
+using AzureFinOps.Dashboard.AI.Runtime;
 
 namespace Dashboard.Tests;
 
@@ -9,10 +9,10 @@ public sealed class TranscriptProjectionTests
     [Fact]
     public void SessionFailureRetainsItsReasonAfterPartialAnswers()
     {
-        var question = new UserMessageEvent { Data = new() { Content = "Synthetic spending question" } };
-        var answer = new AssistantMessageEvent { Data = new() { MessageId = "answer", Content = "| Service | Cost |\n|---|---|\n| Compute | USD 25 |" } };
-        var followUp = new AssistantMessageEvent { Data = new() { MessageId = "follow-up", Content = "Synthetic follow-up" } };
-        var error = new SessionErrorEvent { Data = new() { ErrorType = "provider_error", Message = "Authentication failed with provider (HTTP 401)" } };
+        var question = new UserMessageEvent("Synthetic spending question");
+        var answer = new AssistantMessageEvent("answer", "| Service | Cost |\n|---|---|\n| Compute | USD 25 |");
+        var followUp = new AssistantMessageEvent("follow-up", "Synthetic follow-up");
+        var error = new TurnErrorEvent("Authentication failed with provider (HTTP 401)", "model_error");
 
         using var result = Project(question, answer, followUp, error);
         var messages = result.RootElement;
@@ -28,8 +28,8 @@ public sealed class TranscriptProjectionTests
     [Fact]
     public void FailuresBeforeAVisibleUserTurnAreNotConversationReplies()
     {
-        var context = new UserMessageEvent { Data = new() { Content = "<skill-context>synthetic context</skill-context>" } };
-        var error = new SessionErrorEvent { Data = new() { ErrorType = "provider_error", Message = "Synthetic warmup failure" } };
+        var context = new UserMessageEvent("<skill-context>synthetic context</skill-context>");
+        var error = new TurnErrorEvent("Synthetic warmup failure", "model_error");
         using var result = Project(context, error);
         Assert.Equal(0, result.RootElement.GetArrayLength());
     }
@@ -37,10 +37,10 @@ public sealed class TranscriptProjectionTests
     [Fact]
     public void FailureDoesNotBecomeTheNextTurnsAnswer()
     {
-        var first = new UserMessageEvent { Data = new() { Content = "First question" } };
-        var error = new SessionErrorEvent { Data = new() { ErrorType = "provider_error", Message = "Synthetic failure" } };
-        var second = new UserMessageEvent { Data = new() { Content = "Second question" } };
-        var answer = new AssistantMessageEvent { Data = new() { MessageId = "answer", Content = "Second answer" } };
+        var first = new UserMessageEvent("First question");
+        var error = new TurnErrorEvent("Synthetic failure", "model_error");
+        var second = new UserMessageEvent("Second question");
+        var answer = new AssistantMessageEvent("answer", "Second answer");
         using var result = Project(first, error, second, answer);
         Assert.Equal(4, result.RootElement.GetArrayLength());
         Assert.Equal("error", result.RootElement[1].GetProperty("terminalStatus").GetString());
@@ -52,12 +52,30 @@ public sealed class TranscriptProjectionTests
     public void PersistedFailuresAreRedactedBeforeReplay()
     {
         var secret = "sk-" + new string('x', 48);
-        var question = new UserMessageEvent { Data = new() { Content = "Synthetic question" } };
-        var error = new SessionErrorEvent { Data = new() { ErrorType = "provider_error", Message = $"Synthetic failure with api_key={secret}" } };
+        var question = new UserMessageEvent("Synthetic question");
+        var error = new TurnErrorEvent($"Synthetic failure with api_key={secret}", "model_error");
         using var result = Project(question, error);
         Assert.DoesNotContain(secret, result.RootElement[1].GetProperty("content").GetString());
     }
 
-    private static JsonDocument Project(params SessionEvent[] events) =>
+    [Fact]
+    public void ToolsReplayWithTheirResultsAndCharts()
+    {
+        var question = new UserMessageEvent("Synthetic chart question");
+        var start = new ToolStartEvent("call-1", "RenderChart", "{\"type\":\"bar\"}");
+        var done = new ToolCompleteEvent("call-1", true, "{\"type\":\"bar\",\"data\":[]}", null);
+        var pending = new ToolStartEvent("call-2", "QueryAzure", "{}");
+        var answer = new AssistantMessageEvent("answer", "Synthetic answer");
+        using var result = Project(question, start, done, pending, answer);
+        var reply = result.RootElement[1];
+        Assert.Equal("Synthetic answer", reply.GetProperty("content").GetString());
+        var tools = reply.GetProperty("toolCalls");
+        Assert.Equal(2, tools.GetArrayLength());
+        Assert.True(tools[0].GetProperty("success").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, tools[1].GetProperty("success").ValueKind);
+        Assert.Equal(1, reply.GetProperty("charts").GetArrayLength());
+    }
+
+    private static JsonDocument Project(params AgentEvent[] events) =>
         JsonDocument.Parse(JsonSerializer.Serialize(SessionEndpoints.BuildTranscript(events, 101)));
 }

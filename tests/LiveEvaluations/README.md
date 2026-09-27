@@ -8,7 +8,7 @@ The full catalog imports every exported sidebar/pricing prompt and every job-tem
 
 The selection covers Crawl maturity; current-month cost by service, subscription and resource; forecasts and budgets; Advisor; inventory and tags; Microsoft 365 licenses and Copilot usage; chargeback; VM, storage, database, application and model pricing; an idle-resource script for review; H200 Spot quota; and deterministic English-language arithmetic. Questions needing missing attachments or a prior turn are not selected. The broader catalog remains available for coverage checks; backend, Python, frontend unit and browser regressions are not reduced.
 
-Each case uses a fresh process and synthetic conversation, the candidate's real `ChatEndpoints`, `CopilotSessionFactory`, protected tools and SDK/CLI, live Azure APIs, and real model inference. SSE supplies tool outcomes and latency; the owner-checked transcript endpoint must replay the exact decoded question and every completed answer message, not merely contain the question. A separate strict-schema model call judges the final answer against the question and tool evidence. Deterministic failures override the judge. Malformed judge output retains the execution diagnostics and fails the case. The suite continues recording other cases after an answer fails, but never deploys that candidate.
+Each case uses a fresh process and synthetic conversation, the candidate's real `ChatEndpoints`, `AgentSessionFactory`, protected tools and Agent Framework runtime, live Azure APIs, and real model inference. SSE supplies tool outcomes and latency; the owner-checked transcript endpoint must replay the exact decoded question and every completed answer message, not merely contain the question. A separate strict-schema model call judges the final answer against the question and tool evidence. Deterministic failures override the judge. Malformed judge output retains the execution diagnostics and fails the case. The suite continues recording other cases after an answer fails, but never deploys that candidate.
 
 The evaluator shares the application's reported-tool-failure classifier rather than treating SDK callback completion as success. Empty payloads and explicit failure/cancellation in nested evidence fail deterministically. Unknown, partial or awaiting-approval evidence is not automatically a tool execution failure: the judge must still establish whether the answer satisfies the requested task and accurately states those limitations.
 
@@ -29,7 +29,7 @@ Create a protected GitHub environment named `ai-evaluation`, limited to trusted 
 | `AZURE_EVAL_CLIENT_ID`       | Dedicated evaluation application identity |
 | `AZURE_EVAL_TENANT_ID`       | Evaluation tenant                         |
 | `AZURE_EVAL_SUBSCRIPTION_ID` | Azure CLI default evaluation subscription |
-| `EVAL_MODEL_ENDPOINT`       | Azure OpenAI-compatible inference endpoint; keep deployment coordinates masked |
+| `EVAL_MODEL_ENDPOINT`       | Foundry project endpoint (`https://{account}.services.ai.azure.com/api/projects/{project}`); keep coordinates masked |
 
 Secrets may live on the `ai-evaluation` environment or the repository. They are optional only in the reusable workflow's caller declaration so environment-scoped secrets can resolve on the job. The job's configuration check reports every missing value before login or inference; absence never skips or passes the gate. An unconfigured environment is a setup failure, not evidence that the agent passed or failed its questions.
 

@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text.Json;
 using AzureFinOps.Dashboard.Auth;
-using GitHub.Copilot;
+using AzureFinOps.Dashboard.AI.Runtime;
 using Microsoft.Extensions.AI;
 
 namespace AzureFinOps.Dashboard.Observability;
@@ -16,6 +16,9 @@ namespace AzureFinOps.Dashboard.Observability;
 public sealed class AiTelemetry
 {
     public ActivitySource ActivitySource { get; } = new("AzureFinOps.AI");
+
+    /// <summary>Source and meter name for the Agent Framework GenAI telemetry.</summary>
+    public const string AgentSourceName = "AzureFinOps.AI.Agent";
     public Meter Meter { get; }
 
     public Counter<long> ChatRequests { get; }
@@ -26,11 +29,9 @@ public sealed class AiTelemetry
     public Histogram<double> ChatDuration { get; }
 
     /// <summary>
-    /// All currently-live <see cref="CopilotSession"/> instances keyed by Copilot
-    /// session id. A user can have multiple sessions on disk (the SDK persists each
-    /// to <c>$COPILOT_HOME/session-state/{id}</c>) but only ones currently being
-    /// chatted with live in memory. <see cref="CurrentSessionId"/> tracks which one
-    /// is the user's "active" conversation.
+    /// Conversations opened in this process, keyed by session id, so chat, Stop and
+    /// jobs share one turn stream. <see cref="CurrentSessionId"/> tracks each user's
+    /// active conversation.
     /// </summary>
     public ConcurrentDictionary<string, LiveSessionInfo> LiveSessions { get; } = new();
 
@@ -38,13 +39,11 @@ public sealed class AiTelemetry
     public ConcurrentDictionary<long, string> CurrentSessionId { get; } = new();
 
     public ConcurrentDictionary<long, UserTokens> UserTokens { get; } = new();
-    public ConcurrentDictionary<long, List<AIFunctionDeclaration>> UserTools { get; } = new();
+    public ConcurrentDictionary<long, List<AITool>> UserTools { get; } = new();
 
     /// <summary>
-    /// SDK-generated display titles keyed by sessionId, persisted across restarts.
-    /// The Copilot CLI emits <c>session.title_changed</c> after a few turns; we
-    /// override <see cref="SessionMetadata.Summary"/> in the sidebar with this so
-    /// users see a concise generated label instead of their raw first prompt.
+    /// Generated display titles keyed by sessionId, persisted across restarts. They
+    /// override the conversation's first prompt in the sidebar.
     /// </summary>
     public ConcurrentDictionary<string, string> SessionTitles { get; } = new();
 
@@ -107,18 +106,9 @@ public sealed class AiTelemetry
     }
 }
 
-/// <summary>
-/// Bundles a live <see cref="CopilotSession"/> with the metadata we need to
-/// recycle it when the BYOK bearer token bakes-in expires, and to associate it
-/// back with the user who owns it (for janitor cleanup).
-/// </summary>
+/// <summary>Associates an open conversation with its owning user.</summary>
 public sealed class LiveSessionInfo
 {
-    public required CopilotSession Session { get; init; }
+    public required AgentConversation Session { get; init; }
     public required long UserId { get; init; }
-    public required DateTimeOffset BearerExpiry { get; set; }
-
-    /// <summary>Last reasoning effort applied to this live session via
-    /// <c>SetModelAsync</c> (per-turn effort routing). Null = session default.</summary>
-    public string? AppliedEffort { get; set; }
 }

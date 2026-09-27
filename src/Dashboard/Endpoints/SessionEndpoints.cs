@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AzureFinOps.Dashboard.AI;
+using AzureFinOps.Dashboard.AI.Runtime;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Observability;
 using AzureFinOps.Dashboard.Infrastructure;
@@ -8,8 +9,8 @@ namespace AzureFinOps.Dashboard.Endpoints;
 
 /// <summary>
 /// Per-user chat session management — list past conversations, start a new
-/// one, switch between them, delete. Backed by the Copilot SDK's on-disk
-/// session store, scoped per Entra <c>oid</c> via <see cref="CopilotSessionFactory.GetWorkingDirectory"/>.
+/// one, switch between them, delete. Backed by the per-owner conversation
+/// directories managed by <see cref="AgentSessionFactory"/>.
 ///
 /// Anonymous (non-Entra) users get an ephemeral working dir so these endpoints
 /// always return an empty list for them — multi-session is an Entra-only feature.
@@ -18,7 +19,7 @@ public static class SessionEndpoints
 {
     public static void MapSessionEndpoints(
         this IEndpointRouteBuilder app,
-        CopilotSessionFactory copilotFactory,
+        AgentSessionFactory agentFactory,
         AiTelemetry telemetry,
         AzureFinOps.Dashboard.Jobs.JobStore jobStore,
         ILogger logger)
@@ -34,7 +35,7 @@ public static class SessionEndpoints
             if (string.IsNullOrEmpty(entraOid))
                 return Results.Ok(new { sessions = Array.Empty<object>(), currentSessionId = (string?)null });
 
-            var sessions = await copilotFactory.ListUserSessionsAsync(
+            var sessions = await agentFactory.ListUserSessionsAsync(
                 userId, entraTenantId, entraOid, ctx.RequestAborted);
             telemetry.CurrentSessionId.TryGetValue(userId, out var currentId);
             var payload = sessions.Select(s => new
@@ -54,7 +55,7 @@ public static class SessionEndpoints
             if (!TryResolveUser(ctx, out var userId, out var userLogin, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
 
-            var session = await copilotFactory.CreateNewAsync(
+            var session = await agentFactory.CreateNewAsync(
                 userId, userLogin, entraTenantId, entraOid);
             UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
             return Results.Ok(new { sessionId = session.SessionId });
@@ -67,7 +68,7 @@ public static class SessionEndpoints
         {
             if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
-            if (!await copilotFactory.UserOwnsSessionAsync(
+            if (!await agentFactory.UserOwnsSessionAsync(
                 userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
             return Results.Ok(new { active = AzureFinOps.Dashboard.AI.ChatEndpoints.IsTurnActive(sessionId) });
@@ -76,7 +77,7 @@ public static class SessionEndpoints
         app.MapGet("/api/sessions/{sessionId}/outcomes", async (HttpContext ctx, string sessionId) =>
         {
             if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid)) return Results.Unauthorized();
-            if (!await copilotFactory.UserOwnsSessionAsync(
+            if (!await agentFactory.UserOwnsSessionAsync(
                 userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted)) return Results.NotFound();
             return Results.Ok(new { outcomes = TurnOutcomeStore.Default.ForSession(userId, sessionId) });
         });
@@ -91,11 +92,11 @@ public static class SessionEndpoints
             // IDOR guard: a sessionId is a public-ish string (it's emitted to the
             // browser and logged to App Insights). Reject any id that doesn't
             // belong to this user's workdir.
-            if (!await copilotFactory.UserOwnsSessionAsync(
+            if (!await agentFactory.UserOwnsSessionAsync(
                 userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
 
-            copilotFactory.SetCurrentSession(userId, sessionId);
+            agentFactory.SetCurrentSession(userId, sessionId);
             UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
             logger.LogInformation("User {UserId} switched to session {SessionId}", userId, sessionId);
             return Results.NoContent();
@@ -107,7 +108,7 @@ public static class SessionEndpoints
                 return Results.Unauthorized();
             if (string.IsNullOrEmpty(entraOid)) return Results.NoContent();
 
-            if (!await copilotFactory.UserOwnsSessionAsync(
+            if (!await agentFactory.UserOwnsSessionAsync(
                 userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
 
@@ -120,7 +121,7 @@ public static class SessionEndpoints
 
             try
             {
-                await copilotFactory.DeleteUserSessionAsync(userId, sessionId, ctx.RequestAborted);
+                await agentFactory.DeleteUserSessionAsync(userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted);
                 // If this conversation was a job's run log, detach the job so it
                 // behaves as "never ran" (next run creates a fresh session) instead
                 // of pointing at a dead transcript.
@@ -151,7 +152,7 @@ public static class SessionEndpoints
             // The IDOR guard below scopes to the caller's anonymous or
             // tenant-and-object working directory and is the security boundary
             // for both anonymous and Entra callers.
-            if (!await copilotFactory.UserOwnsSessionAsync(
+            if (!await agentFactory.UserOwnsSessionAsync(
                 userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
 
@@ -160,13 +161,13 @@ public static class SessionEndpoints
             // Read-only load — does NOT register this session as the user's
             // current and does NOT bump the ActiveSessions gauge. Just viewing
             // a past conversation must not switch the user's active thread.
-            IReadOnlyList<GitHub.Copilot.SessionEvent> events;
+            IReadOnlyList<AgentEvent> events;
             try
             {
-                events = await copilotFactory.LoadTranscriptAsync(
+                events = await agentFactory.LoadTranscriptAsync(
                     sessionId, userId, entraTenantId, entraOid, ctx.RequestAborted);
             }
-            catch (CopilotSessionFactory.HistoryUnavailableException)
+            catch (AgentSessionFactory.HistoryUnavailableException)
             {
                 return Results.NotFound(new { code = "history_unavailable", error = "The retained conversation history is unavailable. Start a new conversation to continue." });
             }
@@ -178,21 +179,15 @@ public static class SessionEndpoints
         });
     }
 
-    internal static IReadOnlyList<object> BuildTranscript(IReadOnlyList<GitHub.Copilot.SessionEvent> events, long userId)
+    internal static IReadOnlyList<object> BuildTranscript(IReadOnlyList<AgentEvent> events, long userId)
     {
-        // First pass: index tool execution results by ToolCallId so we
-        // can attach result / success / error to each requested tool.
+        // First pass: index tool results by call id so each started tool
+        // gets its result / success / error.
         var resultsById = new Dictionary<string, (string? Result, bool Success, string? Error)>();
         foreach (var evt in events)
         {
-            if (evt is GitHub.Copilot.ToolExecutionCompleteEvent tec && tec.Data is { } d && !string.IsNullOrEmpty(d.ToolCallId))
-            {
-                resultsById[d.ToolCallId] = (
-                    d.Result?.DetailedContent ?? d.Result?.Content,
-                    d.Success,
-                    d.Error?.ToString()
-                );
-            }
+            if (evt is ToolCompleteEvent done && !string.IsNullOrEmpty(done.CallId))
+                resultsById[done.CallId] = (done.Result, done.Success, done.Error);
         }
 
         var messages = new List<object>();
@@ -225,122 +220,116 @@ public static class SessionEndpoints
 
         foreach (var evt in events)
         {
-            if (evt is GitHub.Copilot.UserMessageEvent um)
+            if (evt is UserMessageEvent um)
             {
-                var raw = um.Data?.Content ?? "";
-                if (IsInjectedUserContext(raw, um.Data?.Source)) continue;
+                var raw = um.Content;
+                if (IsInjectedUserContext(raw)) continue;
                 FlushAssistant();
                 var clean = StripContextPrefix(raw);
                 if (string.IsNullOrWhiteSpace(clean)) continue;
                 messages.Add(new { role = "user", content = clean });
                 hasUserMessage = true;
             }
-            else if (evt is GitHub.Copilot.AssistantMessageEvent am)
+            else if (evt is AssistantMessageEvent am)
             {
-                var text = am.Data?.Content;
-                if (!string.IsNullOrEmpty(text))
+                if (!string.IsNullOrEmpty(am.Content))
+                    pendingAssistantText = (pendingAssistantText is null ? "" : pendingAssistantText + "\n\n") + am.Content;
+            }
+            else if (evt is ToolStartEvent r)
+            {
+                resultsById.TryGetValue(r.CallId, out var ex);
+                pendingTools.Add(new
                 {
-                    pendingAssistantText = (pendingAssistantText is null ? "" : pendingAssistantText + "\n\n") + text;
-                }
-                if (am.Data?.ToolRequests is { Length: > 0 } reqs)
-                {
-                    foreach (var r in reqs)
-                    {
-                        resultsById.TryGetValue(r.ToolCallId ?? "", out var ex);
-                        pendingTools.Add(new
-                        {
-                            name = r.Name,
-                            args = r.Arguments?.ToString() ?? "",
-                            id = r.ToolCallId,
-                            intent = r.IntentionSummary,
-                            result = ex.Result,
-                            success = ex.Result is null ? (bool?)null : ex.Success,
-                            error = ex.Error,
-                        });
+                    name = r.ToolName,
+                    args = r.Arguments ?? "",
+                    id = r.CallId,
+                    intent = (string?)null,
+                    result = ex.Result,
+                    success = resultsById.ContainsKey(r.CallId) ? ex.Success : (bool?)null,
+                    error = ex.Error,
+                });
 
-                        // Mirror ChatEndpoints.HandleToolDoneAsync side-channel parsing
-                        // so charts/scripts/decks survive a session resume.
-                        if (ex.Success && ex.Result is { } rt)
+                // Mirror ChatEndpoints.HandleToolDoneAsync side-channel parsing
+                // so charts/scripts/decks survive a session resume.
+                if (ex.Success && ex.Result is { } rt)
+                {
+                    if (r.ToolName == "RenderChart" || r.ToolName == "RenderAdvancedChart")
+                    {
+                        pendingCharts.Add(rt);
+                    }
+                    else if (rt.Contains("__CHART__:"))
+                    {
+                        foreach (var line in rt.Split('\n'))
                         {
-                            if (r.Name == "RenderChart" || r.Name == "RenderAdvancedChart")
+                            var t = line.Trim();
+                            if (t.StartsWith("__CHART__:"))
                             {
-                                pendingCharts.Add(rt);
+                                pendingCharts.Add(t["__CHART__:".Length..].Trim());
+                                break;
                             }
-                            else if (rt.Contains("__CHART__:"))
+                        }
+                    }
+                    if (rt.Contains("__HTML_READY__:"))
+                    {
+                        foreach (var line in rt.Split('\n'))
+                        {
+                            var t = line.Trim();
+                            if (t.StartsWith("__HTML_READY__:"))
                             {
-                                foreach (var line in rt.Split('\n'))
-                                {
-                                    var t = line.Trim();
-                                    if (t.StartsWith("__CHART__:"))
+                                var parts = t["__HTML_READY__:".Length..].Split(':', 3);
+                                if (parts.Length >= 2)
+                                    pendingHtml = new
                                     {
-                                        pendingCharts.Add(t["__CHART__:".Length..].Trim());
-                                        break;
-                                    }
-                                }
+                                        fileId = parts[0],
+                                        fileName = parts[1],
+                                        slideCount = parts.Length > 2 ? parts[2] : "",
+                                        // Artifacts live 30 min in-memory + on temp disk; after a
+                                        // TTL sweep or restart the download link is dead — let the
+                                        // UI render an \"expired\" state instead of a 404 link.
+                                        expired = ArtifactStore.Default.Find(parts[0], userId) is null,
+                                    };
+                                break;
                             }
-                            if (rt.Contains("__HTML_READY__:"))
+                        }
+                    }
+                    if (rt.Contains("__SCRIPT_READY__:"))
+                    {
+                        foreach (var line in rt.Split('\n'))
+                        {
+                            var t = line.Trim();
+                            if (t.StartsWith("__SCRIPT_READY__:"))
                             {
-                                foreach (var line in rt.Split('\n'))
+                                var parts = t["__SCRIPT_READY__:".Length..].Split(':', 5);
+                                if (parts.Length >= 4)
                                 {
-                                    var t = line.Trim();
-                                    if (t.StartsWith("__HTML_READY__:"))
+                                    var entry = ArtifactStore.Default.Find(parts[0], userId);
+                                    var live = entry is not null;
+                                    pendingScript = new
                                     {
-                                        var parts = t["__HTML_READY__:".Length..].Split(':', 3);
-                                        if (parts.Length >= 2)
-                                            pendingHtml = new
-                                            {
-                                                fileId = parts[0],
-                                                fileName = parts[1],
-                                                slideCount = parts.Length > 2 ? parts[2] : "",
-                                                // Artifacts live 30 min in-memory + on temp disk; after a
-                                                // TTL sweep or restart the download link is dead — let the
-                                                // UI render an \"expired\" state instead of a 404 link.
-                                                expired = ArtifactStore.Default.Find(parts[0], userId) is null,
-                                            };
-                                        break;
-                                    }
+                                        fileId = parts[0],
+                                        fileName = parts[1],
+                                        lineCount = parts[2],
+                                        language = parts[3],
+                                        description = parts.Length > 4 ? parts[4] : "",
+                                        content = entry is not null ? SensitiveContent.Redact(File.ReadAllText(entry.Path)) : "",
+                                        // See __HTML_READY__ above — expired artifacts render a
+                                        // \"regenerate\" hint instead of dead download/copy buttons.
+                                        expired = !live,
+                                    };
                                 }
-                            }
-                            if (rt.Contains("__SCRIPT_READY__:"))
-                            {
-                                foreach (var line in rt.Split('\n'))
-                                {
-                                    var t = line.Trim();
-                                    if (t.StartsWith("__SCRIPT_READY__:"))
-                                    {
-                                        var parts = t["__SCRIPT_READY__:".Length..].Split(':', 5);
-                                        if (parts.Length >= 4)
-                                        {
-                                            var entry = ArtifactStore.Default.Find(parts[0], userId);
-                                            var live = entry is not null;
-                                            pendingScript = new
-                                            {
-                                                fileId = parts[0],
-                                                fileName = parts[1],
-                                                lineCount = parts[2],
-                                                language = parts[3],
-                                                description = parts.Length > 4 ? parts[4] : "",
-                                                content = entry is not null ? SensitiveContent.Redact(File.ReadAllText(entry.Path)) : "",
-                                                // See __HTML_READY__ above — expired artifacts render a
-                                                // \"regenerate\" hint instead of dead download/copy buttons.
-                                                expired = !live,
-                                            };
-                                        }
-                                        break;
-                                    }
-                                }
+                                break;
                             }
                         }
                     }
                 }
             }
-            else if (evt is GitHub.Copilot.SessionErrorEvent error && hasUserMessage)
+            else if (evt is TurnErrorEvent error && hasUserMessage)
             {
                 FlushAssistant();
                 messages.Add(new
                 {
                     role = "system",
-                    content = SensitiveContent.Redact(error.Data.Message),
+                    content = SensitiveContent.Redact(error.Message),
                     terminalStatus = "error",
                 });
             }
@@ -354,13 +343,8 @@ public static class SessionEndpoints
         return StripLeadingBracketBlocks(raw);
     }
 
-    private static bool IsInjectedUserContext(string raw, string? source)
+    private static bool IsInjectedUserContext(string raw)
     {
-        if (!string.IsNullOrWhiteSpace(source) &&
-            (source.StartsWith("skill-", StringComparison.OrdinalIgnoreCase) ||
-             source.StartsWith("tool-", StringComparison.OrdinalIgnoreCase)))
-            return true;
-
         var s = raw.TrimStart();
         return s.StartsWith("<skill-context", StringComparison.OrdinalIgnoreCase) ||
                s.StartsWith("<tool-context", StringComparison.OrdinalIgnoreCase) ||

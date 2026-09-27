@@ -38,6 +38,9 @@
     "deployModelOnExistingAccount": {
       "value": "${AZURE_OPENAI_DEPLOY_ON_EXISTING=false}"
     },
+    "existingAoaiProjectName": {
+      "value": "${EXISTING_AI_PROJECT_NAME=}"
+    },
     "entraAppId": {
       "value": "${AZURE_ENTRA_APP_ID=}"
     },

@@ -7,7 +7,7 @@ namespace AzureFinOps.Dashboard.Endpoints;
 
 public static class OperationEndpoints
 {
-    public static void MapOperationEndpoints(this IEndpointRouteBuilder app, CopilotSessionFactory factory, SessionTokenStore tokenStore)
+    public static void MapOperationEndpoints(this IEndpointRouteBuilder app, AgentSessionFactory factory, SessionTokenStore tokenStore)
     {
         app.MapPost("/api/changes/{id}/approve", async (HttpContext context, string id, IHttpClientFactory httpFactory) =>
         {

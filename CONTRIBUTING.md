@@ -154,7 +154,7 @@ The backend suite executes the package-supplied Copilot runtime against a local 
 ```
 src/Dashboard/
 ├── Program.cs              # App composition, middleware, endpoint mapping
-├── AI/                     # Copilot SDK session factory, chat SSE endpoint, tools
+├── AI/                     # Agent Framework runtime, chat SSE endpoint, tools
 ├── Auth/                   # Microsoft Entra ID OAuth, session token store, persistent identity
 ├── Endpoints/              # Sessions, downloads, uploads, SEO/meta endpoints
 ├── Infrastructure/         # HTTP helper, temp file helper

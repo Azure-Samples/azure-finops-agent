@@ -21,14 +21,14 @@ public sealed class UserStateJanitor : BackgroundService
     private static readonly TimeSpan TtlSweepInterval = TimeSpan.FromHours(6);
 
     private readonly AiTelemetry _telemetry;
-    private readonly CopilotSessionFactory _copilotFactory;
+    private readonly AgentSessionFactory _agentFactory;
     private readonly ILogger<UserStateJanitor> _logger;
     private DateTimeOffset _nextTtlSweep = DateTimeOffset.UtcNow.Add(TtlSweepInterval);
 
-    public UserStateJanitor(AiTelemetry telemetry, CopilotSessionFactory copilotFactory, ILogger<UserStateJanitor> logger)
+    public UserStateJanitor(AiTelemetry telemetry, AgentSessionFactory agentFactory, ILogger<UserStateJanitor> logger)
     {
         _telemetry = telemetry;
-        _copilotFactory = copilotFactory;
+        _agentFactory = agentFactory;
         _logger = logger;
     }
 
@@ -88,7 +88,7 @@ public sealed class UserStateJanitor : BackgroundService
     }
 
     /// <summary>
-    /// Deletes Copilot session-state directories on disk that haven't been
+    /// Deletes conversation directories on disk that haven't been
     /// modified in <see cref="PersistedSessionTtl"/> days. Runs every
     /// <see cref="TtlSweepInterval"/>.
     /// </summary>
@@ -97,15 +97,15 @@ public sealed class UserStateJanitor : BackgroundService
         var cutoff = DateTime.UtcNow - PersistedSessionTtl;
         // Scoped list — only sessions under our managed user/anon roots, so we
         // never delete sessions that belong to another container instance
-        // sharing the same /home Azure Files mount or unrelated SDK state.
-        var all = await _copilotFactory.ListAllManagedSessionsAsync(ct);
+        // sharing the same /home Azure Files mount.
+        var all = _agentFactory.ListAllManagedSessions();
         var deleted = 0;
         foreach (var meta in all)
         {
             if (meta.ModifiedTime >= cutoff) continue;
             try
             {
-                await _copilotFactory.DeleteSessionByIdAsync(meta.SessionId, ct);
+                await _agentFactory.DeleteSessionAsync(meta);
                 deleted++;
             }
             catch (Exception ex)

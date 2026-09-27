@@ -28,15 +28,16 @@ var azureOpenAIEndpoint = builder.Configuration["AzureOpenAI:Endpoint"];
 if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
     throw new InvalidOperationException(
         "AzureOpenAI:Endpoint is required. " +
-        "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-RESOURCE.openai.azure.com/\" " +
+        "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-ACCOUNT.services.ai.azure.com/api/projects/YOUR-PROJECT\" " +
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
 var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-6-sol";
-// Optional: pin the BYOK credential to the AOAI resource's tenant. Needed for
-// local dev when the az CLI's DEFAULT account lives in a different tenant than
-// the AOAI resource (DefaultAzureCredential would mint a token for the wrong
-// tenant → "Token tenant does not match resource tenant" 400s on every turn).
+// Optional: pin the local credential to the Foundry resource's tenant. Needed
+// when the az CLI's default account lives in a different tenant.
 var azureOpenAITenantId = builder.Configuration["AzureOpenAI:TenantId"];
+var foundryProjectEndpoint = AgentSessionFactory.ResolveProjectEndpoint(azureOpenAIEndpoint, builder.Configuration["AzureOpenAI:ProjectName"]);
+// Hosted web search (Bing grounding) is opt-in: it sits outside the Azure data boundary, and QueryAzure already reads public pages.
+var webSearchEnabled = bool.TryParse(builder.Configuration["AzureOpenAI:WebSearch"], out var webSearchSetting) && webSearchSetting;
 var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "xhigh";
 var appInsightsCs = builder.Configuration["ApplicationInsights:ConnectionString"];
 // Canonical public hostname (bare, no scheme/www) for the owner deployment, e.g.
@@ -94,12 +95,11 @@ if (!string.IsNullOrEmpty(appInsightsCs))
         })
         .WithTracing(t => t
             .AddSource("AzureFinOps.AI")
-            // Copilot SDK W3C-propagated tool/LLM spans surface here when the
-            // SDK's TelemetryConfig.SourceName is set to "AzureFinOps.AI.CLI".
-            .AddSource("AzureFinOps.AI.CLI"))
+            // Agent Framework GenAI spans: invoke_agent, chat and execute_tool.
+            .AddSource(AiTelemetry.AgentSourceName))
         .WithMetrics(m => m
             .AddMeter("AzureFinOps.AI")
-            .AddMeter("AzureFinOps.AI.CLI"));
+            .AddMeter(AiTelemetry.AgentSourceName));
 }
 
 var telemetry = new AiTelemetry();
@@ -110,7 +110,7 @@ builder.Services.AddSingleton<EntraClientCredentials>();
 builder.Services.AddSingleton<IdTokenValidator>();
 builder.Services.AddSingleton<SessionTokenStore>();
 builder.Services.AddSingleton<PersistentIdentity>();
-// Janitor is started manually after CopilotSessionFactory is constructed
+// Janitor is started manually after AgentSessionFactory is constructed
 // (see below) because it now depends on the factory for the 30-day TTL sweep.
 
 var app = builder.Build();
@@ -122,13 +122,13 @@ logger.LogInformation("Application starting. AppInsights configured: {Configured
 AzureFinOps.Dashboard.Infrastructure.HttpHelper.Logger =
     loggerFactory.CreateLogger("AzureFinOps.AI.HttpHelper");
 
-await using var copilotFactory = await CopilotSessionFactory.CreateAsync(
-    telemetry, app.Services.GetRequiredService<PersistentIdentity>(), oauthOptions,
-    azureOpenAIEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort,
-    loggerFactory, azureOpenAITenantId);
+await using var agentFactory = AgentSessionFactory.Create(
+    telemetry, app.Services.GetRequiredService<PersistentIdentity>(),
+    foundryProjectEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort,
+    loggerFactory, azureOpenAITenantId, webSearchEnabled);
 
 // Start the janitor now that the factory exists; tie its lifecycle to the host.
-var janitor = new UserStateJanitor(telemetry, copilotFactory, loggerFactory.CreateLogger<UserStateJanitor>());
+var janitor = new UserStateJanitor(telemetry, agentFactory, loggerFactory.CreateLogger<UserStateJanitor>());
 await janitor.StartAsync(CancellationToken.None);
 app.Lifetime.ApplicationStopping.Register(() =>
 {
@@ -161,7 +161,7 @@ var jobStore = new AzureFinOps.Dashboard.Jobs.JobStore(loggerFactory.CreateLogge
 var jobScheduler = new AzureFinOps.Dashboard.Jobs.JobScheduler(
     jobStore,
     telemetry,
-    copilotFactory,
+    agentFactory,
     app.Services.GetRequiredService<SessionTokenStore>(),
     app.Services.GetRequiredService<PersistentIdentity>(),
     app.Services.GetRequiredService<IHttpClientFactory>(),
@@ -402,12 +402,12 @@ var idTokenValidator = app.Services.GetRequiredService<IdTokenValidator>();
 
 app.MapMicrosoftAuthEndpoints(oauthOptions, entraCredentials, idTokenValidator, telemetry, persistentIdentity, logger);
 app.MapAzureSessionEndpoints(tokenStore, telemetry, persistentIdentity, logger);
-app.MapChatEndpoints(copilotFactory, tokenStore, telemetry, logger);
-app.MapSessionEndpoints(copilotFactory, telemetry, jobStore, logger);
+app.MapChatEndpoints(agentFactory, tokenStore, telemetry, logger);
+app.MapSessionEndpoints(agentFactory, telemetry, jobStore, logger);
 AzureFinOps.Dashboard.Jobs.JobEndpoints.MapJobEndpoints(app, jobStore, jobScheduler, logger);
 app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
-app.MapOperationEndpoints(copilotFactory, tokenStore);
+app.MapOperationEndpoints(agentFactory, tokenStore);
 app.MapUploadEndpoints();
 app.MapSeoEndpoints();
 

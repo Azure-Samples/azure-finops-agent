@@ -25,7 +25,7 @@ For authenticated browser access, use only the exact shared tab and `run_playwri
 
 Before collecting the cohort:
 
-1. Read `SessionEndpoints`, `CopilotSessionFactory`, and `TurnOutcomeStore` to establish current ownership and persistence contracts. Discover a session through the authorized owner's session list rather than guessing its identifier.
+1. Read `SessionEndpoints`, `AgentSessionFactory`, and `TurnOutcomeStore` to establish current ownership and persistence contracts. Discover a session through the authorized owner's session list rather than guessing its identifier.
 2. Obtain its entire retained user/assistant transcript, available tool requests/results, and durable outcomes. Preserve turn order and the link between each tool request and completion. The session's final answer alone is insufficient.
 3. Verify the owner association and distinguish actual user messages from injected connection/file context. Preserve relevant context as evidence, but do not count it as another user request.
 4. Record the user's goal, source scope and period, observed tool sequence, errors/retries, final answer or artifact, and whether the requested outcome was achieved. Explicitly distinguish execution completion from business fulfillment.

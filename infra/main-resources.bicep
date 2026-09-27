@@ -14,6 +14,7 @@ param aoaiServiceTier string
 param aoaiReasoningEffort string
 param existingAoaiResourceId string
 param deployModelOnExistingAccount bool
+param existingAoaiProjectName string = ''
 param entraAppId string
 @secure()
 param entraClientSecret string
@@ -60,6 +61,7 @@ module aoai 'modules/aoai.bicep' = {
     serviceTier: aoaiServiceTier
     existingAoaiResourceId: existingAoaiResourceId
     deployModelOnExistingAccount: deployModelOnExistingAccount
+    existingProjectName: existingAoaiProjectName
   }
 }
 
@@ -73,7 +75,7 @@ module appservice 'modules/appservice.bicep' = {
     acrLoginServer: acr.outputs.loginServer
     containerImageName: containerImageName
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
-    aoaiEndpoint: aoai.outputs.endpoint
+    aoaiEndpoint: aoai.outputs.projectEndpoint
     aoaiDeploymentName: aoai.outputs.deploymentName
     aoaiReasoningEffort: aoaiReasoningEffort
     entraAppId: entraAppId
@@ -124,7 +126,7 @@ output webAppName string = appservice.outputs.name
 output webAppHostname string = appservice.outputs.hostname
 output webAppUrl string = 'https://${appservice.outputs.hostname}'
 output webAppPrincipalId string = appservice.outputs.principalId
-output aoaiEndpoint string = aoai.outputs.endpoint
+output aoaiEndpoint string = aoai.outputs.projectEndpoint
 output aoaiDeploymentName string = aoai.outputs.deploymentName
 output aiProjectName string = aoai.outputs.projectName
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString

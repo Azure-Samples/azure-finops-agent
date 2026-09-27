@@ -138,6 +138,37 @@ public class ResultDatabaseTests
     }
 
     [Fact]
+    public void SeveralSelectStatementsReturnOneTableEach()
+    {
+        var database = Fresh();
+        database.Present("/x", "GET", Vms, null, CancellationToken.None);
+
+        var output = database.Query("SELECT count(*) AS n FROM responses; SELECT json_extract(v.value,'$.name') AS name FROM responses r, json_each(r.body,'$.value') v WHERE r.id = 1 ORDER BY name;", null, CancellationToken.None);
+
+        Assert.Equal("n\n1\n(1 rows)\n\nname\nvm-a\nvm-b\n(2 rows)", output);
+    }
+
+    [Fact]
+    public void SharedShapesAreShownOnceWithinOneCall()
+    {
+        static string Large(string name) => "HTTP 200 OK\n{\"value\":[" + string.Join(',', Enumerable.Range(0, 900).Select(index =>
+            $"{{\"name\":\"{name}-{index}\",\"locations\":[\"eastus\"],\"restrictions\":[]}}")) + "]}";
+        var database = Fresh();
+        var shapes = new System.Collections.Concurrent.ConcurrentDictionary<string, long>();
+
+        var first = database.Present("/r1", "GET", Large("a"), null, CancellationToken.None, shapes);
+        var second = database.Present("/r2", "GET", Large("b"), null, CancellationToken.None, shapes);
+        var other = database.Present("/r3", "GET", "HTTP 200 OK\n{\"items\":[" + string.Join(',', Enumerable.Range(0, 3000).Select(index => $"{{\"id\":{index}}}")) + "]}",
+            null, CancellationToken.None, shapes);
+        var alone = database.Present("/r4", "GET", Large("c"), null, CancellationToken.None);
+
+        Assert.Contains("$.value[0].restrictions\tarray", first);
+        Assert.EndsWith("Shape:\nthe same paths and types as responses.id = 1.", second);
+        Assert.Contains("$.items[0].id\tinteger", other);
+        Assert.Contains("$.value[0].restrictions\tarray", alone);
+    }
+
+    [Fact]
     public void FailuresAreReturnedVerbatim()
     {
         const string failure = "HTTP 404 NotFound\n{\"error\":{\"code\":\"ResourceNotFound\"}}";

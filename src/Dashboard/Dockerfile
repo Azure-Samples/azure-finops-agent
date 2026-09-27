@@ -33,11 +33,6 @@ RUN pip3 install --break-system-packages \
   requests pandas numpy openpyxl tabulate python-dateutil \
   "pdfminer.six>=20240706" "pyarrow>=17.0"
 
-# OpenTelemetry Collector (contrib build — needed for the azuremonitor exporter).
-# Bridges OTLP from the Copilot CLI subprocess into Azure Application Insights.
-COPY --from=otel/opentelemetry-collector-contrib:0.161.0 /otelcol-contrib /usr/local/bin/otelcol
-COPY otel-collector-config.yaml /etc/otelcol/config.yaml
-
 WORKDIR /app
 COPY --from=build /app/publish .
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -55,18 +50,10 @@ ENV BUILD_BRANCH=${BUILD_BRANCH}
 
 # App Service expects port 8080 by default for containers
 ENV ASPNETCORE_URLS=http://+:8080
-# Tell the Copilot CLI (and any other OTLP-capable child process) to push
-# telemetry to the local collector.
-ENV OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-ENV OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-# Persist Copilot SDK session state on the App Service /home Azure Files mount
-# so chat history survives container restarts, scale ops, and slot swaps.
-# COPILOT_HOME is read by CopilotSessionFactory and passed to the SDK via
-# CopilotClientOptions.CopilotHome (1.0-beta.3+) — the CLI then writes session
-# state under /home/copilot/.copilot/session-state/. /home is the persistent
-# Azure Files mount on App Service Linux. Entra sessions are isolated under a
-# versioned hash of the validated tenant/object pair; anonymous sessions use a
-# generated user id. SessionConfig.WorkingDirectory is the ownership marker.
+# Persist conversations on the App Service /home Azure Files mount so chat
+# history survives container restarts, scale operations and slot swaps. Entra
+# conversations are isolated under a versioned hash of the validated
+# tenant/object pair; anonymous conversations use a generated user id.
 ENV COPILOT_HOME=/home/copilot
 EXPOSE 8080
 

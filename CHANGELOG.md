@@ -9,13 +9,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- Add optional hosted web search (`AzureOpenAI:WebSearch=true`, default off). Bing grounding is outside the Azure data boundary; `QueryAzure` already reads public documentation and pages.
 - Add a `Microsoft.Data.Sqlite` 10.0.12-backed stored-response database: each exact owner/conversation gets an in-memory SQLite `responses(id, url, method, status, retrieved_utc, body)` table for successful `QueryAzure` and `QueryUploadedFile` bodies, with read-only SQL over JSON/text evidence.
 - Add `QueryAzure` operation URLs: `operation:` lists recent owner-bound operations for the conversation and `operation:<id>` polls the stored ARM operation URL without repeating a mutation.
 
 ### Changed
 
-- Simplify the model-facing tool surface from 21 tools to 16 tools (13 direct, 3 Auto-defer). `QueryAzure` is now `QueryAzure(url, method, body, sql)` for single HTTP evidence calls, operation polling/listing, and read-only SQL over stored responses.
-- Replace bulk envelopes with parallel `QueryAzure` calls. Cost Management `/query` and `/forecast` remain serialized per tenant by the host, retry once after a service cooldown, and stop after a final 429 for the rest of the turn.
+- **Replace the GitHub Copilot SDK/CLI runtime with Microsoft Agent Framework** (`Microsoft.Agents.AI.Foundry` 1.22.0-preview.260918.1). One `AIProjectClient.AsAIAgent(ChatClientAgentOptions)` agent calls the Foundry project Responses API; each turn adds the owner's `ProtectedTool`-wrapped tools through `ChatClientAgentRunOptions`, and independent calls run concurrently. The UI, SSE contract, tools, ownership checks and approvals are unchanged.
+- `AzureOpenAI:Endpoint` is now the Foundry project endpoint (`https://{account}.services.ai.azure.com/api/projects/{project}`), or the account endpoint plus `AzureOpenAI:ProjectName`. `EVAL_MODEL_ENDPOINT` and the deployment endpoint secret use the same project endpoint. The configured `AzureOpenAI:ReasoningEffort` is now applied to every turn (low for greetings).
+- Each conversation stores its serialized `AgentSession` (the chained previous-response ID) and a host-owned UI transcript under the owner's directory. The chain advances only after a successful turn, so Stop or a failure never leaves unanswered tool calls; an expired chain resets to a fresh model context. The service retains stored responses (about 30 days); deleting a conversation removes local state only.
+- Scheduled-job compaction now starts a fresh model context every 20 runs; the run prefix carries the latest bounded result forward.
+- The container image no longer bundles the Copilot CLI or the OpenTelemetry collector sidecar: the host already exports its traces, including Agent Framework spans (`AzureFinOps.AI.Agent`), directly to Azure Monitor.
+- Simplify the model-facing tool surface from 21 tools to 16 tools, all registered directly on every run. `QueryAzure` is now `QueryAzure(url, method, body, sql)` for single HTTP evidence calls, operation polling/listing, and read-only SQL over stored responses.
+- Replace bulk envelopes with parallel `QueryAzure` calls and multi-line `url`: up to 50 same-kind GETs (for example one per region) are one tool call, run at most 4 at a time, stored and sql-filtered as separate responses, with a shape shared by several large responses returned once and failed lines reported as a partial result. One `sql` argument may hold several `;`-separated SELECT statements, each returned as its own table, so several views of stored evidence cost one call. Compute capacity guidance reads every region's quota, including the Spot `lowPriorityCores` pool, from one Resource Graph `QuotaResources` query. Cost Management `/query` and `/forecast` remain serialized per tenant by the host, retry once after a service cooldown, and stop after a final 429 for the rest of the turn.
 - Move totals, shares, rankings, comparisons, token-cost estimates and running totals into model-authored SQLite over stored responses (`SUM`, `round`, joins, `json_each`, window functions) instead of helper calculators.
 - Large successful responses now return a stored row id plus JSON shape or text-search hint; small responses return inline with the same stored-id note. SQL errors return the error and shape without repeating the HTTP request. Approval proposals and 202 operation envelopes stay inline.
 - Replace live-evaluation case `552f572706ca51cd` with `ce95482a745e0a66`, covering English calculation through `QueryAzure` SQL.
@@ -23,6 +29,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Removed
 
+- Remove `GitHub.Copilot.SDK`, the bundled CLI runtime, `RuntimePolicy`, SDK call-id admission, deferred tool metadata and the OTel collector configuration. Conversations created by the SDK runtime are not listed after upgrading; their files remain under `$COPILOT_HOME/.copilot/session-state` until an operator deletes them.
 - Remove the former stored-result query, cost calculator, amount comparison, token-estimate and standalone operation-status helper tools.
 - Remove `QueryAzure`'s bulk-call envelope, inline projection object, caller-selected page cap, public-web grep and caller-selected parallelism knobs. Paginated ARM, Graph and Retail GETs now follow same-origin continuation links up to the fixed 10-page host cap.
 

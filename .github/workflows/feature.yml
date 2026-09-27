@@ -266,7 +266,8 @@ jobs:
           deployment=$(az webapp config appsettings list --subscription "$TARGET_SUBSCRIPTION" --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
             --query "[?name=='AzureOpenAI__DeploymentName'].value | [0]" --output tsv 2>/dev/null || true)
           report "Slot deployment setting" "${deployment:-unset}"
-          account=$(az graph query --first 1 --query "resources | where type =~ 'microsoft.cognitiveservices/accounts' | where tolower(trim_end('/', tostring(properties.endpoint))) == tolower('$normalized') or tolower(trim_end('/', tostring(properties.endpoints['OpenAI Language Model Instance API']))) == tolower('$normalized') | project id" \
+          subdomain=$(printf '%s' "$normalized" | sed -E 's#^https://([^./]+)\..*#\1#')
+          account=$(az graph query --first 1 --query "resources | where type =~ 'microsoft.cognitiveservices/accounts' | where tolower(tostring(properties.customSubDomainName)) == tolower('$subdomain') | project id" \
             --query "data[0].id" --output tsv 2>/dev/null || true)
           report "Endpoint account visible" "$([[ -n "$account" ]] && echo yes || echo no)"
           if [[ -n "$account" ]]; then

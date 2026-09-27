@@ -1,30 +1,66 @@
+using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AzureFinOps.Dashboard.Infrastructure;
 using Microsoft.Extensions.AI;
-using GitHub.Copilot;
 
 namespace AzureFinOps.Dashboard.AI.Tools;
 
-internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string? sessionId = null) : DelegatingAIFunction(inner)
+internal sealed partial class ProtectedTool(AIFunction inner, long? owner = null, string? sessionId = null) : DelegatingAIFunction(inner)
 {
     protected override async ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
+        TurnExecution? turn = null;
+        var callId = FunctionInvokingChatClient.CurrentContext?.CallContent.CallId;
+        if (sessionId is not null && (string.IsNullOrEmpty(callId) || owner is null
+            || !TurnExecution.Active.TryGetValue(sessionId, out turn) || turn.Session?.SessionId != sessionId))
+            throw new OperationCanceledException("The originating turn is not active.");
+        var conversation = turn?.Session;
         UnwrapCallEnvelope(Name, arguments);
         CoerceScalarStrings(JsonSchema, arguments);
+        if (conversation is not null)
+            await conversation.ToolStartedAsync(callId!, Name, SensitiveContent.Redact(JsonSerializer.Serialize(arguments)));
+        try
+        {
+            var result = await InvokeGuardedAsync(arguments, turn, callId, cancellationToken);
+            if (conversation is not null)
+                await conversation.ToolCompletedAsync(callId!, true, ResultText(result), null);
+            return result;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // The model sees the redacted failure as the tool result, as with any "Error:" result.
+            var error = SensitiveContent.Redact(exception.Message);
+            if (conversation is not null)
+                await conversation.ToolCompletedAsync(callId!, false, null, error);
+            return $"Error: {error}";
+        }
+        catch when (conversation is not null)
+        {
+            await conversation.ToolCompletedAsync(callId!, false, null, "The tool was cancelled.");
+            throw;
+        }
+    }
+
+    private static string? ResultText(object? result) => result switch
+    {
+        null => null,
+        string text => text,
+        JsonElement { ValueKind: JsonValueKind.String } scalar => scalar.GetString(),
+        JsonElement element => element.GetRawText(),
+        var other => other.ToString()
+    };
+
+    private async ValueTask<object?> InvokeGuardedAsync(AIFunctionArguments arguments, TurnExecution? turn, string? callId, CancellationToken cancellationToken)
+    {
         var argumentJson = JsonSerializer.Serialize(arguments);
         if (SensitiveContent.ContainsSecret(argumentJson))
             return SensitiveContent.RejectedMessage;
         var scopeKey = CostQueryCoordinator.RequestKey("", Name, "", argumentJson);
-        TurnExecution? turn = null;
-        var invocation = arguments.Services?.GetService(typeof(ToolInvocation)) as ToolInvocation
-            ?? arguments.Context?.Values.OfType<ToolInvocation>().FirstOrDefault();
-        if (sessionId is not null && (invocation?.SessionId != sessionId || invocation.ToolName != Name || string.IsNullOrEmpty(invocation.ToolCallId)))
-            throw new OperationCanceledException("The host invocation identity could not be verified.");
-        if (sessionId is not null && (!TurnExecution.Active.TryGetValue(sessionId, out turn) || owner is null))
-            throw new OperationCanceledException("The originating turn is not active.");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn?.CancellationToken ?? CancellationToken.None);
-        using var lease = turn is null ? null : await turn.AcquireToolAsync(owner!.Value, invocation!.ToolCallId, linked.Token);
-        using var context = new ToolExecutionContext(sessionId, owner, linked.Token) { ToolCallId = invocation?.ToolCallId };
+        using var lease = turn?.AcquireTool(owner!.Value);
+        using var context = new ToolExecutionContext(sessionId, owner, linked.Token) { ToolCallId = callId };
         linked.Token.ThrowIfCancellationRequested();
         // sql without url reads this conversation's stored responses; it calls no API, so it is never fresh evidence.
         if (Name == "QueryAzure" && string.IsNullOrWhiteSpace(Argument(arguments, "url")) && Argument(arguments, "sql") is { Length: > 0 } sql
@@ -36,18 +72,105 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
             turn?.RecordTool(!rows.StartsWith("Error", StringComparison.Ordinal));
             return rows;
         }
-        object? result;
-        try { result = await base.InvokeCoreAsync(arguments, linked.Token); }
+        if (Name == "QueryAzure" && Urls(Argument(arguments, "url")) is { Length: > 0 } urls)
+        {
+            if (urls.Length > 1) return await FanOutAsync(urls, arguments, turn, linked.Token);
+            arguments["url"] = urls[0];
+        }
+        try
+        {
+            var (result, success) = await InvokeOneAsync(arguments, turn, scopeKey, null, linked.Token);
+            turn?.RecordTool(success);
+            return result;
+        }
         catch
         {
             turn?.RecordTool(false);
+            throw;
+        }
+    }
+
+    internal const int MaxUrls = 50;
+    private const int UrlConcurrency = 4;
+    private const int FanOutCharacters = 128 * 1024;
+
+    // Several GET urls (one per line, or a JSON array of strings) run as one tool call, at most 4 at a time.
+    internal static string[] Urls(string? url)
+    {
+        var text = url?.Trim() ?? "";
+        if (text.StartsWith('['))
+        {
+            try
+            {
+                var items = JsonSerializer.Deserialize<string[]>(text);
+                if (items is not null && items.All(item => item is not null)) return items.Select(item => item.Trim()).Where(item => item.Length > 0).ToArray();
+            }
+            catch (JsonException) { }
+        }
+        return text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private async Task<string> FanOutAsync(string[] urls, AIFunctionArguments arguments, TurnExecution? turn, CancellationToken cancellationToken)
+    {
+        var method = Argument(arguments, "method");
+        if (urls.Length > MaxUrls || !string.IsNullOrWhiteSpace(method) && !method.Trim().Equals("GET", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(Argument(arguments, "body"))
+            || urls.Any(url => url.StartsWith("operation:", StringComparison.OrdinalIgnoreCase)))
+        {
+            turn?.RecordTool(false);
+            return $"HTTP 400 BadRequest\nSeveral urls (one per line) are GET only, without body or operation:, and at most {MaxUrls} per call. No request was sent.";
+        }
+        var shapes = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        using var gate = new SemaphoreSlim(UrlConcurrency);
+        var outputs = await Task.WhenAll(urls.Select(async url =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                var item = new AIFunctionArguments(arguments) { Services = arguments.Services, Context = arguments.Context };
+                item["url"] = url;
+                var scopeKey = CostQueryCoordinator.RequestKey("", Name, "", JsonSerializer.Serialize(item));
+                var (result, success) = await InvokeOneAsync(item, turn, scopeKey, shapes, cancellationToken);
+                return (Text: ResultText(result) ?? "", Success: success);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return (Text: "Error: " + SensitiveContent.Redact(exception.Message), Success: false);
+            }
+            finally { gate.Release(); }
+        }));
+        var failed = outputs.Count(output => !output.Success);
+        turn?.RecordTool(failed == 0);
+        var text = new StringBuilder(failed == urls.Length ? $"Error: all {urls.Length} requests failed.\n"
+            : failed > 0 ? $"PARTIAL RESULT: {failed} of {urls.Length} requests failed; a failed request is unknown, not empty.\n"
+            : $"{urls.Length} requests succeeded; results follow in url order.\n");
+        for (var index = 0; index < urls.Length; index++)
+        {
+            var output = outputs[index].Text.TrimEnd();
+            if (text.Length + output.Length > FanOutCharacters)
+                output = (StoredId().Match(output) is { Success: true } stored ? stored.Value + " " : output[..Math.Min(300, output.Length)] + " ")
+                    + "Output omitted to keep the combined result small; read it with sql by id.";
+            text.Append('[').Append(index + 1).Append("] ").Append(urls[index]).Append('\n').Append(output).Append("\n\n");
+        }
+        return text.ToString().TrimEnd();
+    }
+
+    [GeneratedRegex(@"\[Stored as responses\.id = \d+\.\]")]
+    private static partial Regex StoredId();
+
+    private async ValueTask<(object? Result, bool Success)> InvokeOneAsync(AIFunctionArguments arguments, TurnExecution? turn, string scopeKey,
+        ConcurrentDictionary<string, long>? shapes, CancellationToken cancellationToken)
+    {
+        object? result;
+        try { result = await base.InvokeCoreAsync(arguments, cancellationToken); }
+        catch
+        {
             turn?.ToolEvidence.Enqueue(new(Name, false, false, false, DateTimeOffset.UtcNow, scopeKey));
             throw;
         }
         var resultText = result?.ToString() ?? "";
         var evidence = InspectEvidence(resultText);
         if (EvidenceTools.Contains(Name)) turn?.ToolEvidence.Enqueue(new(Name, evidence.Success, evidence.Fresh, evidence.Partial, DateTimeOffset.UtcNow, scopeKey));
-        turn?.RecordTool(evidence.Success);
         if (evidence.Success && Name is "RenderChart" or "RenderAdvancedChart" or "ReportMaturityScore")
             turn?.RecordVisibleOutput();
         if (resultText.StartsWith("__HTML_READY__:") || resultText.StartsWith("__SCRIPT_READY__:"))
@@ -55,16 +178,16 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
             var identifier = resultText.Split(':').ElementAtOrDefault(1);
             if (owner is not null && identifier is not null && ArtifactStore.Default.Find(identifier, owner.Value) is not null) turn?.ArtifactIds.Enqueue(identifier);
         }
-        if (result is string text) return PrepareResult(text, evidence, arguments, linked.Token);
+        if (result is string text) return (PrepareResult(text, evidence, arguments, shapes, cancellationToken), evidence.Success);
         if (result is JsonElement { ValueKind: JsonValueKind.String } scalar)
-            return JsonSerializer.SerializeToElement(PrepareResult(scalar.GetString() ?? "", evidence, arguments, linked.Token));
+            return (JsonSerializer.SerializeToElement(PrepareResult(scalar.GetString() ?? "", evidence, arguments, shapes, cancellationToken)), evidence.Success);
         if (result is JsonElement element)
         {
-            var prepared = PrepareResult(element.GetRawText(), evidence, arguments, linked.Token);
-            try { return JsonSerializer.Deserialize<JsonElement>(prepared); }
-            catch (JsonException) { return JsonSerializer.SerializeToElement(prepared); }
+            var prepared = PrepareResult(element.GetRawText(), evidence, arguments, shapes, cancellationToken);
+            try { return (JsonSerializer.Deserialize<JsonElement>(prepared), evidence.Success); }
+            catch (JsonException) { return (JsonSerializer.SerializeToElement(prepared), evidence.Success); }
         }
-        return result;
+        return (result, evidence.Success);
     }
 
     // Models occasionally serialize a parallel call as {"recipient_name":"functions.<tool>","parameters":{...}}.
@@ -136,7 +259,8 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
 
     // Evidence responses are stored whole per conversation; the model receives small ones in full, large ones as
     // their shape, or only the rows its sql selects. Failures and operation envelopes stay verbatim.
-    private string PrepareResult(string text, (bool Success, bool Fresh, bool Partial) evidence, AIFunctionArguments arguments, CancellationToken cancellationToken)
+    private string PrepareResult(string text, (bool Success, bool Fresh, bool Partial) evidence, AIFunctionArguments arguments,
+        ConcurrentDictionary<string, long>? shapes, CancellationToken cancellationToken)
     {
         var redacted = SensitiveContent.Redact(text);
         if (owner is null || sessionId is null || !EvidenceTools.Contains(Name) || !evidence.Success
@@ -146,7 +270,7 @@ internal sealed class ProtectedTool(AIFunction inner, long? owner = null, string
         return ResultDatabase.For(owner.Value, sessionId).Present(
             azure ? Argument(arguments, "url") ?? "" : "upload:" + (Argument(arguments, "fileId") ?? "") + "/" + (Argument(arguments, "mode") ?? ""),
             azure ? Argument(arguments, "method") ?? "GET" : Name,
-            redacted, azure ? Argument(arguments, "sql") : null, cancellationToken);
+            redacted, azure ? Argument(arguments, "sql") : null, cancellationToken, shapes);
     }
 
     private static string? Argument(AIFunctionArguments arguments, string name) =>

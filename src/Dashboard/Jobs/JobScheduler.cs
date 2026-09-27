@@ -2,7 +2,7 @@ using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Infrastructure;
 using AzureFinOps.Dashboard.Observability;
-using GitHub.Copilot;
+using AzureFinOps.Dashboard.AI.Runtime;
 
 #pragma warning disable GHCP001
 
@@ -39,7 +39,7 @@ public sealed class JobScheduler : BackgroundService
 
     private readonly JobStore _store;
     private readonly AiTelemetry _telemetry;
-    private readonly CopilotSessionFactory _factory;
+    private readonly AgentSessionFactory _factory;
     private readonly SessionTokenStore _tokenStore;
     private readonly PersistentIdentity _identity;
     private readonly IHttpClientFactory _httpFactory;
@@ -48,7 +48,7 @@ public sealed class JobScheduler : BackgroundService
     public JobScheduler(
         JobStore store,
         AiTelemetry telemetry,
-        CopilotSessionFactory factory,
+        AgentSessionFactory factory,
         SessionTokenStore tokenStore,
         PersistentIdentity identity,
         IHttpClientFactory httpFactory,
@@ -190,7 +190,7 @@ public sealed class JobScheduler : BackgroundService
         // 2) Acquire the job's dedicated session — WITHOUT hijacking the user's
         // current conversation (session acquisition repoints CurrentSessionId).
         var hadCurrent = _telemetry.CurrentSessionId.TryGetValue(job.UserId, out var prevCurrent);
-        CopilotSession session;
+        AgentConversation session;
         try
         {
             if (!string.IsNullOrEmpty(job.SessionId))
@@ -260,15 +260,10 @@ public sealed class JobScheduler : BackgroundService
             JobRunOutcome.Apply(job, outcome, DateTimeOffset.UtcNow);
             if (job.Enabled && !turn.CancellationToken.IsCancellationRequested && job.RunCount - job.LastCompactedRun >= 20)
             {
+                // A fresh model context; the run prompt carries the latest bounded result forward.
                 try
                 {
-                    using var compactionTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    compactionTimeout.CancelAfter(TimeSpan.FromMinutes(1));
-                    var compacted = await session.Rpc.History.CompactAsync(new GitHub.Copilot.Rpc.SessionHistoryCompactRequest
-                    {
-                        CustomInstructions = "Retain only the job objective, declared scope, unresolved blockers and latest evidence summary. Prior answers are not fresh evidence. Do not preserve credentials."
-                    }, compactionTimeout.Token);
-                    if (!compacted.Success) throw new InvalidOperationException("Context compaction did not complete.");
+                    session.Compact();
                     job.LastCompactedRun = job.RunCount;
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
@@ -289,28 +284,27 @@ public sealed class JobScheduler : BackgroundService
     }
 
     /// <summary>Sends the job prompt into the session and waits for the turn to
-    /// complete (SessionIdleEvent) or fail (SessionErrorEvent), with a hard
-    /// timeout. Returns (success, answer-summary).</summary>
-    private async Task<JobRunOutcome> RunTurnAsync(ScheduledJob job, CopilotSession session, TurnExecution turn, CancellationToken ct)
+    /// go idle or fail, with a hard timeout. Returns (success, answer-summary).</summary>
+    private async Task<JobRunOutcome> RunTurnAsync(ScheduledJob job, AgentConversation session, TurnExecution turn, CancellationToken ct)
     {
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var buf = new System.Text.StringBuilder();
         var bufLock = new object();
 
-        using var sub = session.On(async (SessionEvent evt) =>
+        using var sub = session.On(evt =>
         {
-            if (evt is AssistantMessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Data.DeltaContent))
-                lock (bufLock) { buf.Append(ad.Data.DeltaContent); }
-            else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Data.Content))
-                lock (bufLock) { buf.Clear(); buf.Append(am.Data.Content); }
-            else if (evt is SessionIdleEvent)
+            if (evt is MessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Content))
+                lock (bufLock) { buf.Append(ad.Content); }
+            else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Content))
+                lock (bufLock) { buf.Clear(); buf.Append(am.Content); }
+            else if (evt is TurnIdleEvent)
                 done.TrySetResult(true);
-            else if (evt is SessionErrorEvent err)
+            else if (evt is TurnErrorEvent err)
             {
-                lock (bufLock) { buf.Clear(); buf.Append(err.Data?.Message ?? "session error"); }
+                lock (bufLock) { buf.Clear(); buf.Append(err.Message); }
                 done.TrySetResult(false);
             }
-            await Task.CompletedTask;
+            return Task.CompletedTask;
         });
 
         var cadence = job.IntervalMinutes switch
@@ -332,7 +326,7 @@ public sealed class JobScheduler : BackgroundService
 
         try
         {
-            await session.SendAsync(new MessageOptions { Prompt = prompt });
+            await session.SendAsync(prompt);
         }
         catch (Exception ex)
         {

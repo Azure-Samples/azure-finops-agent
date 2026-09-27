@@ -33,7 +33,7 @@ public sealed class SavingsLedgerTools
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(RecordSavingsAction, "RecordSavingsAction",
-            "Records one evidenced FinOps remediation with only its affected scope and a concise action title, not raw tool responses or unrelated resources. A delivered script or pending write is proposed, not executed. Record executed only after the host confirms success or the user confirms applying the change. Generic code examples are not savings actions. Returns the entry id.");
+            "Records one evidenced FinOps remediation delivered this turn (a script or pending change) or one the user asks to track; opportunities merely listed in an answer are not recorded. Use only its affected scope and a concise action title, not raw tool responses or unrelated resources. A delivered script or pending write is proposed, not executed. Record executed only after the host confirms success or the user confirms applying the change. Generic code examples are not savings actions. Returns the entry id.");
         yield return AIFunctionFactory.Create(UpdateSavingsAction, "UpdateSavingsAction",
             "Update one exact savings ledger entry by its returned id; reuse a known id instead of fetching the full ledger again. If discovery is needed, use GetSavingsLedger filters and a small detail limit. Advance proposed/executed/verified/dismissed status or attach verified monthly savings only after re-measuring that action's scope with filtered cost data.");
         yield return AIFunctionFactory.Create(GetSavingsLedger, "GetSavingsLedger",

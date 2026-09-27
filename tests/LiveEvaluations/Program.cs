@@ -25,7 +25,6 @@ internal static class Program
     {
         var root = Path.Combine(Path.GetTempPath(), "finops-live-eval-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("COPILOT_HOME", root);
-        Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", null);
         var state = new EvaluationRunState();
         try { return await RunAsync(state); }
         catch (Exception exception)
@@ -43,7 +42,7 @@ internal static class Program
         var expectedSha = Environment.GetEnvironmentVariable("EVAL_EXPECTED_SHA");
         if (expectedSha is not null && !EvaluationGate.MatchesCandidateRevision(expectedSha,
                 typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
-                typeof(CopilotSessionFactory).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion))
+                typeof(AgentSessionFactory).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion))
             throw new InvalidOperationException("Candidate binaries do not match EVAL_EXPECTED_SHA; rebuild the candidate.");
         var endpoint = Environment.GetEnvironmentVariable("EVAL_MODEL_ENDPOINT") ?? throw new InvalidOperationException("Model endpoint is required.");
         var model = Environment.GetEnvironmentVariable("EVAL_MODEL") ?? "gpt-6-sol";
@@ -94,8 +93,8 @@ internal static class Program
         var tokens = new SessionTokenStore(options, new EntraClientCredentials(options, logging.CreateLogger<EntraClientCredentials>()), identity, logging.CreateLogger<SessionTokenStore>());
         var reasoningEffort = Environment.GetEnvironmentVariable("EVAL_REASONING_EFFORT") ?? "xhigh";
         state.AgentProfile = $"{model}, reasoning effort {reasoningEffort}";
-        await using var factory = await CopilotSessionFactory.CreateAsync(credential, telemetry, identity, options, endpoint, model,
-            reasoningEffort, logging, tenant);
+        await using var factory = AgentSessionFactory.Create(credential, telemetry, identity,
+            AgentSessionFactory.ResolveProjectEndpoint(endpoint, null), model, reasoningEffort, logging, tenant);
         app.UseSession();
         app.Use(async (context, next) =>
         {

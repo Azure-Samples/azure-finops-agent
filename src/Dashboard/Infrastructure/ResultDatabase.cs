@@ -52,8 +52,10 @@ internal sealed class ResultDatabase : IDisposable
         return Databases.GetOrAdd((owner, session), _ => new ResultDatabase());
     }
 
-    /// <summary>Stores a response and returns what the model sees: the response itself when small, otherwise its shape; with sql, the query rows.</summary>
-    internal string Present(string url, string method, string response, string? sql, CancellationToken cancellationToken)
+    /// <summary>Stores a response and returns what the model sees: the response itself when small, otherwise its shape; with sql, the query rows.
+    /// Within one multi-url call, <paramref name="shapes"/> shows each distinct shape once and refers later responses to it.</summary>
+    internal string Present(string url, string method, string response, string? sql, CancellationToken cancellationToken,
+        ConcurrentDictionary<string, long>? shapes = null)
     {
         var (head, body) = Split(response);
         var id = Store(url, method, head, body);
@@ -63,11 +65,20 @@ internal sealed class ResultDatabase : IDisposable
         {
             var rows = Query(sql, id, cancellationToken);
             return rows.StartsWith("Error", StringComparison.Ordinal)
-                ? $"{head}{stored}\n{rows}\nThe request was not repeated. Correct the sql against this shape:\n{Shape(id)}"
+                ? $"{head}{stored}\n{rows}\nThe request was not repeated. Correct the sql against this shape:\n{Shape(id, shapes)}"
                 : $"{head}{stored}\n{rows}";
         }
         if (response.Length <= InlineCharacters) return $"{response.TrimEnd()}\n{stored}";
-        return $"{head}{stored} The {body.Length.ToString("N0", CultureInfo.InvariantCulture)}-character body is too large to return; read only what you need with sql. Shape:\n{Shape(id)}";
+        return $"{head}{stored} The {body.Length.ToString("N0", CultureInfo.InvariantCulture)}-character body is too large to return; read only what you need with sql. Shape:\n{Shape(id, shapes)}";
+    }
+
+    private string Shape(long id, ConcurrentDictionary<string, long>? shapes)
+    {
+        var shape = Shape(id);
+        if (shapes is null) return shape;
+        var signature = string.Join('\n', shape.Split('\n').Select(line => string.Join('\t', line.Split('\t').Take(2))));
+        var first = shapes.GetOrAdd(signature, id);
+        return first == id ? shape : $"the same paths and types as responses.id = {first}.";
     }
 
     /// <summary>Runs the model's read-only SQL; $id is the response stored by the same call.</summary>
@@ -152,20 +163,29 @@ internal sealed class ResultDatabase : IDisposable
         return command.ExecuteScalar() is var value and not DBNull ? value : null;
     }
 
+    // Several SELECT statements separated by ; return one table each, so one call can carry every view.
     private static string Render(SqliteDataReader reader)
     {
-        var text = new StringBuilder().AppendJoin('\t', Enumerable.Range(0, reader.FieldCount).Select(reader.GetName)).Append('\n');
-        int rows = 0, shown = 0;
-        while (reader.Read())
+        var text = new StringBuilder();
+        do
         {
-            rows++;
-            if (text.Length > OutputCharacters) continue;
-            for (var column = 0; column < reader.FieldCount; column++)
-                text.Append(column == 0 ? "" : "\t").Append(reader.IsDBNull(column) ? "null" : Cell(reader.GetValue(column)));
-            text.Append('\n');
-            shown++;
+            if (reader.FieldCount == 0) continue;
+            if (text.Length > 0) text.Append("\n\n");
+            text.AppendJoin('\t', Enumerable.Range(0, reader.FieldCount).Select(reader.GetName)).Append('\n');
+            int rows = 0, shown = 0;
+            while (reader.Read())
+            {
+                rows++;
+                if (text.Length > OutputCharacters) continue;
+                for (var column = 0; column < reader.FieldCount; column++)
+                    text.Append(column == 0 ? "" : "\t").Append(reader.IsDBNull(column) ? "null" : Cell(reader.GetValue(column)));
+                text.Append('\n');
+                shown++;
+            }
+            text.Append(shown == rows ? $"({rows} rows)" : $"(showing {shown} of {rows} rows; aggregate, filter or page with LIMIT and OFFSET)");
         }
-        return text.Append(shown == rows ? $"({rows} rows)" : $"(showing {shown} of {rows} rows; aggregate, filter or page with LIMIT and OFFSET)").ToString();
+        while (reader.NextResult());
+        return text.ToString();
     }
 
     private static string Cell(object value) => (value switch

@@ -10,7 +10,7 @@ namespace Dashboard.Tests;
 /// </summary>
 public sealed class SessionQualityGuidanceTests
 {
-    private static string Prompt => CopilotSessionFactory.SystemPrompt;
+    private static string Prompt => AgentSessionFactory.SystemPrompt;
 
     [Theory]
     [InlineData("language of the latest user message")]

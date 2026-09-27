@@ -14,11 +14,11 @@ Three independent persistence layers cooperate:
 
 | Layer                           | What it stores                                                          | Where                                                                               | Lifetime                            |
 | ------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------- |
-| **Copilot SDK session state**   | Chat history, tool calls, model output                                  | SDK-managed session-state directory beneath `$COPILOT_HOME` (Azure Files `/home`)   | Until explicit delete or 30-day TTL |
-| **Per-user workdir**            | SDK working directory used as the _ownership marker_                    | `$COPILOT_HOME/users/v2/{sha256(tid,oid)}` (Entra) or `$COPILOT_HOME/anon/{userId}` | Same as session state               |
+| **Conversation state**          | `session.json` (serialized Agent Framework `AgentSession` + listing metadata) and the UI transcript `events.jsonl` | `{workdir}/sessions/{sessionId}/` (Azure Files `/home`)                              | Until explicit delete or 30-day TTL |
+| **Per-user workdir**            | Owner directory; a conversation is visible only under its owner's workdir | `$COPILOT_HOME/users/v2/{sha256(tid,oid)}` (Entra) or `$COPILOT_HOME/anon/{userId}` | Same as conversation state          |
 | **`PersistentIdentity` record** | Encrypted `oid`, `tenantId`, derived `userId`, refresh token, GraphTier | Principal workdir `identity.json` (DataProtection-encrypted) + `finops_id` cookie   | 30 days, sliding                    |
 
-The combination is what makes restart-survivable login possible: the cookie tells us _who_ the user is, the identity record gives us a fresh access token (via the persisted refresh token), and the SDK rehydrates the conversation from disk on the next prompt.
+The combination is what makes restart-survivable login possible: the cookie tells us _who_ the user is, the identity record gives us a fresh access token (via the persisted refresh token), and the conversation's saved `AgentSession` resumes the model context on the next prompt. The model context itself is the service-stored response chain (retained about 30 days); only its latest response ID is stored locally.
 
 ## 3. Identity & user-id derivation
 
@@ -100,21 +100,21 @@ This is the _only_ place that touches the identity file on the read path; the re
 
 `Auth/SessionTokenStore.ExchangeRefreshTokenForResource` returns `(Token, Expiry, RotatedRefreshToken?)`. On rotation it updates the exact tenant/object record, so another tenant sharing an OID can never receive that refresh token.
 
-## 7. Multi-session SDK glue
+## 7. Multi-conversation runtime
 
-`AI/CopilotSessionFactory.cs` is where the per-user multi-conversation behavior lives. Key invariants:
+`AI/AgentSessionFactory.cs` owns the singleton Agent Framework agent and the per-user conversation index; `AI/Runtime/AgentConversation.cs` runs one conversation's turns. Key invariants:
 
 ### 7.1 Workdir as ownership marker
 
-Every `CopilotSession` is created with the principal-owned Entra workdir or `…/anon/{userId}`. The SDK persists `metadata.Context.WorkingDirectory`, so listing conversations means listing only sessions whose workdir matches the caller's authorized directory. Existing OID-only workdirs remain available solely to the pair attested by their encrypted identity record.
+Every `AgentConversation` lives under the principal-owned Entra workdir or `…/anon/{userId}`, so listing conversations means listing only the caller's authorized directory. Existing OID-only workdirs remain available solely to the pair attested by their encrypted identity record.
 
 ### 7.2 Live-vs-disk distinction (`AiTelemetry.LiveSessions`)
 
-`AiTelemetry.LiveSessions` is a `ConcurrentDictionary<sessionId, LiveSessionInfo>` containing only sessions currently held open in memory. `LiveSessionInfo` carries the `CopilotSession` instance, the `UserId` (init-only), and `BearerExpiry`. The SDK auto-disconnects after `SessionIdleTimeoutSeconds = 1800`, so this dict naturally trims itself; on the next prompt we transparently `ResumeSessionAsync` from the disk state with a fresh bearer.
+`AiTelemetry.LiveSessions` is a `ConcurrentDictionary<sessionId, LiveSessionInfo>` containing only sessions currently held open in memory. `LiveSessionInfo` carries the `AgentConversation` instance and the `UserId` (init-only). The janitor evicts idle users' entries; the next prompt reopens the conversation from disk.
 
-### 7.3 Callback-based bearer refresh
+### 7.3 Model credentials and chain recovery
 
-`ProviderConfig.BearerTokenProvider` supplies a token on demand before model requests. The former static bearer and expiry-based session recycling approach is obsolete. Keep the callback on both create and resume; an OAuth token refresh must not require discarding the conversation. A missing cached SDK handle is evicted and resumed under the existing per-user gate, while genuinely unavailable history returns `history_unavailable` rather than a fabricated empty transcript.
+The project client takes a `TokenCredential` (managed identity in Azure), which refreshes tokens on demand; no conversation holds a model token. The response chain advances only after a successful turn, so a stopped or failed turn leaves the previous response ID and no unanswered tool calls. An expired chain resets to a fresh model context while the visible transcript remains. Genuinely unavailable history returns `history_unavailable` rather than a fabricated empty transcript.
 
 ### 7.4 IDOR guard with graceful fallback
 
@@ -122,11 +122,11 @@ Every `CopilotSession` is created with the principal-owned Entra workdir or `…
 
 ### 7.5 Listing & path comparison
 
-`ListAllManagedSessionsAsync` (used by the janitor) restricts to sessions whose `Cwd` starts with `$COPILOT_HOME/users` or `…/anon`. The compare is `StringComparison.Ordinal` because Linux filesystems are case-sensitive and our roots are constructed from a constant. Anything outside those two roots is some other component's state and we leave it alone.
+`ListAllManagedSessions` (used by the janitor) enumerates only `$COPILOT_HOME/users` and `…/anon`. Anything outside those two roots is some other component's state and we leave it alone.
 
 ### 7.6 Title generation
 
-On the first user/assistant exchange we ask the model for a 5-word title via a tiny chat-completions call. The `max_completion_tokens = 24` parameter is GPT-5 / o-series specific — there's an inline comment so a future GPT-4 swap doesn't silently 400.
+On the first user/assistant exchange a separate low-effort title agent returns a short title.
 
 ## 8. The `/api/sessions` REST surface
 
@@ -134,18 +134,18 @@ On the first user/assistant exchange we ask the model for a 5-word title via a t
 
 | Method   | Path                          | Purpose                                                                                                                                                                                                                          |
 | -------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/api/sessions`               | List the caller's conversations (filtered by `Cwd`). **Anon users get an empty list** — their `userId` is randomized per browser session, so they could never re-find old chats anyway; the sidebar is intentionally Entra-only. |
+| `GET`    | `/api/sessions`               | List the caller's conversations (from the caller's workdir). **Anon users get an empty list** — their `userId` is randomized per browser session, so they could never re-find old chats anyway; the sidebar is intentionally Entra-only. |
 | `POST`   | `/api/sessions/new`           | Force-create a new conversation and make it current.                                                                                                                                                                             |
 | `POST`   | `/api/sessions/{id}/select`   | Switch the user's "current" pointer (with IDOR check).                                                                                                                                                                           |
-| `GET`    | `/api/sessions/{id}/messages` | Owner-checked history fetch with cached-handle recovery and an explicit unavailable-history response.                                                                                                                            |
+| `GET`    | `/api/sessions/{id}/messages` | Owner-checked history fetch with an explicit unavailable-history response.                                                                                                                                                     |
 | `GET`    | `/api/sessions/{id}/outcomes` | Owner-checked durable execution outcomes; normal chat fulfillment remains unevaluated.                                                                                                                                           |
-| `DELETE` | `/api/sessions/{id}`          | Rejects an active turn, deletes SDK state, and only then clears host state. SDK failures propagate instead of returning false success.                                                                                           |
+| `DELETE` | `/api/sessions/{id}`          | Rejects an active turn, deletes the local conversation, and only then clears host state. Failures propagate instead of returning false success.                                                                                  |
 
-The chat SSE endpoint (`AI/ChatEndpoints.cs`) accepts an optional `sessionId` to resume a specific conversation, threads it through the IDOR check, and sends a `session` SSE event so the frontend can retain the active id in `sessionStorage`. Stop and timeout cancel host tools as well as the SDK; the gate remains held until terminal confirmation and tool-lease drainage. A browser disconnect alone does not cancel the turn.
+The chat SSE endpoint (`AI/ChatEndpoints.cs`) accepts an optional `sessionId` to resume a specific conversation, threads it through the IDOR check, and sends a `session` SSE event so the frontend can retain the active id in `sessionStorage`. Stop and timeout cancel host tools as well as the model run; the gate remains held until terminal confirmation and tool-lease drainage. A browser disconnect alone does not cancel the turn.
 
 ## 9. TTL janitor
 
-`Auth/UserStateJanitor.cs` is a `BackgroundService` that wakes hourly and uses `ListAllManagedSessionsAsync` to find sessions whose `LastUpdated` is older than 30 days, calling `DeleteSessionByIdAsync` to remove them. The scope is deliberately narrow — only `users/` and `anon/` — so the janitor can never accidentally delete state from a co-located component sharing the Azure Files mount.
+`Auth/UserStateJanitor.cs` is a `BackgroundService` that wakes hourly and uses `ListAllManagedSessions` to find conversations not modified for 30 days, calling `DeleteSessionAsync` to remove them. The scope is deliberately narrow — only `users/` and `anon/` — so the janitor can never accidentally delete state from a co-located component sharing the Azure Files mount.
 
 ## 10. Frontend (`ChatView.vue`)
 
@@ -155,13 +155,13 @@ The Vue chat UI now has a vertical-split right sidebar: tool calls on top, Conve
 
 1. **First visit, anon** — middleware finds no cookie, mints a random anon `userId`, the user chats; session state is written to `$COPILOT_HOME/anon/{userId}/`.
 2. **Click "Connect Azure"** — OAuth callback derives `userId` from `tid + oid`, migrates in-memory state, writes `identity.json`, and sets a pair-bound `finops_id` cookie. Future sessions use the principal-owned workdir.
-3. **Container restart / new browser on another device** — cookie arrives → hydration middleware decrypts it, loads `identity.json`, restores session blobs. Sidebar fetches `/api/sessions`, shows all the user's past chats. Picking one rehydrates via `ResumeSessionAsync` with a freshly minted bearer.
-4. **Token expiry mid-conversation** - the bearer callback obtains a fresh token for the next model request without replacing the conversation.
+3. **Container restart / new browser on another device** — cookie arrives → hydration middleware decrypts it, loads `identity.json`, restores session blobs. Sidebar fetches `/api/sessions`, shows all the user's past chats. Picking one reopens it from disk and resumes its saved model context.
+4. **Token expiry mid-conversation** - the credential obtains a fresh token for the next model request without replacing the conversation.
 5. **30-day idle** — janitor sweeps the on-disk state away.
 
 ## 12. Why this design and not SQLite / Cosmos
 
 - **Zero new infrastructure.** App Service `/home` is already an Azure Files mount that survives restarts, scale-up, and slot swaps. No new dependency, no new RBAC, no new failure mode.
 - **No locking surprises.** SQLite over SMB is famously bad. Plain JSON files + per-principal `SemaphoreSlim` + atomic `File.Move` give us the same correctness without WAL pitfalls.
-- **The SDK already persists conversations.** Adding our own DB just to track which sessions belong to which user would duplicate state the SDK already keeps on disk — the `Cwd` convention turns the filesystem itself into our index.
+- **The filesystem is the index.** Each conversation is a directory under its owner's workdir, so ownership, listing and deletion need no separate database.
 - **One surface to clean up.** Delete a user → delete their workdir → all their sessions and their identity record go with it.

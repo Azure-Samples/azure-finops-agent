@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using AzureFinOps.Dashboard.Observability;
-using GitHub.Copilot;
 
 namespace AzureFinOps.Dashboard.Auth;
 

@@ -2,12 +2,11 @@ using System.Text.Json;
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Auth;
-using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 
 namespace Dashboard.Tests;
 
-public sealed class RuntimePolicyTests
+public sealed class ToolGuidanceTests
 {
     [Theory]
     [InlineData(3)]
@@ -43,25 +42,6 @@ public sealed class RuntimePolicyTests
         Assert.Equal("ActualCost", document.RootElement.GetProperty("type").GetString());
         Assert.Null(AzureQueryTools.ValidateCostQueryBody("/providers/Microsoft.CostManagement/query", canonical));
         Assert.Equal("{not json", AzureQueryTools.CanonicalJsonBody("{not json"));
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void CreateAndResumeExposeOnlyHostTools(bool resume)
-    {
-        SessionConfigBase config = resume ? new ResumeSessionConfig() : new SessionConfig();
-        config.Tools = [AIFunctionFactory.Create(() => "synthetic result", "ApprovedRead")];
-        RuntimePolicy.Apply(config);
-        Assert.Equal(["custom:ApprovedRead"], config.AvailableTools);
-        Assert.Contains("builtin:*", config.ExcludedTools!);
-        Assert.Contains("mcp:*", config.ExcludedTools!);
-        Assert.False(config.EnableSessionStore);
-        Assert.False(config.Memory!.Enabled);
-        Assert.False(config.ToolSearch!.Enabled);
-        Assert.Equal("disable", config.ManagedSettings!.Permissions!.DisableBypassPermissionsMode);
-        Assert.NotNull(config.OnPermissionRequest);
-        Assert.NotNull(config.Hooks!.OnPreToolUse);
     }
 
     [Theory]
@@ -108,7 +88,7 @@ public sealed class RuntimePolicyTests
         Assert.DoesNotContain("ONLY AFTER", tool.Description);
         var content = tool.JsonSchema.GetProperty("properties").GetProperty("scriptContent");
         Assert.Contains("complete executable", content.GetProperty("description").GetString()!);
-        Assert.Contains("GenerateScript directly", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("GenerateScript directly", AgentSessionFactory.SystemPrompt);
     }
 
     [Fact]
@@ -119,7 +99,7 @@ public sealed class RuntimePolicyTests
         Assert.Contains("proposed, not executed", tool.Description);
         var status = tool.JsonSchema.GetProperty("properties").GetProperty("status");
         Assert.Contains("generation alone is never execution", status.GetProperty("description").GetString()!);
-        Assert.Contains("A generated script is not an executed change", CopilotSessionFactory.SystemPrompt);
+        Assert.Contains("A generated script is not an executed change", AgentSessionFactory.SystemPrompt);
     }
 
     [Theory]

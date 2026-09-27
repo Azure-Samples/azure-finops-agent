@@ -19,10 +19,6 @@ def run():
         with tempfile.TemporaryFile(dir=directory) as probe:
             probe.write(b"storage-check")
 
-    runtimes = list(Path("/app").rglob("copilot-runtime"))
-    assert len(runtimes) == 1, "Expected exactly one bundled CLI runtime"
-    assert (runtimes[0].parent / "runtime.node").is_file()
-    assert os.access(runtimes[0], os.X_OK), "Bundled runtime must be executable"
     subprocess.run(["python3", "-c", "import pandas, openpyxl, pyarrow, pdfminer"], check=True, timeout=30)
     check_application("")
     check_application("InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://127.0.0.1:9/;LiveEndpoint=https://127.0.0.1:9/")
@@ -42,8 +38,7 @@ def run():
             received.extend(items)
             host_requests = [item for item in received if item.get("data", {}).get("baseType") == "RequestData"
                              and "/api/version" in item.get("data", {}).get("baseData", {}).get("name", "")]
-            collector_spans = [item for item in received if item.get("data", {}).get("baseData", {}).get("name") == "synthetic-collector-smoke"]
-            if len(host_requests) >= 21 and collector_spans:
+            if len(host_requests) >= 21:
                 delivered.set()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -75,17 +70,14 @@ def check_application(connection_string, delivered=None):
         }), encoding="utf-8")
         environment = {
             **os.environ,
-            "AzureOpenAI__Endpoint": "https://example.invalid/",
+            "AzureOpenAI__Endpoint": "https://example.invalid/api/projects/synthetic",
             "AzureOpenAI__DeploymentName": "synthetic-test-model",
             "COPILOT_HOME": directory,
             "ASPNETCORE_URLS": "http://127.0.0.1:8080",
             "ASPNETCORE_ENVIRONMENT": "Production",
             "APPLICATIONINSIGHTS_CONNECTION_STRING": connection_string,
             "ApplicationInsights__ConnectionString": connection_string,
-            "OTEL_EXPORTER_OTLP_ENDPOINT": "",
         }
-        if connection_string:
-            subprocess.run(["/usr/local/bin/otelcol", "validate", "--config", "/etc/otelcol/config.yaml"], env=environment, check=True, timeout=30)
         process = subprocess.Popen(
             ["/usr/local/bin/entrypoint.sh"], cwd="/app", env=environment,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True,
@@ -114,10 +106,6 @@ def check_application(connection_string, delivered=None):
                 raise AssertionError("A persisted artifact was served to a different owner")
             except urllib.error.HTTPError as error:
                 assert error.code == 404, f"Persisted artifact startup failed with HTTP {error.code}"
-            if connection_string:
-                request = urllib.request.Request("http://127.0.0.1:4318/v1/traces", data=b'{"resourceSpans":[]}', headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    assert response.status == 200, "Collector must accept OTLP on loopback"
             if delivered is not None:
                 started = time.monotonic()
                 for index in range(20):
@@ -125,25 +113,14 @@ def check_application(connection_string, delivered=None):
                     with urllib.request.urlopen(request, timeout=10) as response:
                         assert response.status == 200
                 assert time.monotonic() - started < 2, "Sampling probe must exceed five requests per second"
-                timestamp = time.time_ns()
-                span = {"traceId": "1" * 32, "spanId": "2" * 16, "name": "synthetic-collector-smoke", "kind": 1,
-                        "startTimeUnixNano": str(timestamp), "endTimeUnixNano": str(timestamp + 1000000)}
-                payload = json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}).encode()
-                request = urllib.request.Request("http://127.0.0.1:4318/v1/traces", data=payload, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    assert response.status == 200
-                assert delivered.wait(45), "Host burst or collector span did not reach local ingestion"
-            children_path = Path(f"/proc/{process.pid}/task/{process.pid}/children")
-            children = children_path.read_text().split()
-            assert len(children) == (2 if connection_string else 1), "Entrypoint must supervise the application and optional collector"
+                assert delivered.wait(45), "Host request burst did not reach local ingestion"
             process.send_signal(signal.SIGTERM)
             process.wait(timeout=30)
             reader.join(timeout=5)
             assert process.returncode in (0, 143), f"Unexpected shutdown exit {process.returncode}"
-            assert not any(Path(f"/proc/{child}").exists() for child in children), "Application process survived shutdown"
             assert "Application is shutting down..." in "\n".join(lines), ".NET did not receive termination"
-            print(json.dumps({"nonRoot": True, "storageWritable": True, "cli": True, "http": True, "gracefulShutdown": True,
-                              "offlineTelemetry": bool(connection_string) and delivered is None, "hostAndCollectorDelivery": delivered is not None}))
+            print(json.dumps({"nonRoot": True, "storageWritable": True, "http": True, "gracefulShutdown": True,
+                              "offlineTelemetry": bool(connection_string) and delivered is None, "hostDelivery": delivered is not None}))
         finally:
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)

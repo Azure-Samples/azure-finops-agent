@@ -6,7 +6,7 @@ The application stays a modular monolith: one .NET API and one Vue application. 
 
 ```mermaid
 flowchart LR
-    Model[Copilot SDK and model] --> Admission[Protected tool admission]
+    Model[Agent Framework and model] --> Admission[Protected tool admission]
     Admission --> Tool[Typed arguments and endpoint contract]
     Tool --> Transport[Shared HTTP and cost coordination]
     Transport --> Provider[Azure or Graph API]
@@ -28,12 +28,12 @@ flowchart LR
 
 ## Implemented UI Simplification
 
-- [assistantMessageStream.js](../src/Dashboard/frontend/src/assistantMessageStream.js) assembles text by SDK message ID. A final snapshot replaces only its own deltas. Later messages, including follow-ups, append without deleting earlier answers. Legacy streams retain a tool-boundary fallback.
+- [assistantMessageStream.js](../src/Dashboard/frontend/src/assistantMessageStream.js) assembles text by message ID. A final snapshot replaces only its own deltas. Later messages, including follow-ups, append without deleting earlier answers. Legacy streams retain a tool-boundary fallback.
 - [requestProgress.js](../src/Dashboard/frontend/src/requestProgress.js) interprets generic HTTP status, retry deadline and retry eligibility. One reactive clock supplies a real countdown; slow responses, waiting retries and terminal cooldowns remain distinct.
 - [RequestProgressCard.vue](../src/Dashboard/frontend/src/components/RequestProgressCard.vue) explains the service wait with a deadline-based countdown and restrained animation, without conflating wait progress with request completion. Reduced motion disables decorative animation; hidden tabs pause it.
 - [AssistantAvatar.vue](../src/Dashboard/frontend/src/components/AssistantAvatar.vue) replaces text-circle avatars with one accessible brand mark. Only working replies animate, and every SVG instance has unique IDs.
 - [turnRecovery.js](../src/Dashboard/frontend/src/turnRecovery.js) classifies owner-checked terminal outcomes without treating unavailable or mismatched history as proof of failure. A model authorization failure is separate from the user's tenant connection.
-- [TurnFailureNotice.vue](../src/Dashboard/frontend/src/components/TurnFailureNotice.vue) renders the same accessible failure state for live and restored turns. [SessionEndpoints.cs](../src/Dashboard/Endpoints/SessionEndpoints.cs) preserves redacted SDK errors in transcript order without discarding partial answers. Editing a failed question never resends it automatically or replaces an existing draft.
+- [TurnFailureNotice.vue](../src/Dashboard/frontend/src/components/TurnFailureNotice.vue) renders the same accessible failure state for live and restored turns. [SessionEndpoints.cs](../src/Dashboard/Endpoints/SessionEndpoints.cs) preserves redacted turn errors in transcript order without discarding partial answers. Editing a failed question never resends it automatically or replaces an existing draft.
 - [jobTemplates.js](../src/Dashboard/frontend/src/data/jobTemplates.js) keeps editable scheduling prompts in data rather than component logic. Template guidance cannot approve purchases or invent missing resource names, and test jobs must not repeatedly query the tenant-throttled billing service.
 - [ChatEndpoints.cs](../src/Dashboard/AI/ChatEndpoints.cs) forwards message and admitted tool-call identities. The browser no longer has to guess which running tool is waiting.
 - [TurnExecution.cs](../src/Dashboard/AI/TurnExecution.cs) accounts for distinct completed messages without double-counting snapshots.

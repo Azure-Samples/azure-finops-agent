@@ -63,10 +63,7 @@ public sealed class TurnOutcomeTests
         {
             turn.RecordAnswer("A synthetic fallback answer is not proof the requested chart was delivered.");
             if (rejectedBeforeCallback)
-            {
-                turn.AdmitTool("synthetic-call", "RenderChart");
-                turn.RecordUndispatchedToolFailure("synthetic-call");
-            }
+                turn.RecordRejectedTool();
             else
                 turn.RecordTool(false);
             store.Complete(turn);

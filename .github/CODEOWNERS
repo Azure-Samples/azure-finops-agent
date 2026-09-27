@@ -4,7 +4,6 @@
 # Infrastructure / deployment
 .github/workflows/    @alfarahn
 src/Dashboard/Dockerfile      @alfarahn
-src/Dashboard/otel-collector-config.yaml  @alfarahn
 
 # Authentication & security-sensitive code
 src/Dashboard/Auth/   @alfarahn

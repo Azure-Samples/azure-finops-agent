@@ -9,7 +9,7 @@ Keep every embedded API fact current without storing customer or maintainer depl
 
 ## 1. Inventory repository claims
 
-Scan `src/Dashboard/AI/Tools/*.cs`, `src/Dashboard/AI/CopilotSessionFactory.cs`, `src/Dashboard/AI/ChatEndpoints.cs`, `.github/copilot-instructions.md`, `README.md`, and `docs/*.md`. Build one claims table containing each:
+Scan `src/Dashboard/AI/Tools/*.cs`, `src/Dashboard/AI/AgentSessionFactory.cs`, `src/Dashboard/AI/ChatEndpoints.cs`, `.github/copilot-instructions.md`, `README.md`, and `docs/*.md`. Build one claims table containing each:
 
 - Azure resource provider, API version, and endpoint path
 - Microsoft Graph endpoint/version

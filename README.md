@@ -52,20 +52,20 @@ See the [tool and prompt catalog](docs/tool-catalog.md) for the 38 tools, their 
 flowchart LR
     User --> UI[Vue 3 SPA]
     UI --> API[.NET 10 API]
-    API --> SDK[GitHub Copilot SDK]
+    API --> Agent[Microsoft Agent Framework]
     API --> Jobs[Job Scheduler]
-    Jobs --> SDK
-    SDK --> Model[Azure OpenAI]
-    SDK --> Tools[Azure tools]
+    Jobs --> Agent
+    Agent --> Model[Foundry project Responses API]
+    Agent --> Tools[Azure tools]
     Tools --> ARM[ARM / Cost Management]
     Tools --> Graph[Microsoft Graph]
     Tools --> Logs[Log Analytics]
     Entra[Microsoft Entra ID] --> API
 ```
 
-The app runs as a Linux container on Azure App Service. Azure Developer CLI provisions Azure Container Registry, Azure OpenAI, monitoring, managed identities, RBAC, App Service, and the optional Entra application.
+The app runs as a Linux container on Azure App Service. Azure Developer CLI provisions Azure Container Registry, a Microsoft Foundry account and project, monitoring, managed identities, RBAC, App Service, and the optional Entra application.
 
-The runtime exposes only registered host tools, without built-in shell or cross-session memory access. Run one active application instance: session gates and cooldown coordination are process-local. See [reliability contracts and verification](docs/agent-reliability.md).
+The runtime exposes only registered host tools plus optional hosted web search, without shell, file system or cross-session memory access. Run one active application instance: session gates and cooldown coordination are process-local. See [reliability contracts and verification](docs/agent-reliability.md).
 
 ## Deploy to your Azure subscription
 

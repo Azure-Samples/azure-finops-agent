@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-using GitHub.Copilot;
+using AzureFinOps.Dashboard.AI.Runtime;
 using AzureFinOps.Dashboard.Jobs;
 using AzureFinOps.Dashboard.Observability;
 
@@ -9,9 +9,6 @@ internal sealed class TurnExecution
 {
     internal static readonly ConcurrentDictionary<string, TurnExecution> Active = new();
     private readonly object _sync = new();
-    private readonly Dictionary<string, string> _admittedTools = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _observedTools = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, TaskCompletionSource> _pendingAdmissions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _answerLengths = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _cancellation = new();
     private int _tools;
@@ -49,8 +46,8 @@ internal sealed class TurnExecution
     }
     internal void RecordVisibleOutput() => Interlocked.Increment(ref _visibleOutputs);
     internal bool TryClaimEmptyNotice() => Interlocked.CompareExchange(ref _emptyNoticeSent, 1, 0) == 0;
-    internal string SessionId { get; private set; }
-    internal CopilotSession? Session { get; private set; }
+    internal string SessionId { get; }
+    internal AgentConversation? Session { get; private set; }
     internal DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
     internal CancellationToken CancellationToken { get; }
     internal bool CostQueriesBlocked => Volatile.Read(ref _costQueriesBlocked) != 0;
@@ -63,7 +60,7 @@ internal sealed class TurnExecution
     internal TaskCompletionSource Terminal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private TurnExecution(string sessionId, long userId, CopilotSession? session)
+    private TurnExecution(string sessionId, long userId, AgentConversation? session)
     {
         SessionId = sessionId;
         UserId = userId;
@@ -71,7 +68,7 @@ internal sealed class TurnExecution
         CancellationToken = _cancellation.Token;
     }
 
-    internal static bool TryBegin(string sessionId, long userId, CopilotSession? session, out TurnExecution turn)
+    internal static bool TryBegin(string sessionId, long userId, AgentConversation? session, out TurnExecution turn)
     {
         turn = new TurnExecution(sessionId, userId, session);
         if (!Active.TryAdd(sessionId, turn)) { turn._cancellation.Dispose(); return false; }
@@ -80,90 +77,37 @@ internal sealed class TurnExecution
         return true;
     }
 
-    internal bool MoveTo(CopilotSession session)
-    {
-        if (SessionId != session.SessionId)
-        {
-            if (!Active.TryAdd(session.SessionId, this)) return false;
-            Active.TryRemove(new KeyValuePair<string, TurnExecution>(SessionId, this));
-            SessionId = session.SessionId;
-        }
-        Observe(session);
-        return true;
-    }
-
-    private void Observe(CopilotSession? session)
+    private void Observe(AgentConversation? session)
     {
         _terminalSubscription?.Dispose();
         Session = session;
-        _terminalSubscription = session?.On<SessionEvent>(item =>
+        _terminalSubscription = session?.On(item =>
         {
-            if (item is ToolExecutionStartEvent tool && !string.IsNullOrWhiteSpace(tool.Data.ToolCallId))
-                AdmitTool(tool.Data.ToolCallId, tool.Data.ToolName);
-            if (item is ToolExecutionCompleteEvent { Data.Success: false } failedTool)
-                RecordUndispatchedToolFailure(failedTool.Data.ToolCallId);
-            if (item is AssistantMessageEvent message) RecordAnswer(message.Data.Content, message.Data.MessageId);
-            if (item is SessionErrorEvent) Cancel("error");
-            if (item is SessionIdleEvent or SessionErrorEvent) ConfirmTerminal();
+            if (item is AssistantMessageEvent message) RecordAnswer(message.Content, message.MessageId);
+            if (item is ToolCompleteEvent { Success: false, Error: { } error } && error.StartsWith(RejectedToolPrefix, StringComparison.Ordinal))
+                RecordRejectedTool();
+            if (item is TurnErrorEvent) Cancel("error");
+            if (item is TurnIdleEvent or TurnErrorEvent) ConfirmTerminal();
+            return Task.CompletedTask;
         });
     }
 
-    internal void AdmitTool(string toolCallId, string toolName = "unknown")
+    internal const string RejectedToolPrefix = "The tool call was rejected.";
+
+    // A call the model made that never reached a protected tool (unknown name or rejected
+    // before dispatch) still counts as a failed tool for outcome classification.
+    internal void RecordRejectedTool()
     {
-        lock (_sync)
-        {
-            if (_closed || _released || !_observedTools.Add(toolCallId)) return;
-            _admittedTools.Add(toolCallId, toolName);
-            if (_pendingAdmissions.TryGetValue(toolCallId, out var pending)) pending.TrySetResult();
-        }
+        RecordTool(false);
+        ToolEvidence.Enqueue(new("unknown", false, false, false, DateTimeOffset.UtcNow));
     }
 
-    internal void RecordUndispatchedToolFailure(string? toolCallId)
-    {
-        lock (_sync)
-        {
-            // An acquired callback already records its outcome in ProtectedTool.
-            if (_released || toolCallId is null || !_admittedTools.Remove(toolCallId, out var name)) return;
-            RecordTool(false);
-            ToolEvidence.Enqueue(new(name, false, false, false, DateTimeOffset.UtcNow));
-        }
-    }
-
-    internal async ValueTask<IDisposable> AcquireToolAsync(long owner, string toolCallId, CancellationToken cancellationToken)
-    {
-        TaskCompletionSource pending;
-        lock (_sync)
-        {
-            if (owner != UserId) throw new UnauthorizedAccessException("Tool ownership could not be verified.");
-            if (_closed || _released) throw new OperationCanceledException("The originating turn is no longer accepting tools.", CancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (_admittedTools.ContainsKey(toolCallId)) return AcquireTool(owner, toolCallId);
-            if (_observedTools.Contains(toolCallId) || _pendingAdmissions.ContainsKey(toolCallId))
-                throw new OperationCanceledException("The tool invocation was already claimed by this turn.", CancellationToken);
-            pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            _pendingAdmissions.Add(toolCallId, pending);
-        }
-        try
-        {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, CancellationToken);
-            await Task.WhenAny(pending.Task, Terminal.Task).WaitAsync(TimeSpan.FromSeconds(10), linked.Token);
-            linked.Token.ThrowIfCancellationRequested();
-            return AcquireTool(owner, toolCallId);
-        }
-        finally
-        {
-            lock (_sync) _pendingAdmissions.Remove(toolCallId);
-        }
-    }
-
-    internal IDisposable AcquireTool(long owner, string? toolCallId = null)
+    internal IDisposable AcquireTool(long owner)
     {
         lock (_sync)
         {
             if (owner != UserId) throw new UnauthorizedAccessException("Tool ownership could not be verified.");
             if (_closed || _released) throw new OperationCanceledException("The originating turn is no longer accepting tools.", CancellationToken);
-            if (toolCallId is not null && !_admittedTools.Remove(toolCallId))
-                throw new OperationCanceledException("The tool invocation was not admitted by this turn.", CancellationToken);
             _tools++;
         }
         return new ToolLease(this);
