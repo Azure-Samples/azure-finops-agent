@@ -5,7 +5,7 @@
 // managed cert can only be issued once public DNS already resolves to the app,
 // then the binding is updated with the cert thumbprint. That ordering spans
 // DNS propagation (minutes to hours), which a single ARM deployment cannot wait
-// on. See .github/prompts/migrate-tenant.prompt.md for the two CLI commands.
+// on. See the migrate-tenant skill (.github/skills/migrate-tenant/SKILL.md) for the two CLI commands.
 //
 // Creating the zone here still gets the nameservers assigned and every record
 // in place declaratively, which is the part that matters for reproducibility.

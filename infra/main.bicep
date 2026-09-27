@@ -115,7 +115,7 @@ param entraClientSecret string = ''
 @description('Entra tenant ID for OAuth — `common` for multi-tenant. Leave default unless restricting to a single tenant.')
 param entraTenantId string = 'common'
 
-@description('Optional custom domain to serve the app on, e.g. contoso.com. When set, an Azure DNS zone is created with the apex/www/asuid/CAA/SPF/DMARC records already in place, and the app marks every other hostname noindex. You must then delegate the domain to the returned nameservers at your registrar and bind the hostnames — see .github/prompts/migrate-tenant.prompt.md. Empty skips all DNS.')
+@description('Optional custom domain to serve the app on, e.g. contoso.com. When set, an Azure DNS zone is created with the apex/www/asuid/CAA/SPF/DMARC records already in place, and the app marks every other hostname noindex. You must then delegate the domain to the returned nameservers at your registrar and bind the hostnames — see .github/skills/migrate-tenant/SKILL.md. Empty skips all DNS.')
 param customDomainName string = ''
 
 @description('Mailbox for DMARC aggregate reports and CAA violation reports on the custom domain. Ignored when customDomainName is empty.')

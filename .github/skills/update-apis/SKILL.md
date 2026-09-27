@@ -1,10 +1,11 @@
 ---
-description: "Audit and update API tool descriptions against latest Microsoft docs"
+name: update-apis
+description: "Audit and update API tool descriptions against latest Microsoft docs. Use when asked to check for deprecated Azure/Graph APIs, update tool descriptions, or verify API versions used by the agent's tools."
 ---
 
 Review all API tool descriptions in this project against the latest Microsoft documentation. Check for deprecated endpoints, new API versions, and missing operations. Query App Insights for recent tool call errors. Update tool descriptions and copilot instructions accordingly, then build to verify.
 
-Search deeply for all apis though Microsoft docs, all relevant github repo and any other relevant tools to find latest and greatest information. 
+Search deeply for all apis though Microsoft docs, all relevant github repo and any other relevant tools to find latest and greatest information.
 
 ### Rules
 

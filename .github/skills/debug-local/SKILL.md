@@ -1,6 +1,6 @@
 ---
-agent: agent
-description: "Build, run, and interactively debug the Azure FinOps Agent locally inside the VS Code Insiders integrated Playwright browser"
+name: debug-local
+description: "Build, run, and interactively debug the Azure FinOps Agent locally inside the VS Code Insiders integrated Playwright browser. Use when asked to start a local dev session, debug locally in the browser, or interactively test the app end-to-end."
 ---
 
 ## Local Debug (VS Code Insiders Playwright flow)
@@ -27,7 +27,7 @@ npm run build
 
 > **CRITICAL**: set `ASPNETCORE_ENVIRONMENT=Development` first. Without it, ASP.NET Core loads `appsettings.Production.json` and the OAuth `redirect_uri` will mismatch.
 
-Before startup, verify Azure CLI can mint the provider token for the locally configured Azure OpenAI tenant. If token acquisition reports `AADSTS90072` while `az account list` already contains enabled subscriptions in that tenant, select one of those subscriptions with `az account set --subscription <id>` and retry the token request before asking for another login. Azure CLI chooses the identity associated with its selected subscription; changing only `TenantId` is insufficient when another tenant is currently default. Resolve tenant/subscription from local configuration and cached account metadata—never add deployment coordinates to this prompt.
+Before startup, verify Azure CLI can mint the provider token for the locally configured Azure OpenAI tenant. If token acquisition reports `AADSTS90072` while `az account list` already contains enabled subscriptions in that tenant, select one of those subscriptions with `az account set --subscription <id>` and retry the token request before asking for another login. Azure CLI chooses the identity associated with its selected subscription; changing only `TenantId` is insufficient when another tenant is currently default. Resolve tenant/subscription from local configuration and cached account metadata—never add deployment coordinates to this skill.
 
 Run as an **async** terminal (the server stays alive while you drive the browser):
 

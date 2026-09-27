@@ -1,6 +1,6 @@
 ---
-mode: agent
-description: "Discover the configured Application Insights workspace, investigate recent exceptions, fix the root cause, and verify locally."
+name: investigate-logs
+description: "Discover the configured Application Insights workspace, investigate recent exceptions, fix the root cause, and verify locally. Use when asked to investigate logs, exceptions, errors, or telemetry for the backend."
 ---
 
 # Investigate logs and fix exceptions

@@ -7,6 +7,7 @@
 *.lscache
 [Dd]ebug/
 [Rr]elease/
+!/.github/skills/release/
 x64/
 x86/
 [Bb]in/

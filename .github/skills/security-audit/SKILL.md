@@ -1,6 +1,6 @@
 ---
-mode: agent
-description: Compact security audit — how secure is this solution?
+name: security-audit
+description: "Compact, severity-ranked security audit covering session/identity, IDOR, OAuth/Entra, tool surface, transport headers, secrets, and OWASP Top 10. Use when asked 'how secure is this' or for a quick, terse end-to-end security pass."
 ---
 
 # Security Audit
@@ -30,3 +30,5 @@ Cover, in order:
 ```
 
 End with one line: **Verdict: READY / READY-WITH-FIXES / BLOCK-DEPLOY**.
+
+> For an exhaustive, code-file-by-file read-only/OAuth-scope verification with a per-tool table, use the `safety-check` skill instead — this skill is a fast, terse, severity-ranked sweep.

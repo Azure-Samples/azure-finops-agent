@@ -1,6 +1,6 @@
 ---
-agent: agent
-description: "Plan a generic rebuild-and-cutover of Azure FinOps Agent to another tenant without committing deployment coordinates."
+name: migrate-tenant
+description: "Plan a generic rebuild-and-cutover of Azure FinOps Agent to another Entra tenant without committing deployment coordinates. Use when asked to migrate tenants, move to a new subscription, or plan a tenant/DNS cutover."
 ---
 
 # Migrate Azure FinOps Agent to another tenant
@@ -58,7 +58,7 @@ Do not modify public DNS until these checks pass.
 5. Record source and target values in an untracked operational worksheet.
 6. Define rollback as restoring the exported source records.
 
-Never place addresses, verification tokens, resource names, or DNS zone coordinates in this prompt.
+Never place addresses, verification tokens, resource names, or DNS zone coordinates in this skill.
 
 ## 5. Cut over
 

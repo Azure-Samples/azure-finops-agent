@@ -1,6 +1,6 @@
 ---
-agent: agent
-description: "Build and run the Azure FinOps Agent locally with Docker for debugging"
+name: debug-local-docker
+description: "Build and run the Azure FinOps Agent locally with Docker for debugging. Use when asked to debug locally with Docker, run the container on localhost, or test appsettings.Local.json inside a container."
 ---
 
 ## Local Debug (Docker)

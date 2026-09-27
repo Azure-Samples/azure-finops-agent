@@ -1,6 +1,6 @@
 ---
-agent: agent
-description: "Audit and apply GitHub repo metadata, settings, security toggles, and standard files for popular-OSS readiness."
+name: repo-metadata-refresh
+description: "Audit and apply GitHub repo metadata, settings, security toggles, and standard files for popular-OSS readiness. Use when asked to refresh repo metadata, tidy repo/GitHub settings, or bring the repo up to OSS best practices. Idempotent — safe to re-run any time."
 ---
 
 # Refresh repo metadata

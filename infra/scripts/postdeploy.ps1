@@ -38,7 +38,7 @@ try {
     # bin/ + obj/ + node_modules/ + wwwroot/ to the registry: measured at 1.27 GB,
     # which crawls or times out instead of the ~76 KB a clean tree produces. The
     # Dockerfile rebuilds all of these inside the image anyway, so remove them
-    # first. Same cleanup the manual checklist in deploy.prompt.md mandates.
+    # first. Same cleanup the manual checklist in the deploy skill mandates.
     $generated = @('bin', 'obj', 'publish', 'wwwroot', 'frontend/node_modules', 'frontend/dist')
     foreach ($g in $generated) {
         if (Test-Path $g) {

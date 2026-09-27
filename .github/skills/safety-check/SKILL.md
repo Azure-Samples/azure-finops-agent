@@ -1,5 +1,6 @@
 ---
-description: "Audit read-only security enforcement and OAuth permissions for customer deployment"
+name: safety-check
+description: "Audit read-only security enforcement and OAuth permissions for customer deployment. Use when asked to verify the agent is strictly read-only, audit tool-level safety, or confirm OAuth scopes before a customer deploys."
 ---
 
 Perform a complete security audit of this agent to verify it is strictly read-only. This is designed for customers cloning this project who want to independently verify the safety guarantees before deploying to their Azure tenant.
@@ -78,3 +79,5 @@ Print a summary table:
 Then print the full list of OAuth scopes with their access level (read/write).
 
 Flag any findings that deviate from read-only. If everything passes, confirm: **"All tools are verified read-only. Safe for customer deployment."**
+
+> For a broader, severity-ranked pass across session/identity, IDOR, transport and OWASP Top 10, use the `security-audit` skill instead — this skill is scoped specifically to the read-only/OAuth safety guarantee.

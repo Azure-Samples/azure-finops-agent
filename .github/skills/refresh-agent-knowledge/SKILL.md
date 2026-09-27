@@ -1,5 +1,6 @@
 ---
-description: Refresh Azure API descriptions, system prompts, and docs from authoritative specifications and telemetry discovered at runtime.
+name: refresh-agent-knowledge
+description: "Refresh Azure API descriptions, system prompts, and docs from authoritative specifications and telemetry discovered at runtime. Use when asked to refresh agent knowledge, verify Azure/Graph API facts, or check tool descriptions against current API versions."
 ---
 
 # Refresh agent knowledge

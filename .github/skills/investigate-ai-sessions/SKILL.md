@@ -1,6 +1,6 @@
 ---
-agent: agent
-description: "Audit 100 individual user conversations end to end, identify new root causes of degraded task completion, and fix the ten strongest evidence-backed blockers locally."
+name: investigate-ai-sessions
+description: "Audit 100 individual user conversations end to end, identify new root causes of degraded task completion, and fix the ten strongest evidence-backed blockers locally. Use when asked to investigate agent answer quality, session completion, or why users aren't getting good answers."
 ---
 
 # Investigate AI session completion

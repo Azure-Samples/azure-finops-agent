@@ -248,13 +248,15 @@ For a ledger summary without entry bodies:
 
 For bounded ledger detail, supply `limit` and then the returned `nextOffset` as `offset`. `scopeContains` is a case-insensitive literal substring of the stored action scope, never an authorization filter. `totalsComplete=true` describes all matching totals; `complete` describes whether the current response contains every matching detail entry. Empty filters return all categories/statuses within the owner boundary. Each call reads the current ledger; pages are not frozen snapshots across concurrent updates.
 
-## Maintainer Prompts
+## Maintainer Skills
 
-These 15 VS Code runbooks are separate from the deployed agent's system prompt and tool declarations:
+These 13 [Agent Skills](https://code.visualstudio.com/docs/agent-customization/agent-skills) (`.github/skills/<name>/SKILL.md`) are separate from the deployed agent's system prompt and tool declarations. They replaced the older `.github/prompts/*.prompt.md` runbooks, which VS Code's Agent Host no longer loads:
 
-- Local work: [debug-local.prompt.md](../.github/prompts/debug-local.prompt.md#L1), [debug-local-docker.prompt.md](../.github/prompts/debug-local-docker.prompt.md#L1), [check-code-changes.prompt.md](../.github/prompts/check-code-changes.prompt.md#L1).
-- Validation: [safety-check.prompt.md](../.github/prompts/safety-check.prompt.md#L1), [security-audit.prompt.md](../.github/prompts/security-audit.prompt.md#L1), [ui-test.prompt.md](../.github/prompts/ui-test.prompt.md#L1), [time-test.prompt.md](../.github/prompts/time-test.prompt.md#L1).
-- Release/deployment: [deploy.prompt.md](../.github/prompts/deploy.prompt.md#L1), [migrate-tenant.prompt.md](../.github/prompts/migrate-tenant.prompt.md#L1), [release.prompt.md](../.github/prompts/release.prompt.md#L1).
-- Maintenance: [metadata.prompt.md](../.github/prompts/metadata.prompt.md#L1), [refresh.prompt.md](../.github/prompts/refresh.prompt.md#L1), [update-apis.prompt.md](../.github/prompts/update-apis.prompt.md#L1), [investigate-logs.prompt.md](../.github/prompts/investigate-logs.prompt.md#L1), [investigate-ai-sessions.prompt.md](../.github/prompts/investigate-ai-sessions.prompt.md#L1).
+- Local work: [debug-local](../.github/skills/debug-local/SKILL.md), [debug-local-docker](../.github/skills/debug-local-docker/SKILL.md).
+- Validation: [safety-check](../.github/skills/safety-check/SKILL.md), [security-audit](../.github/skills/security-audit/SKILL.md), [ui-test](../.github/skills/ui-test/SKILL.md).
+- Release/deployment: [deploy](../.github/skills/deploy/SKILL.md), [migrate-tenant](../.github/skills/migrate-tenant/SKILL.md), [release](../.github/skills/release/SKILL.md).
+- Maintenance: [repo-metadata-refresh](../.github/skills/repo-metadata-refresh/SKILL.md), [refresh-agent-knowledge](../.github/skills/refresh-agent-knowledge/SKILL.md), [update-apis](../.github/skills/update-apis/SKILL.md), [investigate-logs](../.github/skills/investigate-logs/SKILL.md), [investigate-ai-sessions](../.github/skills/investigate-ai-sessions/SKILL.md).
 
-Keep these prompts aligned with this catalog whenever tool names, registration mode, route validation, result-retention behavior, or UI/SSE contracts change.
+There is also one [custom agent](../.github/agents/api-integration.agent.md) (`api-integration`), a reference-only knowledge agent for Azure Cost/Billing/FinOps API surfaces.
+
+Keep these skills aligned with this catalog whenever tool names, registration mode, route validation, result-retention behavior, or UI/SSE contracts change.

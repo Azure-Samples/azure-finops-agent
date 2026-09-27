@@ -140,14 +140,14 @@ Build the frontend before starting the backend so the static web root exists at 
 
 ## Investigate answer-quality issues
 
-Maintainers can run [`/investigate-ai-sessions`](.github/prompts/investigate-ai-sessions.prompt.md) in VS Code to:
+Maintainers can run [`/investigate-ai-sessions`](.github/skills/investigate-ai-sessions/SKILL.md) in VS Code to:
 
 1. Establish authorized access to one complete owner-bound conversation.
 2. Review 100 distinct populated sessions, or disclose an available-history shortfall.
 3. Separate full tool evidence from historical message-only records and explicit test traffic.
 4. Identify recurring task-completion blockers, verify API contracts, and implement regression-tested local fixes.
 
-The audit does not impersonate users, commit customer transcripts, or deploy automatically. Use [`/investigate-logs`](.github/prompts/investigate-logs.prompt.md) for exception-focused triage. See [reliability contracts and verification](docs/agent-reliability.md) for known limitations.
+The audit does not impersonate users, commit customer transcripts, or deploy automatically. Use [`/investigate-logs`](.github/skills/investigate-logs/SKILL.md) for exception-focused triage. See [reliability contracts and verification](docs/agent-reliability.md) for known limitations.
 
 ## Security
 

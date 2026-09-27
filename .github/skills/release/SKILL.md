@@ -1,6 +1,6 @@
 ---
-agent: agent
-description: "Analyze changes since the last tag, pick the right semver bump, update CHANGELOG, tag, push, and publish a GitHub release."
+name: release
+description: "Analyze changes since the last tag, pick the right semver bump, update CHANGELOG, tag, push, and publish a GitHub release. Use when asked to cut a release, bump the version, or publish release notes."
 ---
 
 # Cut a release
@@ -149,5 +149,5 @@ Report the live release URL.
 
 - Do **not** push to `main` if the working tree has unrelated uncommitted changes — show `git status`, ask the user how to proceed.
 - Do **not** force-push, do **not** delete or move existing tags.
-- Do **not** trigger a deploy. Releases are docs + tag only; deployment is `deploy.prompt.md`.
+- Do **not** trigger a deploy. Releases are docs + tag only; deployment is the `deploy` skill.
 - If `gh` is not authenticated, stop and tell the user to run `gh auth login`.

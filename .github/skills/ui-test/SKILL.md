@@ -1,13 +1,13 @@
 ---
-mode: agent
-description: "Exhaustive Playwright regression of the Azure FinOps Agent — every endpoint, tool, SSE event, session/stop/recovery path, jobs lifecycle, upload, download, security gate and latency budget. Encodes the browser gotchas that make this app hostile to naive automation."
+name: ui-test
+description: "Exhaustive Playwright regression of the Azure FinOps Agent — every endpoint, tool, SSE event, session/stop/recovery path, jobs lifecycle, upload, download, security gate and latency budget. Use when asked to run a full UI/browser regression test. Encodes the browser gotchas that make this app hostile to naive automation."
 ---
 
 # Extensive UI Browser Test
 
 Drive the **whole application** with the VS Code integrated browser tools, measure response times, and fix what is broken. Read `/memories/repo/finops-agent-debugging.md` first — it is the running catalog of past bugs and test gotchas.
 
-Default target is **local**; follow `debug-local.prompt.md` first. Test a deployed URL only when the user explicitly supplies or confirms it. Resolve deployment and telemetry coordinates from external configuration—never from literals in this prompt.
+Default target is **local**; follow the `debug-local` skill first. Test a deployed URL only when the user explicitly supplies or confirms it. Resolve deployment and telemetry coordinates from external configuration—never from literals in this skill.
 
 **Ground rules**
 
@@ -138,7 +138,7 @@ Per turn record: **time to first `delta`** (true TTFT), time to `[DONE]`, ordere
 Assert against these. Anything over budget must be explained by its tool sequence, not hand-waved.
 
 | Class                    | Example               | Budget (TTFT)                                |
-| ------------------------ | --------------------- | -------------------------------------------- |
+| ------------------------ | --------------------- | --------------------------------------------- |
 | Trivial                  | `hi`, `thanks`        | ≤ 3s, **0 tools**                            |
 | Single-fact public       | one SKU in one region | ≤ 8s                                         |
 | Multi-region compare     | 3 regions             | ≤ 20s, **exactly 1** Retail Prices `QueryAzure` call |
@@ -152,6 +152,8 @@ When testing an explicitly confirmed deployed target, discover its workspace dyn
 AppRequests | where TimeGenerated > ago(2h) and Name has "/api/chat"
 | summarize n=count(), p50=percentile(DurationMs,50), p95=percentile(DurationMs,95), maxMs=max(DurationMs)
 ```
+
+For a focused, step-by-step timing breakdown of a single flow (for example Crawl maturity scoring end to end), reuse this section's SSE instrumentation but log a per-step timetable instead of running the full suite below.
 
 ## 4. Anonymous surfaces
 
@@ -177,7 +179,7 @@ Install `page.on('console'|'pageerror'|'requestfailed')` capture first. Assert *
 ## 5. Session, stop and recovery — historically the most fragile area
 
 | Scenario                                            | Expected                                                                                                                   |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Stop mid-turn                                       | marker **"You stopped this response before it finished."**, no `■`/`⏹` glyph, key in `sessionStorage.finops_stopped_turns` |
 | Stop → tab return (`visibilitychange` + `focus` ×6) | **NO** "Reconnecting" notice; marker survives                                                                              |
 | Stop → reload                                       | same wording; **not** downgraded to "No answer was generated"                                                              |

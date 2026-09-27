@@ -1,6 +1,6 @@
 ---
-agent: agent
-description: "Validate and deploy Azure FinOps Agent using the configured Azure environment"
+name: deploy
+description: "Validate and deploy Azure FinOps Agent using the configured Azure environment. Use when asked to deploy, ship, or push a build to Azure via azd or CI, after the user explicitly confirms the target environment."
 ---
 
 ## Deploy Azure FinOps Agent
@@ -41,7 +41,7 @@ azd up
 
 For maintainer CI, push an already-reviewed commit to the branch mapped by the workflow. The workflow must read all target coordinates from GitHub Actions configuration and authenticate with OIDC.
 
-Use a manual ACR/App Service deployment only for an explicitly requested recovery. Resolve the registry, image, web app, resource group, and verification URL from external configuration first; never substitute repository-specific literals into this prompt.
+Use a manual ACR/App Service deployment only for an explicitly requested recovery. Resolve the registry, image, web app, resource group, and verification URL from external configuration first; never substitute repository-specific literals into this skill.
 
 ### 4. Verify
 
