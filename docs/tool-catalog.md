@@ -77,7 +77,7 @@ Every query returns `totalMatches`, `totalResults`, `returned`, `complete`, and 
 
 ## Cost Detail And Retry Behavior
 
-The primary agent model defaults to `gpt-6-luna` version `2026-09-22`. The tool contracts and permission boundaries do not change with the model. An existing-account configuration requires a deployed model and account-scoped inference access; it does not create quota or move a deployment.
+The primary agent model defaults to `gpt-6-sol` version `2026-09-22`. The tool contracts and permission boundaries do not change with the model. An existing-account configuration requires a deployed model and account-scoped inference access; it does not create quota or move a deployment.
 
 Cost Management supports at most two grouping dimensions. Resource detail at a management group uses SubscriptionId plus ResourceId; subscription-level resource/model detail can use ResourceId plus Meter. Derive resource-group labels from the resource ID instead of adding another grouping. Detailed billing requests do not require a preliminary totals-only call. When billing detail is unavailable, say so without repeatedly substituting subscription totals, current inventory or token activity.
 

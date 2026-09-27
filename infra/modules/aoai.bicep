@@ -9,7 +9,7 @@ param modelName string
 param modelVersion string
 param deploymentName string
 param modelCapacity int
-@description('Deployment service tier. "Default" is standard processing. "Priority" enables priority processing at a premium, but only for models that support it; gpt-6-luna 2026-09-22 rejects Priority.')
+@description('Deployment service tier. "Default" is standard processing. "Priority" enables priority processing at a premium, but only for models that support it; gpt-6-sol 2026-09-22 supports it on GlobalStandard.')
 @allowed(['Default', 'Priority'])
 param serviceTier string = 'Default'
 param existingAoaiResourceId string
@@ -59,6 +59,7 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2026-
       name: modelName
       version: modelVersion
     }
+    raiPolicyName: 'Microsoft.DefaultV2'
     // Priority processing (the Foundry portal's "Priority processing" toggle):
     // requests are served with faster time-to-first-token at a price premium.
     serviceTier: serviceTier

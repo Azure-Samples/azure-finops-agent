@@ -358,7 +358,7 @@ test("feature deployment consumes only the successful environment-resolved evalu
     assert.match(live, /id: accepted\s+if: success\(\)\s+run: node infra\/scripts\/feature-slot\.mjs evaluation-output/);
     assert.ok(live.indexOf("run: node tests/LiveEvaluations/suite.mjs") <
         live.indexOf("id: accepted"));
-    assert.doesNotMatch(feature, /vars\.EVAL_MODEL|gpt-6-luna|EVALUATED_MODEL:.*\|\|/);
+    assert.doesNotMatch(feature, /vars\.EVAL_MODEL|gpt-6-(?:sol|luna)|EVALUATED_MODEL:.*\|\|/);
     assert.doesNotMatch(feature, /EVAL_MODEL_ENDPOINT/);
 });
 

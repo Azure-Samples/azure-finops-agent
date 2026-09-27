@@ -13,7 +13,7 @@ It is designed for customers to deploy into **their own tenant and subscription*
 - Backend: .NET 10 minimal API in `src/Dashboard`
 - Frontend: Vue 3 + Vite + ECharts in `src/Dashboard/frontend`
 - Agent runtime: GitHub Copilot SDK with Azure OpenAI BYOK
-- Default model: `gpt-6-luna`, version `2026-09-22`, using the Responses API. Existing-account reuse requires that deployment to exist and the app identity to have account-scoped inference access. Verify available model-specific quota; deleting a different model does not free Luna quota.
+- Default model: `gpt-6-sol`, version `2026-09-22`, using the Responses API. Live evaluations use the same model for the agent and the judge. Existing-account reuse requires that deployment to exist and the app identity to have account-scoped inference access. Verify available model-specific quota; deleting a different model does not free Sol quota.
 - Authentication: anonymous chat plus optional multi-tenant Entra OAuth
 - Hosting: Linux container on Azure App Service
 - Infrastructure: `azure.yaml` + Bicep under `infra`

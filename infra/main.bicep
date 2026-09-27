@@ -79,19 +79,19 @@ param aoaiLocation string = 'swedencentral'
 @description('App Service Plan SKU. B1 (~$13/mo) is the recommended evaluation default; P0V3 matches production.')
 param appServicePlanSku string = 'B1'
 
-@description('Azure OpenAI model name to deploy. The default gpt-6-luna supports the Responses API used by this agent; verify availability in aoaiLocation.')
-param aoaiModelName string = 'gpt-6-luna'
+@description('Azure OpenAI model name to deploy. The default gpt-6-sol supports the Responses API used by this agent; verify availability in aoaiLocation.')
+param aoaiModelName string = 'gpt-6-sol'
 
-@description('Azure OpenAI model version. Must match the model name: gpt-6-luna = 2026-09-22.')
+@description('Azure OpenAI model version. Must match the model name: gpt-6-sol = 2026-09-22.')
 param aoaiModelVersion string = '2026-09-22'
 
 @description('Azure OpenAI deployment name surfaced as `AzureOpenAI__DeploymentName` to the app.')
-param aoaiDeploymentName string = 'gpt-6-luna'
+param aoaiDeploymentName string = 'gpt-6-sol'
 
-@description('Azure OpenAI GlobalStandard deployment capacity in model-specific quota units. For gpt-6-luna, 1000 units corresponds to 1M tokens/minute. Verify unallocated quota for the model, SKU and region; quota already assigned to other deployments is not available. Lower this value when needed. The service is billed by usage, not reserved throughput.')
+@description('Azure OpenAI GlobalStandard deployment capacity in model-specific quota units. For gpt-6-sol, 1000 units corresponds to 1M tokens/minute. Verify unallocated quota for the model, SKU and region; quota already assigned to other deployments is not available. Lower this value when needed. The service is billed by usage, not reserved throughput.')
 param aoaiModelCapacity int = 1000
 
-@description('Model deployment service tier. Keep "Default" unless the selected model/version supports priority processing; gpt-6-luna 2026-09-22 does not.')
+@description('Model deployment service tier. "Default" is standard processing. "Priority" is billed at a premium and requires a model/version that supports it; gpt-6-sol 2026-09-22 supports it on GlobalStandard.')
 @allowed(['Default', 'Priority'])
 param aoaiServiceTier string = 'Default'
 

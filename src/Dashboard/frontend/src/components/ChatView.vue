@@ -3879,8 +3879,8 @@ function toggleSidebar() {
   }
 }
 const plusMenuOpen = ref(false);
-const availableModels = ref(["gpt-6-luna"]);
-const selectedModel = ref("gpt-6-luna");
+const availableModels = ref(["gpt-6-sol"]);
+const selectedModel = ref("gpt-6-sol");
 
 // Auth loading state
 const authLoading = ref(""); // "" | "github" | "azure"
