@@ -97,15 +97,15 @@ public sealed class ThinToolBoundaryTests
     }
 
     [Fact]
-    public void ScoresRepairOnlyAGarbledClosingBracket()
+    public void ScoresAreReadAsJsonWithoutRepair()
     {
         const string item = """[{"id":"tagging","label":"Tagging","status":"observed","score":3,"detail":"45% tagged"}]""";
-        Assert.NotNull(ScoreTools.NormalizeScores(item + "}"));
-        Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(item + "}"));
-        Assert.Null(ScoreTools.NormalizeScores(item + "}}}"));
-        Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(item[..^1]));
-        Assert.Null(ScoreTools.NormalizeScores(item[..^2]));
-        Assert.Null(ScoreTools.NormalizeScores(item[..^1] + "}"));
+        Assert.NotNull(ScoreTools.NormalizeScores(item));
+        Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(" " + item + "\u001E\n"));
+        Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(ModelJson.Text(JsonDocument.Parse(item).RootElement)));
+        Assert.Null(ScoreTools.NormalizeScores(item + "}"));
+        Assert.Null(ScoreTools.NormalizeScores(item[..^1]));
         Assert.Null(ScoreTools.NormalizeScores(item + "x"));
+        Assert.Null(ScoreTools.NormalizeScores("""{"id":"tagging"}"""));
     }
 }

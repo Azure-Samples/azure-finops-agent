@@ -113,6 +113,9 @@ public sealed class ToolResultTests
 
         Assert.Equal("Error: Query 1: Mode must be query, schema or keys.",
             ToolResultQueryTools.ExecuteMany(entry, "[" + single + """,{"mode":"bogus"}]"""));
+        // A mode naming one of the query's own operations labels an ordinary query.
+        Assert.Equal(ToolResultQueryTools.Execute(entry, single), ToolResultQueryTools.Execute(entry, """{"mode":"groupBy",""" + single[1..]));
+        Assert.Equal(ToolResultQueryTools.Execute(entry, single), ToolResultQueryTools.Execute(entry, """{"mode":"aggregate",""" + single[1..]));
         Assert.StartsWith("Error: Query 0 must be a JSON object", ToolResultQueryTools.ExecuteMany(entry, "[1]"));
         Assert.StartsWith("Error: A query array holds 1 to 16", ToolResultQueryTools.ExecuteMany(entry, "[]"));
         Assert.StartsWith("Error: A query array holds 1 to 16",
@@ -359,6 +362,9 @@ public sealed class ToolResultTests
         Assert.Equal([0], existential.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
         using var universal = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"where":[{"path":"$.body.value[*].limit","op":"ne","value":10}]}"""));
         Assert.Equal([1], universal.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
+        using var present = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"where":[{"path":"$.body.value[?(@.name.value=='cores')]","op":"exists"}]}"""));
+        Assert.Equal([0], present.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("index").GetInt32()));
+        Assert.StartsWith("Error: Each where condition requires a value", ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","where":[{"path":"$.index","op":"eq"}]}"""));
         using var elements = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","groupBy":{"limit":"$.body.value[*].limit"},"aggregates":[{"op":"count","as":"n"}]}"""));
         Assert.Equal([0m, 10m, 100m], elements.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("limit").GetDecimal()).Order());
         Assert.Contains("$.body.value[*]", elements.RootElement.GetProperty("note").GetString());
@@ -373,6 +379,19 @@ public sealed class ToolResultTests
         using var capped = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[*]","select":{"index":"$.index"},"limit":250}"""));
         Assert.Equal(2, capped.RootElement.GetProperty("returned").GetInt32());
         Assert.StartsWith("Error: Query paging", ToolResultQueryTools.Execute(entry, """{"offset":200000}"""));
+    }
+
+    [Fact]
+    public void InConditionsTakeTheirValuesFromAPathInTheSameResult()
+    {
+        const string text = """{"results":[{"index":0,"body":{"value":[{"name":"eastus"},{"name":"KoreaSouth"},{"name":"westeurope"}]}},{"index":1,"body":{"Items":[{"armRegionName":"eastus"},{"armRegionName":"koreasouth"},{"armRegionName":"usgovarizona"},{"armRegionName":"eastus"}]}}]}""";
+        var entry = ToolResultStore.Default.Retain(305, "batch-session", text, Source)!;
+        using var shared = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[1].body.Items[*]","where":[{"path":"$.armRegionName","op":"in","value":"$.results[0].body.value[*].name"}],"groupBy":{"region":"$.armRegionName"},"aggregates":[{"op":"count"}]}"""));
+        Assert.Equal(["eastus", "koreasouth"], shared.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("region").GetString()).Order());
+        using var outside = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.results[1].body.Items[*]","where":[{"path":"$.armRegionName","op":"notIn","value":"$.results[0].body.value[*].name"}],"select":{"region":"$.armRegionName"}}"""));
+        Assert.Equal(["usgovarizona"], outside.RootElement.GetProperty("rows").EnumerateArray().Select(row => row.GetProperty("region").GetString()));
+        Assert.StartsWith("Error: A value path for in/notIn must match", ToolResultQueryTools.Execute(entry, """{"path":"$.results[1].body.Items[*]","where":[{"path":"$.armRegionName","op":"in","value":"$.results[2].body.value[*].name"}]}"""));
+        Assert.StartsWith("Error: List operators need", ToolResultQueryTools.Execute(entry, """{"path":"$.results[1].body.Items[*]","where":[{"path":"$.armRegionName","op":"containsAny","value":"$.results[0].body.value[*].name"}]}"""));
     }
 
     [Fact]

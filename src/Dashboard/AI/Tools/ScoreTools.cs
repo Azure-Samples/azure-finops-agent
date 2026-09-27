@@ -42,7 +42,7 @@ CRAWL — Visibility & Baseline (id slug — label — what to check):
   1. budgets — 'Budgets & thresholds' — Cost Mgmt budgets: count, amounts, notification config. Flag unrealistic (≥$1M placeholders) and missing alerts.
   2. tagging — 'Tagging for accountability' — Resource Graph: total resources + % carrying CostCenter, Owner, Environment (exact key names). Flag inconsistent casing ('department' vs 'Department') and placeholder values ('unassigned', 'unknown').
   3. exports — 'Cost data exports' — list Cost Mgmt exports (Microsoft.CostManagement/exports). Score 0 if none.
-  4. alerts — 'Cost alerts & scheduled actions' — list Microsoft.CostManagement/scheduledActions (anomaly alerts are kind InsightAlert). Score 0 if none.
+  4. alerts — 'Cost alerts & scheduled actions' — list Microsoft.CostManagement/scheduledActions at the subscription scope; cost anomaly alerts are scheduled actions of kind InsightAlert, so that one list covers both (cite it as such). Score 0 if none.
   5. policy — 'Governance guardrails' — policy assignments visible at the connected subscription scope (atScope() includes inherited management-group assignments) enforcing FinOps tagging or cost controls; effects come from policyStates summarize.
   6. waste — 'Waste identification & cleanup' — counts of unattached disks, orphaned public IPs, empty App Service plans, empty resource groups.
   7. visibility — 'Cost visibility & ownership' — MTD spend grouped by RG and by top services.
@@ -66,10 +66,10 @@ RUN — Scale & Accountability (id slug — label — what to check):
 Return scores array: id=slug, label=exact name above, status=observed|unknown|notApplicable, score=0-5 for observed or null otherwise, detail=concise evidence or the specific reason evidence is unavailable.")]
     private string ReportMaturityScore(
         [Description("Level: 'crawl', 'walk', 'run', or 'playbook'")] string level,
-        [Description(@"JSON array of all requested level dimensions with concise filtered evidence, not raw resource lists. Example: [{""id"":""tagging"",""label"":""Tagging"",""status"":""observed"",""score"":3,""detail"":""45% of resources tagged""}]. Include unknown/notApplicable dimensions with score=null and a reason.")] string scores)
+        [Description(@"Native JSON array (not an escaped string) of all requested level dimensions with concise filtered evidence, not raw resource lists. Example: [{""id"":""tagging"",""label"":""Tagging"",""status"":""observed"",""score"":3,""detail"":""45% of resources tagged""}]. Include unknown/notApplicable dimensions with score=null and a reason.")] JsonElement? scores = null)
     {
         if (level is not ("crawl" or "walk" or "run" or "playbook")) return "Error: invalid maturity level.";
-        var normalized = NormalizeScores(scores);
+        var normalized = NormalizeScores(ModelJson.Text(scores));
         if (normalized is null) return "Error: scores require id, label, detail, status and an observed score from 0 to 5, or null for unknown/notApplicable.";
         SaveScore(level, normalized);
         return $"__MATURITY_SCORE__:{level}:{normalized}";
@@ -79,8 +79,8 @@ Return scores array: id=slug, label=exact name above, status=observed|unknown|no
     {
         try
         {
-            using var document = ParseArray(scores);
-            if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() is < 1 or > 30) return null;
+            using var document = ModelJson.TryParse(scores, JsonValueKind.Array);
+            if (document is null || document.RootElement.GetArrayLength() is < 1 or > 30) return null;
             var normalized = new List<object>();
             var identifiers = new HashSet<string>(StringComparer.Ordinal);
             foreach (var item in document.RootElement.EnumerateArray())
@@ -102,23 +102,6 @@ Return scores array: id=slug, label=exact name above, status=observed|unknown|no
             return JsonSerializer.Serialize(normalized);
         }
         catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException) { return null; }
-    }
-
-    // Models writing a long JSON-in-a-string argument sometimes garble only its closing brackets:
-    // a stray closing brace of the surrounding call object after the array, or a dropped final ].
-    // Each repair must still parse as a complete array of the submitted objects.
-    private static JsonDocument ParseArray(string text)
-    {
-        try { return JsonDocument.Parse(text); }
-        catch (JsonException)
-        {
-            var trimmed = text.Trim();
-            var end = trimmed.Length;
-            while (end > 0 && trimmed[end - 1] == '}') end--;
-            if (trimmed.Length - end is 1 or 2 && end > 0 && trimmed[end - 1] == ']') return JsonDocument.Parse(trimmed[..end]);
-            if (trimmed.StartsWith('[') && trimmed.EndsWith('}')) return JsonDocument.Parse(trimmed + "]");
-            throw;
-        }
     }
 
     /// <summary>Persists a score produced by a consolidated evidence tool.

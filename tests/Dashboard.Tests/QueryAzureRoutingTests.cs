@@ -84,6 +84,22 @@ public sealed class QueryAzureRoutingTests
         Assert.Equal("{\"k\":1}", items[2].Body);
     }
 
+    [Fact]
+    public void LeakedToolCallsInABatchAreUnwrappedOrSkippedNeverSent()
+    {
+        var skipped = new List<string>();
+        var items = ParseBatch("""
+            [{"url":"/a"},
+             {"recipient_name":"functions.QueryAzure","parameters":{"method":"POST","url":"/b","body":{"q":1}}},
+             {"recipient_name":"functions.QueryToolResult","parameters":{"resultId":"r","queryJson":[{"mode":"schema"}]}}]
+            """, skipped);
+        Assert.Equal(["/a", "/b"], items.Select(item => item.Path));
+        Assert.Equal(("POST", "{\"q\":1}"), (items[1].Method, items[1].Body));
+        Assert.Equal(["QueryToolResult"], skipped);
+        Assert.Contains("only calls to other tools", Assert.Throws<FormatException>(() =>
+            ParseBatch("""[{"recipient_name":"functions.QueryToolResult","parameters":{}}]""")).Message);
+    }
+
     [Theory]
     [InlineData("[]", "non-empty")]
     [InlineData("[null]", "request object")]
@@ -289,10 +305,11 @@ public sealed class QueryAzureRoutingTests
     }
 
     [Fact]
-    public void QueryBodiesMissingOnlyTheirFinalBraceAreClosed()
+    public void GarbledQueryBodiesAreRejectedNotRepaired()
     {
-        var closed = CanonicalJsonBody("{\"subscriptions\":[\"11111111-1111-1111-1111-111111111111\"],\"query\":\"Resources | take 5\"");
-        Assert.Null(ValidateQueryBody("/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01", closed));
+        const string open = "{\"subscriptions\":[\"11111111-1111-1111-1111-111111111111\"],\"query\":\"Resources | take 5\"";
+        Assert.Equal(open, CanonicalJsonBody(open));
+        Assert.NotNull(ValidateQueryBody("/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01", CanonicalJsonBody(open)));
         Assert.Equal("{\"query\":\"Resources", CanonicalJsonBody("{\"query\":\"Resources"));
         Assert.Equal("[1,2", CanonicalJsonBody("[1,2"));
     }
@@ -401,4 +418,11 @@ public sealed class QueryAzureRoutingTests
     [InlineData("/providers/Microsoft.PolicyInsights/policyStates/latest/summarize?api-version=2019-10-01", false)]
     public void PolicyComplianceQueriesAreReadOnlyPosts(string path, bool allowed) =>
         Assert.Equal(allowed, ValidateReadOnlyPostPath(path, null) is null);
+
+    // Advisor publishes no read-only POST: recommendations are a GET list and generateRecommendations is an action.
+    [Theory]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.Advisor/recommendations?api-version=2025-01-01&$filter=Category%20eq%20%27Cost%27")]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.Advisor/recommendations/summarize?api-version=2025-01-01")]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.Advisor/generateRecommendations?api-version=2025-01-01")]
+    public void AdvisorPostsAreBlocked(string path) => Assert.NotNull(ValidateReadOnlyPostPath(path, null));
 }

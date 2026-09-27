@@ -1,72 +1,56 @@
 using System.Text.Json;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Infrastructure;
+using Microsoft.Extensions.AI;
 
 namespace Dashboard.Tests;
 
 public sealed class ModelJsonTests
 {
-    [Theory]
-    [InlineData("{\"a\":1} }},{", "{\"a\":1}")]
-    [InlineData("{\"s\":[\"x\"],\"query\":\"q\"}}]}]}_parameters?", "{\"s\":[\"x\"],\"query\":\"q\"}")]
-    [InlineData("{\"a\":1} extra", "{\"a\":1}")]
-    [InlineData("{\"subscriptions\":[\"s\"],\"query\":\"Resources | take 5\"", "{\"subscriptions\":[\"s\"],\"query\":\"Resources | take 5\"}")]
-    [InlineData("[{\"id\":\"x\"}]}", "[{\"id\":\"x\"}]")]
-    [InlineData("[{\"id\":\"x\"},{\"id\":\"y\"}", "[{\"id\":\"x\"},{\"id\":\"y\"}]")]
-    [InlineData("[{\"method\":\"GET\",\"url\":\"/u\"]", "[{\"method\":\"GET\",\"url\":\"/u\"}]")]
-    [InlineData("[{\"a\":1}},{\"b\":2}]", "[{\"a\":1},{\"b\":2}]")]
-    [InlineData("[{\"method\":\"POST\",\"url\":\"/u\",\"body\":{\"q\":\"x\"},{\"method\":\"GET\",\"url\":\"/v\"}]", "[{\"method\":\"POST\",\"url\":\"/u\",\"body\":{\"q\":\"x\"}},{\"method\":\"GET\",\"url\":\"/v\"}]")]
-    [InlineData("[{\"method\":\"POST\",\"url\":\"/u\",\"body\":{\"q\":\"x\", {\"method\":\"GET\",\"url\":\"/v\"}]", "[{\"method\":\"POST\",\"url\":\"/u\",\"body\":{\"q\":\"x\"}},{\"method\":\"GET\",\"url\":\"/v\"}]")]
-    [InlineData("{\"q\":\"where name == '{x}' and tag == \\\"}]\\\"\"", "{\"q\":\"where name == '{x}' and tag == \\\"}]\\\"\"}")]
-    [InlineData("{\"a\":[1,2}", "{\"a\":[1,2]}")]
-    [InlineData("[{\"path\":\"$.x\",\"limit\":50}]}}]}]}imuhamedassistant to=functions.QueryAzure? no, response multi tool. Let's see. The \"", "[{\"path\":\"$.x\",\"limit\":50}]")]
-    [InlineData("{\"a\":1} assistant to=functions.QueryToolResult {\"b\":2}", "{\"a\":1}")]
-    [InlineData("[{\"limit\":100}]} Hm tool call syntax JSON array is queryJson string yes. Transcript: assistant to=functions.QueryToolResult ... \"", "[{\"limit\":100}]")]
-    public void RepairsOnlyStructuralBrackets(string text, string expected) => Assert.Equal(expected, ModelJson.Repair(text));
+    private static JsonElement Json(string text) => JsonDocument.Parse(text).RootElement.Clone();
 
-    [Theory]
-    [InlineData("{\"a\":")]
-    [InlineData("{\"a\":\"unterminated")]
-    [InlineData("{\"a\":1} | take 5")]
-    [InlineData("{\"a\":1} note: to=functions is mentioned later")]
-    [InlineData("{\"a\":1} ,\"limit\":50} to=functions.X")]
-    [InlineData("{\"a\":1}{\"b\":2}")]
-    [InlineData("{\"a\":1,{\"b\":2}}")]
-    [InlineData("{{\"a\":1}}")]
-    [InlineData("\"text\"")]
-    [InlineData("")]
-    public void UnrepairableTextIsNotParsed(string text)
+    [Fact]
+    public void NativeJsonArgumentsAreForwardedAndStringsAreRead()
     {
-        var repaired = ModelJson.Repair(text);
-        if (repaired is null) return;
-        Assert.Null(ModelJson.TryParse(text, JsonValueKind.Object));
-        Assert.Null(ModelJson.TryParse(text, JsonValueKind.Array));
+        Assert.Equal("", ModelJson.Text(null));
+        Assert.Equal("", ModelJson.Text(Json("null")));
+        Assert.Equal("[{\"url\":\"/a\"}]", ModelJson.Text(Json("[{\"url\":\"/a\"}]")));
+        Assert.Equal("{\"a\":1}", ModelJson.Text(Json("\"{\\\"a\\\":1}\"")));
     }
 
     [Fact]
-    public void ParsedRootMustHaveTheExpectedKind()
+    public void LenientJsonIsReadButGarbledJsonIsNeverRepaired()
     {
-        Assert.Null(ModelJson.TryParse("[1,2", JsonValueKind.Object));
-        using var array = ModelJson.TryParse("[1,2", JsonValueKind.Array);
-        Assert.Equal(2, array!.RootElement.GetArrayLength());
         using var lenient = ModelJson.TryParse("{\"a\":1,// note\n}", JsonValueKind.Object);
         Assert.Equal(1, lenient!.RootElement.GetProperty("a").GetInt32());
+        Assert.Null(ModelJson.TryParse("[1,2]", JsonValueKind.Object));
+        foreach (var garbled in new[] { "[1,2", "{\"a\":1} }},{", "[{\"a\":1}},{\"b\":2}]", "{\"a\":\"unterminated", "" })
+            Assert.Null(ModelJson.TryParse(garbled, JsonValueKind.Object) ?? ModelJson.TryParse(garbled, JsonValueKind.Array));
+        Assert.Throws<FormatException>(() => AzureQueryTools.ParseBatch("[{\"url\":\"/a\"},{\"url\":\"/b\"]"));
     }
 
     [Fact]
-    public void GarbledBatchesKeepEveryRequest()
+    public async Task QueryToolResultAcceptsANativeQueryArray()
     {
-        var items = AzureQueryTools.ParseBatch("[{\"method\":\"POST\",\"url\":\"/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01\",\"body\":{\"subscriptions\":[\"s\"],\"query\":\"Resources | summarize n=count()\"},{\"method\":\"GET\",\"url\":\"/b\"}]}");
-        Assert.Equal(2, items.Count);
-        Assert.Equal("Resources | summarize n=count()", JsonDocument.Parse(items[0].Body!).RootElement.GetProperty("query").GetString());
-        Assert.Equal(("GET", "/b"), (items[1].Method, items[1].Path));
+        var entry = ToolResultStore.Default.Retain(101, "native-session", """{"rows":[{"count":4},{"count":6}]}""",
+            new ToolResultStore.Source("SyntheticRead", DateTimeOffset.UtcNow, true, false, true, ""))!;
+        var tool = new ToolResultQueryTools(101).Create().Single();
+        using var context = new ToolExecutionContext("native-session", 101, CancellationToken.None);
+        var output = (await tool.InvokeAsync(new AIFunctionArguments
+        {
+            ["resultId"] = entry.Id,
+            ["queryJson"] = Json("""[{"path":"$.rows[*]","select":{"c":"$.count"}},{"path":"$.rows[*]","aggregates":[{"op":"sum","path":"$.count","as":"total"}],"limit":0}]"""),
+        }))!.ToString()!;
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal(10m, result.RootElement.GetProperty("queries")[1].GetProperty("totals").GetProperty("total").GetDecimal());
     }
 
     [Fact]
-    public void RetainedResultQueriesMissingTheirFinalBraceRun()
+    public void JsonParametersAdvertiseNativeJson()
     {
-        var entry = new ToolResultStore().Retain(101, "session", """{"rows":[{"count":4},{"count":6}]}""", new ToolResultStore.Source("SyntheticRead", DateTimeOffset.UtcNow, true, false, true, ""))!;
-        using var result = JsonDocument.Parse(ToolResultQueryTools.Execute(entry, """{"path":"$.rows[*]","aggregates":[{"op":"sum","path":"$.count","as":"total"}]"""));
-        Assert.Equal(10m, result.RootElement.GetProperty("totals").GetProperty("total").GetDecimal());
+        var properties = new AzureQueryTools(new AzureFinOps.Dashboard.Auth.UserTokens { UserId = 101 }).Create().Single().JsonSchema.GetProperty("properties");
+        foreach (var name in new[] { "body", "requests", "forEach", "resultQuery" })
+            Assert.False(properties.GetProperty(name).TryGetProperty("type", out _), name);
+        Assert.False(new ToolResultQueryTools(101).Create().Single().JsonSchema.GetProperty("properties").GetProperty("queryJson").TryGetProperty("type", out _));
     }
 }

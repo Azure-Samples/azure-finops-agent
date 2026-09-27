@@ -18,7 +18,7 @@ public sealed class ToolResultQueryTools(long owner)
 
     private async Task<string> QueryToolResult(
         [Description("Opaque resultId returned in this conversation. Copy it exactly, including case, from queryable_tool_result, _resultQuery or its query response; never reconstruct, shorten or alter it. Never a file path or URL.")] string resultId,
-        [Description("JSON object, or an array of up to 16 such objects answered together as queries[i] (several views of one result in one call; any invalid query fails the call): mode=query (default), schema (shape of the selected values) or keys (property names of the selected objects, filterable with where on $, e.g. an OpenAPI spec's $.paths); path is JSONPath, default $. Select array rows with $.rows[*]; table rows with columns become records such as {\"Cost\":1.2,\"ServiceName\":\"Storage\"}. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (case-insensitive text, no regex; a path matching several values passes when any value matches, or every value for ne/notIn), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\",\"items\":\"$.body.value.length()\"}, or lists paths [\"$.name\",\"$.sku.name\"] named by their last segment; a trailing .length() counts an array, and a select path matching several values (wildcard or a [?(@.name.value=='x')] filter, whose only operators are ==, !=, <, <=, >, >=; text matching belongs in where) returns them as an array. Optional groupBy maps up to 12 names to per-row paths (paths that all run through one array wildcard, such as $.body.value[*].x, group that array's elements) and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path, as defaults to the op name, and sum/avg/min/max include every numeric value (numbers or numeric strings) the path matches. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (pages hold at most 200 rows; follow nextOffset; 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. No code, paths, URLs, owner or source overrides.")] string queryJson = "{}",
+        [Description("Native JSON object (not an escaped string), or an array of up to 16 such objects answered together as queries[i] (several views of one result in one call; any invalid query fails the call): mode=query (default), schema (shape of the selected values) or keys (property names of the selected objects, filterable with where on $, e.g. an OpenAPI spec's $.paths); path is JSONPath, default $. Select array rows with $.rows[*]; table rows with columns become records such as {\"Cost\":1.2,\"ServiceName\":\"Storage\"}. Optional where is an array of up to 12 AND conditions {path,op,value} evaluated per row, op=eq|ne|in|notIn|gt|gte|lt|lte|contains|containsAny|startsWith|endsWith|exists (value defaults to true for exists; an in/notIn value may instead be a JSONPath string into this same result, such as \"$.results[0].body.value[*].name\", which intersects two lists exactly without retyping either; case-insensitive text, no regex; a path matching several values passes when any value matches, or every value for ne/notIn), e.g. [{\"path\":\"$[1]\",\"op\":\"containsAny\",\"value\":[\"virtualMachines\"]}]. Optional select maps output names to per-row JSONPaths, e.g. {\"region\":\"$.region\",\"quota\":\"$.result.QuotaStatus\",\"items\":\"$.body.value.length()\"}, or lists paths [\"$.name\",\"$.sku.name\"] named by their last segment; a trailing .length() counts an array, and a select path matching several values (wildcard or a [?(@.name.value=='x')] filter, whose only operators are ==, !=, <, <=, >, >=; text matching belongs in where) returns them as an array. Optional groupBy maps up to 12 names to per-row paths (paths that all run through one array wildcard, such as $.body.value[*].x, group that array's elements) and aggregates is [{op:count|sum|avg|min|max,path:$.cost,as:total}]; count needs no path, as defaults to the op name, and sum/avg/min/max include every numeric value (numbers or numeric strings) the path matches. Empty select/groupBy objects or where/sort/aggregates arrays mean that optional operation is omitted; nonempty groupBy still requires aggregates. Optional sort:[{path:$.total,direction:desc|asc}] uses output fields after projection/grouping, e.g. $.date after select:{date:'$[1]'}, not the original $[1]. offset=0, limit=50 (pages hold at most 200 rows; follow nextOffset; 0 for totals). Ungrouped aggregates always return overall totals across every match, including limit=0; adding select also returns selected rows. Grouped values remain separate and are not combined into a grand total. No code, paths, URLs, owner or source overrides.")] JsonElement? queryJson = null,
         CancellationToken cancellationToken = default)
     {
         var context = ToolExecutionContext.Current;
@@ -26,7 +26,7 @@ public sealed class ToolResultQueryTools(long owner)
         var entry = ToolResultStore.Default.Find(owner, context.SessionId, resultId);
         if (entry is null) return Unavailable;
         await QuerySlots.WaitAsync(cancellationToken);
-        try { return ExecuteMany(entry, queryJson, cancellationToken); }
+        try { return ExecuteMany(entry, ModelJson.Text(queryJson) is { Length: > 0 } query ? query : "{}", cancellationToken); }
         finally { QuerySlots.Release(); }
     }
 
@@ -88,6 +88,8 @@ public sealed class ToolResultQueryTools(long owner)
             using var document = ModelJson.TryParse(queryJson, JsonValueKind.Object) ?? JsonDocument.Parse(queryJson);
             var query = Canonical(document.RootElement);
             var mode = String(query, "mode", "query");
+            // A mode naming one of the query's own operations (groupBy, aggregate, select...) labels an ordinary query.
+            if (QueryKeys.Contains(mode) || QueryKeys.Contains(mode + "s") || QueryAliases.ContainsKey(mode)) mode = "query";
             Require(mode is "query" or "schema" or "keys", "Mode must be query, schema or keys.");
             var watch = Stopwatch.StartNew();
             var steps = 0;
@@ -131,7 +133,7 @@ public sealed class ToolResultQueryTools(long owner)
             selected = mode == "keys" ? Keys(selected, CheckBudget) : Records(selected, CheckBudget);
             if (query.TryGetProperty("where", out var where))
             {
-                var conditions = Conditions(where);
+                var conditions = Conditions(where, from => Select(root, from, CheckBudget));
                 selected = selected.Where(row => conditions.All(condition => condition.Test(Values(row, condition.Path, CheckBudget)))).ToArray();
             }
             if (mode == "schema")
@@ -347,7 +349,9 @@ public sealed class ToolResultQueryTools(long owner)
         }
     }
 
-    private static Condition[] Conditions(JsonElement where)
+    private static readonly JsonElement ExistsDefault = JsonDocument.Parse("true").RootElement.Clone();
+
+    private static Condition[] Conditions(JsonElement where, Func<string, IEnumerable<JToken>> valuesAt)
     {
         Require(where.ValueKind == JsonValueKind.Array && where.GetArrayLength() <= 12, "where must be an array of up to 12 conditions.");
         return where.EnumerateArray().Select(item =>
@@ -356,12 +360,23 @@ public sealed class ToolResultQueryTools(long owner)
             OnlyKeys(item, "path", "op", "value");
             var path = String(item, "path", "$");
             var operation = String(item, "op", "eq");
-            Require(item.TryGetProperty("value", out var value), "Each where condition requires a value.");
+            if (!item.TryGetProperty("value", out var value) && operation == "exists") value = ExistsDefault;
+            Require(value.ValueKind != JsonValueKind.Undefined, "Each where condition requires a value.");
+            // An in/notIn value may be a JSONPath into the same retained result, so intersecting two lists needs no retyping.
+            var derived = operation is "in" or "notIn" && value.ValueKind == JsonValueKind.String && value.GetString() is ['$', ..];
+            if (derived)
+            {
+                var found = valuesAt(value.GetString()!).OfType<JValue>().Where(scalar => scalar.Value is not null)
+                    .Select(scalar => scalar.ToString(Newtonsoft.Json.Formatting.None)).Distinct().ToArray();
+                Require(found.Length is > 0 and <= 5000, "A value path for in/notIn must match 1-5000 scalar values in this same retained result; retain both lists together by fetching them in one requests batch.");
+                using var document = JsonDocument.Parse($"[{string.Join(",", found)}]");
+                value = document.RootElement.Clone();
+            }
             var list = operation is "in" or "notIn" or "containsAny";
             var text = operation is "contains" or "startsWith" or "endsWith";
             Require(operation is "eq" or "ne" or "gt" or "gte" or "lt" or "lte" or "exists" || list || text, "Unsupported where operator. Use eq, ne, in, notIn, gt, gte, lt, lte, contains, containsAny, startsWith, endsWith or exists.");
-            if (list) Require(value.ValueKind == JsonValueKind.Array && value.GetArrayLength() is > 0 and <= 100
-                && value.EnumerateArray().All(entry => operation != "containsAny" || entry.ValueKind == JsonValueKind.String && entry.GetString()!.Length is > 0 and <= 200), "List operators need an array of 1-100 values (non-empty strings for containsAny).");
+            if (list) Require(value.ValueKind == JsonValueKind.Array && (derived || value.GetArrayLength() is > 0 and <= 100)
+                && value.EnumerateArray().All(entry => operation != "containsAny" || entry.ValueKind == JsonValueKind.String && entry.GetString()!.Length is > 0 and <= 200), "List operators need an array of 1-100 values (non-empty strings for containsAny) or, for in/notIn, a JSONPath string into this result.");
             if (text) Require(value.ValueKind == JsonValueKind.String && value.GetString()!.Length is > 0 and <= 200, "Text operators need a non-empty string of at most 200 characters.");
             if (operation == "exists") Require(value.ValueKind is JsonValueKind.True or JsonValueKind.False, "exists needs true or false.");
             if (!list && !text && operation != "exists") Require(value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null, "Comparison values must be scalars.");
