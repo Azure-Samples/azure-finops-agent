@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
     mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -52,6 +53,34 @@ const CURATED_CASE_IDS = Object.freeze([
     "062a296be5be951f", // H200 Spot incident
     "ce95482a745e0a66", // English deterministic SQL calculation incident
 ]);
+// Cost Management quota is tenant-wide, so every case that may query it shares one paced
+// lane. Only cases listed here, which never need Cost Management, run in parallel lanes;
+// any other case defaults to the paced lane.
+const PARALLEL_LANES = Object.freeze({
+    tenant: Object.freeze([
+        "522cb8a56daeae81", // Advisor
+        "f756478143fce63c", // Resource Graph
+        "81374a24e31aa410", // Resource Graph tags
+        "eac3ecb5ceb83c4b", // Graph licenses
+        "84206ed740e28de4", // Graph Copilot usage
+        "062a296be5be951f", // Compute quota
+    ]),
+    public: Object.freeze([
+        "e4e6c2296f2dfc97",
+        "095d1c30190c1015",
+        "f9b2c97a215d8923",
+        "160eca54c580c4f8",
+        "126bedbbf645cbd1",
+        "ce95482a745e0a66",
+    ]),
+});
+export const COST_MANAGEMENT_LANE = "cost-management";
+
+export function evaluationLane(scenario) {
+    for (const [lane, ids] of Object.entries(PARALLEL_LANES))
+        if (ids.includes(scenario?.id)) return lane;
+    return COST_MANAGEMENT_LANE;
+}
 
 export async function assertCandidateRevision(
     sha,
@@ -553,9 +582,12 @@ export async function runCases(
         environment = process.env,
         diagnosticsSourceRoot = repositoryRoot,
         failFast = false,
+        laneOf = () => COST_MANAGEMENT_LANE,
     } = {},
 ) {
     const results = [];
+    const plannedOrder = new Map(cases.map((scenario, index) => [scenario.id, index]));
+    const laneProfiles = [];
     await mkdir(output, { recursive: true });
     await mkdir(captureRoot, { recursive: true });
     const captureRootFromOutput = relative(
@@ -588,17 +620,19 @@ export async function runCases(
     const terminate = () => stop("SIGTERM");
     signals.on("SIGINT", interrupt);
     signals.on("SIGTERM", terminate);
-    const report = async () => {
+    const writeReport = async () => {
         const failure = runFailure;
         const verdict = evaluateSuite(cases, results, sha, suiteHash);
         if (failure) {
             verdict.accepted = false;
             verdict.failures.push(failure.message);
         }
-        const publishedResults = results.map((row) => ({
-            ...row,
-            result: publishableResult(row.result, publishAnswers),
-        }));
+        const publishedResults = [...results]
+            .sort((left, right) => plannedOrder.get(left.id) - plannedOrder.get(right.id))
+            .map((row) => ({
+                ...row,
+                result: publishableResult(row.result, publishAnswers),
+            }));
         await writeFile(
             resolve(output, "results.json"),
             JSON.stringify(
@@ -619,8 +653,15 @@ export async function runCases(
                 cases, results, verdict, sha, publishAnswers,
             ) + (failure ? `\n**Suite failure:** ${html(failure.message)}\n` : ""),
         );
-        if (runFailure !== failure) return report();
+        if (runFailure !== failure) return writeReport();
         return verdict;
+    };
+    // Lanes finish concurrently; one writer at a time keeps both report files whole.
+    let reporting = Promise.resolve();
+    const report = () => {
+        const written = reporting.then(writeReport, writeReport);
+        reporting = written.catch(() => {});
+        return written;
     };
     try {
         await report();
@@ -643,89 +684,120 @@ export async function runCases(
             if (Number.isFinite(retryAt)) cooldownUntil = Math.max(cooldownUntil, retryAt);
             return result?.throttle?.final === true;
         };
+        const lanes = new Map();
         for (const [index, scenario] of cases.entries()) {
-            controller.signal.throwIfAborted();
-            // Spaces cases so the suite does not throttle tenant-wide Cost Management quota itself.
-            await waitForCooldown(index > 0 ? pauseMs : 0);
-            controller.signal.throwIfAborted();
-            await renew();
-            controller.signal.throwIfAborted();
-            const resultPath = resolve(captureDirectory, `${scenario.id}.json`);
-            const runAttempt = async () => {
-                const exitCode = await execute(
-                    scenario,
-                    resultPath,
-                    sha,
-                    suiteHash,
-                    undefined,
-                    { signal: controller.signal },
-                );
-                controller.signal.throwIfAborted();
-                let result;
-                try {
-                    result = JSON.parse(await readFile(resultPath, "utf8"));
-                } catch {
-                    result = null;
-                }
-                const failures = validateResult(
-                    scenario,
-                    result,
-                    exitCode,
-                    sha,
-                    suiteHash,
-                );
-                return { exitCode, result, failures };
-            };
-            let { exitCode, result, failures } = await runAttempt();
-            let attempts = 1;
-            // A final service throttle is an environmental refusal, not an agent verdict: rerun once, unchanged, after the deadline.
-            if (noteThrottle(result) && failures.length > 0) {
-                console.log(`[${index + 1}/${cases.length}] ${scenario.id} throttled by the service; retrying once after cooldown.`);
-                await waitForCooldown(pauseMs);
-                controller.signal.throwIfAborted();
-                await renew();
-                controller.signal.throwIfAborted();
-                ({ exitCode, result, failures } = await runAttempt());
-                noteThrottle(result);
-                attempts = 2;
-            }
-            if (result && typeof result === "object" && !Array.isArray(result))
-                result.attempts = attempts;
-            if (retainedCapture && failures.length === 0) {
-                try {
-                    const location = await privateDiagnosticsLocation(
-                        captureDirectory, output, diagnosticsSourceRoot,
-                    );
-                    await Promise.all([
-                        rm(join(location, `${scenario.id}.json`), { force: true }),
-                        rm(join(location, `${scenario.id}.json.tmp`), { force: true }),
-                    ]);
-                } catch {
-                    runFailure = new Error(
-                        "Private evaluation diagnostics cleanup failed; passing captures could not be removed.",
-                    );
-                    throw runFailure;
-                }
-            }
-            await writeFile(
-                resolve(output, `${scenario.id}.json`),
-                JSON.stringify(publishableResult(result, publishAnswers)),
-            );
-            results.push({ id: scenario.id, exitCode, result, failures });
-            await report();
-            controller.signal.throwIfAborted();
-            const published = publishableResult(result, publishAnswers);
-            console.log(
-                `[${index + 1}/${cases.length}] ${scenario.id} ${failures.length ? "FAIL" : "PASS"} tools=${published?.toolCount ?? "?"} durationMs=${published?.durationMs ?? "?"} ${scenario.label}`,
-            );
-            // The gate already failed; fail-fast skips the remaining cases instead of spending their full runtime.
-            if (failFast && failures.length > 0) {
-                runFailure = new Error(
-                    `Fail-fast: ${scenario.id} failed; the remaining ${cases.length - index - 1} cases were not run.`,
-                );
-                break;
-            }
+            const lane = laneOf(scenario);
+            if (!lanes.has(lane)) lanes.set(lane, []);
+            lanes.get(lane).push([index, scenario]);
         }
+        // Each CI case replaces the lane's `az login`; concurrent lanes must not rewrite one shared CLI profile under a running case.
+        const isolateProfiles = lanes.size > 1 && environment.GITHUB_ACTIONS === "true";
+        let failedFast;
+        const runLane = async (planned) => {
+            let profile;
+            if (isolateProfiles) {
+                profile = await mkdtemp(join(environment.RUNNER_TEMP || tmpdir(), "finops-eval-az-"));
+                laneProfiles.push(profile);
+            }
+            const renewLane = () =>
+                profile ? renew({ ...environment, AZURE_CONFIG_DIR: profile }) : renew();
+            const caseOptions = profile ? { azureConfigDirectory: profile } : {};
+            for (const [position, [index, scenario]] of planned.entries()) {
+                if (failedFast) return;
+                controller.signal.throwIfAborted();
+                // Spaces a lane's cases so the suite does not throttle tenant-wide Cost Management quota itself.
+                await waitForCooldown(position > 0 ? pauseMs : 0);
+                controller.signal.throwIfAborted();
+                if (failedFast) return;
+                await renewLane();
+                controller.signal.throwIfAborted();
+                const resultPath = resolve(captureDirectory, `${scenario.id}.json`);
+                const runAttempt = async () => {
+                    const exitCode = await execute(
+                        scenario,
+                        resultPath,
+                        sha,
+                        suiteHash,
+                        undefined,
+                        { signal: controller.signal, ...caseOptions },
+                    );
+                    controller.signal.throwIfAborted();
+                    let result;
+                    try {
+                        result = JSON.parse(await readFile(resultPath, "utf8"));
+                    } catch {
+                        result = null;
+                    }
+                    const failures = validateResult(
+                        scenario,
+                        result,
+                        exitCode,
+                        sha,
+                        suiteHash,
+                    );
+                    return { exitCode, result, failures };
+                };
+                let { exitCode, result, failures } = await runAttempt();
+                let attempts = 1;
+                // A final service throttle is an environmental refusal, not an agent verdict: rerun once, unchanged, after the deadline.
+                if (noteThrottle(result) && failures.length > 0) {
+                    console.log(`[${index + 1}/${cases.length}] ${scenario.id} throttled by the service; retrying once after cooldown.`);
+                    await waitForCooldown(pauseMs);
+                    controller.signal.throwIfAborted();
+                    await renewLane();
+                    controller.signal.throwIfAborted();
+                    ({ exitCode, result, failures } = await runAttempt());
+                    noteThrottle(result);
+                    attempts = 2;
+                }
+                if (result && typeof result === "object" && !Array.isArray(result))
+                    result.attempts = attempts;
+                if (retainedCapture && failures.length === 0) {
+                    try {
+                        const location = await privateDiagnosticsLocation(
+                            captureDirectory, output, diagnosticsSourceRoot,
+                        );
+                        await Promise.all([
+                            rm(join(location, `${scenario.id}.json`), { force: true }),
+                            rm(join(location, `${scenario.id}.json.tmp`), { force: true }),
+                        ]);
+                    } catch {
+                        runFailure = new Error(
+                            "Private evaluation diagnostics cleanup failed; passing captures could not be removed.",
+                        );
+                        throw runFailure;
+                    }
+                }
+                await writeFile(
+                    resolve(output, `${scenario.id}.json`),
+                    JSON.stringify(publishableResult(result, publishAnswers)),
+                );
+                results.push({ id: scenario.id, exitCode, result, failures });
+                await report();
+                controller.signal.throwIfAborted();
+                const published = publishableResult(result, publishAnswers);
+                console.log(
+                    `[${index + 1}/${cases.length}] ${scenario.id} ${failures.length ? "FAIL" : "PASS"} tools=${published?.toolCount ?? "?"} durationMs=${published?.durationMs ?? "?"} ${scenario.label}`,
+                );
+                // The gate already failed; fail-fast starts no further case in any lane.
+                if (failFast && failures.length > 0) {
+                    failedFast ??= scenario.id;
+                    return;
+                }
+            }
+        };
+        const outcomes = await Promise.allSettled([...lanes.values()].map((planned) =>
+            runLane(planned).catch((error) => {
+                // One broken lane invalidates the suite; stop the others' owned children too.
+                if (!controller.signal.aborted) controller.abort(error);
+                throw error;
+            })));
+        const rejected = outcomes.find((outcome) => outcome.status === "rejected");
+        if (rejected) throw rejected.reason;
+        if (failedFast)
+            runFailure = new Error(
+                `Fail-fast: ${failedFast} failed; the remaining ${cases.length - results.length} cases were not run.`,
+            );
     } catch {
         runFailure ??= new Error(
             "Evaluation execution failed; no remaining cases will run.",
@@ -758,6 +830,13 @@ export async function runCases(
             } catch {
                 runFailure ??= new Error("Private evaluation capture cleanup failed.");
             }
+        }
+        try {
+            // Lane profiles hold evaluation tokens and never outlive the suite.
+            await Promise.all(laneProfiles.map((profile) =>
+                rm(profile, { recursive: true, force: true })));
+        } catch {
+            runFailure ??= new Error("Evaluation identity profile cleanup failed.");
         }
         try {
             finalVerdict = await report();
@@ -805,6 +884,7 @@ export async function executeCase(
         terminateTree = terminateProcessTree,
         startTimer = setTimeout,
         cancelTimer = clearTimeout,
+        azureConfigDirectory,
     } = {},
 ) {
     signal?.throwIfAborted();
@@ -824,6 +904,7 @@ export async function executeCase(
                 cwd: repositoryRoot,
                 env: {
                     ...process.env,
+                    ...(azureConfigDirectory ? { AZURE_CONFIG_DIR: azureConfigDirectory } : {}),
                     EVAL_CASE_ID: scenario.id,
                     EVAL_QUESTION: scenario.question,
                     EVAL_RUBRIC: scenario.rubric,
@@ -961,6 +1042,7 @@ async function main() {
             privateDiagnosticsDirectory:
                 process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY,
             failFast: process.env.EVAL_FAIL_FAST === "true",
+            laneOf: evaluationLane,
         },
     );
     if (!verdict.accepted) process.exitCode = 1;
@@ -1011,7 +1093,7 @@ export async function refreshEvaluationIdentity(
                 "--output",
                 "none",
             ],
-            { timeout: 60000 },
+            { timeout: 60000, env: environment },
         );
         await execute(
             "az",
@@ -1021,7 +1103,7 @@ export async function refreshEvaluationIdentity(
                 "--subscription",
                 environment.EVAL_LOGIN_SUBSCRIPTION,
             ],
-            { timeout: 30000 },
+            { timeout: 30000, env: environment },
         );
     } catch {
         throw new Error(

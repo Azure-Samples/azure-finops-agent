@@ -5,6 +5,7 @@ import {
     mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile,
 } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { JOB_TEMPLATES } from "../../src/Dashboard/frontend/src/data/jobTemplates.js";
@@ -16,7 +17,9 @@ import {
     assertCandidateRevision,
     buildCatalog,
     buildSuite,
+    COST_MANAGEMENT_LANE,
     evaluateSuite,
+    evaluationLane,
     executeCase,
     MINIMUM_EFFICIENCY_SCORE,
     preparePrivateDiagnostics,
@@ -864,6 +867,205 @@ test("fail-fast stops after the first failed case and never accepts the partial 
         assert.match(await readFile(join(directory, "summary.md"), "utf8"), /Suite failure:.*Fail-fast/);
     } finally {
         await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("independent lanes overlap while each lane stays ordered and reports stay whole", async () => {
+    const directory = await createDirectory();
+    try {
+        const laneOf = (scenario) => cases.indexOf(scenario) % 3;
+        let active = 0, peak = 0;
+        const started = [];
+        const verdict = await runCases(
+            cases, directory, sha, suiteHash,
+            async (scenario, path) => {
+                started.push(scenario);
+                peak = Math.max(peak, ++active);
+                await delay(5);
+                await writeFile(path, JSON.stringify(pass(scenario)));
+                active--;
+                return 0;
+            },
+            async () => {},
+            true,
+            0,
+            { laneOf, environment: {} },
+        );
+        assert.equal(verdict.accepted, true);
+        assert.equal(peak, 3);
+        for (const lane of [0, 1, 2])
+            assert.deepEqual(
+                started.filter((scenario) => laneOf(scenario) === lane),
+                cases.filter((scenario) => laneOf(scenario) === lane),
+            );
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        assert.deepEqual(report.results.map((row) => row.id), cases.map((scenario) => scenario.id));
+        assert.equal(report.verdict.accepted, true);
+        assert.match(await readFile(join(directory, "summary.md"), "utf8"), /20\/20 accepted/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("CI lanes renew into private Azure CLI profiles that are removed afterwards", async () => {
+    const directory = await createDirectory();
+    try {
+        const runner = join(directory, "runner");
+        await mkdir(runner);
+        const laneOf = (scenario) => (cases.indexOf(scenario) % 2 ? "b" : "a");
+        const renewed = [];
+        const used = new Map();
+        const verdict = await runCases(
+            cases, directory, sha, suiteHash,
+            async (scenario, path, _sha, _hash, _spawn, options) => {
+                assert.ok(options.signal);
+                used.set(scenario.id, options.azureConfigDirectory);
+                await writeFile(path, JSON.stringify(pass(scenario)));
+                return 0;
+            },
+            async (environment) => {
+                assert.equal(environment.GITHUB_ACTIONS, "true");
+                renewed.push(environment.AZURE_CONFIG_DIR);
+            },
+            true,
+            0,
+            { laneOf, environment: { GITHUB_ACTIONS: "true", RUNNER_TEMP: runner } },
+        );
+        assert.equal(verdict.accepted, true);
+        const profiles = new Set(used.values());
+        assert.equal(profiles.size, 2);
+        for (const scenario of cases) {
+            const profile = used.get(scenario.id);
+            assert.equal(dirname(profile), runner);
+            assert.equal(profile, used.get(cases.find((other) => laneOf(other) === laneOf(scenario)).id));
+        }
+        assert.equal(renewed.length, cases.length);
+        assert.deepEqual(new Set(renewed), profiles);
+        assert.deepEqual(await readdir(runner), []);
+
+        const single = [];
+        await runCases(
+            cases.slice(0, 2), directory, sha, suiteHash,
+            async (scenario, path, _sha, _hash, _spawn, options) => {
+                assert.equal(options.azureConfigDirectory, undefined);
+                await writeFile(path, JSON.stringify(pass(scenario)));
+                return 0;
+            },
+            async (...args) => single.push(args.length),
+            true,
+            0,
+            { environment: { GITHUB_ACTIONS: "true", RUNNER_TEMP: runner } },
+        );
+        assert.deepEqual(single, [0, 0]);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("a failing lane stops every other lane's owned case and starts no more", async () => {
+    const directory = await createDirectory();
+    try {
+        const laneOf = (scenario) => (cases.indexOf(scenario) % 2 ? "b" : "a");
+        let started = 0, aborted = 0, markStarted;
+        const otherStarted = new Promise((resolveStarted) => { markStarted = resolveStarted; });
+        await assert.rejects(
+            runCases(
+                cases, directory, sha, suiteHash,
+                async (scenario, _path, _sha, _hash, _spawn, { signal }) => {
+                    started++;
+                    if (laneOf(scenario) === "a") {
+                        await otherStarted;
+                        throw new Error("synthetic lane failure");
+                    }
+                    markStarted();
+                    return new Promise((_, reject) => signal.addEventListener("abort", () => {
+                        aborted++;
+                        reject(signal.reason);
+                    }, { once: true }));
+                },
+                async () => {},
+                false,
+                0,
+                { laneOf, environment: {} },
+            ),
+            /Evaluation execution failed/,
+        );
+        assert.equal(started, 2);
+        assert.equal(aborted, 1);
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        assert.equal(report.verdict.accepted, false);
+        assert.equal(report.results.length, 0);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("only cases that never need Cost Management leave its paced lane", () => {
+    const lanes = Object.groupBy(cases, evaluationLane);
+    assert.deepEqual(Object.keys(lanes).sort(), [COST_MANAGEMENT_LANE, "public", "tenant"].sort());
+    assert.deepEqual(lanes[COST_MANAGEMENT_LANE].map((scenario) => scenario.label), [
+        "Score Crawl maturity", "Cost this month", "Cost by subscription",
+        "Top 10 costly resources", "Cost forecast", "Budget vs actual",
+        "Chargeback report", "Idle resource sweep",
+    ]);
+    assert.ok(lanes.public.every((scenario) =>
+        scenario.origins.every((origin) => origin === "pricing:public" || origin === "incident:language")));
+    assert.equal(evaluationLane({ id: "an-unclassified-future-case" }), COST_MANAGEMENT_LANE);
+    assert.equal(evaluationLane(undefined), COST_MANAGEMENT_LANE);
+});
+
+test("a lane's Azure CLI profile reaches only its own case process and renewal", async () => {
+    const directory = await createDirectory();
+    try {
+        const environments = [];
+        for (const azureConfigDirectory of [undefined, join(directory, "profile")]) {
+            const code = await executeCase(
+                cases[0], join(directory, "result.json"), sha, suiteHash,
+                (_command, _args, options) => {
+                    environments.push(options.env);
+                    const child = new EventEmitter();
+                    queueMicrotask(() => child.emit("close", 0));
+                    return child;
+                },
+                { azureConfigDirectory },
+            );
+            assert.equal(code, 0);
+        }
+        assert.equal(environments[0].AZURE_CONFIG_DIR, process.env.AZURE_CONFIG_DIR);
+        assert.equal(environments[1].AZURE_CONFIG_DIR, join(directory, "profile"));
+        const environment = {
+            GITHUB_ACTIONS: "true",
+            ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.test/token",
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN: "synthetic-request",
+            EVAL_CLIENT_ID: "synthetic-client",
+            EVAL_TENANT_ID: "synthetic-tenant",
+            EVAL_LOGIN_SUBSCRIPTION: "synthetic-scope",
+            AZURE_CONFIG_DIR: join(directory, "profile"),
+        };
+        const profiles = [];
+        await refreshEvaluationIdentity(
+            environment,
+            async () => ({ ok: true, json: async () => ({ value: "synthetic-assertion" }) }),
+            async (_command, _args, options) => profiles.push(options.env.AZURE_CONFIG_DIR),
+        );
+        assert.deepEqual(profiles, [environment.AZURE_CONFIG_DIR, environment.AZURE_CONFIG_DIR]);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("live evaluations start with the regressions and deploy still needs both", async () => {
+    for (const name of ["main", "feature"]) {
+        const workflow = await readFile(
+            new URL(`../../.github/workflows/${name}.yml`, import.meta.url),
+            "utf8",
+        );
+        const job = workflow.match(/^  live-evaluations:\r?\n((?:    .*\r?\n|\s*\r?\n)+)/m)?.[1];
+        assert.ok(job, `${name}.yml defines the live-evaluations job`);
+        assert.doesNotMatch(job, /needs:/);
+        assert.match(workflow, /needs: \[regressions, live-evaluations\]/);
+        if (name === "feature")
+            assert.match(job, /if: github\.event_name != 'workflow_dispatch' \|\| !inputs\.preflight/);
     }
 });
 

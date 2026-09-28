@@ -52,8 +52,9 @@ jobs:
       contents: read
     uses: ./.github/workflows/validate.yml
 
+  # Starts with the regressions instead of after them; deploy still requires both.
   live-evaluations:
-    needs: regressions
+    if: github.event_name != 'workflow_dispatch' || !inputs.preflight
     permissions:
       contents: read
       id-token: write
