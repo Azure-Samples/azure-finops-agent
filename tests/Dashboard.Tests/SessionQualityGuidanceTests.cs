@@ -28,6 +28,8 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("only when the user explicitly requests it")]
     [InlineData("Never request, echo or store passwords")]
     [InlineData("ReportMaturityScore")]
+    [InlineData("request period totals with granularity None")]
+    [InlineData("query the other key only when that count shows wider coverage")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
