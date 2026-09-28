@@ -93,16 +93,22 @@ function Set-SiteFederatedCredential {
     )
     Write-Host "  Federating the $Label managed identity to the app (secretless OAuth)..." -ForegroundColor Yellow
 
-    # Idempotent: remove any prior credential of the same name first.
-    $existingFic = az ad app federated-credential list --id $AppObjectId --query "[?name=='$Name'].id" -o tsv 2>$null
-    if ($existingFic) {
-        az ad app federated-credential delete --id $AppObjectId --federated-credential-id $existingFic --output none 2>$null
+    $issuer = "https://login.microsoftonline.com/$TenantId/v2.0"
+    $existing = az ad app federated-credential list --id $AppObjectId --query "[?name=='$Name'] | [0]" -o json 2>$null | ConvertFrom-Json
+    # Recreating an identical credential would briefly break sign-in on a live site.
+    if ($existing -and $existing.issuer -eq $issuer -and $existing.subject -eq $PrincipalId -and
+        @($existing.audiences) -contains 'api://AzureADTokenExchange') {
+        Write-Host "  Federated credential already current (subject = $Label MI $PrincipalId)." -ForegroundColor Green
+        return
+    }
+    if ($existing) {
+        az ad app federated-credential delete --id $AppObjectId --federated-credential-id $existing.id --output none 2>$null
     }
 
     $ficFile = Join-Path ([System.IO.Path]::GetTempPath()) "$Name.json"
     @{
         name        = $Name
-        issuer      = "https://login.microsoftonline.com/$TenantId/v2.0"
+        issuer      = $issuer
         subject     = $PrincipalId
         audiences   = @('api://AzureADTokenExchange')
         description = "Azure FinOps Agent $Label managed identity (secretless OAuth confidential client)"
@@ -139,5 +145,10 @@ if (-not $appObjectId -or -not $tenantId -or -not $miPrincipalId) {
 
 Write-Host "`n  Web App:    $webUrl" -ForegroundColor Cyan
 if ($slotHost) { Write-Host "  Preview:    https://$slotHost" -ForegroundColor Cyan }
+$deployClientId = $envValues['PREVIEW_DEPLOY_CLIENT_ID']
+if ($deployClientId -and $slotHost) {
+    Write-Host "  Feature workflow: set secrets AZURE_CLIENT_ID=$($deployClientId.Trim('"')), AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID" -ForegroundColor Gray
+    Write-Host "  and variables TEST_WEBAPP_NAME, TEST_RESOURCE_GROUP, TEST_SLOT_NAME, TEST_ACR_*, TEST_CONTAINER_IMAGE, TEST_VERIFY_URL=https://$slotHost" -ForegroundColor Gray
+}
 Write-Host "  Next: image will be built and pushed by the postdeploy hook." -ForegroundColor Gray
 Write-Host "=== postprovision complete ===`n" -ForegroundColor Cyan

@@ -13,7 +13,7 @@ The Bicep in [infra/main.bicep](../infra/main.bicep) targets **subscription scop
 **Minimum (least privilege):**
 
 - **Contributor** on the subscription — to create the RG and all resources (ACR, App Service Plan + Web App, Azure OpenAI / Cognitive Services account + model deployment, Log Analytics workspace, Application Insights), **plus**
-- **User Access Administrator** (or **Role Based Access Control Administrator**) on the subscription — required because [infra/modules/roles.bicep](../infra/modules/roles.bicep) and [infra/modules/roles-aoai.bicep](../infra/modules/roles-aoai.bicep) create role assignments (`AcrPull` on ACR and `Foundry User` on the Foundry account) for the Web App's system-assigned managed identity, and for the optional preview slot's own identity.
+- **User Access Administrator** (or **Role Based Access Control Administrator**) on the subscription — required because [infra/modules/roles.bicep](../infra/modules/roles.bicep) and [infra/modules/roles-aoai.bicep](../infra/modules/roles-aoai.bicep) create role assignments (`AcrPull` on ACR and `Foundry User` on the Foundry account) for the Web App's system-assigned managed identity, and for the optional preview slot's own identity. With `AZURE_PREVIEW_DEPLOY_SUBJECTS`, [infra/modules/preview-deployer.bicep](../infra/modules/preview-deployer.bicep) also creates a user-assigned identity and grants it Website Contributor on the slot, Reader on the web app and AcrPush.
 
 You also need available **quota** for:
 

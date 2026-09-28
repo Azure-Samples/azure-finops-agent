@@ -64,6 +64,9 @@
     },
     "previewSlotName": {
       "value": "${AZURE_PREVIEW_SLOT_NAME=}"
+    },
+    "previewDeploySubjects": {
+      "value": "${AZURE_PREVIEW_DEPLOY_SUBJECTS=}"
     }
   }
 }

@@ -24,6 +24,7 @@ param dmarcReportEmail string
 param enableDeleteLocks bool
 param appServiceInboundIp string
 param previewSlotName string = ''
+param previewDeploySubjects string[] = []
 
 var containerImageName = 'finops-agent:latest'
 // Prefer the custom domain for the synthetic probe when there is one — that is
@@ -83,7 +84,33 @@ module appservice 'modules/appservice.bicep' = {
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId
     publicSiteHost: customDomainName
-    previewSlotName: previewSlotName
+  }
+}
+
+// Optional preview slot on the same web app and plan, plus a GitHub deploy
+// identity that can change only that slot.
+module preview 'modules/preview.bicep' = if (!empty(previewSlotName)) {
+  name: 'preview'
+  params: {
+    location: location
+    tags: tags
+    webAppName: appservice.outputs.name
+    slotName: previewSlotName
+    acrLoginServer: acr.outputs.loginServer
+    containerImageName: containerImageName
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    aoaiEndpoint: aoai.outputs.projectEndpoint
+    aoaiDeploymentName: aoai.outputs.deploymentName
+    aoaiReasoningEffort: aoaiReasoningEffort
+    entraAppId: entraAppId
+    entraClientSecret: entraClientSecret
+    entraTenantId: entraTenantId
+    publicSiteHost: customDomainName
+    acrName: acr.outputs.name
+    aoaiName: aoai.outputs.accountName
+    aoaiResourceGroup: aoai.outputs.resourceGroup
+    aoaiSubscriptionId: aoai.outputs.subscriptionId
+    deploySubjects: previewDeploySubjects
   }
 }
 
@@ -113,11 +140,8 @@ module availability 'modules/availability.bicep' = {
 module roles 'modules/roles.bicep' = {
   name: 'roles'
   params: {
-    // A slot's identity is distinct from the web app's; without its own grant
-    // every chat on the slot fails with a Foundry agents/write 403.
-    sitePrincipalIds: empty(previewSlotName)
-      ? [appservice.outputs.principalId]
-      : [appservice.outputs.principalId, appservice.outputs.slotPrincipalId]
+    // modules/preview.bicep grants the preview slot's own identity.
+    sitePrincipalIds: [appservice.outputs.principalId]
     acrName: acr.outputs.name
     aoaiName: aoai.outputs.accountName
     aoaiResourceGroup: aoai.outputs.resourceGroup
@@ -132,9 +156,10 @@ output webAppName string = appservice.outputs.name
 output webAppHostname string = appservice.outputs.hostname
 output webAppUrl string = 'https://${appservice.outputs.hostname}'
 output webAppPrincipalId string = appservice.outputs.principalId
-output webAppSlotName string = appservice.outputs.slotName
-output webAppSlotHostname string = appservice.outputs.slotHostname
-output webAppSlotPrincipalId string = appservice.outputs.slotPrincipalId
+output webAppSlotName string = previewSlotName
+output webAppSlotHostname string = empty(previewSlotName) ? '' : preview!.outputs.slotHostname
+output webAppSlotPrincipalId string = empty(previewSlotName) ? '' : preview!.outputs.slotPrincipalId
+output previewDeployClientId string = empty(previewSlotName) ? '' : preview!.outputs.deployClientId
 output aoaiEndpoint string = aoai.outputs.projectEndpoint
 output aoaiDeploymentName string = aoai.outputs.deploymentName
 output aiProjectName string = aoai.outputs.projectName

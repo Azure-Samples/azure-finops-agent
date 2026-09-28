@@ -335,6 +335,10 @@ test("workflow validates the target before writes and merges only serialized mod
     assert.ok(workflow.indexOf("az webapp config appsettings set") < workflow.indexOf("az webapp config container set"));
     assert.ok(workflow.indexOf("az webapp config container set") < workflow.indexOf("feature-slot.mjs check-settings"));
     assert.match(workflow, /cancel-in-progress: false/);
+    // Every Azure sign-in shares the one branch-independent, environment-scoped OIDC subject.
+    const logins = (workflow.match(/uses: azure\/login@/g) ?? []).length;
+    assert.ok(logins > 0);
+    assert.equal((workflow.match(/^ {4}environment:(?: test|\r?\n {6}name: test)\r?$/gm) ?? []).length, logins);
     // One forward merge of the evaluated settings, one rollback merge of the prior values.
     assert.equal((workflow.match(/az webapp config appsettings set/g) ?? []).length, 2);
     assert.equal((workflow.match(/--settings "@\$work\/settings\.json"/g) ?? []).length, 1);

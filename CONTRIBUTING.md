@@ -60,14 +60,28 @@ example, the slot identity lacks **Foundry User** on the Foundry account), the
 workflow restores the image and three model settings recorded before its writes
 and fails. Production uses the same gate and rollback.
 
-A slot has its own system-assigned identity, separate from the web app's. To
-provision a preview slot with the right access, set
-`azd env set AZURE_PREVIEW_SLOT_NAME test` (the plan must be `S1` or higher)
-before `azd provision`. The template then grants the slot identity AcrPull and
-Foundry User, and postprovision registers its OAuth redirect URIs and federated
-credential. For a slot created outside the template, an authorized owner grants
-the same roles, at resource scope, to the principal from
-`az webapp identity show --slot <slot>`.
+The test environment is a deployment slot on the production web app and App
+Service plan, in the same resource group, tenant and Foundry project. A slot has
+its own system-assigned identity, separate from the web app's, and a managed
+identity cannot be granted Foundry access in another tenant. Before
+`azd provision`, set `azd env set AZURE_PREVIEW_SLOT_NAME test` (the plan must be
+`S1` or higher). Also set `AZURE_PREVIEW_DEPLOY_SUBJECTS` to the comma-separated
+GitHub OIDC subjects for the `test` environment. For the default subject format,
+that is `repo:OWNER/REPO:environment:test`; use your repository's customized
+subject format if it has one. [infra/modules/preview.bicep](infra/modules/preview.bicep)
+then creates:
+
+- the slot, with production's configuration
+- AcrPull and Foundry User for the slot identity
+- a GitHub deploy identity with Website Contributor on the slot only, Reader on
+  the parent web app, and AcrPush
+
+Postprovision registers the slot's OAuth redirect URIs and federated credential.
+It also prints the values for the feature workflow's `AZURE_*` secrets and `TEST_*`
+variables. To add the slot to an existing production site, deploy only
+`infra/modules/preview.bicep` with `az deployment group create` against the site's
+resource group. A full provision rewrites the site's image and model settings,
+which CI deployments manage.
 
 For validation without deployment, use a manual dispatch with `deploy=false`.
 See [live evaluation configuration](tests/LiveEvaluations/README.md) for the

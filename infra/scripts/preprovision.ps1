@@ -58,6 +58,13 @@ if (-not [string]::IsNullOrWhiteSpace($previewSlot)) {
     }
     Write-Host "  Preview slot: $previewSlot (own identity gets AcrPull + Foundry User)" -ForegroundColor Gray
 }
+if (-not [string]::IsNullOrWhiteSpace((Get-AzdEnvValue 'AZURE_PREVIEW_DEPLOY_SUBJECTS'))) {
+    if ([string]::IsNullOrWhiteSpace($previewSlot)) {
+        Write-Host "  AZURE_PREVIEW_DEPLOY_SUBJECTS requires AZURE_PREVIEW_SLOT_NAME: the deploy identity can change only the preview slot." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  Preview deploy identity: GitHub OIDC, slot-only Website Contributor + AcrPush" -ForegroundColor Gray
+}
 
 $existingAppId  = Get-AzdEnvValue 'AZURE_ENTRA_APP_ID'
 $existingSecret = Get-AzdEnvValue 'AZURE_ENTRA_CLIENT_SECRET'

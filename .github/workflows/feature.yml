@@ -69,6 +69,11 @@ jobs:
     name: Build & Deploy to test slot
     needs: [regressions, live-evaluations]
     runs-on: ubuntu-latest
+    # The environment makes the OIDC subject branch-independent
+    # (…:environment:test), so one federated credential serves every feature branch.
+    environment:
+      name: test
+      url: ${{ steps.target.outputs.slot_url }}
     # Dependabot-triggered runs don't get access to repo secrets, so azure/login
     # would fail. Skip — these PRs are reviewed and merged via main.yml.
     if: github.actor != 'dependabot[bot]' && github.ref_type == 'branch' && github.ref_name != 'main' && (github.event_name != 'workflow_dispatch' || inputs.deploy)
@@ -290,6 +295,7 @@ jobs:
     name: Read-only test-slot preflight
     if: github.event_name == 'workflow_dispatch' && inputs.preflight
     runs-on: ubuntu-latest
+    environment: test
     permissions:
       contents: read
       id-token: write

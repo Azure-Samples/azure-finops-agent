@@ -9,12 +9,14 @@
 // or an existing account in another RG/subscription.
 
 @minLength(1)
-@description('Principal IDs of the site identities to authorize: the web app first, then any slot.')
+@description('Principal IDs of the site identities to authorize (the web app, or a preview slot).')
 param sitePrincipalIds string[]
 param acrName string
 param aoaiName string
 param aoaiResourceGroup string
 param aoaiSubscriptionId string
+@description('Nested deployment name; distinct per caller so web-app and slot grants never collide.')
+param aoaiRoleDeploymentName string = 'aoai-role'
 
 // Built-in role definition IDs (constant across all Azure subscriptions).
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
@@ -39,7 +41,7 @@ resource acrPullAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01'
 // Foundry User role on the Foundry account — applied via a nested
 // module because the account may live in a different RG/subscription when reused.
 module aoaiRole 'roles-aoai.bicep' = {
-  name: 'aoai-role'
+  name: aoaiRoleDeploymentName
   scope: resourceGroup(aoaiSubscriptionId, aoaiResourceGroup)
   params: {
     aoaiName: aoaiName

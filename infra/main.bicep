@@ -133,6 +133,11 @@ param appServiceInboundIp string = ''
 @description('Optional preview deployment slot name, e.g. `test`. Creates the slot with its own managed identity, grants that identity AcrPull and Foundry User, and lets postprovision register its OAuth redirect URIs and federated credential. Requires an S* or P*V3 appServicePlanSku. Empty creates no slot.')
 param previewSlotName string = ''
 
+@description('Comma-separated GitHub OIDC subjects for a deploy identity that can push images and update only the preview slot, e.g. `repo:OWNER/REPO:environment:test`. Requires previewSlotName. Empty creates no identity.')
+param previewDeploySubjects string = ''
+
+var previewDeploySubjectList = filter(map(split(previewDeploySubjects, ','), subject => trim(subject)), subject => !empty(subject))
+
 var tags = {
   'azd-env-name': environmentName
   application: 'azure-finops-agent'
@@ -174,6 +179,7 @@ module resources 'main-resources.bicep' = {
     enableDeleteLocks: enableDeleteLocks
     appServiceInboundIp: appServiceInboundIp
     previewSlotName: previewSlotName
+    previewDeploySubjects: previewDeploySubjectList
   }
 }
 
@@ -197,6 +203,8 @@ output WEB_APP_PRINCIPAL_ID string = resources.outputs.webAppPrincipalId
 output WEB_APP_SLOT_NAME string = resources.outputs.webAppSlotName
 output WEB_APP_SLOT_HOSTNAME string = resources.outputs.webAppSlotHostname
 output WEB_APP_SLOT_PRINCIPAL_ID string = resources.outputs.webAppSlotPrincipalId
+// Client ID for the feature workflow's AZURE_CLIENT_ID secret; empty without previewDeploySubjects.
+output PREVIEW_DEPLOY_CLIENT_ID string = resources.outputs.previewDeployClientId
 
 output AZURE_OPENAI_ENDPOINT string = resources.outputs.aoaiEndpoint
 output AZURE_OPENAI_DEPLOYMENT_NAME string = resources.outputs.aoaiDeploymentName
