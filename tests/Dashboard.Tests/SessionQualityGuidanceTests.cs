@@ -29,7 +29,8 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("Never request, echo or store passwords")]
     [InlineData("ReportMaturityScore")]
     [InlineData("request period totals with granularity None")]
-    [InlineData("query the other key only when that count shows wider coverage")]
+    [InlineData("test every offered key against billed cost")]
+    [InlineData("a Resource Graph tag count is inventory context, never billing evidence")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
