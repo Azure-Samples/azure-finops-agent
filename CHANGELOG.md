@@ -45,6 +45,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Stop the rollback-capture unit test from emitting a real `::warning::` annotation on every CI run.
 - Correct the deployment permissions guide, which still named Cognitive Services User as the app's model role, and the App Service settings comments that still described the removed Copilot CLI and OpenTelemetry collector.
 - Wait at least one full minute before re-running a live-evaluation case after a final Cost Management throttle. The rerun honored only the service's short retry-after, so it started 27 seconds after the refusal, inside the same per-tenant 60-QPU-per-minute quota window, and the Chargeback case was refused again.
+- Steer `QueryAzure` SQL away from quadratic share and rank queries. A share of total written as a subquery that reads `json_each(r.body)` again for each row re-reads the whole array per row: about 3 seconds on 2,000 cost rows and past the 15-second deadline on a 14,000-row daily result, which failed the call. The tool description and the timeout error now direct the model to read the array once and use window functions, which take milliseconds on the same data.
 
 ## [0.3.0] - 2026-09-20
 

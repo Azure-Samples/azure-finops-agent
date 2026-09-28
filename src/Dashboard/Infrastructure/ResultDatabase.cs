@@ -111,6 +111,8 @@ internal sealed class ResultDatabase : IDisposable
 
     private const string FailurePrefix = "Error: SQL failed: ";
 
+    internal const string TimeoutHint = " (the query exceeded 15 seconds: a subquery or self-join that reads json_each(r.body) again for each row rereads the whole array per row; read the array once and take totals, shares and ranks with window functions such as sum(x) OVER () and rank() OVER (ORDER BY x DESC))";
+
     private (string Text, bool Failed) Run(string statement, long? id)
     {
         try
@@ -123,7 +125,7 @@ internal sealed class ResultDatabase : IDisposable
         }
         catch (Exception exception) when (exception is SqliteException or InvalidOperationException)
         {
-            return (FailurePrefix + exception.Message + (DateTime.UtcNow > _deadline ? " (the query exceeded 15 seconds; filter with json_each before joining or aggregating)" : ""), true);
+            return (FailurePrefix + exception.Message + (DateTime.UtcNow > _deadline ? TimeoutHint : ""), true);
         }
     }
 

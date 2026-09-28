@@ -48,6 +48,25 @@ public class ResultDatabaseTests
     }
 
     [Fact]
+    public void ShareOfTotalOverOneReadOfALargeCostResultIsFast()
+    {
+        // 500 resources x 28 days: a correlated per-row total over this body took over 40 seconds.
+        var rows = string.Join(',', Enumerable.Range(0, 14_000).Select(index => $"[{index / 28 + 1},{20260901 + index % 28},\"/subscriptions/x/resourcegroups/rg/providers/microsoft.compute/virtualmachines/vm-{index / 28:000}\",\"USD\"]"));
+        var response = "HTTP 200 OK\n{\"properties\":{\"columns\":[{\"name\":\"Cost\"},{\"name\":\"UsageDate\"},{\"name\":\"ResourceId\"},{\"name\":\"Currency\"}],\"rows\":[" + rows + "]}}";
+        var started = DateTime.UtcNow;
+
+        var output = Fresh().Present("/subscriptions/x/providers/Microsoft.CostManagement/query", "POST", response,
+            "SELECT res, sum(cost) AS total, round(sum(cost) * 100.0 / sum(sum(cost)) OVER (), 2) AS share, rank() OVER (ORDER BY sum(cost) DESC) AS rk, count(*) OVER () AS resources FROM (SELECT json_extract(v.value,'$[2]') AS res, json_extract(v.value,'$[0]') AS cost FROM responses r, json_each(r.body,'$.properties.rows') v WHERE r.id = $id) GROUP BY res ORDER BY total DESC LIMIT 1",
+            CancellationToken.None);
+
+        Assert.EndsWith("/virtualmachines/vm-499\t14000\t0.4\t1\t500\n(1 rows)", output);
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(5));
+        Assert.Contains("sum(x) OVER ()", AzureQueryTools.ToolDescription);
+        Assert.Contains("never with a subquery or self-join that reads json_each(r.body) again for each row", AzureQueryTools.ToolDescription);
+        Assert.Contains("window functions", ResultDatabase.TimeoutHint);
+    }
+
+    [Fact]
     public void LogAnalyticsShapeListsEveryColumnName()
     {
         var rows = string.Join(',', Enumerable.Range(0, 2000).Select(index => $"[\"Perf\",{index}.25,\"2026-09-01\"]"));
