@@ -513,6 +513,20 @@ test("malformed verdicts, missing results, timeouts and failed tools fail closed
         validateResult(scenario, pass(scenario), 1, sha, suiteHash).length > 0,
     );
 });
+test("one failed call corrected by a later call to the same tool passes; a second or uncorrected failure fails", () => {
+    const scenario = { ...cases[0], requiredTools: [], forbiddenTools: [] };
+    const withTools = (tools) => ({ ...pass(scenario), tools, toolCount: tools.length });
+    const failed = { name: "QueryAzure", success: false };
+    const ok = { name: "QueryAzure", success: true };
+    assert.deepEqual(validateResult(scenario, withTools([failed, ok]), 0, sha, suiteHash), []);
+    for (const tools of [
+        [ok, failed],
+        [failed, ok, failed, ok],
+        [failed, { name: "SuggestFollowUp", success: true }],
+        [{ name: "QueryAzure" }, ok],
+    ])
+        assert.ok(validateResult(scenario, withTools(tools), 0, sha, suiteHash).length > 0);
+});
 test("valid negative judge criteria reject the gate without claiming malformed output", () => {
     for (const criterion of ["accepted", "grounded", "complete"]) {
         const results = rows();

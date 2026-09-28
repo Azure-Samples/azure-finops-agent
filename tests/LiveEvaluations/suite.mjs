@@ -15,7 +15,7 @@ import {
 } from "../../src/Dashboard/frontend/src/data/sidebarCategories.js";
 
 const rubric =
-    "Fulfil the actual question in its language using the returned source evidence. Keep scopes, dates, currencies, units, source freshness and partial coverage explicit. Never invent availability, costs, savings, usage or actions. If the question genuinely lacks required user inputs, ask a concise clarification instead of inventing values. Missing access, a failed tool, or a broken query is not successful fulfilment of a fully specified evidence request. Do not execute writes or purchases; requested changes require the existing application approval flow. Do not claim a chart or generated file unless the corresponding tool actually returned it.";
+    "Fulfil the actual question in its language using the returned source evidence. Keep scopes, dates, currencies, units, source freshness and partial coverage explicit. Never invent availability, costs, savings, usage or actions. If the question genuinely lacks required user inputs, ask a concise clarification instead of inventing values. An answer that rests on missing access, a failed call or a broken query is not successful fulfilment of a fully specified evidence request; a failed call the agent corrected with a later successful call is fine. Do not execute writes or purchases; requested changes require the existing application approval flow. Do not claim a chart or generated file unless the corresponding tool actually returned it.";
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const captureRoot = resolve(repositoryRoot, "tests", "LiveEvaluations", "obj");
 const evaluationSourcePaths = [
@@ -260,10 +260,18 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
                 (tool) =>
                     !tool ||
                     typeof tool.name !== "string" ||
-                    tool.success !== true,
+                    typeof tool.success !== "boolean",
             )
         )
-            failures.push("A tool failed.");
+            failures.push("A tool record is invalid.");
+        else {
+            const failed = result.tools.flatMap((tool, index) => (tool.success ? [] : [index]));
+            if (failed.length > ALLOWED_CORRECTED_TOOL_FAILURES)
+                failures.push(`${failed.length} tool calls failed; at most ${ALLOWED_CORRECTED_TOOL_FAILURES} corrected failure is allowed.`);
+            else if (failed.some((index) => !result.tools.slice(index + 1)
+                .some((later) => later.name === result.tools[index].name && later.success === true)))
+                failures.push("A failed tool call was never corrected.");
+        }
         for (const name of scenario.requiredTools)
             if (!result.tools.some((tool) => tool?.name === name))
                 failures.push(`Required tool missing: ${name}.`);
@@ -303,6 +311,9 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
 
 // Judge scores 1-2 mean clear waste; they fail the gate even when the efficient flag disagrees.
 export const MINIMUM_EFFICIENCY_SCORE = 3;
+
+// The agent researches: one failed call is fine when a later call to the same tool succeeds.
+export const ALLOWED_CORRECTED_TOOL_FAILURES = 1;
 
 export function evaluateSuite(cases, results, sha, suiteHash) {
     const failures = [];

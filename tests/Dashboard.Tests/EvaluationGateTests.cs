@@ -55,6 +55,36 @@ public sealed class EvaluationGateTests
     public void CompleteRunWithValidJudgeVerdictPasses() => Assert.True(EvaluationGate.Assess(Scenario, Success, Accepted).Accepted);
 
     [Fact]
+    public void OneFailedCallCorrectedByALaterSuccessfulCallPasses()
+    {
+        var run = Success with { Tools = [new("GetCrawlMaturityEvidence", true, "HTTP 400 BadRequest\n{\"error\":{\"code\":\"InvalidApiVersion\"}}", null),
+            new("GetCrawlMaturityEvidence", true, "{}", null)] };
+        Assert.True(EvaluationGate.Assess(Scenario, run, Accepted).Accepted);
+    }
+
+    [Theory]
+    [InlineData("second-failure")]
+    [InlineData("never-corrected")]
+    [InlineData("other-tool-succeeded")]
+    public void MoreThanOneOrAnUncorrectedFailedCallFails(string shape)
+    {
+        ToolResult failed = new("GetCrawlMaturityEvidence", false, "", "Tool execution failed");
+        ToolResult ok = new("GetCrawlMaturityEvidence", true, "{}", null);
+        var run = Success with
+        {
+            Tools = shape switch
+            {
+                "second-failure" => [failed, ok, failed, ok],
+                "never-corrected" => [ok, failed],
+                _ => [failed, new("SuggestFollowUp", true, "{}", null)],
+            }
+        };
+        var verdict = EvaluationGate.Assess(Scenario, run, Accepted);
+        Assert.False(verdict.Accepted);
+        Assert.Contains(verdict.Reasons, reason => reason.Contains("failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task JudgeSeparatesInventoryFromBillingWithoutDroppingKnownEvidence()
     {
         using var handler = new JudgeRequestHandler();

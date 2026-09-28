@@ -96,7 +96,11 @@ public static class EvaluationGate
         if (!run.Terminal) reasons.Add("The turn did not complete.");
         if (string.IsNullOrWhiteSpace(run.Answer)) reasons.Add("The final answer is empty.");
         if (run.Errors.Length > 0) reasons.Add("The run emitted errors.");
-        if (run.Tools.Any(tool => !ToolSucceeded(tool))) reasons.Add("At least one tool failed.");
+        var failedCalls = run.Tools.Select((tool, index) => (tool, index)).Where(call => !ToolSucceeded(call.tool)).ToArray();
+        if (failedCalls.Length > AllowedCorrectedToolFailures)
+            reasons.Add($"{failedCalls.Length} tool calls failed; at most {AllowedCorrectedToolFailures} corrected failure is allowed.");
+        else if (failedCalls.Any(call => !run.Tools.Skip(call.index + 1).Any(later => later.Name == call.tool.Name && ToolSucceeded(later))))
+            reasons.Add("A failed tool call was never corrected by a later successful call to that tool.");
         if (run.Tools.Any(tool => tool.Result.Contains("Output too large to read at once", StringComparison.OrdinalIgnoreCase)))
             reasons.Add("Required tool evidence was offloaded and unavailable to the model.");
         if (run.Tools.Length > scenario.MaxToolCalls) reasons.Add("The tool-call budget was exceeded.");
@@ -135,4 +139,8 @@ public static class EvaluationGate
     }
 
     public const int MinimumEfficiencyScore = 3;
+
+    // The agent researches: it may learn from one failed call when a later call to the same
+    // tool succeeds. The judge still rejects an answer that rests on failed evidence.
+    public const int AllowedCorrectedToolFailures = 1;
 }
