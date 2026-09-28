@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Add optional hosted web search (`AzureOpenAI:WebSearch=true`, default off). Bing grounding is outside the Azure data boundary; `QueryAzure` already reads public documentation and pages.
 - Add a `Microsoft.Data.Sqlite` 10.0.12-backed stored-response database: each exact owner/conversation gets an in-memory SQLite `responses(id, url, method, status, retrieved_utc, body)` table for successful `QueryAzure` and `QueryUploadedFile` bodies, with read-only SQL over JSON/text evidence.
 - Add `QueryAzure` operation URLs: `operation:` lists recent owner-bound operations for the conversation and `operation:<id>` polls the stored ARM operation URL without repeating a mutation.
+- Add a post-deployment chat gate to the feature and production workflows. The live evaluations call the model with the evaluation identity, so build 168 passed all 20 cases while the test slot's own managed identity lacked Foundry User (`agents/write` HTTP 403). Each deployment now records the prior image and model settings, sends one real anonymous chat turn through the deployed URL and requires a completed answer. On failure it restores the prior state and fails the run.
 
 ### Changed
 

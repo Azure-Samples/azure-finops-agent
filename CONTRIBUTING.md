@@ -53,6 +53,13 @@ access. The workflow never grants itself permissions,
 creates replacement infrastructure or swaps into production. Effective settings
 and the deployed full SHA, build and branch are checked afterward.
 
+The live evaluations run with the evaluation identity, not the slot's own managed
+identity. So after the version check, the workflow sends one real anonymous chat
+turn through the deployed URL and requires a completed answer. If that fails (for
+example, the slot identity lacks **Foundry User** on the Foundry account), the
+workflow restores the image and three model settings recorded before its writes
+and fails. Production uses the same gate and rollback.
+
 For validation without deployment, use a manual dispatch with `deploy=false`.
 See [live evaluation configuration](tests/LiveEvaluations/README.md) for the
 required protected identity, fixtures and exact-revision gate.

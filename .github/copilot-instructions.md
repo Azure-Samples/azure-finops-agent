@@ -228,6 +228,8 @@ Feature deployments reuse the configured existing shared TEST slot, never create
 
 The protected evaluation endpoint comes from the `EVAL_MODEL_ENDPOINT` secret, never a plain variable. Successful evaluation exports the model, reasoning effort, full candidate SHA and normalized endpoint SHA-256 fingerprint. Feature deployment uses those values without model defaults and compares its endpoint secret locally before Azure login or writes; never expose raw endpoint coordinates or silently retarget inference.
 
+Live evaluations use the evaluation identity, so they never prove the deployed identity. Both deployment workflows record the prior image and three model settings before writes. After the version check, `infra/scripts/deployment-smoke.mjs chat` must receive a completed anonymous answer through the deployed URL. On failure or cancellation after writes began, the workflow restores the recorded state and fails. Keep published smoke reasons redacted, and do not add `continue-on-error` or a skip path.
+
 Production OIDC must be branch-scoped to `main` and least-privileged: `AcrPush` on the target registry and `Website Contributor` on the target web app. App Service pulls images with its own managed identity and `AcrPull`.
 
 Do not deploy without explicit user instruction. When instructed, validate builds, diff, secrets, account context, workflow configuration, and target version before pushing.

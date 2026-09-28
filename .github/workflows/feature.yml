@@ -157,9 +157,28 @@ jobs:
             type=registry,ref=${{ env.IMAGE }}:buildcache-main
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
 
+      # Recorded before any slot write so a build that fails verification is
+      # replaced by the previous image and model settings instead of staying live.
+      - name: Record current slot state for rollback
+        id: rollback-state
+        shell: bash
+        run: |
+          umask 077
+          state="$RUNNER_TEMP/deploy-rollback"
+          mkdir "$state"
+          az webapp config show --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+            --query linuxFxVersion --output json > "$state/runtime.json"
+          az webapp config appsettings list --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+            --query "[?name=='AzureOpenAI__Endpoint' || name=='AzureOpenAI__DeploymentName' || name=='AzureOpenAI__ReasoningEffort']" \
+            --output json > "$state/current-settings.json"
+          node infra/scripts/deployment-smoke.mjs capture "$state"
+
       # Standard App Service settings write: merges only these three keys into the
       # existing slot dictionary and needs no ARM deployment permission.
       - name: Apply only the evaluated feature-slot model settings
+        id: apply-settings
         shell: bash
         run: |
           umask 077
@@ -220,6 +239,13 @@ jobs:
           echo "Expected test SHA/build/branch did not become active." >&2
           exit 1
 
+      # The live evaluations call the model in-process with the evaluation identity.
+      # Only a real turn through the slot proves its own managed identity and settings.
+      - name: Verify a real chat answer through the deployed slot
+        env:
+          SMOKE_URL: ${{ steps.target.outputs.slot_url }}
+        run: node infra/scripts/deployment-smoke.mjs chat
+
       - name: Summary
         env:
           PREVIEW_URL: ${{ steps.target.outputs.slot_url }}
@@ -232,7 +258,30 @@ jobs:
             printf -- '- **Branch:** `%s`\n- **Build:** `%s`\n- **SHA:** `%s`\n' "$DEPLOYED_BRANCH" "$DEPLOYED_BUILD" "$DEPLOYED_SHA"
             printf -- '- **Image:** `%s:test-%s`\n- **Model:** `%s` (%s)\n' "$IMAGE" "$DEPLOYED_SHA" "$EVALUATED_MODEL" "$EVALUATED_REASONING_EFFORT"
             printf -- '- **Preview URL:** %s\n' "$PREVIEW_URL"
+            printf -- '- **Deployed chat:** answered through the slot identity\n'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore the previous slot image and model settings
+        if: (failure() || cancelled()) && steps.rollback-state.outputs.captured == 'true' && steps.apply-settings.outcome != 'skipped'
+        shell: bash
+        run: |
+          state="$RUNNER_TEMP/deploy-rollback"
+          if [[ -s "$state/restore-settings.json" ]]; then
+            az webapp config appsettings set --subscription "$TARGET_SUBSCRIPTION" \
+              --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+              --settings "@$state/restore-settings.json" --output none
+          fi
+          az webapp config container set --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
+            --container-image-name "$(<"$state/image")" \
+            --container-registry-url "https://$(<"$state/registry")" \
+            --output none
+          echo "::error::Deployment verification failed. The test slot was restored to its previous image and model settings."
+
+      - name: Remove rollback state
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/deploy-rollback"
 
   preflight:
     name: Read-only test-slot preflight

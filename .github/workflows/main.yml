@@ -73,6 +73,7 @@ jobs:
           done
           # Production must serve the exact deployment, effort and endpoint the live gate evaluated.
           node infra/scripts/feature-slot.mjs check-production-config
+          SMOKE_URL="$VERIFY_URL" node infra/scripts/deployment-smoke.mjs check-url
 
       - name: Azure Login (OIDC)
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
@@ -112,7 +113,24 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-main
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-main,mode=max,image-manifest=true,oci-mediatypes=true
 
+      # Recorded before any production write so a build that fails verification is
+      # replaced by the previous image and model settings instead of staying live.
+      - name: Record current production state for rollback
+        id: rollback-state
+        shell: bash
+        run: |
+          umask 077
+          state="$RUNNER_TEMP/deploy-rollback"
+          mkdir "$state"
+          az webapp config show --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
+            --query linuxFxVersion --output json > "$state/runtime.json"
+          az webapp config appsettings list --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
+            --query "[?name=='AzureOpenAI__Endpoint' || name=='AzureOpenAI__DeploymentName' || name=='AzureOpenAI__ReasoningEffort']" \
+            --output json > "$state/current-settings.json"
+          node infra/scripts/deployment-smoke.mjs capture "$state"
+
       - name: Configure evaluated Azure OpenAI settings
+        id: apply-settings
         shell: bash
         run: |
           umask 077
@@ -156,3 +174,30 @@ jobs:
           done
           echo "Expected production SHA/build/branch did not become active." >&2
           exit 1
+
+      # The live evaluations call the model in-process with the evaluation identity.
+      # Only a real turn through production proves its own managed identity and settings.
+      - name: Verify a real chat answer through production
+        env:
+          SMOKE_URL: ${{ env.VERIFY_URL }}
+        run: node infra/scripts/deployment-smoke.mjs chat
+
+      - name: Restore the previous production image and model settings
+        if: (failure() || cancelled()) && steps.rollback-state.outputs.captured == 'true' && steps.apply-settings.outcome != 'skipped'
+        shell: bash
+        run: |
+          state="$RUNNER_TEMP/deploy-rollback"
+          if [[ -s "$state/restore-settings.json" ]]; then
+            az webapp config appsettings set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
+              --settings "@$state/restore-settings.json" --output none
+          fi
+          az webapp config container set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
+            --container-image-name "$(<"$state/image")" \
+            --container-registry-url "https://$(<"$state/registry")" \
+            --output none
+          echo "::error::Deployment verification failed. Production was restored to its previous image and model settings."
+
+      - name: Remove rollback state
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/deploy-rollback"

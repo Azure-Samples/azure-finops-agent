@@ -2,6 +2,8 @@
 
 Production and test-slot deployment both require the `live-evaluations` job to succeed. Local and CI runs use the same explicitly selected **20 distinct questions**, and all 20 must pass. No percentage threshold, retry-until-green, skip flag, or `continue-on-error` is used. One failed, missing, malformed, wrong-revision or timed-out case blocks deployment. A subset, an arbitrary replacement set of 20, or changed case contracts cannot satisfy the gate.
 
+The live suite calls the model in-process with the **evaluation identity**, so it cannot prove the deployed app's own managed identity, settings or network path. After each deployment, [deployment-smoke.mjs](../../infra/scripts/deployment-smoke.mjs) therefore sends one real anonymous chat turn through the deployed URL and requires a completed answer echoing a per-run verification code. An error event, empty or incomplete answer, or a missing code fails the deployment after three attempts. The workflow then restores the previously recorded image and the three model settings. Published failure reasons redact ids, URLs, hosts and emails.
+
 ## Coverage
 
 The full catalog imports every exported sidebar/pricing prompt and every job-template prompt directly from the frontend, deduplicating identical questions and retaining their origins. It adds H200 Spot and English SQL-calculation incident cases. The live gate selects 20 named cases from that catalog rather than running its entire 124-question inventory. These are **curated representative question types**, not a verified ranking of the 20 most-asked production questions. The read-only history analyzer is separate; its output must be authorized, anonymized and reviewed before it becomes regression data.
