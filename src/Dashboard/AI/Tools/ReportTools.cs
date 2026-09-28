@@ -23,7 +23,7 @@ public sealed class ReportTools(long owner)
     {
         format = format.ToLowerInvariant();
         if (format is not ("csv" or "xlsx" or "html")) return "Error: supported formats are csv, xlsx, html.";
-        if (dataJson.Length > 2 * 1024 * 1024 || SensitiveContent.ContainsSecret(dataJson)) return "Error: report data exceeds the limit or contains credentials.";
+        if (dataJson.Length > 2 * 1024 * 1024) return "Error: report data exceeds the 2 MB limit.";
         JsonElement data;
         try { data = JsonSerializer.Deserialize<JsonElement>(dataJson); }
         catch (JsonException) { return "Error: report data must be valid JSON."; }

@@ -20,7 +20,7 @@ internal sealed partial class ProtectedTool(AIFunction inner, long? owner = null
         UnwrapCallEnvelope(Name, arguments);
         CoerceScalarStrings(JsonSchema, arguments);
         if (conversation is not null)
-            await conversation.ToolStartedAsync(callId!, Name, SensitiveContent.Redact(JsonSerializer.Serialize(arguments)));
+            await conversation.ToolStartedAsync(callId!, Name, JsonSerializer.Serialize(arguments));
         try
         {
             var result = await InvokeGuardedAsync(arguments, turn, callId, cancellationToken);
@@ -30,8 +30,8 @@ internal sealed partial class ProtectedTool(AIFunction inner, long? owner = null
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            // The model sees the redacted failure as the tool result, as with any "Error:" result.
-            var error = SensitiveContent.Redact(exception.Message);
+            // The model sees the failure as the tool result, as with any "Error:" result.
+            var error = exception.Message;
             if (conversation is not null)
                 await conversation.ToolCompletedAsync(callId!, false, null, error);
             return $"Error: {error}";
@@ -55,8 +55,6 @@ internal sealed partial class ProtectedTool(AIFunction inner, long? owner = null
     private async ValueTask<object?> InvokeGuardedAsync(AIFunctionArguments arguments, TurnExecution? turn, string? callId, CancellationToken cancellationToken)
     {
         var argumentJson = JsonSerializer.Serialize(arguments);
-        if (SensitiveContent.ContainsSecret(argumentJson))
-            return SensitiveContent.RejectedMessage;
         var scopeKey = CostQueryCoordinator.RequestKey("", Name, "", argumentJson);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn?.CancellationToken ?? CancellationToken.None);
         using var lease = turn?.AcquireTool(owner!.Value);
@@ -68,7 +66,7 @@ internal sealed partial class ProtectedTool(AIFunction inner, long? owner = null
         {
             var rows = owner is null || sessionId is null
                 ? "Error: no active conversation."
-                : SensitiveContent.Redact(ResultDatabase.For(owner.Value, sessionId).Query(sql, null, linked.Token));
+                : ResultDatabase.For(owner.Value, sessionId).Query(sql, null, linked.Token);
             turn?.RecordTool(!rows.StartsWith("Error", StringComparison.Ordinal));
             return rows;
         }
@@ -135,7 +133,7 @@ internal sealed partial class ProtectedTool(AIFunction inner, long? owner = null
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                return (Text: "Error: " + SensitiveContent.Redact(exception.Message), Success: false);
+                return (Text: "Error: " + exception.Message, Success: false);
             }
             finally { gate.Release(); }
         }));
@@ -262,15 +260,14 @@ internal sealed partial class ProtectedTool(AIFunction inner, long? owner = null
     private string PrepareResult(string text, (bool Success, bool Fresh, bool Partial) evidence, AIFunctionArguments arguments,
         ConcurrentDictionary<string, long>? shapes, CancellationToken cancellationToken)
     {
-        var redacted = SensitiveContent.Redact(text);
         if (owner is null || sessionId is null || !EvidenceTools.Contains(Name) || !evidence.Success
-            || redacted.Contains("__HTML_READY__:", StringComparison.Ordinal) || redacted.Contains("__SCRIPT_READY__:", StringComparison.Ordinal)
-            || redacted.Contains("\"operationId\"", StringComparison.Ordinal)) return redacted;
+            || text.Contains("__HTML_READY__:", StringComparison.Ordinal) || text.Contains("__SCRIPT_READY__:", StringComparison.Ordinal)
+            || text.Contains("\"operationId\"", StringComparison.Ordinal)) return text;
         var azure = Name == "QueryAzure";
         return ResultDatabase.For(owner.Value, sessionId).Present(
             azure ? Argument(arguments, "url") ?? "" : "upload:" + (Argument(arguments, "fileId") ?? "") + "/" + (Argument(arguments, "mode") ?? ""),
             azure ? Argument(arguments, "method") ?? "GET" : Name,
-            redacted, azure ? Argument(arguments, "sql") : null, cancellationToken, shapes);
+            text, azure ? Argument(arguments, "sql") : null, cancellationToken, shapes);
     }
 
     private static string? Argument(AIFunctionArguments arguments, string name) =>

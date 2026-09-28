@@ -311,7 +311,7 @@ public static class SessionEndpoints
                                         lineCount = parts[2],
                                         language = parts[3],
                                         description = parts.Length > 4 ? parts[4] : "",
-                                        content = entry is not null ? SensitiveContent.Redact(File.ReadAllText(entry.Path)) : "",
+                                        content = entry is not null ? File.ReadAllText(entry.Path) : "",
                                         // See __HTML_READY__ above — expired artifacts render a
                                         // \"regenerate\" hint instead of dead download/copy buttons.
                                         expired = !live,
@@ -329,7 +329,7 @@ public static class SessionEndpoints
                 messages.Add(new
                 {
                     role = "system",
-                    content = SensitiveContent.Redact(error.Message),
+                    content = error.Message,
                     terminalStatus = "error",
                 });
             }

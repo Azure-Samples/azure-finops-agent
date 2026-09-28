@@ -49,16 +49,6 @@ public sealed class TranscriptProjectionTests
     }
 
     [Fact]
-    public void PersistedFailuresAreRedactedBeforeReplay()
-    {
-        var secret = "sk-" + new string('x', 48);
-        var question = new UserMessageEvent("Synthetic question");
-        var error = new TurnErrorEvent($"Synthetic failure with api_key={secret}", "model_error");
-        using var result = Project(question, error);
-        Assert.DoesNotContain(secret, result.RootElement[1].GetProperty("content").GetString());
-    }
-
-    [Fact]
     public void ToolsReplayWithTheirResultsAndCharts()
     {
         var question = new UserMessageEvent("Synthetic chart question");

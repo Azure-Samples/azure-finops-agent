@@ -118,13 +118,6 @@ public static class ChatEndpoints
                 return;
             }
 
-            if (SensitiveContent.ContainsSecret(prompt))
-            {
-                ctx.Response.StatusCode = 400;
-                await ctx.Response.WriteAsJsonAsync(new { error = SensitiveContent.RejectedMessage, code = "sensitive_content" });
-                return;
-            }
-
             var user = JsonSerializer.Deserialize<JsonElement>(userJson);
             var userId = user.GetProperty("id").GetInt64();
             var userLogin = user.TryGetProperty("login", out var loginProp) ? loginProp.GetString() : userId.ToString();
@@ -428,7 +421,7 @@ public static class ChatEndpoints
                 if (trivialTurn)
                     contextBits.Add(TrivialTurnDirective);
                 if (contextBits.Count > 0)
-                    prompt = SensitiveContent.Redact(string.Join("\n", contextBits) + "\n" + prompt);
+                    prompt = string.Join("\n", contextBits) + "\n" + prompt;
 
                 var done = new TaskCompletionSource();
                 var toolTracker = new ConcurrentDictionary<string, (string Name, DateTimeOffset StartTime)>();
@@ -459,7 +452,7 @@ public static class ChatEndpoints
                     try
                     {
                         if (Volatile.Read(ref streamDetached) == 0)
-                            await EmitAsync(ctx, SensitiveContent.Redact(sseData));
+                            await EmitAsync(ctx, sseData);
                     }
                     catch (Exception ex) when (IsClientDisconnect(ex))
                     {
@@ -774,7 +767,7 @@ public static class ChatEndpoints
                     new KeyValuePair<string, object?>("model", agentFactory.Deployment),
                     new KeyValuePair<string, object?>("user", userLogin),
                     new KeyValuePair<string, object?>("error_type", ex.GetType().Name));
-                var safeError = Infrastructure.SensitiveContent.Redact(ex.Message);
+                var safeError = ex.Message;
                 chatActivity?.SetTag("ai.error", safeError);
                 chatActivity?.SetTag("ai.error_type", ex.GetType().Name);
                 logger.LogError("Chat request failed for {User}; errorType={ErrorType}", userLogin, ex.GetType().Name);
@@ -1165,7 +1158,7 @@ public static class ChatEndpoints
                             var scriptFileId = parts[0];
                             var scriptContent = "";
                             if (ArtifactStore.Default.Find(scriptFileId, userId) is { } scriptEntry)
-                                scriptContent = SensitiveContent.Redact(File.ReadAllText(scriptEntry.Path));
+                                scriptContent = File.ReadAllText(scriptEntry.Path);
                             var scriptPayload = JsonSerializer.Serialize(new { type = "script_ready", fileId = parts[0], fileName = parts[1], lineCount = parts[2], language = parts[3], description = parts.Length > 4 ? parts[4] : "", content = scriptContent });
                             await emit(sseData);
                             await emit(scriptPayload);

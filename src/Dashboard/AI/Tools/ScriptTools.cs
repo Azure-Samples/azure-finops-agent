@@ -19,7 +19,7 @@ public sealed class ScriptTools(long ownerUserId)
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateScript, "GenerateScript",
-            @"Directly creates a downloadable Azure CLI or PowerShell artifact from the complete code supplied in scriptContent. The tool packages that code with credential redaction; it never executes it and does not write or complete the code itself.
+            @"Directly creates a downloadable Azure CLI or PowerShell artifact from the complete code supplied in scriptContent. The tool packages that code as a file; it never executes it and does not write or complete the code itself.
 
 Call this tool in the same response whenever the user explicitly requests code, a script, or a repeatable command workflow. Write the complete executable script in scriptContent instead of returning only a fenced code block. For tenant-specific remediation, analyze and scope the environment first. A self-contained parameterized script does not require a tenant query.
 
@@ -61,7 +61,7 @@ Example header:
         var desc = string.IsNullOrWhiteSpace(description) ? "FinOps remediation script" : description;
 
         var artifact = ArtifactStore.Default.Register(ownerUserId, safeName + ext,
-            lang == "powershell" ? "application/x-powershell" : "application/x-shellscript", Encoding.UTF8.GetBytes(SensitiveContent.Redact(scriptContent)));
+            lang == "powershell" ? "application/x-powershell" : "application/x-shellscript", Encoding.UTF8.GetBytes(scriptContent));
 
         var lineCount = scriptContent.Split('\n').Length;
 

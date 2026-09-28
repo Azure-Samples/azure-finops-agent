@@ -91,6 +91,37 @@ public class ResultDatabaseTests
         Assert.Equal("hit\nspot eviction\n(1 rows)", database.Query("SELECT substr(body, instr(body, 'spot'), 13) AS hit FROM responses WHERE id = 1", null, CancellationToken.None));
     }
 
+    [Fact]
+    public void FullStoreDropsLargeBodiesFirstAndSaysWhich()
+    {
+        // H200 run: FIFO eviction deleted the retail prices (id 53) and quotas (id 54) under 2.5 MB SKU pages,
+        // so later joins silently returned no rows.
+        using var database = ResultDatabase.WithCapacity(3_500_000);
+        var large = "HTTP 200 OK\n{\"value\":\"" + new string('s', 1_200_000) + "\"}";
+        database.Present("/prices", "GET", Vms, null, CancellationToken.None);
+        database.Present("/skus/eastus", "GET", large, null, CancellationToken.None);
+        database.Present("/quotas", "GET", Vms, null, CancellationToken.None);
+        database.Present("/skus/westus", "GET", large, null, CancellationToken.None);
+
+        var output = database.Present("/skus/westus2", "GET", large, null, CancellationToken.None);
+
+        Assert.Contains("[Stored as responses.id = 5.]", output);
+        Assert.Contains("responses.id 2 were dropped, largest first; request them again if they are still needed.]", output);
+        Assert.Equal("id\n1\n3\n4\n5\n(4 rows)", database.Query("SELECT id FROM responses ORDER BY id", null, CancellationToken.None));
+    }
+
+    [Fact]
+    public void FullStoreOfSmallBodiesDropsTheOldest()
+    {
+        using var database = ResultDatabase.WithCapacity(ResultDatabase.Split(Vms).Body.Length * 2);
+        database.Present("/a", "GET", Vms, null, CancellationToken.None);
+        database.Present("/b", "GET", Vms, null, CancellationToken.None);
+
+        var output = database.Present("/c", "GET", Vms, "SELECT count(*) AS n FROM responses", CancellationToken.None);
+
+        Assert.EndsWith("n\n2\n(1 rows)\n[To stay within this conversation's 1 MB store, responses.id 1 were dropped, largest first; request them again if they are still needed.]", output);
+    }
+
     [Theory]
     [InlineData("INSERT INTO responses(url, method, retrieved_utc, body) VALUES ('a','b','c','d')")]
     [InlineData("DELETE FROM responses")]

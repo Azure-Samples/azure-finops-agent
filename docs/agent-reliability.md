@@ -25,7 +25,7 @@ The agent's model was separately switched to an existing Luna deployment because
 | Finding | Implemented control | Regression coverage |
 | --- | --- | --- |
 | FIN-01: unrestricted execution | Custom-only runtime policy on create/resume, per-invocation admission, non-root image | Permission tests and real Windows/Linux CLI protocol |
-| FIN-02: credential exposure | Pre-dispatch screening, structured return/SSE redaction, content capture disabled | Credential/redaction tests; historical cleanup remains operator-owned |
+| FIN-02: credential exposure | Content capture disabled; host-side screening and redaction were removed by maintainer decision, so the model decides | Historical cleanup remains operator-owned |
 | FIN-03: ownerless downloads | Explicit owner-bound persistent artifact registry and fail-closed endpoints | Owner/missing/expired/restart tests |
 | FIN-04: short requests lose tools | Only standalone greetings take the no-tool path | Routing tests and live short XLSX follow-up |
 | FIN-05: scheduled idle equals success | Structured host-validated scoped evidence, repeated-failure/goal pause, context compaction | Freshness/scope/outcome tests and real CLI compaction |

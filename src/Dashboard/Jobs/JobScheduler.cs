@@ -121,12 +121,6 @@ public sealed class JobScheduler : BackgroundService
 
     private async Task RunJobCoreAsync(ScheduledJob job, CancellationToken ct)
     {
-        if (SensitiveContent.ContainsSecret(job.Prompt) || SensitiveContent.ContainsSecret(job.Name))
-        {
-            job.Enabled = false;
-            MarkFailure(job, "sensitive_content", SensitiveContent.RejectedMessage);
-            return;
-        }
         // Reschedule FIRST so a crash mid-run can't produce a hot retry loop.
         job.NextRunUtc = DateTimeOffset.UtcNow.AddMinutes(job.IntervalMinutes);
         _store.Save();
@@ -321,7 +315,7 @@ public sealed class JobScheduler : BackgroundService
             "Read fresh evidence for the entire declared scope. Prior runs are context, never proof nothing changed. " +
             "After source tools finish call ReportJobOutcome with status, summary, exact evidence tool names, source dataAsOfUtc when known, and any retry deadline. " +
             "Use blocked or partial when access, throttling, stale data, or incomplete coverage prevents success. Use goal_achieved only when verified; the scheduler will pause automatically. " +
-            $"Latest bounded result: {SensitiveContent.Redact(job.LastSummary ?? "none")}.]\n" +
+            $"Latest bounded result: {job.LastSummary ?? "none"}.]\n" +
             job.Prompt;
 
         try

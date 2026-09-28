@@ -53,8 +53,6 @@ public static class JobEndpoints
 
             if (string.IsNullOrWhiteSpace(prompt))
                 return Results.BadRequest(new { error = "prompt is required" });
-            if (SensitiveContent.ContainsSecret(prompt) || SensitiveContent.ContainsSecret(name))
-                return Results.BadRequest(new { error = SensitiveContent.RejectedMessage, code = "sensitive_content" });
             if (prompt.Length > 2000)
                 return Results.BadRequest(new { error = "prompt too long (max 2000 chars)" });
             if (interval < MinIntervalMinutes || interval > MaxIntervalMinutes)
@@ -114,8 +112,6 @@ public static class JobEndpoints
                 newInterval = iv;
             }
 
-            if (SensitiveContent.ContainsSecret(newPrompt) || SensitiveContent.ContainsSecret(newName))
-                return Results.BadRequest(new { error = SensitiveContent.RejectedMessage, code = "sensitive_content" });
             if (newPrompt is not null) job!.Prompt = newPrompt;
             if (newName is not null)
                 job!.Name = string.IsNullOrWhiteSpace(newName)

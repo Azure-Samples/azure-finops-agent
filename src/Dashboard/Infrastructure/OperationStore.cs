@@ -59,7 +59,6 @@ internal sealed class OperationStore
     internal Operation Begin(long owner, string sessionId, string method, string url, string? body, out bool created, bool requiresApproval = false)
     {
         if (!IsArmUrl(url)) throw new InvalidOperationException("Invalid operation resource.");
-        if (SensitiveContent.ContainsSecret(body)) throw new InvalidOperationException(SensitiveContent.RejectedMessage);
         lock (_sync)
         {
             Cleanup();
@@ -231,7 +230,7 @@ internal sealed class OperationStore
     {
         try
         {
-            using var parsed = JsonDocument.Parse(SensitiveContent.Redact(content));
+            using var parsed = JsonDocument.Parse(content);
             var root = parsed.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return null;
             var retained = new Dictionary<string, object?>();

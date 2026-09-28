@@ -43,9 +43,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Remove the former stored-result query, cost calculator, amount comparison, token-estimate and standalone operation-status helper tools.
 - Remove `QueryAzure`'s bulk-call envelope, inline projection object, caller-selected page cap, public-web grep and caller-selected parallelism knobs. Paginated ARM, Graph and Retail GETs now follow same-origin continuation links up to the fixed 10-page host cap.
 - Remove the unused `jq` and `sqlite3` CLIs from the runtime image; no shell tools remain to call them. Stored-response SQL uses the SQLite bundled by `Microsoft.Data.Sqlite`, which the container smoke check now loads from the published image.
+- Remove host-side credential screening and redaction (`SensitiveContent`) from chat, jobs, tool arguments and returns, SSE, transcripts, generated scripts, uploads and operation records; recognizing and refusing secrets is left to the model. Under concurrent multi-URL reads, its regular expressions timed out over 2.5 MB SKU responses and replaced whole tool results with `[REDACTED]` while still reporting success. Browser telemetry scrubbing and public evaluation-report redaction are unchanged.
 
 ### Fixed
 
+- Stop a full conversation result store from silently dropping the small responses a later join needs. Plain FIFO eviction at the 64M-character cap deleted retail-price and quota responses under 2.5 MB SKU pages mid-turn, so the model's joins returned no rows. Bodies of 1M characters or more are now evicted first, and the tool result names every dropped `responses.id` so the model can request it again.
+- Raise the Foundry project client's network timeout from System.ClientModel's 100-second default to 10 minutes. The default also bounds each streaming read, so a long silent reasoning stretch could time out and retry the whole model request.
 - Retry the regression gate's Trivy vulnerability-database download across `mirror.gcr.io` and `ghcr.io`, then scan offline. Trivy's own registry fallback covers only 429/5xx, so a failed layer fetch previously failed validation without scanning. The scan still fails closed when no database can be downloaded.
 - Stop Dependabot branch pushes from triggering the test-slot workflow. They could never deploy, but joining `test-slot-deploy` cancelled an in-flight feature run during its live evaluations.
 - Stop the rollback-capture unit test from emitting a real `::warning::` annotation on every CI run.

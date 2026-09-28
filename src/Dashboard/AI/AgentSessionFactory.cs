@@ -205,7 +205,11 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         sharedTools.AddRange(FollowUpTools.Create());
 
         var effort = string.IsNullOrWhiteSpace(reasoningEffort) ? null : reasoningEffort.Trim().ToLowerInvariant();
-        var factory = new AgentSessionFactory(telemetry, identity, new AIProjectClient(projectEndpoint, credential),
+        // System.ClientModel's 100 s default also bounds each streaming read; a long silent reasoning stretch would
+        // otherwise time out and retry the whole model request.
+        var projectClient = new AIProjectClient(projectEndpoint, credential,
+            new AIProjectClientOptions { NetworkTimeout = TimeSpan.FromMinutes(10) });
+        var factory = new AgentSessionFactory(telemetry, identity, projectClient,
             deployment, effort, webSearch, sharedTools, loggerFactory);
         factory._logger.LogInformation("Agent runtime ready; deployment={Deployment} effort={Effort} webSearch={WebSearch}",
             deployment, effort ?? "<model default>", webSearch);
@@ -249,14 +253,13 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         });
 
 
-    /// <summary>A bounded, redacted failure description that is safe to show and persist.</summary>
+    /// <summary>A bounded failure description that is safe to show and persist.</summary>
     internal string DescribeFailure(Exception exception)
     {
         _logger.LogWarning(exception, "Agent turn failed");
         var detail = exception is ClientResultException result
             ? $"The model request failed (HTTP {result.Status}). {FirstLine(result.Message)}"
             : $"The agent turn failed: {FirstLine(exception.Message)}";
-        detail = SensitiveContent.Redact(detail);
         return detail.Length > 400 ? detail[..400] : detail;
 
         static string FirstLine(string text) =>

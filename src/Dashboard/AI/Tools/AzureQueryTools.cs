@@ -17,7 +17,7 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// <summary>
 /// The single HTTP evidence tool. The model authors the URL, method and body for every supported API;
 /// the host resolves the service from the exact URL host, attaches only that service's delegated token
-/// and enforces its method, scope, throttling, pagination, redaction and approval rules. Unknown hosts
+/// and enforces its method, scope, throttling, pagination and approval rules. Unknown hosts
 /// are public, credential-free GETs. All calls are traced via OpenTelemetry → Application Insights.
 ///
 /// Security model: DELETE is blocked everywhere. ARM POST is restricted to known read-only
@@ -75,7 +75,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         [Description("Optional read-only SQLite over table responses(id, url, method, status, retrieved_utc, body); $id is this call's stored response. Only the query's rows are returned.")] string sql = "",
         CancellationToken cancellationToken = default)
     {
-        // sql runs in ProtectedTool over the stored, redacted response.
+        // sql runs in ProtectedTool over the stored response.
         _ = sql;
         using var activity = HttpHelper.Telemetry.StartActivity("QueryAzure");
         var target = url.Trim();

@@ -7,7 +7,7 @@ using SQLitePCL;
 namespace AzureFinOps.Dashboard.Infrastructure;
 
 /// <summary>
-/// One in-memory SQLite database per conversation. QueryAzure stores every redacted response in table
+/// One in-memory SQLite database per conversation. QueryAzure stores every response in table
 /// responses; the model learns a result's shape and filters, joins, groups and calculates with its own
 /// read-only SQL instead of receiving whole payloads. Bound to the exact owner and conversation; idle
 /// databases expire after 30 minutes and on restart.
@@ -24,14 +24,17 @@ internal sealed class ResultDatabase : IDisposable
 
     private readonly SqliteConnection _connection = new("Data Source=:memory:");
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SortedDictionary<long, int> _sizes = [];
     private bool _untrusted;
     private DateTime _deadline;
     private CancellationToken _cancellation;
     private long _characters;
+    private readonly long _capacity;
     private DateTime _lastUsed = DateTime.UtcNow;
 
-    private ResultDatabase()
+    private ResultDatabase(long capacity = ConversationCharacters)
     {
+        _capacity = capacity;
         _connection.Open();
         var handle = _connection.Handle!;
         raw.sqlite3_limit(handle, raw.SQLITE_LIMIT_ATTACHED, 0);
@@ -52,24 +55,29 @@ internal sealed class ResultDatabase : IDisposable
         return Databases.GetOrAdd((owner, session), _ => new ResultDatabase());
     }
 
+    /// <summary>An unregistered database with a smaller store, so eviction can be tested without 64 MB of data.</summary>
+    internal static ResultDatabase WithCapacity(long characters) => new(characters);
+
     /// <summary>Stores a response and returns what the model sees: the response itself when small, otherwise its shape; with sql, the query rows.
     /// Within one multi-url call, <paramref name="shapes"/> shows each distinct shape once and refers later responses to it.</summary>
     internal string Present(string url, string method, string response, string? sql, CancellationToken cancellationToken,
         ConcurrentDictionary<string, long>? shapes = null)
     {
         var (head, body) = Split(response);
-        var id = Store(url, method, head, body);
+        var (id, dropped) = Store(url, method, head, body);
         var stored = $"[Stored as responses.id = {id}.]";
-        if (head.StartsWith("HTTP 4", StringComparison.Ordinal) || head.StartsWith("HTTP 5", StringComparison.Ordinal)) return response;
+        var note = dropped.Count == 0 ? "" : $"\n[To stay within this conversation's {Math.Max(1, _capacity / (1024 * 1024))} MB store, responses.id {string.Join(", ", dropped)} "
+            + "were dropped, largest first; request them again if they are still needed.]";
+        if (head.StartsWith("HTTP 4", StringComparison.Ordinal) || head.StartsWith("HTTP 5", StringComparison.Ordinal)) return response + note;
         if (!string.IsNullOrWhiteSpace(sql))
         {
             var rows = Query(sql, id, cancellationToken);
-            return rows.StartsWith("Error", StringComparison.Ordinal)
+            return (rows.StartsWith("Error", StringComparison.Ordinal)
                 ? $"{head}{stored}\n{rows}\nThe request was not repeated. Correct the sql against this shape:\n{Shape(id, shapes)}"
-                : $"{head}{stored}\n{rows}";
+                : $"{head}{stored}\n{rows}") + note;
         }
-        if (response.Length <= InlineCharacters) return $"{response.TrimEnd()}\n{stored}";
-        return $"{head}{stored} The {body.Length.ToString("N0", CultureInfo.InvariantCulture)}-character body is too large to return; read only what you need with sql. Shape:\n{Shape(id, shapes)}";
+        if (response.Length <= InlineCharacters) return $"{response.TrimEnd()}\n{stored}{note}";
+        return $"{head}{stored} The {body.Length.ToString("N0", CultureInfo.InvariantCulture)}-character body is too large to return; read only what you need with sql. Shape:\n{Shape(id, shapes)}{note}";
     }
 
     private string Shape(long id, ConcurrentDictionary<string, long>? shapes)
@@ -171,16 +179,24 @@ internal sealed class ResultDatabase : IDisposable
         return statements;
     }
 
-    private long Store(string url, string method, string head, string body)
+    // Large bodies are evicted first, oldest first: they are usually read once by the sql of their own call, while
+    // small responses such as prices and quotas are what later joins reuse. Plain FIFO once dropped those mid-turn.
+    private const int LargeCharacters = 1024 * 1024;
+
+    private (long Id, List<long> Dropped) Store(string url, string method, string head, string body)
     {
         _gate.Wait();
         try
         {
             _lastUsed = DateTime.UtcNow;
-            while (_characters + body.Length > ConversationCharacters && Scalar("SELECT min(id) FROM responses") is long oldest)
+            var dropped = new List<long>();
+            while (_characters + body.Length > _capacity && _sizes.Count > 0)
             {
-                _characters -= (long)(Scalar("SELECT length(body) FROM responses WHERE id = $id", oldest) ?? 0L);
-                Scalar("DELETE FROM responses WHERE id = $id", oldest);
+                var (evicted, size) = _sizes.FirstOrDefault(entry => entry.Value >= LargeCharacters) is { Key: > 0 } large ? large : _sizes.First();
+                Scalar("DELETE FROM responses WHERE id = $id", evicted);
+                _sizes.Remove(evicted);
+                _characters -= size;
+                dropped.Add(evicted);
             }
             using var insert = _connection.CreateCommand();
             insert.CommandText = "INSERT INTO responses(url, method, status, retrieved_utc, body) VALUES ($url, $method, $status, $time, $body) RETURNING id";
@@ -190,8 +206,11 @@ internal sealed class ResultDatabase : IDisposable
                 && int.TryParse(head.AsSpan(5, Math.Min(3, head.Length - 5)), out var status) ? status : DBNull.Value);
             insert.Parameters.AddWithValue("$time", DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture));
             insert.Parameters.AddWithValue("$body", body);
+            var id = (long)insert.ExecuteScalar()!;
+            _sizes[id] = body.Length;
             _characters += body.Length;
-            return (long)insert.ExecuteScalar()!;
+            dropped.Sort();
+            return (id, dropped);
         }
         finally { _gate.Release(); }
     }

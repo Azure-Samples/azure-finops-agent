@@ -224,7 +224,7 @@ Examples:
         await using var hashStream = File.OpenRead(path);
         var hash = Convert.ToHexString(await SHA256.HashDataAsync(hashStream)).ToLowerInvariant();
         var entry = new UploadEntry(fileId, userId, safeName, kind, path, size, DateTime.UtcNow,
-            SensitiveContent.Redact(schemaSummary ?? ""), ExpiresUtc: DateTime.UtcNow.AddMinutes(30), Sha256: hash);
+            schemaSummary ?? "", ExpiresUtc: DateTime.UtcNow.AddMinutes(30), Sha256: hash);
         Catalog.Add(entry);
         return (entry, previewJson);
     }
@@ -369,7 +369,7 @@ Examples:
         if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
             return Json(new { ok = false, error = "File inspection failed. Verify the file format and narrow the query." });
 
-        return SensitiveContent.Redact(stdout.Trim());
+        return stdout.Trim();
     }
 
     internal static object? JsonValueToObject(JsonElement el) => el.ValueKind switch

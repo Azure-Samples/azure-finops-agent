@@ -19,7 +19,7 @@ flowchart LR
 | Boundary | Owns | Must not own |
 | --- | --- | --- |
 | Session/turn host | User/session identity, one active turn, cancellation, completion | Guessing whether an answer fulfilled the business goal |
-| Protected tools | Admission, owner binding, redaction, execution leases | Model-controlled permissions or filesystem access |
+| Protected tools | Admission, owner binding, execution leases | Model-controlled permissions or filesystem access |
 | Tool contracts | Required/optional arguments, supported query options and scope | Generic filters unsupported by the source API |
 | HTTP transport | Authentication, cancellation, service retry deadlines | Invented data or silently shortened retry deadlines |
 | Evidence/results | Source date, currency, units, counts, paging and completeness | Treating unknown/denied/partial data as zero or complete |
@@ -33,7 +33,7 @@ flowchart LR
 - [RequestProgressCard.vue](../src/Dashboard/frontend/src/components/RequestProgressCard.vue) explains the service wait with a deadline-based countdown and restrained animation, without conflating wait progress with request completion. Reduced motion disables decorative animation; hidden tabs pause it.
 - [AssistantAvatar.vue](../src/Dashboard/frontend/src/components/AssistantAvatar.vue) replaces text-circle avatars with one accessible brand mark. Only working replies animate, and every SVG instance has unique IDs.
 - [turnRecovery.js](../src/Dashboard/frontend/src/turnRecovery.js) classifies owner-checked terminal outcomes without treating unavailable or mismatched history as proof of failure. A model authorization failure is separate from the user's tenant connection.
-- [TurnFailureNotice.vue](../src/Dashboard/frontend/src/components/TurnFailureNotice.vue) renders the same accessible failure state for live and restored turns. [SessionEndpoints.cs](../src/Dashboard/Endpoints/SessionEndpoints.cs) preserves redacted turn errors in transcript order without discarding partial answers. Editing a failed question never resends it automatically or replaces an existing draft.
+- [TurnFailureNotice.vue](../src/Dashboard/frontend/src/components/TurnFailureNotice.vue) renders the same accessible failure state for live and restored turns. [SessionEndpoints.cs](../src/Dashboard/Endpoints/SessionEndpoints.cs) preserves turn errors in transcript order without discarding partial answers. Editing a failed question never resends it automatically or replaces an existing draft.
 - [jobTemplates.js](../src/Dashboard/frontend/src/data/jobTemplates.js) keeps editable scheduling prompts in data rather than component logic. Template guidance cannot approve purchases or invent missing resource names, and test jobs must not repeatedly query the tenant-throttled billing service.
 - [ChatEndpoints.cs](../src/Dashboard/AI/ChatEndpoints.cs) forwards message and admitted tool-call identities. The browser no longer has to guess which running tool is waiting.
 - [TurnExecution.cs](../src/Dashboard/AI/TurnExecution.cs) accounts for distinct completed messages without double-counting snapshots.
@@ -53,7 +53,7 @@ The following remain deterministic host policy:
 - Approved request destinations and reserved host-owned fields.
 - No Azure deletion and no unrestricted mutating POST.
 - Exact stored PUT/PATCH approval in the application.
-- Credential screening, redaction and sandboxed generated HTML.
+- Sandboxed generated HTML.
 - Cost Management serialization, full retry deadlines and final same-turn blocking.
 
 Do not replace these controls with prompt wording or an AI judgement.

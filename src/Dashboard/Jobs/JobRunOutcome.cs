@@ -11,7 +11,7 @@ internal sealed record JobRunOutcome(string Status, string Summary, string[] Evi
     DateTimeOffset? DataAsOfUtc, DateTimeOffset? NextEligibleRunUtc)
 {
     internal bool Succeeded => Status is "completed" or "unchanged" or "goal_achieved";
-    internal static JobRunOutcome Failed(string summary) => new("failed", SensitiveContent.Redact(summary), [], null, null);
+    internal static JobRunOutcome Failed(string summary) => new("failed", summary, [], null, null);
 
     internal static JobRunOutcome Validate(JobRunOutcome? reported, TurnExecution turn, string answer, DateTimeOffset now)
     {
@@ -67,8 +67,8 @@ internal sealed class JobOutcomeTools(long owner)
             return "Error: no scheduled run is active.";
         if (status is not ("completed" or "unchanged" or "goal_achieved" or "blocked" or "partial" or "failed"))
             return "Error: invalid outcome status.";
-        if (string.IsNullOrWhiteSpace(summary) || summary.Length > 1000 || SensitiveContent.ContainsSecret(summary))
-            return "Error: provide a concise result without credentials.";
+        if (string.IsNullOrWhiteSpace(summary) || summary.Length > 1000)
+            return "Error: provide a concise result of at most 1000 characters.";
         string[] evidence;
         try { evidence = JsonSerializer.Deserialize<string[]>(evidenceToolsJson) ?? []; }
         catch (JsonException) { return "Error: evidenceToolsJson must be a JSON string array."; }
