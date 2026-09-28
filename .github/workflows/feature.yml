@@ -4,10 +4,12 @@ name: Deploy feature branch to test slot
 # to the deployment slot configured by `TEST_*` repository variables,
 # so maintainers can preview feature branches before merging. Forks supply
 # their own variables and secrets; no deployment coordinates live in source.
+# Dependabot branches are excluded: they never deploy (no secrets) and their pull
+# requests run validate.yml, but joining `test-slot-deploy` pre-empted in-flight runs.
 
 on:
   push:
-    branches-ignore: [main]
+    branches-ignore: [main, "dependabot/**"]
     paths:
       - "src/Dashboard/**"
       - "tests/**"

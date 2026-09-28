@@ -37,6 +37,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Remove `QueryAzure`'s bulk-call envelope, inline projection object, caller-selected page cap, public-web grep and caller-selected parallelism knobs. Paginated ARM, Graph and Retail GETs now follow same-origin continuation links up to the fixed 10-page host cap.
 - Remove the unused `jq` and `sqlite3` CLIs from the runtime image; no shell tools remain to call them. Stored-response SQL uses the SQLite bundled by `Microsoft.Data.Sqlite`, which the container smoke check now loads from the published image.
 
+### Fixed
+
+- Retry the regression gate's Trivy vulnerability-database download across `mirror.gcr.io` and `ghcr.io`, then scan offline. Trivy's own registry fallback covers only 429/5xx, so a failed layer fetch previously failed validation without scanning. The scan still fails closed when no database can be downloaded.
+- Stop Dependabot branch pushes from triggering the test-slot workflow. They could never deploy, but joining `test-slot-deploy` cancelled an in-flight feature run during its live evaluations.
+- Stop the rollback-capture unit test from emitting a real `::warning::` annotation on every CI run.
+
 ## [0.3.0] - 2026-09-20
 
 ### Added

@@ -198,13 +198,13 @@ async function readJson(path) {
     }
 }
 
-export async function captureRollback(directory, output) {
+export async function captureRollback(directory, output, { log = console.log } = {}) {
     const target = rollbackImage(await readJson(join(directory, "runtime.json")));
     const settings = restoreSettings(await readJson(join(directory, "current-settings.json")));
     await rm(join(directory, "current-settings.json"), { force: true });
     await rm(join(directory, "runtime.json"), { force: true });
     if (!target) {
-        console.log("::warning::Automatic rollback is unavailable: the target is not running a single registry container image.");
+        log("::warning::Automatic rollback is unavailable: the target is not running a single registry container image.");
         await appendFile(output, "captured=false\n");
         return false;
     }
@@ -213,7 +213,7 @@ export async function captureRollback(directory, output) {
     await writeFile(join(directory, "registry"), target.registry, options);
     if (settings.length > 0) await writeFile(join(directory, "restore-settings.json"), JSON.stringify(settings), options);
     if (settings.length < MODEL_SETTING_NAMES.length)
-        console.log("::warning::Rollback restores only model settings that existed before this deployment.");
+        log("::warning::Rollback restores only model settings that existed before this deployment.");
     await appendFile(output, "captured=true\n");
     return true;
 }

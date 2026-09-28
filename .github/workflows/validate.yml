@@ -57,6 +57,27 @@ jobs:
       - name: Reject fixable critical runtime vulnerabilities
         run: |
           docker save finops-validation:local -o "$RUNNER_TEMP/finops-validation.tar"
-          docker run --rm -v "$RUNNER_TEMP:/validation:ro" aquasec/trivy:0.74.0 image \
-            --input /validation/finops-validation.tar --scanners vuln --severity CRITICAL \
-            --ignore-unfixed --no-progress --skip-version-check --exit-code 1
+          mkdir -p "$RUNNER_TEMP/trivy-cache"
+          trivy() {
+            docker run --rm -e TRIVY_CACHE_DIR=/cache \
+              -v "$RUNNER_TEMP:/validation:ro" -v "$RUNNER_TEMP/trivy-cache:/cache" \
+              aquasec/trivy:0.74.0 "$@"
+          }
+          # Trivy only falls back between registries on 429/5xx; a failed layer fetch after a
+          # good manifest aborts the scan. Retry the download explicitly, then scan offline.
+          downloaded=false
+          for attempt in 1 2 3; do
+            for repository in mirror.gcr.io/aquasec/trivy-db:2 ghcr.io/aquasecurity/trivy-db:2; do
+              if trivy image --download-db-only --db-repository "$repository" --no-progress --skip-version-check; then
+                downloaded=true
+                break 2
+              fi
+            done
+            if [ "$attempt" -lt 3 ]; then sleep $((attempt * 15)); fi
+          done
+          if [ "$downloaded" != true ]; then
+            echo "::error::Trivy vulnerability database could not be downloaded from any registry."
+            exit 1
+          fi
+          trivy image --input /validation/finops-validation.tar --scanners vuln --severity CRITICAL \
+            --ignore-unfixed --no-progress --skip-version-check --skip-db-update --exit-code 1

@@ -201,7 +201,9 @@ test("capture writes private rollback files, removes raw CLI output and never pr
         const output = join(directory, "output");
         await writeFile(join(directory, "runtime.json"), JSON.stringify("SITECONTAINERS"));
         await writeFile(join(directory, "current-settings.json"), "[]");
-        assert.equal(await captureRollback(directory, output), false);
+        const warnings = [];
+        assert.equal(await captureRollback(directory, output, { log: (line) => warnings.push(line) }), false);
+        assert.deepEqual(warnings, ["::warning::Automatic rollback is unavailable: the target is not running a single registry container image."]);
         assert.equal(await readFile(output, "utf8"), "captured=false\n");
         await assert.rejects(stat(join(directory, "image")), { code: "ENOENT" });
     });
