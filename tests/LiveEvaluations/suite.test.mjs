@@ -1153,6 +1153,42 @@ test("a final service throttle is retried once after its deadline with the rubri
     }
 });
 
+test("a throttle rerun waits a full quota window even after a short service deadline", async () => {
+    const directory = await createDirectory();
+    try {
+        const planned = cases.slice(0, 1);
+        const starts = [];
+        let firstEnded = 0;
+        await runCases(
+            planned,
+            directory,
+            sha,
+            suiteHash,
+            async (scenario, path) => {
+                starts.push(Date.now());
+                const result = pass(scenario);
+                if (starts.length === 1) {
+                    result.accepted = false;
+                    result.reasons = ["At least one tool failed."];
+                    // An already-expired deadline: only the quota window can delay the rerun.
+                    result.throttle = { notices: 1, final: true, retryAtUtc: new Date(Date.now() - 60_000).toISOString() };
+                }
+                await writeFile(path, JSON.stringify(result));
+                if (starts.length === 1) firstEnded = Date.now();
+                return starts.length === 1 ? 1 : 0;
+            },
+            async () => {},
+            false,
+            0,
+            { throttleRetryQuietMs: 400 },
+        );
+        assert.equal(starts.length, 2);
+        assert.ok(starts[1] - firstEnded >= 380, `rerun started ${starts[1] - firstEnded}ms after the refusal`);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test("a throttled case that still fails after its single retry remains failed", async () => {
     const directory = await createDirectory();
     try {

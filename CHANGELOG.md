@@ -44,6 +44,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Stop Dependabot branch pushes from triggering the test-slot workflow. They could never deploy, but joining `test-slot-deploy` cancelled an in-flight feature run during its live evaluations.
 - Stop the rollback-capture unit test from emitting a real `::warning::` annotation on every CI run.
 - Correct the deployment permissions guide, which still named Cognitive Services User as the app's model role, and the App Service settings comments that still described the removed Copilot CLI and OpenTelemetry collector.
+- Wait at least one full minute before re-running a live-evaluation case after a final Cost Management throttle. The rerun honored only the service's short retry-after, so it started 27 seconds after the refusal, inside the same per-tenant 60-QPU-per-minute quota window, and the Chargeback case was refused again.
 
 ## [0.3.0] - 2026-09-20
 

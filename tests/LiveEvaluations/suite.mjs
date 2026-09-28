@@ -29,6 +29,10 @@ const evaluationSourcePaths = [
 ];
 const LIVE_SUITE_SIZE = 20;
 const THROTTLE_MARGIN_MS = 5000;
+// Cost Management's per-tenant Query API quotas are 12 QPU per 10 s, 60 QPU per minute and
+// 600 QPU per hour. A retry-after covers only the exhausted window; a rerun inside the same
+// minute replays the same burst into the same refusal.
+const COST_QUOTA_WINDOW_MS = 60 * 1000;
 // The app waits at most five minutes for a cost retry; allow a bounded margin beyond it.
 const MAX_THROTTLE_WAIT_MS = 6 * 60 * 1000;
 const CURATED_CASE_IDS = Object.freeze([
@@ -583,6 +587,7 @@ export async function runCases(
         diagnosticsSourceRoot = repositoryRoot,
         failFast = false,
         laneOf = () => COST_MANAGEMENT_LANE,
+        throttleRetryQuietMs = 0,
     } = {},
 ) {
     const results = [];
@@ -742,7 +747,8 @@ export async function runCases(
                 // A final service throttle is an environmental refusal, not an agent verdict: rerun once, unchanged, after the deadline.
                 if (noteThrottle(result) && failures.length > 0) {
                     console.log(`[${index + 1}/${cases.length}] ${scenario.id} throttled by the service; retrying once after cooldown.`);
-                    await waitForCooldown(pauseMs);
+                    // Wait out the reported deadline and at least one full quota window since the refusal.
+                    await waitForCooldown(Math.max(pauseMs, throttleRetryQuietMs));
                     controller.signal.throwIfAborted();
                     await renewLane();
                     controller.signal.throwIfAborted();
@@ -1043,6 +1049,7 @@ async function main() {
                 process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY,
             failFast: process.env.EVAL_FAIL_FAST === "true",
             laneOf: evaluationLane,
+            throttleRetryQuietMs: COST_QUOTA_WINDOW_MS,
         },
     );
     if (!verdict.accepted) process.exitCode = 1;
