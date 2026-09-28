@@ -110,6 +110,41 @@ public sealed class ToolSchemaContractTests
         Assert.Contains("conflicting type and chart", result!.ToString());
     }
 
+    // Run 36481780607: the model appended leaked format tokens after the array; the tool
+    // reported success, the browser could not parse it, and the promised chart never rendered.
+    [Theory]
+    [InlineData("[{\"name\":\"A\",\"value\":1}]}  亚洲日韩functions.RenderChartոխcommentary.debate {", "not valid JSON")]
+    [InlineData("[{\"name\":\"A\",\"value\":1},]", "not valid JSON")]
+    [InlineData("name,value\nA,1", "not valid JSON")]
+    [InlineData("[]", "non-empty")]
+    [InlineData("{\"name\":\"A\",\"value\":1}", "non-empty")]
+    [InlineData("[1,2,3]", "entries must be objects")]
+    [InlineData("  ", "requires data")]
+    public async Task MalformedChartDataFailsSoTheModelResendsIt(string data, string expected)
+    {
+        var result = await GetTool("RenderChart").InvokeAsync(new AIFunctionArguments
+        {
+            ["type"] = "horizontal_bar", ["title"] = "Synthetic chart", ["seriesName"] = "Cost", ["data"] = data
+        });
+        var text = result!.ToString()!;
+        Assert.StartsWith("Error: RenderChart", text);
+        Assert.Contains(expected, text);
+        Assert.Contains("Nothing was rendered", text);
+        Assert.DoesNotContain("functions.RenderChart", text);
+    }
+
+    [Fact]
+    public async Task ChartDataSentAsAJsonArrayIsAcceptedAsItsText()
+    {
+        using var array = JsonDocument.Parse("[{\"name\":\"A\",\"value\":1}]");
+        var result = await GetTool("RenderChart").InvokeAsync(new AIFunctionArguments
+        {
+            ["type"] = "bar", ["title"] = "Synthetic chart", ["seriesName"] = "Cost", ["data"] = array.RootElement.Clone()
+        });
+        using var response = JsonDocument.Parse(Assert.IsType<JsonElement>(result).GetString()!);
+        Assert.Equal("[{\"name\":\"A\",\"value\":1}]", response.RootElement.GetProperty("data").GetString());
+    }
+
     private static AIFunction GetTool(string name)
     {
         var tools = name switch

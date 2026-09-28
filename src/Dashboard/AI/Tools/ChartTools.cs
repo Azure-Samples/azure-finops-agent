@@ -91,9 +91,38 @@ WORLD MAP — effectScatter on geo (e.g. Azure region pricing):
             type = (type ?? alias)?.Trim().ToLowerInvariant();
             if (type is not ("bar" or "horizontal_bar" or "line" or "pie" or "scatter" or "funnel" or "race"))
                 return Reject("RenderChart requires type: bar, horizontal_bar, line, pie, scatter, funnel or race.");
-            var normalized = new AIFunctionArguments(arguments) { ["type"] = type };
+            arguments.TryGetValue("data", out var rawData);
+            var data = rawData is JsonElement { ValueKind: JsonValueKind.Array } array ? array.GetRawText() : Text(rawData);
+            if (DataError(data) is { } dataError)
+                return Reject(dataError);
+            var normalized = new AIFunctionArguments(arguments) { ["type"] = type, ["data"] = data };
             normalized.Remove("chart");
             return base.InvokeCoreAsync(normalized, cancellationToken);
+        }
+
+        // The browser JSON.parses data and silently drops a chart it cannot read, so a
+        // malformed array (for example text generated after its closing bracket) must fail
+        // here, where the model sees the error and resends, not after the answer claims a chart.
+        internal static string? DataError(string? data)
+        {
+            const string Shape = "a JSON array such as [{\"name\":\"A\",\"value\":100}] or [[\"A\",100]]";
+            if (string.IsNullOrWhiteSpace(data))
+                return $"RenderChart requires data: {Shape}. Nothing was rendered.";
+            try
+            {
+                using var document = JsonDocument.Parse(data);
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0)
+                    return $"RenderChart data must be a non-empty {Shape}. Nothing was rendered.";
+                foreach (var item in root.EnumerateArray())
+                    if (item.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+                        return $"RenderChart data entries must be objects or [label, value] arrays: {Shape}. Nothing was rendered.";
+                return null;
+            }
+            catch (JsonException ex)
+            {
+                return $"RenderChart data is not valid JSON (character {ex.BytePositionInLine + 1}). Nothing was rendered. Resend RenderChart with data containing only {Shape}, with nothing after its closing bracket.";
+            }
         }
 
         private static ValueTask<object?> Reject(string message)
