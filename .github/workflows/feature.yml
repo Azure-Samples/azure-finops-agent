@@ -119,13 +119,17 @@ jobs:
           umask 077
           work=$(mktemp -d "$RUNNER_TEMP/feature-target.XXXXXX")
           trap 'rm -f "$work/parent.json" "$work/slot.json"; rmdir "$work"' EXIT
-          az webapp show --subscription "$TARGET_SUBSCRIPTION" \
-            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
-            --query '{id:id,name:name,type:type,defaultHostName:defaultHostName}' \
+          # Plain ARM reads: `az webapp show` also calls publishxml, which the
+          # deploy identity must never hold on the production parent app.
+          az resource show --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --namespace Microsoft.Web \
+            --resource-type sites --name "$WEBAPP_NAME" \
+            --query '{id:id,name:name,type:type,defaultHostName:properties.defaultHostName}' \
             --output json > "$work/parent.json"
-          az webapp show --subscription "$TARGET_SUBSCRIPTION" \
-            --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" --slot "$SLOT_NAME" \
-            --query '{id:id,name:name,type:type,defaultHostName:defaultHostName}' \
+          az resource show --subscription "$TARGET_SUBSCRIPTION" \
+            --resource-group "$RESOURCE_GROUP" --namespace Microsoft.Web \
+            --parent "sites/$WEBAPP_NAME" --resource-type slots --name "$SLOT_NAME" \
+            --query '{id:id,name:name,type:type,defaultHostName:properties.defaultHostName}' \
             --output json > "$work/slot.json"
           node infra/scripts/feature-slot.mjs check-target "$work/parent.json" "$work/slot.json"
 

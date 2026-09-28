@@ -350,8 +350,13 @@ test("workflow validates the target before writes and merges only serialized mod
     assert.doesNotMatch(workflow,
         /az deployment|\.bicep|--mode Complete|appsettings delete|--enable-immutable|az role|az cognitiveservices|slot (?:create|swap)|az webapp create|az account set/);
     for (const command of workflow.replace(/\\\r?\n\s*/g, " ").split(/\r?\n/)
-        .filter((line) => !line.trimStart().startsWith("#") && /az (?:webapp|acr) /.test(line)))
+        .filter((line) => !line.trimStart().startsWith("#") && /az (?:webapp|acr|resource) /.test(line)))
         assert.match(command, /--subscription "\$TARGET_SUBSCRIPTION"/);
+    // The deploy identity reads production as Reader only; `az webapp show` needs publishxml.
+    for (const command of workflow.replace(/\\\r?\n\s*/g, " ").split(/\r?\n/)
+        .filter((line) => /az webapp show /.test(line)))
+        assert.match(command, /--slot "\$SLOT_NAME"/);
+    assert.match(workflow, /az resource show --subscription "\$TARGET_SUBSCRIPTION"/);
     for (const match of workflow.matchAll(/uses: (?!\.\/)([^\n]+)/g))
         assert.match(match[1], /@[a-f0-9]{40} # v\d/);
 });
