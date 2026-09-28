@@ -129,11 +129,13 @@ export function validateFeatureTarget(config, parent, slot) {
 
 // `az webapp config appsettings set` merges these keys into the existing dictionary,
 // so only App Service configuration rights (Website Contributor) are required.
+// Items carry no `slotSetting` key: the CLI then rewrites the parent site's
+// slotConfigNames, which a slot-scoped deploy identity is correctly denied.
 export function modelSettings(config) {
     return [
-        { name: "AzureOpenAI__Endpoint", value: config.endpoint, slotSetting: false },
-        { name: "AzureOpenAI__DeploymentName", value: config.model, slotSetting: false },
-        { name: "AzureOpenAI__ReasoningEffort", value: config.reasoningEffort, slotSetting: false },
+        { name: "AzureOpenAI__Endpoint", value: config.endpoint },
+        { name: "AzureOpenAI__DeploymentName", value: config.model },
+        { name: "AzureOpenAI__ReasoningEffort", value: config.reasoningEffort },
     ];
 }
 

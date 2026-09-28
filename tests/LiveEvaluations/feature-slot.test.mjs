@@ -202,12 +202,15 @@ test("the exact successful evaluation contract is mandatory and has no model fal
         assert.throws(() => readFeatureConfiguration({ ...environment, [key]: value }));
 });
 
-test("settings override only the three model keys and never mark them slot-sticky", () => {
-    assert.deepEqual(modelSettings(config), [
-        { name: "AzureOpenAI__Endpoint", value: environment.AOAI_ENDPOINT, slotSetting: false },
-        { name: "AzureOpenAI__DeploymentName", value: environment.EVALUATED_MODEL, slotSetting: false },
-        { name: "AzureOpenAI__ReasoningEffort", value: environment.EVALUATED_REASONING_EFFORT, slotSetting: false },
+test("settings override only the three model keys and never touch the parent's sticky-name list", () => {
+    const settings = modelSettings(config);
+    assert.deepEqual(settings, [
+        { name: "AzureOpenAI__Endpoint", value: environment.AOAI_ENDPOINT },
+        { name: "AzureOpenAI__DeploymentName", value: environment.EVALUATED_MODEL },
+        { name: "AzureOpenAI__ReasoningEffort", value: environment.EVALUATED_REASONING_EFFORT },
     ]);
+    // Any slotSetting key makes the CLI write parent slotConfigNames, denied to the slot deploy identity.
+    assert.ok(settings.every((setting) => !("slotSetting" in setting)));
 });
 
 test("effective settings must contain exactly one matching value for all three keys", () => {

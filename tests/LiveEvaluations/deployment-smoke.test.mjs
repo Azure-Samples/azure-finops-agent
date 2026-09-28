@@ -154,10 +154,12 @@ test("rollback restores only the three prior model keys and rejects ambiguous st
         { name: "AzureOpenAI__DeploymentName", value: "old-model", slotSetting: true },
         { name: "Unrelated", value: "keep", slotSetting: false },
     ];
-    assert.deepEqual(restoreSettings(current), [
-        { name: "AzureOpenAI__Endpoint", value: "https://old.example.test/", slotSetting: false },
-        { name: "AzureOpenAI__DeploymentName", value: "old-model", slotSetting: true },
+    const restored = restoreSettings(current);
+    assert.deepEqual(restored, [
+        { name: "AzureOpenAI__Endpoint", value: "https://old.example.test/" },
+        { name: "AzureOpenAI__DeploymentName", value: "old-model" },
     ]);
+    assert.ok(restored.every((setting) => !("slotSetting" in setting)));
     assert.deepEqual(restoreSettings([]), []);
     assert.throws(() => restoreSettings(null));
     assert.throws(() => restoreSettings([current[0], current[0]]), /ambiguous/);

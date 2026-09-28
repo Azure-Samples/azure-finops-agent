@@ -176,6 +176,7 @@ export function rollbackImage(linuxFxVersion) {
 }
 
 // Restores only the three model keys the deployment overwrites; others are never touched.
+// No `slotSetting` key, so the CLI leaves the parent site's sticky-name list alone.
 export function restoreSettings(settings) {
     if (!Array.isArray(settings)) throw new SmokeError("Unable to read the current model settings.");
     const restored = [];
@@ -184,7 +185,7 @@ export function restoreSettings(settings) {
         if (matches.length > 1) throw new SmokeError("The current model settings are ambiguous.");
         if (matches.length === 1) {
             if (typeof matches[0].value !== "string") throw new SmokeError("Unable to read the current model settings.");
-            restored.push({ name, value: matches[0].value, slotSetting: matches[0].slotSetting === true });
+            restored.push({ name, value: matches[0].value });
         }
     }
     return restored;
