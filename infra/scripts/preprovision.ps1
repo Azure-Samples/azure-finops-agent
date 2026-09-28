@@ -7,6 +7,7 @@
 #    appId / clientSecret / tenantId in azd env so Bicep picks them up in this
 #    same provision run.
 # 3. Capture AZURE_PRINCIPAL_ID for downstream role assignments if needed.
+# 4. Reject an AZURE_PREVIEW_SLOT_NAME the selected plan SKU cannot host.
 #
 # Idempotent: if AZURE_ENTRA_APP_ID is already set, skip Entra creation.
 
@@ -38,6 +39,24 @@ function Get-AzdEnvValue {
     if ($LASTEXITCODE -ne 0) { return '' }
     if ($null -eq $val) { return '' }
     return ([string]$val).Trim().Trim('"')
+}
+
+# Reject a preview slot the plan cannot host before creating anything. ARM
+# preflight accepts a slot on Basic and fails only mid-deployment.
+$previewSlot = Get-AzdEnvValue 'AZURE_PREVIEW_SLOT_NAME'
+if (-not [string]::IsNullOrWhiteSpace($previewSlot)) {
+    $planSku = Get-AzdEnvValue 'APP_SERVICE_PLAN_SKU'
+    if ([string]::IsNullOrWhiteSpace($planSku)) { $planSku = 'B1' }
+    if ($previewSlot -ieq 'production' -or $previewSlot -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$') {
+        Write-Host "  AZURE_PREVIEW_SLOT_NAME '$previewSlot' is invalid: use letters, digits and inner hyphens, and not 'production'." -ForegroundColor Red
+        exit 1
+    }
+    if ($planSku -notmatch '^(S[1-3]|P[0-3]V3)$') {
+        Write-Host "  AZURE_PREVIEW_SLOT_NAME requires a Standard or Premium plan; APP_SERVICE_PLAN_SKU is $planSku." -ForegroundColor Red
+        Write-Host "  Run: azd env set APP_SERVICE_PLAN_SKU S1   (or unset AZURE_PREVIEW_SLOT_NAME)" -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "  Preview slot: $previewSlot (own identity gets AcrPull + Foundry User)" -ForegroundColor Gray
 }
 
 $existingAppId  = Get-AzdEnvValue 'AZURE_ENTRA_APP_ID'

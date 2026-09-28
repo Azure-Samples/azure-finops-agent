@@ -130,6 +130,9 @@ param enableDeleteLocks bool = false
 @description('Comma-separated App Service inbound VIPs for the custom domain apex A record. Only knowable after the web app exists, so leave empty on the first `azd up` — the zone is created without an apex record and the runbook adds them. Ignored when customDomainName is empty.')
 param appServiceInboundIp string = ''
 
+@description('Optional preview deployment slot name, e.g. `test`. Creates the slot with its own managed identity, grants that identity AcrPull and Foundry User, and lets postprovision register its OAuth redirect URIs and federated credential. Requires an S* or P*V3 appServicePlanSku. Empty creates no slot.')
+param previewSlotName string = ''
+
 var tags = {
   'azd-env-name': environmentName
   application: 'azure-finops-agent'
@@ -170,6 +173,7 @@ module resources 'main-resources.bicep' = {
     dmarcReportEmail: dmarcReportEmail
     enableDeleteLocks: enableDeleteLocks
     appServiceInboundIp: appServiceInboundIp
+    previewSlotName: previewSlotName
   }
 }
 
@@ -189,6 +193,10 @@ output WEB_APP_NAME string = resources.outputs.webAppName
 output WEB_APP_HOSTNAME string = resources.outputs.webAppHostname
 output WEB_APP_URL string = resources.outputs.webAppUrl
 output WEB_APP_PRINCIPAL_ID string = resources.outputs.webAppPrincipalId
+// Empty unless previewSlotName was set.
+output WEB_APP_SLOT_NAME string = resources.outputs.webAppSlotName
+output WEB_APP_SLOT_HOSTNAME string = resources.outputs.webAppSlotHostname
+output WEB_APP_SLOT_PRINCIPAL_ID string = resources.outputs.webAppSlotPrincipalId
 
 output AZURE_OPENAI_ENDPOINT string = resources.outputs.aoaiEndpoint
 output AZURE_OPENAI_DEPLOYMENT_NAME string = resources.outputs.aoaiDeploymentName

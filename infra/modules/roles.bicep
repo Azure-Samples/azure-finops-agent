@@ -1,5 +1,6 @@
-// Role assignments for the Web App's system-assigned managed identity:
-// - AcrPull on the ACR (so the Web App can pull container images)
+// Role assignments for every site identity (the web app and its optional preview
+// slot — each slot has its own system-assigned managed identity):
+// - AcrPull on the ACR (so the site can pull container images)
 // - Foundry User (formerly Azure AI User) on the Foundry (AIServices) account — the
 //   project data-plane access the app needs to call the project Responses endpoint
 //   via managed-identity token (no API keys)
@@ -7,7 +8,9 @@
 // The AOAI assignment is scoped to either a freshly-created account in this RG
 // or an existing account in another RG/subscription.
 
-param webAppPrincipalId string
+@minLength(1)
+@description('Principal IDs of the site identities to authorize: the web app first, then any slot.')
+param sitePrincipalIds string[]
 param acrName string
 param aoaiName string
 param aoaiResourceGroup string
@@ -23,15 +26,15 @@ resource acr 'Microsoft.ContainerRegistry/registries@2024-11-01-preview' existin
   name: acrName
 }
 
-resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource acrPullAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in sitePrincipalIds: {
   scope: acr
-  name: guid(acr.id, webAppPrincipalId, acrPullRoleId)
+  name: guid(acr.id, principalId, acrPullRoleId)
   properties: {
-    principalId: webAppPrincipalId
+    principalId: principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
   }
-}
+}]
 
 // Foundry User role on the Foundry account — applied via a nested
 // module because the account may live in a different RG/subscription when reused.
@@ -40,7 +43,7 @@ module aoaiRole 'roles-aoai.bicep' = {
   scope: resourceGroup(aoaiSubscriptionId, aoaiResourceGroup)
   params: {
     aoaiName: aoaiName
-    webAppPrincipalId: webAppPrincipalId
+    sitePrincipalIds: sitePrincipalIds
     foundryUserRoleId: foundryUserRoleId
   }
 }

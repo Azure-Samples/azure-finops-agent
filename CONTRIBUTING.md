@@ -60,6 +60,15 @@ example, the slot identity lacks **Foundry User** on the Foundry account), the
 workflow restores the image and three model settings recorded before its writes
 and fails. Production uses the same gate and rollback.
 
+A slot has its own system-assigned identity, separate from the web app's. To
+provision a preview slot with the right access, set
+`azd env set AZURE_PREVIEW_SLOT_NAME test` (the plan must be `S1` or higher)
+before `azd provision`. The template then grants the slot identity AcrPull and
+Foundry User, and postprovision registers its OAuth redirect URIs and federated
+credential. For a slot created outside the template, an authorized owner grants
+the same roles, at resource scope, to the principal from
+`az webapp identity show --slot <slot>`.
+
 For validation without deployment, use a manual dispatch with `deploy=false`.
 See [live evaluation configuration](tests/LiveEvaluations/README.md) for the
 required protected identity, fixtures and exact-revision gate.

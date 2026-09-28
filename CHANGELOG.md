@@ -13,6 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Add a `Microsoft.Data.Sqlite` 10.0.12-backed stored-response database: each exact owner/conversation gets an in-memory SQLite `responses(id, url, method, status, retrieved_utc, body)` table for successful `QueryAzure` and `QueryUploadedFile` bodies, with read-only SQL over JSON/text evidence.
 - Add `QueryAzure` operation URLs: `operation:` lists recent owner-bound operations for the conversation and `operation:<id>` polls the stored ARM operation URL without repeating a mutation.
 - Add a post-deployment chat gate to the feature and production workflows. The live evaluations call the model with the evaluation identity, so build 168 passed all 20 cases while the test slot's own managed identity lacked Foundry User (`agents/write` HTTP 403). Each deployment now records the prior image and model settings, sends one real anonymous chat turn through the deployed URL and requires a completed answer. On failure it restores the prior state and fails the run.
+- Add optional `AZURE_PREVIEW_SLOT_NAME` provisioning. The Bicep template creates a preview deployment slot with the web app's configuration and its own managed identity, which gets AcrPull and Foundry User. Postprovision registers the slot's OAuth redirect URIs and federated credential. Preprovision rejects a Basic plan, which ARM preflight accepts but which fails mid-deployment. Existing role-assignment names are unchanged.
 
 ### Changed
 
@@ -42,6 +43,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Retry the regression gate's Trivy vulnerability-database download across `mirror.gcr.io` and `ghcr.io`, then scan offline. Trivy's own registry fallback covers only 429/5xx, so a failed layer fetch previously failed validation without scanning. The scan still fails closed when no database can be downloaded.
 - Stop Dependabot branch pushes from triggering the test-slot workflow. They could never deploy, but joining `test-slot-deploy` cancelled an in-flight feature run during its live evaluations.
 - Stop the rollback-capture unit test from emitting a real `::warning::` annotation on every CI run.
+- Correct the deployment permissions guide, which still named Cognitive Services User as the app's model role, and the App Service settings comments that still described the removed Copilot CLI and OpenTelemetry collector.
 
 ## [0.3.0] - 2026-09-20
 

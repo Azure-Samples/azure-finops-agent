@@ -13,12 +13,12 @@ The Bicep in [infra/main.bicep](../infra/main.bicep) targets **subscription scop
 **Minimum (least privilege):**
 
 - **Contributor** on the subscription — to create the RG and all resources (ACR, App Service Plan + Web App, Azure OpenAI / Cognitive Services account + model deployment, Log Analytics workspace, Application Insights), **plus**
-- **User Access Administrator** (or **Role Based Access Control Administrator**) on the subscription — required because [infra/modules/roles.bicep](../infra/modules/roles.bicep) and [infra/modules/roles-aoai.bicep](../infra/modules/roles-aoai.bicep) create role assignments (`AcrPull` on ACR and `Cognitive Services User` on the AOAI account) for the Web App's system-assigned managed identity.
+- **User Access Administrator** (or **Role Based Access Control Administrator**) on the subscription — required because [infra/modules/roles.bicep](../infra/modules/roles.bicep) and [infra/modules/roles-aoai.bicep](../infra/modules/roles-aoai.bicep) create role assignments (`AcrPull` on ACR and `Foundry User` on the Foundry account) for the Web App's system-assigned managed identity, and for the optional preview slot's own identity.
 
 You also need available **quota** for:
 
 - Azure OpenAI in `aoaiLocation` (default `swedencentral`): unallocated GlobalStandard quota for `gpt-6-sol` (default capacity 1000 units via `AZURE_OPENAI_MODEL_CAPACITY`; lower it when quota is shared). gpt-6-sol 2026-09-22 supports the Priority service tier on GlobalStandard, but `AZURE_OPENAI_SERVICE_TIER` stays `Default` unless you opt in to its premium pricing.
-- The chosen App Service Plan SKU in `location` (default `B1`).
+- The chosen App Service Plan SKU in `location` (default `B1`). An optional preview slot (`AZURE_PREVIEW_SLOT_NAME`) needs `S1` or higher; Basic plans have no slots.
 
 ## 2. Microsoft Entra ID (tenant)
 
