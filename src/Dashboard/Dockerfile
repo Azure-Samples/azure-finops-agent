@@ -20,11 +20,11 @@ RUN dotnet publish -c Release -r linux-x64 --self-contained false -o /app/publis
 # ── Stage 3: Final runtime image ──
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 
-# Install Python 3 + CLI tools (plain RUN — classic-builder compatible, no BuildKit).
+# Python 3 runs the file-analysis tool (plain RUN — classic-builder compatible, no BuildKit).
+# Microsoft.Data.Sqlite bundles its own native SQLite, so no sqlite3/jq CLIs are installed.
 RUN apt-get update -qq && \
   apt-get install -y --no-install-recommends \
-  python3 python3-pip \
-  jq sqlite3 && \
+  python3 python3-pip && \
   ln -sf /usr/bin/python3 /usr/bin/python && \
   rm -rf /var/lib/apt/lists/*
 

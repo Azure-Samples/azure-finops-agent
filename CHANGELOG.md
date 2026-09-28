@@ -35,6 +35,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Remove `GitHub.Copilot.SDK`, the bundled CLI runtime, `RuntimePolicy`, SDK call-id admission, deferred tool metadata and the OTel collector configuration. Conversations created by the SDK runtime are not listed after upgrading; their files remain under `$COPILOT_HOME/.copilot/session-state` until an operator deletes them.
 - Remove the former stored-result query, cost calculator, amount comparison, token-estimate and standalone operation-status helper tools.
 - Remove `QueryAzure`'s bulk-call envelope, inline projection object, caller-selected page cap, public-web grep and caller-selected parallelism knobs. Paginated ARM, Graph and Retail GETs now follow same-origin continuation links up to the fixed 10-page host cap.
+- Remove the unused `jq` and `sqlite3` CLIs from the runtime image; no shell tools remain to call them. Stored-response SQL uses the SQLite bundled by `Microsoft.Data.Sqlite`, which the container smoke check now loads from the published image.
 
 ## [0.3.0] - 2026-09-20
 
