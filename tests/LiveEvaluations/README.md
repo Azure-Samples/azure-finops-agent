@@ -119,4 +119,22 @@ Use an access-restricted local folder, not a shared or synchronized directory. N
 
 Public summaries and artifacts still obey `EVAL_DATA_CLASSIFICATION`: enabling private diagnostics does not publish internal-test answers or rationale. Neither classification publishes raw failed-tool arguments/details, `toolDetails`, `failure` or undeclared private fields. Retention setup/write/cleanup failures visibly fail the run, even if all 20 case verdicts passed. The pinned questions, original rubrics, tool/time limits and unanimous acceptance rule are unchanged; this option adds neither retries nor a diagnostic-subset bypass. With the variable unset or empty, the existing disposable-capture cleanup remains unchanged. Clear the option with `Remove-Item Env:EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY` after local diagnosis.
 
+### Encrypted CI diagnostics
+
+CI withholds internal-test answers and judge rationale from its public artifacts. To learn why a CI case failed without reproducing it, a maintainer can have the suite encrypt the same failed-case records the local option retains, including judge rationale, answer, gate failures, bounded tool details and any unfinished capture, to a certificate whose private key only they hold. The records exist only in the runner's disposable capture directory until they are encrypted; the plaintext is never written to the output. The artifact gains one `private-diagnostics.enc.json` when a case or the suite fails. It uses RSA-OAEP-256 to wrap a random AES-256-GCM key, so the file is unreadable and tamper-evident without the private key. Passing runs write no file.
+
+On Windows with PowerShell 7, create the certificate once. Its RSA 4096 private key is non-exportable in `Cert:\CurrentUser\My`. Then store the public PEM as the repository variable (not a secret):
+
+```powershell
+./tests/LiveEvaluations/New-DiagnosticsCertificate.ps1 | gh variable set EVAL_DIAGNOSTICS_CERT
+```
+
+After a failed run, download and decrypt its diagnostics in the same Windows profile:
+
+```powershell
+./tests/LiveEvaluations/Unprotect-Diagnostics.ps1 -RunId <run-id>
+```
+
+The script prints each failed case's verdict, judge rationale, gate failures and answer, and removes the downloaded artifacts. `-OutFile` saves the full decrypted JSON; treat it like local private diagnostics. A repository variable is not inherited by forks, so a fork running its own tenant never encrypts to the upstream maintainer's key. The suite rejects a private key, a non-RSA key or one below 3072 bits before any case starts. With the variable unset, nothing changes. Losing the certificate only makes older artifacts unreadable; create a new one and replace the variable.
+
 Fix a failed case by inspecting its source evidence and reproduction, repairing the owning code or contract, and rerunning the full candidate suite. Review intentional rubric changes separately. No automatic code rewrite, permission escalation or rubric relaxation occurs in the deployment workflow.

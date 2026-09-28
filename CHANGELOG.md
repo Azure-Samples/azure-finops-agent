@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- Add optional encrypted CI diagnostics for failed live evaluations. With repository variable `EVAL_DIAGNOSTICS_CERT` set to a maintainer's public certificate, a failed run's artifact gains `private-diagnostics.enc.json`: the failed-case judge rationale, answer, gate failures, bounded tool details and unfinished captures, encrypted with RSA-OAEP-256 wrapping an AES-256-GCM key. Public summaries still withhold internal-test answers and rationale. `tests/LiveEvaluations/New-DiagnosticsCertificate.ps1` creates a non-exportable RSA 4096 key in the Windows user certificate store, and `Unprotect-Diagnostics.ps1 -RunId <id>` downloads and decrypts a run. Forks do not inherit the variable, so they never encrypt their tenant data to the upstream key.
 - Add optional hosted web search (`AzureOpenAI:WebSearch=true`, default off). Bing grounding is outside the Azure data boundary; `QueryAzure` already reads public documentation and pages.
 - Add a `Microsoft.Data.Sqlite` 10.0.12-backed stored-response database: each exact owner/conversation gets an in-memory SQLite `responses(id, url, method, status, retrieved_utc, body)` table for successful `QueryAzure` and `QueryUploadedFile` bodies, with read-only SQL over JSON/text evidence.
 - Add `QueryAzure` operation URLs: `operation:` lists recent owner-bound operations for the conversation and `operation:<id>` polls the stored ARM operation URL without repeating a mutation.

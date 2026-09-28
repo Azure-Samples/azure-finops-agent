@@ -64,6 +64,8 @@ jobs:
       EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}
       EVAL_DATA_CLASSIFICATION: ${{ vars.EVAL_DATA_CLASSIFICATION }}
       EVAL_TOKEN_RESOURCES: ${{ vars.EVAL_TOKEN_RESOURCES }}
+      # Optional maintainer certificate; failed-case rationale is uploaded only encrypted to it.
+      EVAL_DIAGNOSTICS_CERT: ${{ vars.EVAL_DIAGNOSTICS_CERT }}
       EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
       EVAL_RUNNER_DLL: tests/LiveEvaluations/bin/Release/net10.0/LiveEvaluations.dll
       EVAL_FAIL_FAST: ${{ inputs.fail-fast && 'true' || 'false' }}

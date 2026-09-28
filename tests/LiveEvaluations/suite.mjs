@@ -1,5 +1,7 @@
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import {
+    constants, createCipheriv, createHash, createPublicKey, publicEncrypt, randomBytes,
+} from "node:crypto";
 import {
     mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile,
 } from "node:fs/promises";
@@ -530,6 +532,48 @@ const interruption = (signal) =>
         { code: "EVAL_INTERRUPTED" },
     );
 
+export const DIAGNOSTICS_ENVELOPE_FORMAT = "azure-finops-agent/live-evaluation-diagnostics/v1";
+export const ENCRYPTED_DIAGNOSTICS_FILE = "private-diagnostics.enc.json";
+
+// The maintainer's certificate lets public CI keep failed-case rationale that only the private-key holder can read.
+export function diagnosticsRecipient(pem) {
+    if (typeof pem !== "string" || pem.trim() === "") return null;
+    if (/PRIVATE KEY/.test(pem))
+        throw new Error("EVAL_DIAGNOSTICS_CERT must be a public certificate, never a private key.");
+    let key;
+    try {
+        key = createPublicKey(pem.trim());
+    } catch {
+        throw new Error("EVAL_DIAGNOSTICS_CERT is not a PEM certificate or public key.");
+    }
+    if (key.asymmetricKeyType !== "rsa" || key.asymmetricKeyDetails.modulusLength < 3072)
+        throw new Error("EVAL_DIAGNOSTICS_CERT must hold an RSA key of at least 3072 bits.");
+    // The SPKI hash identifies the recipient for both certificate and bare public-key input.
+    const sha256 = createHash("sha256").update(key.export({ type: "spki", format: "der" })).digest("hex");
+    return { key, sha256 };
+}
+
+export function encryptDiagnostics(plaintext, recipient) {
+    const contentKey = randomBytes(32);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", contentKey, iv);
+    cipher.setAAD(Buffer.from(DIAGNOSTICS_ENVELOPE_FORMAT));
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    return {
+        format: DIAGNOSTICS_ENVELOPE_FORMAT,
+        recipientSpkiSha256: recipient.sha256,
+        keyEncryption: "RSA-OAEP-256",
+        contentEncryption: "A256GCM",
+        encryptedKey: publicEncrypt(
+            { key: recipient.key, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+            contentKey,
+        ).toString("base64"),
+        iv: iv.toString("base64"),
+        tag: cipher.getAuthTag().toString("base64"),
+        ciphertext: ciphertext.toString("base64"),
+    };
+}
+
 function assertLocalPrivateDiagnostics(directory, environment) {
     if (directory && ["GITHUB_ACTIONS", "CI", "TF_BUILD"].some((key) => {
         const value = String(environment[key] ?? "").trim().toLowerCase();
@@ -599,6 +643,7 @@ export async function runCases(
         failFast = false,
         laneOf = () => COST_MANAGEMENT_LANE,
         throttleRetryQuietMs = 0,
+        encryptDiagnosticsTo = null,
     } = {},
 ) {
     const results = [];
@@ -842,6 +887,31 @@ export async function runCases(
                 );
             }
         } else {
+            const failed = results.filter((row) => row.failures.length > 0);
+            if (encryptDiagnosticsTo && (failed.length > 0 || runFailure)) {
+                try {
+                    // A timed-out case has no result; its unfinished capture is the only evidence.
+                    const rows = await Promise.all(failed.map(async (row) => ({
+                        ...row,
+                        unfinishedCapture: row.result === null
+                            ? await readFile(resolve(captureDirectory, `${row.id}.json.tmp`), "utf8").catch(() => null)
+                            : null,
+                    })));
+                    const plaintext = Buffer.from(JSON.stringify({
+                        sha, suiteHash, completed: results.length,
+                        results: rows, failure: runFailure?.message ?? null,
+                    }));
+                    await writeFile(
+                        resolve(output, ENCRYPTED_DIAGNOSTICS_FILE),
+                        JSON.stringify(encryptDiagnostics(plaintext, encryptDiagnosticsTo)),
+                    );
+                } catch {
+                    const failure = "Encrypted evaluation diagnostics could not be written.";
+                    runFailure = new Error(
+                        runFailure ? `${runFailure.message} ${failure}` : failure,
+                    );
+                }
+            }
             try {
                 await rm(captureDirectory, { recursive: true, force: true });
             } catch {
@@ -1014,6 +1084,7 @@ async function main() {
     assertLocalPrivateDiagnostics(
         process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY, process.env,
     );
+    const encryptDiagnosticsTo = diagnosticsRecipient(process.env.EVAL_DIAGNOSTICS_CERT);
     for (const name of [
         "EVAL_MODEL_ENDPOINT",
         "EVAL_MODEL",
@@ -1061,6 +1132,7 @@ async function main() {
             failFast: process.env.EVAL_FAIL_FAST === "true",
             laneOf: evaluationLane,
             throttleRetryQuietMs: COST_QUOTA_WINDOW_MS,
+            encryptDiagnosticsTo,
         },
     );
     if (!verdict.accepted) process.exitCode = 1;

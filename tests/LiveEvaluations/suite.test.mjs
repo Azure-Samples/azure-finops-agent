@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import {
+    constants, createDecipheriv, generateKeyPairSync, privateDecrypt,
+} from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
     mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile,
@@ -18,6 +21,9 @@ import {
     buildCatalog,
     buildSuite,
     COST_MANAGEMENT_LANE,
+    diagnosticsRecipient,
+    DIAGNOSTICS_ENVELOPE_FORMAT,
+    ENCRYPTED_DIAGNOSTICS_FILE,
     evaluateSuite,
     evaluationLane,
     executeCase,
@@ -1266,6 +1272,99 @@ test("internal-test runs publish verdicts but withhold answers and judge rationa
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
+});
+
+test("encrypted CI diagnostics keep failed-case rationale readable only with the private key", async () => {
+    const directory = await createDirectory();
+    const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+    const recipient = diagnosticsRecipient(publicKey.export({ type: "spki", format: "pem" }));
+    try {
+        const [rejected, passing, timedOut] = cases.slice(0, 3);
+        const verdict = await runCases(
+            [rejected, passing, timedOut], directory, sha, suiteHash,
+            async (scenario, path) => {
+                if (scenario === timedOut) {
+                    await writeFile(`${path}.tmp`, "tenant-unfinished-capture-must-not-publish");
+                    return -1;
+                }
+                const result = privateResult(scenario);
+                if (scenario === rejected) {
+                    result.accepted = false;
+                    result.judge.accepted = false;
+                    result.judge.grounded = false;
+                }
+                await writeFile(path, JSON.stringify(result));
+                return scenario === rejected ? 1 : 0;
+            },
+            async () => {}, false, 0,
+            { encryptDiagnosticsTo: recipient },
+        );
+        assert.equal(verdict.accepted, false);
+        assert.doesNotMatch(await readPublished(directory), /tenant-.*-must-not-publish/);
+        const envelope = JSON.parse(await readFile(join(directory, ENCRYPTED_DIAGNOSTICS_FILE), "utf8"));
+        assert.equal(envelope.format, DIAGNOSTICS_ENVELOPE_FORMAT);
+        assert.equal(envelope.recipientSpkiSha256, recipient.sha256);
+        const decrypt = (ciphertext) => {
+            const contentKey = privateDecrypt(
+                { key: privateKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+                Buffer.from(envelope.encryptedKey, "base64"),
+            );
+            const decipher = createDecipheriv("aes-256-gcm", contentKey, Buffer.from(envelope.iv, "base64"));
+            decipher.setAAD(Buffer.from(DIAGNOSTICS_ENVELOPE_FORMAT));
+            decipher.setAuthTag(Buffer.from(envelope.tag, "base64"));
+            return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+        };
+        const ciphertext = Buffer.from(envelope.ciphertext, "base64");
+        const diagnostics = JSON.parse(decrypt(ciphertext));
+        assert.deepEqual(diagnostics.results.map((row) => row.id), [rejected.id, timedOut.id]);
+        assert.equal(diagnostics.results[0].result.judge.reason, "tenant-rationale-must-not-publish");
+        assert.equal(diagnostics.results[1].unfinishedCapture, "tenant-unfinished-capture-must-not-publish");
+        ciphertext[0] ^= 1;
+        assert.throws(() => decrypt(ciphertext));
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("no encrypted diagnostics are written when every case passes or no certificate is configured", async () => {
+    const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+    const recipient = diagnosticsRecipient(publicKey.export({ type: "spki", format: "pem" }));
+    for (const [fail, encryptDiagnosticsTo] of [[false, recipient], [true, null]]) {
+        const directory = await createDirectory();
+        try {
+            await runCases(
+                cases.slice(0, 1), directory, sha, suiteHash,
+                async (scenario, path) => {
+                    const result = privateResult(scenario);
+                    if (fail) result.accepted = false;
+                    await writeFile(path, JSON.stringify(result));
+                    return fail ? 1 : 0;
+                },
+                async () => {}, false, 0,
+                { encryptDiagnosticsTo },
+            );
+            await assert.rejects(stat(join(directory, ENCRYPTED_DIAGNOSTICS_FILE)), { code: "ENOENT" });
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    }
+});
+
+test("the diagnostics recipient must be an RSA public key of at least 3072 bits", () => {
+    assert.equal(diagnosticsRecipient(undefined), null);
+    assert.equal(diagnosticsRecipient("  "), null);
+    assert.throws(() => diagnosticsRecipient("not a certificate"), /not a PEM/);
+    const small = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    assert.throws(
+        () => diagnosticsRecipient(small.publicKey.export({ type: "spki", format: "pem" })),
+        /at least 3072 bits/,
+    );
+    const pair = generateKeyPairSync("rsa", { modulusLength: 3072 });
+    assert.throws(
+        () => diagnosticsRecipient(pair.privateKey.export({ type: "pkcs8", format: "pem" })),
+        /never a private key/,
+    );
+    assert.match(diagnosticsRecipient(pair.publicKey.export({ type: "spki", format: "pem" })).sha256, /^[a-f0-9]{64}$/);
 });
 
 test("local diagnostics retain redacted failed-case rationale without changing public classification or acceptance", async () => {
