@@ -13,7 +13,8 @@ public sealed record RunCapture(string Answer, ToolResult[] Tools, bool Terminal
     long DurationMs, long? FirstTokenMs, string[]? VisibleOutputs = null, string HostContext = "",
     int ThrottleNotices = 0, string AgentProfile = "");
 
-public sealed record JudgeVerdict(bool Accepted, bool Grounded, bool Complete, bool Efficient, int EfficiencyScore, string Reason);
+public sealed record JudgeVerdict(bool Accepted, bool Grounded, bool Complete, bool Efficient, int EfficiencyScore, string Reason,
+    int AvoidableCalls = 0, int AvoidableRounds = 0, double AvoidableSeconds = 0);
 
 public sealed record Verdict(bool Accepted, string[] Reasons, JudgeVerdict? Judge = null);
 
@@ -114,23 +115,30 @@ public static class EvaluationGate
         {
             using var document = JsonDocument.Parse(judgeJson);
             var verdict = document.RootElement;
-            var efficiencyScore = 0;
-            if (verdict.ValueKind != JsonValueKind.Object || verdict.EnumerateObject().Count() != 6
+            int avoidableCalls = 0, avoidableRounds = 0;
+            double avoidableSeconds = 0;
+            if (verdict.ValueKind != JsonValueKind.Object || verdict.EnumerateObject().Count() != 7
                 || !verdict.TryGetProperty("accepted", out var accepted) || accepted.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
                 || !verdict.TryGetProperty("grounded", out var grounded) || grounded.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
                 || !verdict.TryGetProperty("complete", out var complete) || complete.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
-                || !verdict.TryGetProperty("efficient", out var efficient) || efficient.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
-                || !verdict.TryGetProperty("efficiencyScore", out var score) || score.ValueKind != JsonValueKind.Number
-                || !score.TryGetInt32(out efficiencyScore) || efficiencyScore is < 1 or > 5
+                || !verdict.TryGetProperty("avoidableCalls", out var calls) || calls.ValueKind != JsonValueKind.Number
+                || !calls.TryGetInt32(out avoidableCalls) || avoidableCalls < 0 || avoidableCalls > run.Tools.Length
+                || !verdict.TryGetProperty("avoidableRounds", out var rounds) || rounds.ValueKind != JsonValueKind.Number
+                || !rounds.TryGetInt32(out avoidableRounds) || avoidableRounds < 0 || avoidableRounds > run.Tools.Length
+                || !verdict.TryGetProperty("avoidableSeconds", out var seconds) || seconds.ValueKind != JsonValueKind.Number
+                || !seconds.TryGetDouble(out avoidableSeconds) || !double.IsFinite(avoidableSeconds) || avoidableSeconds < 0
                 || !verdict.TryGetProperty("reason", out var reason) || reason.ValueKind != JsonValueKind.String
                 || string.IsNullOrWhiteSpace(reason.GetString())) reasons.Add("Judge response did not satisfy the verdict schema.");
             else
             {
-                judge = new(accepted.GetBoolean(), grounded.GetBoolean(), complete.GetBoolean(), efficient.GetBoolean(), efficiencyScore, reason.GetString()!);
+                var efficiencyScore = EfficiencyScore(avoidableCalls, avoidableRounds, avoidableSeconds,
+                    run.Tools.Length, Math.Max(run.DurationMs, 0) / 1000.0);
+                judge = new(accepted.GetBoolean(), grounded.GetBoolean(), complete.GetBoolean(),
+                    efficiencyScore >= MinimumEfficiencyScore, efficiencyScore, reason.GetString()!,
+                    avoidableCalls, avoidableRounds, avoidableSeconds);
                 var qualityRejected = !judge.Accepted || !judge.Grounded || !judge.Complete;
                 if (qualityRejected) reasons.Add("Judge rejected the result: " + judge.Reason);
-                // Scores 1-2 mean clear waste even if the flag disagrees; an inconsistent verdict never passes.
-                if (!judge.Efficient || judge.EfficiencyScore < MinimumEfficiencyScore)
+                if (!judge.Efficient)
                     reasons.Add($"Judge rated the session inefficient ({judge.EfficiencyScore}/5)" + (qualityRejected ? "." : ": " + judge.Reason));
             }
         }
@@ -138,7 +146,25 @@ public static class EvaluationGate
         return new(reasons.Count == 0, reasons.ToArray(), judge);
     }
 
+    // The judge counts the waste; the rubric's anchors turn it into a score, so the same waste
+    // always gets the same severity instead of depending on how harshly one verdict reads it.
+    public static int EfficiencyScore(int avoidableCalls, int avoidableRounds, double avoidableSeconds,
+        int toolCalls, double totalSeconds)
+    {
+        var waste = Math.Max(avoidableCalls, avoidableRounds);
+        if (waste == 0) return 5;
+        var addedSeconds = Math.Clamp(avoidableSeconds, 0, Math.Max(totalSeconds, 0));
+        var growth = Math.Max((double)avoidableCalls / Math.Max(toolCalls - avoidableCalls, 1),
+            addedSeconds / Math.Max(totalSeconds - addedSeconds, 1));
+        if (growth >= 2) return 1;
+        if (growth >= RoughlyDoubledGrowth) return 2;
+        return waste <= 2 ? 4 : 3;
+    }
+
     public const int MinimumEfficiencyScore = 3;
+
+    // "Roughly doubled": the waste added at least three quarters of an expert's calls or elapsed time.
+    public const double RoughlyDoubledGrowth = 0.75;
 
     // The agent researches: it may learn from one failed call when a later call to the same
     // tool succeeds. The judge still rejects an answer that rests on failed evidence.

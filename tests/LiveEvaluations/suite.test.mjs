@@ -84,6 +84,9 @@ const pass = (scenario) => ({
         complete: true,
         efficient: true,
         efficiencyScore: 5,
+        avoidableCalls: 0,
+        avoidableRounds: 0,
+        avoidableSeconds: 0,
         reason: "Evidence supports the answer.",
     },
 });
@@ -569,12 +572,16 @@ test("the judge efficiency verdict gates the case and requires a 1-5 integer sco
     }
     const result = pass(cases[0]);
     result.judge.efficiencyScore = MINIMUM_EFFICIENCY_SCORE;
+    Object.assign(result.judge, { avoidableCalls: 3, avoidableRounds: 2, avoidableSeconds: 12.5 });
     assert.deepEqual(validateResult(cases[0], result, 0, sha, suiteHash), []);
     result.timeline = { rounds: 2, maxConcurrentTools: 3, toolWallMs: 400, modelMs: 600 };
     result.tools[0].durationMs = 250;
     const published = publishableResult(result, false);
     assert.equal(published.judge.efficient, true);
     assert.equal(published.judge.efficiencyScore, MINIMUM_EFFICIENCY_SCORE);
+    assert.equal(published.judge.avoidableCalls, 3);
+    assert.equal(published.judge.avoidableRounds, 2);
+    assert.equal(published.judge.avoidableSeconds, 12.5);
     assert.equal(published.tools[0].durationMs, 250);
     assert.deepEqual(published.timeline, result.timeline);
     assert.ok(!("reason" in published.judge));

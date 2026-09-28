@@ -18,6 +18,7 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("unknown, never zero")]
     [InlineData("look it up instead of guessing")]
     [InlineData("never resend a failing request unchanged")]
+    [InlineData("never search documentation for script commands")]
     [InlineData("azure-rest-api-specs")]
     [InlineData("apiVersions")]
     [InlineData("one at a time")]

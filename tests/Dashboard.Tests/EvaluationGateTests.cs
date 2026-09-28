@@ -49,7 +49,7 @@ public sealed class EvaluationGateTests
         ["GetCrawlMaturityEvidence"], ["QueryAzure"]);
     private static readonly RunCapture Success = new("Evidence-backed answer", [new("GetCrawlMaturityEvidence", true, "{}", null)],
         true, [], 1000, 100);
-    private const string Accepted = """{"accepted":true,"grounded":true,"complete":true,"efficient":true,"efficiencyScore":5,"reason":"Supported by the supplied evidence."}""";
+    private const string Accepted = """{"accepted":true,"grounded":true,"complete":true,"avoidableCalls":0,"avoidableRounds":0,"avoidableSeconds":0,"reason":"Supported by the supplied evidence."}""";
 
     [Fact]
     public void CompleteRunWithValidJudgeVerdictPasses() => Assert.True(EvaluationGate.Assess(Scenario, Success, Accepted).Accepted);
@@ -153,11 +153,12 @@ public sealed class EvaluationGateTests
         var efficiency = root.GetProperty("input")[1].GetProperty("content").GetString()!;
         Assert.Contains("whole end-to-end session for efficiency", efficiency);
         Assert.Contains("Cost Management query and forecast calls running one after another", efficiency);
-        Assert.Contains("efficient must be true exactly when efficiencyScore is 3 or higher", efficiency);
+        Assert.Contains("The host derives the 1-5 efficiency score from these counts", efficiency);
+        Assert.Contains("a search plus reading one of its results is one lookup", efficiency);
         var schema = root.GetProperty("text").GetProperty("format").GetProperty("schema");
-        Assert.Equal(["accepted", "grounded", "complete", "efficient", "efficiencyScore", "reason"],
+        Assert.Equal(["accepted", "grounded", "complete", "avoidableCalls", "avoidableRounds", "avoidableSeconds", "reason"],
             schema.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
-        Assert.Equal([1, 2, 3, 4, 5], schema.GetProperty("properties").GetProperty("efficiencyScore").GetProperty("enum").EnumerateArray().Select(item => item.GetInt32()));
+        Assert.False(schema.GetProperty("properties").TryGetProperty("efficiencyScore", out _));
 
         using var evidence = JsonDocument.Parse(root.GetProperty("input")[2].GetProperty("content").GetString()!);
         var session = evidence.RootElement.GetProperty("session");
@@ -207,27 +208,35 @@ public sealed class EvaluationGateTests
         Assert.Equal(4, timeline.ToolCalls);
     }
 
-    [Theory]
-    [InlineData(false, 4)]
-    [InlineData(true, 2)]
-    [InlineData(false, 1)]
-    public void AnInefficientSessionFailsEvenWhenTheAnswerIsAccepted(bool efficient, int score)
+    // A 12-call, 160-second session, like the Idle sweep that four documentation lookups failed.
+    private static readonly RunCapture TwelveCalls = Success with
     {
-        var verdict = EvaluationGate.Assess(Scenario, Success,
-            $$"""{"accepted":true,"grounded":true,"complete":true,"efficient":{{(efficient ? "true" : "false")}},"efficiencyScore":{{score}},"reason":"Calls 2-4 repeated call 1."}""");
-        Assert.False(verdict.Accepted);
-        Assert.Contains($"Judge rated the session inefficient ({score}/5): Calls 2-4 repeated call 1.", verdict.Reasons);
+        DurationMs = 160000,
+        Tools = [..Enumerable.Repeat(new ToolResult("GetCrawlMaturityEvidence", true, "{}", null), 12)]
+    };
+
+    [Theory]
+    [InlineData(0, 0, 0, 5)]
+    [InlineData(2, 2, 20, 4)]
+    [InlineData(3, 3, 40, 3)]
+    [InlineData(5, 5, 60, 3)]
+    [InlineData(6, 5, 50, 2)]
+    [InlineData(3, 3, 80, 2)]
+    [InlineData(8, 8, 60, 1)]
+    public void TheHostScoresTheJudgesCountedWasteWithTheRubricAnchors(int calls, int rounds, double seconds, int score)
+    {
+        var verdict = EvaluationGate.Assess(Scenario, TwelveCalls,
+            $$"""{"accepted":true,"grounded":true,"complete":true,"avoidableCalls":{{calls}},"avoidableRounds":{{rounds}},"avoidableSeconds":{{seconds}},"reason":"Calls 9-12 repeated a lookup."}""");
         Assert.Equal(score, verdict.Judge!.EfficiencyScore);
+        Assert.Equal(score >= EvaluationGate.MinimumEfficiencyScore, verdict.Judge.Efficient);
+        Assert.Equal(score >= EvaluationGate.MinimumEfficiencyScore, verdict.Accepted);
+        if (!verdict.Accepted)
+            Assert.Contains($"Judge rated the session inefficient ({score}/5): Calls 9-12 repeated a lookup.", verdict.Reasons);
     }
 
     [Fact]
-    public void TheLowestPassingEfficiencyScoreIsThree()
-    {
-        var verdict = EvaluationGate.Assess(Scenario, Success,
-            """{"accepted":true,"grounded":true,"complete":true,"efficient":true,"efficiencyScore":3,"reason":"Some overhead."}""");
-        Assert.True(verdict.Accepted);
-        Assert.Equal(EvaluationGate.MinimumEfficiencyScore, verdict.Judge!.EfficiencyScore);
-    }
+    public void WasteThatRoughlyDoublesAShortSessionFailsEvenWithFewCalls() =>
+        Assert.Equal(2, EvaluationGate.EfficiencyScore(avoidableCalls: 1, avoidableRounds: 1, avoidableSeconds: 5, toolCalls: 2, totalSeconds: 20));
 
     [Theory]
     [InlineData("replay", false)]
@@ -362,14 +371,17 @@ public sealed class EvaluationGateTests
     [InlineData("not json")]
     [InlineData("{}")]
     [InlineData("{\"accepted\":true}")]
-    [InlineData("{\"accepted\":true,\"grounded\":false,\"complete\":true,\"efficient\":true,\"efficiencyScore\":5,\"reason\":\"Missing evidence\"}")]
-    [InlineData("{\"accepted\":\"true\",\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":5,\"reason\":\"Invalid type\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":5,\"reason\":\"\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":false,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Missing evidence\"}")]
+    [InlineData("{\"accepted\":\"true\",\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Invalid type\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"\"}")]
     [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"reason\":\"Legacy verdict without efficiency\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":\"true\",\"efficiencyScore\":5,\"reason\":\"Invalid type\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":0,\"reason\":\"Out of range\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":4.5,\"reason\":\"Not an integer\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":\"5\",\"reason\":\"Invalid type\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":5,\"reason\":\"Judge-authored score\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":\"0\",\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Invalid type\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":-1,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Negative\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0.5,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Not an integer\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":2,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"More calls than were made\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":-1,\"reason\":\"Negative seconds\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"efficiencyScore\":5,\"reason\":\"Extra field\"}")]
     public void MissingMalformedOrNegativeJudgeFailsClosed(string judge) => Assert.False(EvaluationGate.Assess(Scenario, Success, judge).Accepted);
 
     private sealed class JudgeCredential : TokenCredential

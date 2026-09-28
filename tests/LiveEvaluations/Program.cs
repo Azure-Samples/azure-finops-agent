@@ -283,6 +283,9 @@ internal static class Program
                 complete = judge.Complete,
                 efficient = judge.Efficient,
                 efficiencyScore = judge.EfficiencyScore,
+                avoidableCalls = judge.AvoidableCalls,
+                avoidableRounds = judge.AvoidableRounds,
+                avoidableSeconds = judge.AvoidableSeconds,
                 reason = Redact(judge.Reason, subscriptions)
             } : null,
             answer = Redact(capture.Answer, subscriptions),

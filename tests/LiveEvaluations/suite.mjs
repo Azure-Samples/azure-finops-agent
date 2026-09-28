@@ -488,6 +488,9 @@ export function publishableResult(result, publishAnswers) {
                   efficiencyScore: Number.isInteger(judge.efficiencyScore)
                       && judge.efficiencyScore >= 1 && judge.efficiencyScore <= 5
                       ? judge.efficiencyScore : null,
+                  avoidableCalls: Number.isInteger(judge.avoidableCalls) ? judge.avoidableCalls : null,
+                  avoidableRounds: Number.isInteger(judge.avoidableRounds) ? judge.avoidableRounds : null,
+                  avoidableSeconds: Number.isFinite(judge.avoidableSeconds) ? judge.avoidableSeconds : null,
               }
             : null,
         attempts: Number.isInteger(result.attempts) ? result.attempts : 1,
