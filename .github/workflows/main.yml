@@ -37,6 +37,17 @@ jobs:
       # so we don't need full git history any more.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The repository is public: keep deployment coordinates out of the log.
+      - name: Mask deployment coordinates
+        shell: bash
+        run: |
+          for value in "$ACR_NAME" "$ACR_LOGIN" "$IMAGE" "$WEBAPP_NAME" "$RESOURCE_GROUP" "$VERIFY_URL"; do
+            [[ -n "$value" ]] && echo "::add-mask::$value"
+          done
+          host="${VERIFY_URL#*://}"; host="${host%%/*}"
+          [[ -n "$host" ]] && echo "::add-mask::$host"
+          true
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
@@ -90,12 +101,7 @@ jobs:
           # Registry-mode cache lives in ACR, shared across all workflows.
           # `buildcache-main` is the warm baseline that feature.yml also
           # reads from, so feature builds inherit prod's cached layers.
-          # TEMPORARY: build without the shared cache. The production image
-          # segfaulted (exit 139) 0.9s into startup with no output, while the
-          # identical Dockerfile and code deployed cleanly to the test slot,
-          # which reads a different cache. A poisoned `buildcache-main` layer
-          # is the only difference, so this build trusts none of it.
-          no-cache: true
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-main
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-main,mode=max,image-manifest=true,oci-mediatypes=true
 
       # Prove the image actually starts before production is touched. Every
@@ -110,7 +116,7 @@ jobs:
           docker pull "$TAG"
           docker run -d --name candidate -p 8080:8080 \
             -e ASPNETCORE_URLS=http://+:8080 \
-            -e COPILOT_HOME=/tmp/copilot \
+            -e AGENT_HOME=/tmp/agent \
             -e AzureOpenAI__Endpoint=https://example.services.ai.azure.com/api/projects/preflight \
             -e AzureOpenAI__DeploymentName=gpt-6-sol \
             "$TAG"
@@ -170,10 +176,25 @@ jobs:
           fi
           work=$(mktemp -d "$RUNNER_TEMP/prod-settings.XXXXXX")
           trap 'rm -rf "$work"' EXIT
+          # TEMPORARY crash capture: production segfaults (exit 139) 0.9s into
+          # startup with no output, and nowhere else. The .NET host trace and a
+          # crash report (JSON stack plus at most one small triage dump) land in
+          # /home/LogFiles so the failure path below can read the faulting
+          # frames. Removed again on every path.
           jq -n --arg endpoint "$AOAI_ENDPOINT" \
             '[{name:"AzureOpenAI__Endpoint",value:$endpoint},
               {name:"AzureOpenAI__DeploymentName",value:"gpt-6-sol"},
-              {name:"AzureOpenAI__ReasoningEffort",value:"xhigh"}]' > "$work/settings.json"
+              {name:"AzureOpenAI__ReasoningEffort",value:"xhigh"},
+              {name:"COREHOST_TRACE",value:"1"},
+              {name:"COREHOST_TRACE_VERBOSITY",value:"3"},
+              {name:"COREHOST_TRACEFILE",value:"/home/LogFiles/startup-corehost.txt"},
+              {name:"DOTNET_DbgEnableMiniDump",value:"1"},
+              {name:"DOTNET_DbgMiniDumpType",value:"3"},
+              {name:"DOTNET_EnableCrashReport",value:"1"},
+              {name:"DOTNET_EnableCrashReportOnly",value:"1"},
+              {name:"DOTNET_CreateDumpDiagnostics",value:"1"},
+              {name:"DOTNET_CreateDumpLogToFile",value:"/home/LogFiles/startup-createdump.txt"},
+              {name:"DOTNET_DbgMiniDumpName",value:"/home/LogFiles/startup-crash.%p"}]' > "$work/settings.json"
           az webapp config appsettings set \
             --name "$WEBAPP_NAME" \
             --resource-group "$RESOURCE_GROUP" \
@@ -193,10 +214,12 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --output none
 
+      # A healthy container answers within about a minute; a crashing one never
+      # does. Keep the outage short and let the failure path collect evidence.
       - name: Verify deployment
         run: |
-          for attempt in $(seq 1 90); do
-            payload=$(curl --connect-timeout 10 --max-time 20 -sf "${VERIFY_URL%/}/api/version" || true)
+          for attempt in $(seq 1 21); do
+            payload=$(curl --connect-timeout 5 --max-time 10 -sf "${VERIFY_URL%/}/api/version" || true)
             sha=$(jq -r '.sha // empty' <<<"$payload")
             build=$(jq -r '.build // empty' <<<"$payload")
             branch=$(jq -r '.branch // empty' <<<"$payload")
@@ -204,11 +227,30 @@ jobs:
               echo "Verified production build $build ($sha) on main."
               exit 0
             fi
-            echo "Waiting for expected production build (attempt $attempt/90, currently ${sha:-none}/${build:-none})..."
+            echo "Waiting for expected production build (attempt $attempt/21, currently ${sha:-none}/${build:-none})..."
             sleep 10
           done
           echo "Expected production SHA/build/branch did not become active." >&2
           exit 1
+
+      - name: Remove crash capture settings
+        if: success()
+        shell: bash
+        run: |
+          az webapp config appsettings delete --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
+            --setting-names COREHOST_TRACE COREHOST_TRACE_VERBOSITY COREHOST_TRACEFILE \
+              DOTNET_DbgEnableMiniDump DOTNET_DbgMiniDumpType DOTNET_EnableCrashReport DOTNET_EnableCrashReportOnly \
+              DOTNET_CreateDumpDiagnostics DOTNET_CreateDumpLogToFile DOTNET_DbgMiniDumpName \
+            --output none
+          for attempt in $(seq 1 18); do
+            sha=$(curl --connect-timeout 5 --max-time 10 -sf "${VERIFY_URL%/}/api/version" | jq -r '.sha // empty' || true)
+            if [[ "$sha" == "${{ steps.meta.outputs.sha }}" ]]; then
+              echo "Production still serves $sha after removing the crash capture settings."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::Production did not answer within 3 minutes of removing the crash capture settings."
 
       # TEMPORARY: the production chat smoke test is removed for this ungated
       # deploy because it calls the model endpoint, which is currently in an
@@ -224,11 +266,76 @@ jobs:
             az webapp config appsettings set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
               --settings "@$state/restore-settings.json" --output none
           fi
+          if [[ "${{ steps.apply-settings.outcome }}" != "skipped" ]]; then
+            az webapp config appsettings delete --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
+              --setting-names COREHOST_TRACE COREHOST_TRACE_VERBOSITY COREHOST_TRACEFILE \
+                DOTNET_DbgEnableMiniDump DOTNET_DbgMiniDumpType DOTNET_EnableCrashReport DOTNET_EnableCrashReportOnly \
+                DOTNET_CreateDumpDiagnostics DOTNET_CreateDumpLogToFile DOTNET_DbgMiniDumpName \
+              --output none
+          fi
           az webapp config container set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
             --container-image-name "$(<"$state/image")" \
             --container-registry-url "https://$(<"$state/registry")" \
             --output none
           echo "::error::Deployment verification failed. Production was restored to its previous image and model settings."
+
+      # Read-only: downloads /home/LogFiles after production is restored and
+      # prints only the faulting frames and redacted startup lines.
+      - name: Print the startup crash evidence
+        if: failure() && steps.apply-settings.outcome == 'success'
+        shell: bash
+        run: |
+          set +e
+          az webapp log download --name "$WEBAPP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --log-file logs.zip --output none
+          mkdir -p logs && unzip -o -q logs.zip -d logs
+          redact() {
+            sed -E \
+              -e "s#${WEBAPP_NAME}#<app>#g" -e "s#${RESOURCE_GROUP}#<rg>#g" -e "s#${ACR_NAME}#<acr>#g" \
+              -e 's#https?://[^[:space:]"]+#<url>#g' \
+              -e 's#[A-Za-z0-9.-]+\.(azurewebsites\.net|azurecr\.io|services\.ai\.azure\.com|openai\.azure\.com)#<host>#g' \
+              -e 's#[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#<guid>#g' \
+              -e 's#[0-9a-fA-F]{24,}#<hex>#g' \
+              -e 's#(Bearer|ey)[A-Za-z0-9._-]{10,}#<token>#g' \
+              -e 's#(-e [A-Za-z0-9_]+)=[^ ]*#\1=...#g'
+          }
+          echo "=================== crash reports ==================="
+          reports=$(find logs -type f -name 'startup-crash.*crashreport.json' -printf '%T@ %p\n' | sort -n | tail -2 | cut -d' ' -f2-)
+          [[ -z "$reports" ]] && echo "No crash report was written (createdump may be blocked, or the crash precedes the runtime)."
+          for report in $reports; do
+            echo "--- $(basename "$report" | redact)"
+            jq -r '
+              "parameters: " + ((.parameters // {}) | with_entries(select(.key | test("Exception|Signal|Version|Code"; "i"))) | tostring),
+              ((.payload.threads // []) as $all
+                | ($all | map(select(.crashed == true))) as $crashed
+                | (if ($crashed | length) > 0 then $crashed else $all[0:1] end)[]
+                | "thread crashed=\(.crashed) managed=\(.is_managed) exception=\(.managed_exception_type // "-")",
+                  ((.stack_frames // [])[0:80][]
+                    | "  \(.filename // .native_module // "?")!\(.method_name // .unmanaged_name // "?")"))
+            ' "$report" | redact
+          done
+          echo "=================== createdump log ==================="
+          dumplog=$(find logs -type f -name 'startup-createdump.txt' | head -1)
+          if [[ -n "$dumplog" ]]; then tail -30 "$dumplog" | redact; else echo "No createdump log was written."; fi
+          echo "=================== .NET host trace (last start) ==================="
+          trace=$(find logs -type f -name 'startup-corehost.txt' | head -1)
+          if [[ -n "$trace" ]]; then
+            echo "starts traced: $(grep -c -- '--- Invoked' "$trace")"
+            last=$(grep -n -- '--- Invoked' "$trace" | tail -1 | cut -d: -f1)
+            tail -n +"${last:-1}" "$trace" | grep -vE 'TRUSTED_PLATFORM_ASSEMBLIES|Adding tpa entry|Probe|probe|Processing TPA|deps entry|Resolved|Replacing' | tail -60 | redact
+          else
+            echo "No host trace was written (dotnet may never have started, or /home/LogFiles is not writable)."
+          fi
+          echo "=================== container output ==================="
+          for file in $(find logs -type f -name '*_default_docker.log' -printf '%T@ %p\n' | sort -n | tail -2 | cut -d' ' -f2-); do
+            echo "--- $(basename "$file" | redact)"
+            tail -60 "$file" | redact
+          done
+          echo "=================== platform container starts ==================="
+          for file in $(find logs -type f -name '*_docker.log' ! -name '*_default_docker.log' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-); do
+            grep -E 'docker run|exit code|exited|Stack|signal|Pulling|pull' "$file" | tail -12 | redact
+          done
+          true
 
       - name: Remove rollback state
         if: always()
