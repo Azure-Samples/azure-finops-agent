@@ -114,6 +114,34 @@ jobs:
             --output json > "$state/current-settings.json"
           node infra/scripts/deployment-smoke.mjs capture "$state"
 
+      # The new agent runtime resolves the Foundry project endpoint at startup and
+      # throws if it is given the old account endpoint, so these must be correct
+      # before the container starts. The evaluated contract normally supplies them;
+      # during this ungated deploy they come straight from the production secret
+      # and the application's own defaults.
+      - name: Configure Azure OpenAI settings
+        id: apply-settings
+        shell: bash
+        env:
+          AOAI_ENDPOINT: ${{ secrets.AZURE_PROD_OPENAI_ENDPOINT }}
+        run: |
+          umask 077
+          if [[ -z "$AOAI_ENDPOINT" ]]; then
+            echo "Missing the AZURE_PROD_OPENAI_ENDPOINT secret." >&2
+            exit 1
+          fi
+          work=$(mktemp -d "$RUNNER_TEMP/prod-settings.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
+          jq -n --arg endpoint "$AOAI_ENDPOINT" \
+            '[{name:"AzureOpenAI__Endpoint",value:$endpoint},
+              {name:"AzureOpenAI__DeploymentName",value:"gpt-6-sol"},
+              {name:"AzureOpenAI__ReasoningEffort",value:"xhigh"}]' > "$work/settings.json"
+          az webapp config appsettings set \
+            --name "$WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --settings "@$work/settings.json" \
+            --output none
+
       - name: Point App Service at immutable image
         run: |
           az webapp config container set \
@@ -149,16 +177,20 @@ jobs:
       # Azure AI Foundry regional outage. It would fail and roll back a
       # perfectly good image. Restore it with the gates tonight.
 
-      - name: Restore the previous production image
+      - name: Restore the previous production image and model settings
         if: (failure() || cancelled()) && steps.rollback-state.outputs.captured == 'true'
         shell: bash
         run: |
           state="$RUNNER_TEMP/deploy-rollback"
+          if [[ "${{ steps.apply-settings.outcome }}" != "skipped" && -s "$state/restore-settings.json" ]]; then
+            az webapp config appsettings set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
+              --settings "@$state/restore-settings.json" --output none
+          fi
           az webapp config container set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
             --container-image-name "$(<"$state/image")" \
             --container-registry-url "https://$(<"$state/registry")" \
             --output none
-          echo "::error::Deployment verification failed. Production was restored to its previous image. Model settings were never modified."
+          echo "::error::Deployment verification failed. Production was restored to its previous image and model settings."
 
       - name: Remove rollback state
         if: always()
