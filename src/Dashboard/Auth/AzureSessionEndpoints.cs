@@ -280,9 +280,7 @@ public static class AzureSessionEndpoints
             if (telemetry.LiveSessions.TryRemove(sid, out var live))
             {
                 telemetry.ActiveSessions.Add(-1);
-                // Fire-and-forget but observe the task so a failed dispose is
-                // logged via the unobserved-exception channel rather than
-                // silently leaking the CLI subprocess.
+                // Fire-and-forget; a failed dispose must not fail the sign-out.
                 _ = Task.Run(async () =>
                 {
                     try { await live.Session.DisposeAsync(); } catch { }

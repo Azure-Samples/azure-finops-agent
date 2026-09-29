@@ -36,7 +36,7 @@ internal static class ModelJson
     }
 
     // Models occasionally serialize a parallel call as {"recipient_name":"functions.<tool>","parameters":{...}}.
-    // Unwrap only that exact envelope, and only when it names the tool the SDK actually invoked.
+    // Unwrap only that exact envelope, and only when it names the tool actually invoked.
     internal static void UnwrapCallEnvelope(string toolName, AIFunctionArguments arguments)
     {
         if (arguments.Count != 2

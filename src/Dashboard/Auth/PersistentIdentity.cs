@@ -16,8 +16,8 @@ namespace AzureFinOps.Dashboard.Auth;
 /// restart, forcing users to re-authenticate. We avoid the dependency cost of
 /// Redis (and the <strong>file-locking corruption</strong> that breaks SQLite on
 /// Azure Files SMB) by writing the long-lived refresh token + a small identity
-/// blob to the same persistent <c>/home</c> Azure Files mount the Copilot SDK
-/// already uses for chat history, encrypted with ASP.NET Data Protection.
+/// blob to the same persistent <c>/home</c> Azure Files mount that holds
+/// chat history, encrypted with ASP.NET Data Protection.
 ///
 /// On the next request after a restart, a hydration middleware reads the
 /// signed <c>finops_id</c> cookie (set after successful Entra login), looks up

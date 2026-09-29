@@ -12,7 +12,7 @@ This catalog covers all 17 application tools registered by [AgentSessionFactory.
 
 Inputs below are strings unless `int`, `double`, or `bool` is shown. `=value` is a C# default; `?` denotes nullable, not necessarily optional in the emitted schema. Cancellation tokens are omitted because the host supplies them.
 
-## Direct Registrations (14)
+## Evidence, Chart And State Tools (14)
 
 | Tool | Credential / scope | Inputs | Model-facing prompt contract |
 | --- | --- | --- | --- |
@@ -31,7 +31,7 @@ Inputs below are strings unless `int`, `double`, or `bool` is shown. `=value` is
 | `GetSavingsLedger` | Owner-bound state | `status=null`, `category=null`, `scopeContains=null`, `limit=50`, `offset=0` | Host-side filters and newest-first paging; default 50, max 200 details, or limit 0 for totals only. Totals cover all matches before paging. |
 | `QueryUploadedFile` | Conversation-bound upload | `fileId`, `mode`, `paramsJson=null` | Registered upload only; query mode supports filters, groups, aggregates, sorting, output columns (1-50), offset and limit. Parameterless modes such as `workbook` need no argument bag. |
 
-## Auto-Defer Registrations (3)
+## Presentation And Publication Tools (3)
 
 | Tool | Credential / scope | Inputs | Model-facing prompt contract |
 | --- | --- | --- | --- |

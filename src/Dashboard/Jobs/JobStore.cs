@@ -5,7 +5,7 @@ namespace AzureFinOps.Dashboard.Jobs;
 
 /// <summary>
 /// A user-defined scheduled job: a prompt that runs on a cadence inside its own
-/// dedicated Copilot session. The session doubles as the job's run history —
+/// dedicated conversation. The conversation doubles as the job's run history —
 /// each run appends a turn, so opening the job in the UI shows every past
 /// answer (text, charts, tables) through the normal transcript replay.
 /// </summary>
@@ -20,9 +20,9 @@ public sealed class ScheduledJob
     public string UserLogin { get; set; } = "";
     public string Name { get; set; } = "";
     public string Prompt { get; set; } = "";
-    /// <summary>Cadence in minutes. Allowed: 15, 60, 1440 (daily), 10080 (weekly).</summary>
+    /// <summary>Cadence in minutes, 1-43200.</summary>
     public int IntervalMinutes { get; set; } = 1440;
-    /// <summary>The dedicated Copilot session backing this job. Created on first run.</summary>
+    /// <summary>The dedicated conversation backing this job. Created on first run.</summary>
     public string? SessionId { get; set; }
     public bool Enabled { get; set; } = true;
     public DateTimeOffset CreatedUtc { get; set; } = DateTimeOffset.UtcNow;

@@ -414,7 +414,7 @@ public static class SessionEndpoints
     /// <summary>
     /// Strips the injected <c>[CONTEXT: ...]</c> and <c>[UPLOADED FILES ...]</c>
     /// system prefixes that <c>ChatEndpoints</c> prepends to every user message.
-    /// Without this, the SDK-derived session summary surfaces our internal prompt
+    /// Without this, the stored conversation summary surfaces our internal prompt
     /// scaffolding ("User IS connected to Azure...") instead of the user's real
     /// first question. Falls back to "Untitled conversation" if nothing remains.
     /// </summary>

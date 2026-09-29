@@ -3285,8 +3285,8 @@ async function reconcileSessionAfterReturn(sid, reason) {
 }
 
 // ── Persisted-transcript recovery ──
-// The backend never aborts a turn on client disconnect: the CLI keeps
-// generating and persists events to the on-disk session state as it goes. So
+// The backend never aborts a turn on client disconnect: the agent keeps
+// running and the server persists the transcript as it goes. So
 // whenever the client's SSE dies (background-tab freeze, minimize, network
 // drop, page reload), the answer WILL appear in /api/sessions/{id}/messages —
 // we wait for it and repaint. The owner-checked active gate and durable outcomes
@@ -3648,7 +3648,7 @@ async function tryRecoverPersistedAnswer(sid, promptText) {
     // Cover the backend's full per-turn budget (ActiveTurns staleness cap is
     // 15 min): a "score my whole estate / all regions × all subscriptions"
     // turn makes dozens of tool calls and persists NOTHING until the final
-    // answer, so the old 3-min deadline gave up while the CLI was still
+    // answer, so the old 3-min deadline gave up while the agent was still
     // working — leaving a permanently stuck "Reconnecting…" banner. Poll
     // interval backs off 3s→10s to keep the request count sane over 15 min.
     const deadline = Date.now() + 900000; // 15 min
@@ -3889,7 +3889,7 @@ const tenantError = ref(false);
 const clearing = ref(false);
 
 // ── Multi-session state (Entra-only) ─────────────────────────────
-// `sessions` mirrors the server's view of the user's saved Copilot sessions.
+// `sessions` mirrors the server's view of the user's saved conversations.
 // `currentSessionId` is the one the next /api/chat request will hit. The
 // backend echoes it back as the first SSE event of every chat so we always
 // stay in sync even if the user clicked a row mid-stream.
@@ -4520,7 +4520,7 @@ async function selectSession(sessionId) {
 // does NOT guard against the already-current session — the background-tab
 // recovery path reloads the CURRENTLY-active session after a severed stream.
 async function reloadSessionTranscript(sessionId) {
-  // Fetch the persisted transcript from the SDK and replay it so the user
+  // Fetch the persisted transcript from the server and replay it so the user
   // sees their actual past messages and tool calls — not a placeholder.
   // Wipe transient view-scoped UI refs (intent ticker, partial text buffer,
   // follow-up CTA) so nothing from the previous view leaks. Do NOT touch
@@ -4604,7 +4604,7 @@ async function reloadSessionTranscript(sessionId) {
       );
       // If this session is still streaming in the background, drop any
       // trailing assistant message — it is the in-progress turn that the
-      // SDK has already persisted. The live SSE stream will commit the
+      // server has already persisted. The live SSE stream will commit the
       // final version on completion. Otherwise the streaming indicator
       // (which renders its own AI avatar) would appear directly below the
       // partial assistant row, producing two stacked AI avatars.
@@ -4721,7 +4721,7 @@ async function reloadSessionTranscript(sessionId) {
   forceScrollToBottom();
 
   // Re-attach: if this session has a turn still running SERVER-side (page was
-  // refreshed mid-answer, or the SSE died while the CLI kept working), poll
+  // refreshed mid-answer, or the SSE died while the agent kept working), poll
   // until it finishes and then reload the transcript — instead of leaving the
   // user staring at a silent conversation that "doesn't respond".
   attachToServerTurn(sessionId);
@@ -5068,10 +5068,10 @@ async function fetchModels() {
   } catch {}
 }
 
-// Pre-warm the Copilot session as soon as we know the user's identity, so the
-// first prompt skips server-side session creation (system-prompt + tool-schema
-// upload, ~300 ms) instead of paying it on the critical path. Fire-and-forget;
-// any failure is harmless — the first /api/chat just creates the session then.
+// Pre-warm the conversation as soon as we know the user's identity, so the
+// first prompt skips server-side conversation creation on the critical path.
+// Fire-and-forget; any failure is harmless — the first /api/chat just creates
+// the conversation then.
 let warmedUp = false;
 function warmUpSession() {
   if (warmedUp) return;
@@ -8461,7 +8461,7 @@ async function send() {
           sessionId: resolvedSid,
         });
       } else if (stopResult?.stopped === true) {
-        // The server confirmed SDK completion after AbortAsync. Keep any partial
+        // The server confirmed the run stopped. Keep any partial
         // text and remember the terminal intent across reloads.
         window.__trackAppInsightsEvent?.("chat.stream.stopped", {
           sessionId: streamingId,
@@ -8505,9 +8505,9 @@ async function send() {
       });
       // A severed SSE stream usually means the app restarted mid-turn (deploy,
       // scale event, crash) OR the tab was backgrounded and the browser froze /
-      // dropped the fetch. In every case the CLI keeps working and persists the
-      // answer (SendAsync runs with no cancellation token), so recover it from
-      // the server. Drop this session from runningSessions FIRST so the
+      // dropped the fetch. Unless the app itself restarted, the turn keeps running
+      // and persists the answer after a disconnect, so recover it from the server.
+      // Drop this session from runningSessions FIRST so the
       // transcript reload keeps (doesn't discard) the persisted trailing answer.
       runningSessions.delete(streamingId);
       // Fire-and-forget: the poller watches the persisted transcript for up to

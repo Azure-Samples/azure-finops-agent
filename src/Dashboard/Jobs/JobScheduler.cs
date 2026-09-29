@@ -10,7 +10,7 @@ namespace AzureFinOps.Dashboard.Jobs;
 
 /// <summary>
 /// Runs user-defined scheduled jobs (prompt + cadence) as background agent
-/// turns in each job's dedicated Copilot session. Ticks every minute, finds
+/// turns in each job's dedicated conversation. Ticks every minute, finds
 /// due jobs, and executes them sequentially (jobs are rare; sequential keeps
 /// AOAI + ARM pressure trivial).
 ///

@@ -5,7 +5,7 @@ description: "Audit 100 individual user conversations end to end, identify new r
 
 # Investigate AI session completion
 
-Evaluate whether users actually solved their problems, not whether requests returned HTTP 200, tools finished, or the SDK became idle. Investigate prompts, tool descriptions and schemas, integrations, API contracts, evidence quality, follow-up behavior, artifacts, latency, and recovery.
+Evaluate whether users actually solved their problems, not whether requests returned HTTP 200, tools finished, or the turn became idle. Investigate prompts, tool descriptions and schemas, integrations, API contracts, evidence quality, follow-up behavior, artifacts, latency, and recovery.
 
 Default: **100 distinct populated user conversations**, newest first, within the selected deployment's retained history. Honor any user-specified owner, date range, sample size, or analysis-only constraint. A conversation is the sampling unit, not a request, model iteration, tool call, or repeated snapshot.
 
@@ -33,10 +33,10 @@ Before collecting the cohort:
 
 ### Authorized operator storage alternative
 
-- Resolve `COPILOT_HOME` from configuration. Inspect the actual SDK layout rather than assuming a version-specific directory. Managed ownership comes from the session working directory under the configured `users` or `anon` root, not from a session identifier alone.
+- Resolve `COPILOT_HOME` from configuration. Each conversation is `{workdir}/sessions/{sessionId}/` with `session.json` (listing metadata and the saved `AgentSession`) and the UI transcript `events.jsonl`, under the owner's workdir in the configured `users` or `anon` root. Managed ownership comes from that workdir, not from a session identifier alone.
 - Use GET-only SCM/Kudu reads with an existing Microsoft Entra operator token held in memory. Never fetch publishing profiles, identity/token files, secrets, uploads unrelated to the question, or a whole storage-root archive.
 - Read only the needed session metadata, `events.jsonl`, and owner-bound turn outcomes. Session directories can contain only workspace scaffolding: directory count is not conversation count. Do not call every missing event file a failed user interaction.
-- If retained SDK SQLite message indexes are available, they may recover historical user/assistant rows. Use a stable read-only copy with the necessary WAL state; verify the relevant tables and snapshot consistency. Never repair or modify the live database.
+- Conversations created by the retired Copilot SDK runtime may remain under `$COPILOT_HOME/.copilot/session-state` with their own `events.jsonl` and SQLite message indexes. Treat them as historical evidence only: use a stable read-only copy with the necessary WAL state, verify the relevant tables and snapshot consistency, and never repair or modify the live files.
 - Label index-only histories **message-only coverage** when tool events, exact timing, terminal status, or earlier context are unavailable. Deduplicate overlapping event-log/index sessions, checkpoint snapshots and exact replay duplicates without deleting genuine repeated user requests. Do not count index rows as separate sessions.
 - Do not resume or replay live agent sessions merely to audit them, execute recorded tools, renew user tokens, or issue additional tenant queries to reconstruct missing historical evidence.
 
@@ -69,7 +69,7 @@ Read every retained request and answer chronologically, including short confirma
 
 Use `fulfilled`, `partial`, `blocked_expected`, `failed`, or `not_evaluable`, with a short rationale and exact pseudonymous turn/event references. A truthful permission/capacity limitation can be `blocked_expected`; it is not evidence that the model should bypass a control.
 
-For tool failures, inspect returned HTTP/error/partial metadata as well as SDK success flags. Correlate host, CLI and HTTP spans; many dependency rows can represent retries or nested spans from one operation, not independent failed user requests.
+For tool failures, inspect returned HTTP/error/partial metadata as well as function-call success. Correlate host, agent (`AzureFinOps.AI.Agent`) and HTTP spans; many dependency rows can represent retries or nested spans from one operation, not independent failed user requests.
 
 ## 5. Establish the ten strongest NEW root causes
 

@@ -4,7 +4,7 @@ Current execution, approval, artifact and outcome contracts are documented in [a
 
 ## 1. Purpose
 
-Before this change set, the Azure FinOps Agent had a **single live conversation per browser session**. Closing the tab, redeploying the container, or being idle past the 30-minute SDK timeout meant the user lost their chat history and had to re-consent to Azure / Graph / Log Analytics on the next visit.
+Before this change set, the Azure FinOps Agent had a **single live conversation per browser session**. Closing the tab, redeploying the container, or being idle past the 30-minute session timeout meant the user lost their chat history and had to re-consent to Azure / Graph / Log Analytics on the next visit.
 
 The goal of this work is to give every user — anonymous or Entra-authenticated — **multiple long-lived conversations** that survive container restarts, slot swaps, OAuth token expiry, and 24-hour absences, **without re-prompting for OAuth consent**. Entra users additionally get cross-device continuity (sign in on a new browser → see the same conversations).
 
@@ -22,7 +22,7 @@ The combination is what makes restart-survivable login possible: the cookie tell
 
 ## 3. Identity & user-id derivation
 
-`Auth/PersistentIdentity.cs` (new file) is the single source of truth for "who is this caller, and how do I prove it across restarts".
+`Auth/PersistentIdentity.cs` is the single source of truth for "who is this caller, and how do I prove it across restarts".
 
 ### 3.1 Deterministic `userId` from the Entra principal
 
@@ -43,7 +43,7 @@ The legacy `userId` was a random `long` minted per browser session. Persistence 
 - The record is serialized to JSON, encrypted with ASP.NET Core **DataProtection** (`protector scope = "FinOps.Identity.v1"`), and written atomically to `identity.json`.
 - A companion `finops_id` cookie (HttpOnly, Secure, SameSite=Lax, 30-day) holds the encrypted versioned `tid + oid` pointer, never plaintext.
 - An old OID-only directory is reused only when its encrypted identity record attests the same tenant/object pair. A different tenant with the same OID receives a new v2 directory and cannot list, read, select, or delete the legacy sessions.
-- DataProtection keys themselves are persisted to `/home/dataprotection-keys/` (Program.cs ~line 37) so that a container restart doesn't invalidate every cookie in the wild.
+- DataProtection keys themselves are persisted to `/home/dataprotection-keys/` (see `Program.cs`) so that a container restart doesn't invalidate every cookie in the wild.
 
 ### 3.3 Atomic, lock-protected writes
 
@@ -130,7 +130,7 @@ On the first user/assistant exchange a separate low-effort title agent returns a
 
 ## 8. The `/api/sessions` REST surface
 
-`Endpoints/SessionEndpoints.cs` (new file, ~330 LOC) exposes:
+`Endpoints/SessionEndpoints.cs` exposes:
 
 | Method   | Path                          | Purpose                                                                                                                                                                                                                          |
 | -------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -141,15 +141,15 @@ On the first user/assistant exchange a separate low-effort title agent returns a
 | `GET`    | `/api/sessions/{id}/outcomes` | Owner-checked durable execution outcomes; normal chat fulfillment remains unevaluated.                                                                                                                                           |
 | `DELETE` | `/api/sessions/{id}`          | Rejects an active turn, deletes the local conversation, and only then clears host state. Failures propagate instead of returning false success.                                                                                  |
 
-The chat SSE endpoint (`AI/ChatEndpoints.cs`) accepts an optional `sessionId` to resume a specific conversation, threads it through the IDOR check, and sends a `session` SSE event so the frontend can retain the active id in `sessionStorage`. Stop and timeout cancel host tools as well as the model run; the gate remains held until terminal confirmation and tool-lease drainage. A browser disconnect alone does not cancel the turn.
+The chat SSE endpoint (`AI/ChatEndpoints.cs`) accepts an optional `sessionId` to resume a specific conversation, threads it through the IDOR check, and sends a `session` SSE event so the frontend can retain the active id in `sessionStorage`. Stop cancels the run's token, and the turn gate stays held until the run reports a terminal state. A browser disconnect alone does not cancel the turn.
 
 ## 9. TTL janitor
 
-`Auth/UserStateJanitor.cs` is a `BackgroundService` that wakes hourly and uses `ListAllManagedSessions` to find conversations not modified for 30 days, calling `DeleteSessionAsync` to remove them. The scope is deliberately narrow — only `users/` and `anon/` — so the janitor can never accidentally delete state from a co-located component sharing the Azure Files mount.
+`Auth/UserStateJanitor.cs` is a `BackgroundService` that evicts idle users' in-memory state every 10 minutes and, every 6 hours, uses `ListAllManagedSessions` to find conversations not modified for 30 days, calling `DeleteSessionAsync` to remove them. The scope is deliberately narrow — only `users/` and `anon/` — so the janitor can never accidentally delete state from a co-located component sharing the Azure Files mount.
 
 ## 10. Frontend (`ChatView.vue`)
 
-The Vue chat UI now has a vertical-split right sidebar: tool calls on top, Conversations list on bottom. Deletion is a single click without a confirmation step and keeps the row stable while the server responds. A failed delete remains visible with an error; only a confirmed `204`/`404` removes the row and current transcript state. Running conversations must be stopped first.
+The Vue chat UI lists the user's conversations beside the chat. Deletion is a single click without a confirmation step and keeps the row stable while the server responds. A failed delete remains visible with an error; only a confirmed `204`/`404` removes the row and current transcript state. Running conversations must be stopped first.
 
 ## 11. End-to-end flow after these changes
 

@@ -37,8 +37,8 @@ public static class HttpHelper
     public static ILogger? Logger { get; set; }
 
     /// <summary>
-    /// Per-turn retry status, resolved by the owner/session context established
-    /// inside the protected SDK callback. Cost throttles carry the full deadline
+    /// Per-turn retry status, reported to the turn's SSE stream through Activity
+    /// baggage. Cost throttles carry the full deadline
     /// and whether this request will retry automatically.
     /// </summary>
     public sealed record RetryNotice(int Attempt, double WaitSeconds, string Url, string Tool, int Status,
@@ -49,7 +49,7 @@ public static class HttpHelper
     /// <summary>
     /// Resolves the calling user's id from the per-turn Activity Baggage
     /// (<c>finops.turn.id</c> = <c>{userId}:{sessionId}</c>, stamped by ChatEndpoints
-    /// before SendAsync). Null when called outside a chat turn. Used to bind
+    /// before the run). Null when called outside a chat turn. Used to bind
     /// generated artifacts (scripts, decks) to their owner so the download
     /// endpoints can enforce per-user access.
     /// </summary>
@@ -259,11 +259,8 @@ public static class HttpHelper
                 // again. Prefix matches the tool/scope tag in App Insights.
                 Logger?.LogWarning("HTTP retry {Tool} attempt={Attempt} status={Status} waitSec={Wait:F1} url={Url}",
                     telemetryPrefix, attempt + 1, reason, waitSeconds, url);
-                // Look up the SSE reporter via Activity Baggage — baggage
-                // propagates across W3C tracecontext boundaries (including the
-                // Copilot CLI subprocess JSON-RPC tool callback) where RootId
-                // does not. ChatEndpoints stamps "finops.turn.id" (userId:sessionId)
-                // on the chat activity before SendAsync.
+                // The SSE reporter is keyed by the "finops.turn.id" baggage
+                // (userId:sessionId) that ChatEndpoints stamps before the run.
                 await ReportRetryAsync(report, new(attempt + 1, waitSeconds, url, telemetryPrefix, status,
                     retryAt, costThrottle ? true : null));
                 res.Dispose();

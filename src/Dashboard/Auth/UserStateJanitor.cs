@@ -4,9 +4,9 @@ using AzureFinOps.Dashboard.Observability;
 namespace AzureFinOps.Dashboard.Auth;
 
 /// <summary>
-/// Background service that evicts per-user state (CopilotSession, UserTokens, tool list)
-/// when the user has been inactive for a configurable period, and deletes Copilot
-/// session-state directories on disk older than <see cref="PersistedSessionTtl"/>.
+/// Background service that evicts per-user state (live conversations, UserTokens, tool list)
+/// when the user has been inactive for a configurable period, and deletes conversation
+/// directories on disk older than <see cref="PersistedSessionTtl"/>.
 /// Without this, the in-memory dictionaries grow unbounded as anonymous visitors
 /// accumulate (eventually OOM'ing the container) and the persistent /home mount
 /// fills up with abandoned sessions.
@@ -76,7 +76,7 @@ public sealed class UserStateJanitor : BackgroundService
                 {
                     _telemetry.ActiveSessions.Add(-1);
                     try { await live.Session.DisposeAsync(); }
-                    catch (Exception ex) { _logger.LogWarning(ex, "Failed to dispose Copilot session {SessionId} for user {UserId}", sid, userId); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "Failed to dispose conversation {SessionId} for user {UserId}", sid, userId); }
                 }
             }
             evicted++;

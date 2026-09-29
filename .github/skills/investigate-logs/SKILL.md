@@ -37,7 +37,7 @@ Drill into top offenders with bounded projections. Treat many rows at one timest
 Classify each finding before editing:
 
 - Expected transient egress failures already retried/degraded
-- SDK-internal self-healing session failures
+- Model service failures already retried by the client pipeline (408/429/5xx), and expired response chains that reset to a fresh context
 - Browser/client cancellation
 - Internet bot scans
 - Local startup races

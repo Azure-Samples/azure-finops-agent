@@ -6,8 +6,8 @@ The application stays a modular monolith: one .NET API and one Vue application. 
 
 ```mermaid
 flowchart LR
-    Model[Agent Framework and model] --> Admission[Protected tool admission]
-    Admission --> Tool[Typed arguments and endpoint contract]
+    Model[Agent Framework and model] --> Invoker[Function invocation]
+    Invoker --> Tool[Owner-bound tool and endpoint contract]
     Tool --> Transport[Shared HTTP and cost coordination]
     Transport --> Provider[Azure or Graph API]
     Provider --> Evidence[Bounded result and source evidence]
@@ -19,7 +19,7 @@ flowchart LR
 | Boundary | Owns | Must not own |
 | --- | --- | --- |
 | Session/turn host | User/session identity, one active turn, cancellation, completion | Guessing whether an answer fulfilled the business goal |
-| Protected tools | Admission, owner binding, execution leases | Model-controlled permissions or filesystem access |
+| Tool functions | Owner binding (each user's tools are built from that user's tokens), host-owned destinations, paths and reserved fields | Model-controlled permissions or filesystem access |
 | Tool contracts | Required/optional arguments, supported query options and scope | Generic filters unsupported by the source API |
 | HTTP transport | Authentication, cancellation, service retry deadlines | Invented data or silently shortened retry deadlines |
 | Evidence/results | Source date, currency, units, counts, paging and completeness | Treating unknown/denied/partial data as zero or complete |
@@ -35,9 +35,9 @@ flowchart LR
 - [turnRecovery.js](../src/Dashboard/frontend/src/turnRecovery.js) classifies owner-checked terminal outcomes without treating unavailable or mismatched history as proof of failure. A model authorization failure is separate from the user's tenant connection.
 - [TurnFailureNotice.vue](../src/Dashboard/frontend/src/components/TurnFailureNotice.vue) renders the same accessible failure state for live and restored turns. [SessionEndpoints.cs](../src/Dashboard/Endpoints/SessionEndpoints.cs) preserves turn errors in transcript order without discarding partial answers. Editing a failed question never resends it automatically or replaces an existing draft.
 - [jobTemplates.js](../src/Dashboard/frontend/src/data/jobTemplates.js) keeps editable scheduling prompts in data rather than component logic. Template guidance cannot approve purchases or invent missing resource names, and test jobs must not repeatedly query the tenant-throttled billing service.
-- [ChatEndpoints.cs](../src/Dashboard/AI/ChatEndpoints.cs) forwards message and admitted tool-call identities. The browser no longer has to guess which running tool is waiting.
+- [ChatEndpoints.cs](../src/Dashboard/AI/ChatEndpoints.cs) forwards message and tool-call identities. The browser no longer has to guess which running tool is waiting.
 - [TurnExecution.cs](../src/Dashboard/AI/TurnExecution.cs) accounts for distinct completed messages without double-counting snapshots.
-- [AzureQueryTools.cs](../src/Dashboard/AI/Tools/AzureQueryTools.cs) reuses the existing bulk transport for grouped multi-scope billing reads. The host forces cost-containing batches sequential, stops after a final throttle, and preserves source evidence when response bodies are omitted. This reduces model round-trips, not Azure's mandated wait time.
+- [AzureQueryTools.cs](../src/Dashboard/AI/Tools/AzureQueryTools.cs) accepts several same-kind GETs as url lines of one call (at most 50, four at a time), crops each with the same `query`, and reports any failed line as partial. Cost Management `/query` and `/forecast` stay serialized per tenant and stop after a final throttle. This reduces model round-trips, not Azure's mandated wait time.
 
 These modules use the existing Vue Composition API and standard JavaScript/.NET primitives. No additional state-management framework is needed.
 
@@ -60,7 +60,7 @@ Do not replace these controls with prompt wording or an AI judgement.
 
 ## Library and Refactor Rules
 
-1. Reuse the existing SDK, ASP.NET Core, Vue reactivity, `HttpClient` and JSON facilities before adding dependencies.
+1. Reuse Agent Framework, ASP.NET Core, Vue reactivity, `HttpClient` and JSON facilities before adding dependencies.
 2. Prefer a small shared parser/state module over another tool-specific branch in the main component.
 3. Add a library only when it replaces meaningful custom code and preserves the existing security, cancellation and output contracts.
 4. Prove each migration with focused unit tests, a browser reproduction and then authenticated acceptance on the same user-shared tab.
@@ -72,7 +72,7 @@ This document does not claim the entire tool catalog or large Vue component has 
 
 | Area | Next safe boundary | Decision |
 | --- | --- | --- |
-| ARM and Graph query contracts | Shared parsing with host-owned endpoint capability definitions | Graph query-option validation now uses a compact contract table and one parser/validator, preserving the existing allow/deny matrix. Keep ARM scope, grouping and mutation guards deterministic. Do not assume every API accepts every OData option. |
+| ARM and Graph query contracts | Host-owned host routing, scope and method guards in `QueryAzure` | Graph and ARM share one pass-through; the model reads the endpoint's documented query options. Keep ARM scope, grouping and mutation guards deterministic. Do not assume every API accepts every OData option. |
 | Ledger filtering and paging | Existing `FilterLedger` implementation | Reuse the existing engine. Another abstraction would add code without removing meaningful duplication. Keep ownership, literal filters and totals-before-paging fixed. |
 | HTTP and public-web reads | Small bounded-read/result-formatting helpers | Share mechanics where contracts match. Keep public HTTPS fetch separate from delegated ARM/Graph/Log Analytics transport; their credentials, retries and coverage rules differ. |
 | Generated scripts | Existing thin artifact wrapper | Keep packaging separate from execution. A more flexible argument bag must not become arbitrary host execution. |
