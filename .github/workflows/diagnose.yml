@@ -65,13 +65,16 @@ jobs:
               -e 's#(Bearer|ey)[A-Za-z0-9._-]{10,}#<token>#g'
           }
 
-          latest=$(find logs -name '*docker*.log' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -3 | cut -d' ' -f2-)
+          latest=$(find logs -type f -name '*.log' -newermt '2026-09-29 17:30' 2>/dev/null | head -40)
           if [ -z "$latest" ]; then
-            echo "No container log found; listing what was downloaded:"
-            find logs -type f | head -50
-            exit 0
+            latest=$(find logs -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -8 | cut -d' ' -f2-)
           fi
+          echo "=================== files downloaded ==================="
+          find logs -type f | head -60
           for file in $latest; do
-            echo "=================== $(basename "$file") (last 120 lines) ==================="
-            tail -120 "$file" | redact
+            echo "=================== $file ==================="
+            # The crashed container's own stdout is what matters, so keep any
+            # line that is not routine App Service platform chatter.
+            grep -vE 'Nested mountpoint|named pipe|Establishing |Mounting volumes|Starting watchers|metrics collection|DetailsLevel: INFO' "$file" \
+              | tail -80 | redact
           done
