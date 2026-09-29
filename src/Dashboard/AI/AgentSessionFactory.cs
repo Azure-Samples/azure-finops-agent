@@ -277,6 +277,11 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     /// <summary>A bounded failure description that is safe to show and persist.</summary>
     internal string DescribeFailure(Exception exception)
     {
+        if (exception is IncompleteModelResponseException incomplete)
+        {
+            _logger.LogWarning("Agent turn failed: {Reason}", incomplete.Message);
+            return incomplete.Message.Length > 400 ? incomplete.Message[..400] : incomplete.Message;
+        }
         _logger.LogWarning(exception, "Agent turn failed");
         var detail = exception is ClientResultException result
             ? $"The model request failed (HTTP {result.Status}). {FirstLine(result.Message)}"

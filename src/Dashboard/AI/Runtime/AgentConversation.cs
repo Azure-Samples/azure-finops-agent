@@ -227,9 +227,11 @@ public sealed class AgentConversation : IAsyncDisposable
             messages.Add(new ChatMessage(ChatRole.User, contents));
             var session = await RestoreSessionAsync(agent, cancellationToken);
             var surfaced = new List<JsonElement>();
+            var completion = new ModelRunCompletion();
 
             await foreach (var update in agent.RunStreamingAsync(messages, session, options, cancellationToken))
             {
+                completion.Observe(update.Contents, update.FinishReason);
                 foreach (var content in update.Contents)
                 {
                     switch (content)
@@ -274,6 +276,7 @@ public sealed class AgentConversation : IAsyncDisposable
             }
             await FlushMessageAsync();
             await CompleteOpenCallsAsync();
+            if (completion.Failure is { } failure) throw new IncompleteModelResponseException(failure);
             _meta.AgentSession = await agent.SerializeSessionAsync(session, cancellationToken: cancellationToken);
             _meta.PendingApprovals = surfaced.Count > 0 ? surfaced : null;
             _meta.InterruptedApproval = null;
