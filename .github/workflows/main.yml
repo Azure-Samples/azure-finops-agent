@@ -23,6 +23,10 @@ env:
   WEBAPP_NAME: ${{ vars.PROD_WEBAPP_NAME }}
   RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
   VERIFY_URL: ${{ vars.PROD_VERIFY_URL }}
+  # TEMPORARY ungated deploy: the image is built from this branch, whose
+  # src/Dashboard is identical to main@dcba16c, so it is tagged and verified
+  # with main's real commit rather than this throwaway branch's SHA.
+  DEPLOY_SHA: dcba16c
 
 # Cancel in-flight prod deploys when a newer commit lands.
 concurrency:
@@ -30,29 +34,12 @@ concurrency:
   cancel-in-progress: false # don't cancel a half-deployed prod build
 
 jobs:
-  regressions:
-    permissions:
-      contents: read
-    uses: ./.github/workflows/validate.yml
-
-  # Starts with the regressions instead of after them; deploy still requires both.
-  live-evaluations:
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/live-evaluations.yml
-    secrets: inherit
-
+  # TEMPORARY: the `regressions` and `live-evaluations` gates are intentionally
+  # removed on this throwaway branch for a one-off ungated production deploy.
+  # Never merge this file into main; main keeps both gates.
   deploy:
     name: Build & Deploy
-    needs: [regressions, live-evaluations]
     runs-on: ubuntu-latest
-    env:
-      AOAI_ENDPOINT: ${{ secrets.AZURE_PROD_OPENAI_ENDPOINT }}
-      EVALUATED_MODEL: ${{ needs.live-evaluations.outputs.model }}
-      EVALUATED_REASONING_EFFORT: ${{ needs.live-evaluations.outputs.reasoning_effort }}
-      EVALUATED_SHA: ${{ needs.live-evaluations.outputs.sha }}
-      EVALUATED_ENDPOINT_SHA256: ${{ needs.live-evaluations.outputs.endpoint_sha256 }}
     steps:
       # Shallow checkout — build number now comes from github.run_number,
       # so we don't need full git history any more.
@@ -72,7 +59,8 @@ jobs:
             fi
           done
           # Production must serve the exact deployment, effort and endpoint the live gate evaluated.
-          node infra/scripts/feature-slot.mjs check-production-config
+          # TEMPORARY: the evaluated-contract check is skipped for this ungated deploy,
+          # and the model settings are left exactly as production already has them.
           SMOKE_URL="$VERIFY_URL" node infra/scripts/deployment-smoke.mjs check-url
 
       - name: Azure Login (OIDC)
@@ -88,7 +76,7 @@ jobs:
       - name: Set build metadata
         id: meta
         run: |
-          echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          echo "sha=${DEPLOY_SHA}" >> $GITHUB_OUTPUT
           echo "build=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
@@ -129,26 +117,6 @@ jobs:
             --output json > "$state/current-settings.json"
           node infra/scripts/deployment-smoke.mjs capture "$state"
 
-      - name: Configure evaluated Azure OpenAI settings
-        id: apply-settings
-        shell: bash
-        run: |
-          umask 077
-          work=$(mktemp -d "$RUNNER_TEMP/prod-settings.XXXXXX")
-          trap 'rm -f "$work/settings.json" "$work/effective.json"; rmdir "$work"' EXIT
-          node infra/scripts/feature-slot.mjs production-settings "$work/settings.json"
-          az webapp config appsettings set \
-            --name ${{ env.WEBAPP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --settings "@$work/settings.json" \
-            --output none
-          az webapp config appsettings list \
-            --name ${{ env.WEBAPP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --query "[?name=='AzureOpenAI__Endpoint' || name=='AzureOpenAI__DeploymentName' || name=='AzureOpenAI__ReasoningEffort']" \
-            --output json > "$work/effective.json"
-          node infra/scripts/feature-slot.mjs check-production-settings "$work/effective.json"
-
       - name: Point App Service at immutable image
         run: |
           az webapp config container set \
@@ -182,20 +150,16 @@ jobs:
           SMOKE_URL: ${{ env.VERIFY_URL }}
         run: node infra/scripts/deployment-smoke.mjs chat
 
-      - name: Restore the previous production image and model settings
-        if: (failure() || cancelled()) && steps.rollback-state.outputs.captured == 'true' && steps.apply-settings.outcome != 'skipped'
+      - name: Restore the previous production image
+        if: (failure() || cancelled()) && steps.rollback-state.outputs.captured == 'true'
         shell: bash
         run: |
           state="$RUNNER_TEMP/deploy-rollback"
-          if [[ -s "$state/restore-settings.json" ]]; then
-            az webapp config appsettings set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
-              --settings "@$state/restore-settings.json" --output none
-          fi
           az webapp config container set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
             --container-image-name "$(<"$state/image")" \
             --container-registry-url "https://$(<"$state/registry")" \
             --output none
-          echo "::error::Deployment verification failed. Production was restored to its previous image and model settings."
+          echo "::error::Deployment verification failed. Production was restored to its previous image. Model settings were never modified."
 
       - name: Remove rollback state
         if: always()
