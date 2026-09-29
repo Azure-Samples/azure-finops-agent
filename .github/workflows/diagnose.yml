@@ -1,29 +1,30 @@
-#     TEMPORARY diagnostic. Read-only: it never deploys, restarts or writes.
+#     TEMPORARY diagnostic. Read-only: it never deploys, restarts or writes to
+#     any Azure resource. It runs the already-built production image locally on
+#     the runner and reproduces the startup crash.
 #
-#     The same image starts on a GitHub runner and on the test slot but
-#     segfaults on production, so this compares the two site configurations
-#     and reports the production container's real exit reason.
-#
-#     Secrets are never printed: setting values are shown only for an explicit
-#     allow-list of non-secret platform keys, and URLs, GUIDs and tokens are
-#     redacted from every log line.
+#     The image starts fine on a bare runner but segfaults (exit 139, ~1s, no
+#     output) on App Service. The App Service detectors in the Azure Monitor
+#     OpenTelemetry distro only activate when WEBSITE_* variables exist, so the
+#     bare runner never exercised that path. Each case below adds one part of
+#     the App Service environment to find which one kills the process.
 name: Diagnose production startup
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to reproduce against
+        required: false
+        default: 6e99d91
 
 permissions:
   id-token: write
   contents: read
 
 jobs:
-  compare:
-    name: Compare production with the working slot
+  repro:
+    name: Reproduce the startup crash
     runs-on: ubuntu-latest
-    env:
-      WEBAPP_NAME: ${{ vars.PROD_WEBAPP_NAME }}
-      RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
-      SLOT_NAME: ${{ vars.TEST_SLOT_NAME }}
     steps:
       - name: Azure Login (OIDC)
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
@@ -32,68 +33,60 @@ jobs:
           tenant-id: ${{ secrets.AZURE_PROD_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_PROD_SUBSCRIPTION_ID }}
 
-      - name: Site configuration, production versus slot
+      - name: Login to ACR
+        run: az acr login --name ${{ vars.PROD_ACR_NAME }}
+
+      - name: Run the image under increasing amounts of App Service environment
+        env:
+          IMAGE: ${{ vars.PROD_CONTAINER_IMAGE }}
+          TAG: ${{ inputs.tag }}
         run: |
           set -u
-          scrub() {
-            sed -E \
-              -e 's#[A-Za-z0-9._-]+\.azurecr\.io#<registry>#g' \
-              -e 's#https://[^[:space:]",]+#<url>#g' \
-              -e 's#[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#<guid>#g'
+          docker pull "$IMAGE:$TAG"
+
+          # A synthetic connection string: the crash is expected from the code
+          # path that reads it, not from any real resource, so no secret is used.
+          FAKE_AI='InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://westeurope-5.in.applicationinsights.azure.com/;LiveEndpoint=https://westeurope.livediagnostics.monitor.azure.com/'
+
+          run_case() {
+            name="$1"; shift
+            echo "=================== CASE: $name ==================="
+            set +e
+            docker run --rm --name "case" \
+              -e ASPNETCORE_URLS=http://+:8080 \
+              -e AGENT_HOME=/tmp/agent \
+              -e AzureOpenAI__Endpoint=https://example.services.ai.azure.com/api/projects/diag \
+              -e AzureOpenAI__DeploymentName=gpt-6-sol \
+              "$@" \
+              --entrypoint /bin/bash "$IMAGE:$TAG" \
+              -c 'mkdir -p "$AGENT_HOME/users" "$AGENT_HOME/anon"; timeout 25 dotnet Dashboard.dll; echo "EXIT=$?"' 2>&1 \
+              | sed -E 's#https://[^[:space:]",]+#<url>#g' | tail -25
+            set -e
+            echo
           }
-          # Exactly the platform knobs that decide how a container is launched.
-          q='{linuxFxVersion:linuxFxVersion,appCommandLine:appCommandLine,alwaysOn:alwaysOn,healthCheckPath:healthCheckPath,numberOfWorkers:numberOfWorkers,acrUseManagedIdentityCreds:acrUseManagedIdentityCreds,use32BitWorkerProcess:use32BitWorkerProcess}'
-          echo "=================== PRODUCTION site config ==================="
-          az webapp config show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query "$q" -o json | scrub
-          echo "=================== SLOT site config ==================="
-          az webapp config show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot "$SLOT_NAME" --query "$q" -o json | scrub
-          echo "=================== PLAN ==================="
-          az appservice plan show --ids "$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query serverFarmId -o tsv)" \
-            --query '{sku:sku.name,tier:sku.tier,workers:sku.capacity,linux:reserved}' -o json | scrub
 
-      - name: App setting names, production versus slot
-        run: |
-          set -u
-          az webapp config appsettings list -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-            --query "sort_by(@,&name)[].name" -o tsv > prod.txt
-          az webapp config appsettings list -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot "$SLOT_NAME" \
-            --query "sort_by(@,&name)[].name" -o tsv > slot.txt
-          echo "=================== only on PRODUCTION ==================="
-          comm -23 prod.txt slot.txt || true
-          echo "=================== only on SLOT ==================="
-          comm -13 prod.txt slot.txt || true
+          # 1. Baseline: what the earlier preflight already proved works.
+          run_case "bare runner (no App Service variables)"
 
-      - name: Values of non-secret platform settings only
-        run: |
-          set -u
-          # These keys hold no credentials, and they are what would inject a
-          # native profiler or otherwise change the container launch.
-          allow="WEBSITES_ENABLE_APP_SERVICE_STORAGE WEBSITES_PORT WEBSITES_CONTAINER_START_TIME_LIMIT DOCKER_ENABLE_CI ApplicationInsightsAgent_EXTENSION_VERSION XDT_MicrosoftApplicationInsights_Mode DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER LD_PRELOAD COPILOT_HOME AGENT_HOME ASPNETCORE_URLS OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_PROTOCOL WEBSITE_RUN_FROM_PACKAGE"
-          for scope in production slot; do
-            echo "=================== $scope allow-listed values ==================="
-            if [ "$scope" = "production" ]; then
-              az webapp config appsettings list -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" -o json > s.json
-            else
-              az webapp config appsettings list -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot "$SLOT_NAME" -o json > s.json
-            fi
-            for key in $allow; do
-              value=$(jq -r --arg k "$key" '.[] | select(.name==$k) | .value' s.json)
-              [ -n "$value" ] && echo "$key = $value"
-            done
-          done
-          rm -f s.json
+          # 2. App Service identity variables only.
+          run_case "WEBSITE_* present" \
+            -e WEBSITE_SITE_NAME=diag-site \
+            -e WEBSITE_RESOURCE_GROUP=diag-rg \
+            -e WEBSITE_OWNER_NAME=00000000-0000-0000-0000-000000000000+diag-rg-EuropeNorthwebspace \
+            -e WEBSITE_INSTANCE_ID=diaginstance \
+            -e WEBSITE_HOSTNAME=diag-site.azurewebsites.net
 
-      - name: Why the production container exited
-        run: |
-          set -u
-          az webapp log download -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --log-file logs.zip
-          mkdir -p logs && unzip -o -q logs.zip -d logs
-          echo "=================== distinct container exit reasons ==================="
-          grep -rhoE 'Container exited with exit code [0-9]+ during startup after [0-9.]+s' logs 2>/dev/null \
-            | sort | uniq -c | sort -rn | head -20
-          echo "=================== last application output ==================="
-          grep -rh 'ContainerStream' logs 2>/dev/null \
-            | grep -vE 'Nested mountpoint|named pipe|Establishing |Mounting volumes' \
-            | tail -40 \
-            | sed -E -e 's#https://[^[:space:]",]+#<url>#g' \
-                     -e 's#[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#<guid>#g'
+          # 3. Application Insights only.
+          run_case "Application Insights connection string present" \
+            -e APPLICATIONINSIGHTS_CONNECTION_STRING="$FAKE_AI" \
+            -e ApplicationInsights__ConnectionString="$FAKE_AI"
+
+          # 4. Both, which is what production actually runs with.
+          run_case "full App Service environment (production shape)" \
+            -e WEBSITE_SITE_NAME=diag-site \
+            -e WEBSITE_RESOURCE_GROUP=diag-rg \
+            -e WEBSITE_OWNER_NAME=00000000-0000-0000-0000-000000000000+diag-rg-EuropeNorthwebspace \
+            -e WEBSITE_INSTANCE_ID=diaginstance \
+            -e WEBSITE_HOSTNAME=diag-site.azurewebsites.net \
+            -e APPLICATIONINSIGHTS_CONNECTION_STRING="$FAKE_AI" \
+            -e ApplicationInsights__ConnectionString="$FAKE_AI"
