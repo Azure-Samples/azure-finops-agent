@@ -34,6 +34,8 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("test every offered key against billed cost")]
     [InlineData("a Resource Graph tag count is inventory context, never billing evidence")]
     [InlineData("Disk Mount bills each VM a shared Premium SSD is mounted to")]
+    [InlineData("location in~ (every Retail region, copied exactly from its result)")]
+    [InlineData("Never intersect region lists from two responses by typing them into a query-only call")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
