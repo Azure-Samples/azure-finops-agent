@@ -72,6 +72,18 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         Only when the user asks for a maturity score or FinOps assessment. Evaluate every dimension that ReportMaturityScore defines for the requested level (Crawl, Walk, Run) with scoped evidence, call ReportMaturityScore once, after every evidence call including the records the answer's table will cite (compute every amount it cites with query before the call and reuse exactly those figures in the answer; after scoring, call no evidence tool and never recompute a total), then answer: a headline verdict with the biggest number, two to five lines of business context including source freshness, and one table (top evidenced fixes, or the largest Advisor savings opportunities with annual estimate, currency, term and lastUpdated when savings were asked, every cell of a row copied from the same recommendation record). Unknown or not-applicable dimensions score null with a reason, never zero; an empty resource group is not billable waste.
         """;
 
+    /// <summary>Hosted web search default; the app setting and the live evaluation both fall back to it.</summary>
+    public const bool DefaultWebSearch = true;
+
+    internal const string WebSearchGuidance = """
+
+        ## Web search
+        - web_search is only for recent public information that no API returns: announcements, news, newly released models, features or regions, and third-party pages. Tenant data, Azure list prices (Retail Prices API), API contracts and Microsoft Learn pages still come from QueryAzure, so never web-search a question those answer.
+        - Cite every fact taken from a web search with its source URL and publication date, and keep it separate from tenant evidence.
+        """;
+
+    internal static string Instructions(bool webSearch) => webSearch ? SystemPrompt + WebSearchGuidance : SystemPrompt;
+
     private const string TitleInstructions =
         "Summarise the user's question into a 3-6 word title for a chat sidebar. No quotes, no trailing punctuation, no emoji. Title-case.";
 
@@ -124,7 +136,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
                 ChatOptions = new ChatOptions
                 {
                     ModelId = deployment,
-                    Instructions = SystemPrompt,
+                    Instructions = Instructions(webSearch),
                     Reasoning = reasoningEffort is null ? null : new ReasoningOptions
                     {
                         Effort = ParseEffort(reasoningEffort),
@@ -186,7 +198,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         string? reasoningEffort,
         ILoggerFactory loggerFactory,
         string? tenantId = null,
-        bool webSearch = false) =>
+        bool webSearch = DefaultWebSearch) =>
         Create(null, telemetry, identity, projectEndpoint, deployment, reasoningEffort, loggerFactory, tenantId, webSearch);
 
     internal static AgentSessionFactory Create(
@@ -198,7 +210,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         string? reasoningEffort,
         ILoggerFactory loggerFactory,
         string? tenantId = null,
-        bool webSearch = false)
+        bool webSearch = DefaultWebSearch)
     {
         // Managed identity in Azure; Azure CLI or environment credentials locally.
         credential ??= IsRunningInAzure()

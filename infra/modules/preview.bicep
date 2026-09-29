@@ -18,6 +18,7 @@ param aoaiEndpoint string
 param aoaiDeploymentName string
 @allowed(['low', 'medium', 'high', 'xhigh'])
 param aoaiReasoningEffort string = 'high'
+param aoaiWebSearch bool = true
 param entraAppId string
 @secure()
 param entraClientSecret string = ''
@@ -51,7 +52,7 @@ resource slot 'Microsoft.Web/sites/slots@2024-04-01' = {
     httpsOnly: true
     publicNetworkAccess: 'Enabled'
     siteConfig: buildSiteConfig(acrLoginServer, containerImageName, appInsightsConnectionString, aoaiEndpoint,
-      aoaiDeploymentName, aoaiReasoningEffort, entraAppId, entraClientSecret, entraTenantId, publicSiteHost)
+      aoaiDeploymentName, aoaiReasoningEffort, aoaiWebSearch, entraAppId, entraClientSecret, entraTenantId, publicSiteHost)
   }
 }
 

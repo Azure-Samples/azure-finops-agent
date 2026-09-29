@@ -10,6 +10,7 @@ func buildSiteConfig(
   aoaiEndpoint string,
   aoaiDeploymentName string,
   aoaiReasoningEffort string,
+  aoaiWebSearch bool,
   entraAppId string,
   entraClientSecret string,
   entraTenantId string,
@@ -48,6 +49,8 @@ func buildSiteConfig(
     // Reasoning effort for reasoning-capable models. CI deployments replace
     // it with the effort the live evaluation gate tested.
     { name: 'AzureOpenAI__ReasoningEffort', value: aoaiReasoningEffort }
+    // Hosted web search (Bing grounding) sends search queries outside the Azure data boundary.
+    { name: 'AzureOpenAI__WebSearch', value: string(aoaiWebSearch) }
     // Entra ID OAuth (multi-tenant). Empty values disable OAuth gracefully.
     { name: 'Microsoft__ClientId', value: entraAppId }
     { name: 'Microsoft__ClientSecret', value: entraClientSecret }

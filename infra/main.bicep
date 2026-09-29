@@ -99,6 +99,9 @@ param aoaiServiceTier string = 'Default'
 @allowed(['low', 'medium', 'high', 'xhigh'])
 param aoaiReasoningEffort string = 'high'
 
+@description('Give the agent the model\'s hosted web search tool (`AzureOpenAI__WebSearch`) for recent public information such as announcements and new model or region availability. Search queries go to Bing grounding, which is outside the Azure data boundary; set false to keep every call inside it.')
+param aoaiWebSearch bool = true
+
 @description('Optional resource ID of an existing Azure OpenAI account to reuse instead of creating a new one. When set, `aoaiLocation` is ignored. The model deployment must already exist unless `deployModelOnExistingAccount` is true.')
 param existingAoaiResourceId string = ''
 
@@ -168,6 +171,7 @@ module resources 'main-resources.bicep' = {
     aoaiModelCapacity: aoaiModelCapacity
     aoaiServiceTier: aoaiServiceTier
     aoaiReasoningEffort: aoaiReasoningEffort
+    aoaiWebSearch: aoaiWebSearch
     existingAoaiResourceId: existingAoaiResourceId
     deployModelOnExistingAccount: deployModelOnExistingAccount
     existingAoaiProjectName: existingAoaiProjectName

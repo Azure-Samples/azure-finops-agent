@@ -12,6 +12,7 @@ param aoaiDeploymentName string
 param aoaiModelCapacity int
 param aoaiServiceTier string
 param aoaiReasoningEffort string
+param aoaiWebSearch bool = true
 param existingAoaiResourceId string
 param deployModelOnExistingAccount bool
 param existingAoaiProjectName string = ''
@@ -80,6 +81,7 @@ module appservice 'modules/appservice.bicep' = {
     aoaiEndpoint: aoai.outputs.projectEndpoint
     aoaiDeploymentName: aoai.outputs.deploymentName
     aoaiReasoningEffort: aoaiReasoningEffort
+    aoaiWebSearch: aoaiWebSearch
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId
@@ -102,6 +104,7 @@ module preview 'modules/preview.bicep' = if (!empty(previewSlotName)) {
     aoaiEndpoint: aoai.outputs.projectEndpoint
     aoaiDeploymentName: aoai.outputs.deploymentName
     aoaiReasoningEffort: aoaiReasoningEffort
+    aoaiWebSearch: aoaiWebSearch
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId

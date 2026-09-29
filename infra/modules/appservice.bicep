@@ -12,6 +12,7 @@ param aoaiEndpoint string
 param aoaiDeploymentName string
 @allowed(['low', 'medium', 'high', 'xhigh'])
 param aoaiReasoningEffort string = 'high'
+param aoaiWebSearch bool = true
 param entraAppId string
 @secure()
 param entraClientSecret string
@@ -23,7 +24,7 @@ param publicSiteHost string = ''
 var planTier = startsWith(appServicePlanSku, 'B') ? 'Basic' : (startsWith(appServicePlanSku, 'S') ? 'Standard' : 'PremiumV3')
 
 var siteConfig = buildSiteConfig(acrLoginServer, containerImageName, appInsightsConnectionString, aoaiEndpoint,
-  aoaiDeploymentName, aoaiReasoningEffort, entraAppId, entraClientSecret, entraTenantId, publicSiteHost)
+  aoaiDeploymentName, aoaiReasoningEffort, aoaiWebSearch, entraAppId, entraClientSecret, entraTenantId, publicSiteHost)
 
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: 'plan-finops-${resourceToken}'

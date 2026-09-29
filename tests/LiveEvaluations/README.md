@@ -41,6 +41,7 @@ Configure these environment/repository variables:
 | -------------------------- | ----------------------------------------------------------------------------------------- |
 | `EVAL_MODEL`               | Candidate deployment name, matching the intended production model                         |
 | `EVAL_REASONING_EFFORT`    | Candidate reasoning effort, also applied to the feature slot after successful evaluation |
+| `EVAL_WEB_SEARCH`          | Optional `true`/`false` for the model's hosted web search; defaults to the app default (on), which is what deploys |
 | `EVAL_JUDGE_MODEL`         | Deployment for the independent structured-output judge                                    |
 | `EVAL_SUBSCRIPTION_IDS`    | Comma-separated IDs for 1-10 approved test subscriptions                                  |
 | `EVAL_DATA_CLASSIFICATION` | `synthetic` (answers published) or `internal-test` (verdicts only); never customer data   |

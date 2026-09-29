@@ -36,6 +36,17 @@ public sealed class SessionQualityGuidanceTests
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
+    [Fact]
+    public void WebSearchIsOnByDefaultAndScopedToPublicNews()
+    {
+        Assert.True(AgentSessionFactory.DefaultWebSearch);
+        var withSearch = AgentSessionFactory.Instructions(webSearch: true);
+        Assert.StartsWith(Prompt, withSearch);
+        Assert.Contains("never web-search a question those answer", withSearch);
+        Assert.Contains("source URL", withSearch);
+        Assert.Equal(Prompt, AgentSessionFactory.Instructions(webSearch: false));
+    }
+
     [Theory]
     [InlineData("GetCrawlMaturityEvidence")]
     [InlineData("CheckComputeFeasibility")]

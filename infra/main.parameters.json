@@ -32,6 +32,9 @@
     "aoaiReasoningEffort": {
       "value": "${AZURE_OPENAI_REASONING_EFFORT=high}"
     },
+    "aoaiWebSearch": {
+      "value": "${AZURE_OPENAI_WEB_SEARCH=true}"
+    },
     "existingAoaiResourceId": {
       "value": "${EXISTING_AOAI_RESOURCE_ID=}"
     },

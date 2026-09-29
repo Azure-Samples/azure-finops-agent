@@ -65,7 +65,7 @@ flowchart LR
 
 The app runs as a Linux container on Azure App Service. Azure Developer CLI provisions Azure Container Registry, a Microsoft Foundry account and project, monitoring, managed identities, RBAC, App Service, and the optional Entra application.
 
-The runtime exposes only registered host tools plus optional hosted web search, without shell, file system or cross-session memory access. Run one active application instance: session gates and cooldown coordination are process-local. See [reliability contracts and verification](docs/agent-reliability.md).
+The runtime exposes only registered host tools plus the model's hosted web search (on by default; its queries leave the Azure data boundary, so set `AZURE_OPENAI_WEB_SEARCH=false` before `azd up` to turn it off), without shell, file system or cross-session memory access. Run one active application instance: session gates and cooldown coordination are process-local. See [reliability contracts and verification](docs/agent-reliability.md).
 
 ## Deploy to your Azure subscription
 

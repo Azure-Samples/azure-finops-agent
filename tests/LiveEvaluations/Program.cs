@@ -92,9 +92,11 @@ internal static class Program
         var identity = new PersistentIdentity(app.Services.GetRequiredService<IDataProtectionProvider>(), logging.CreateLogger<PersistentIdentity>());
         var tokens = new SessionTokenStore(options, new EntraClientCredentials(options, logging.CreateLogger<EntraClientCredentials>()), identity, logging.CreateLogger<SessionTokenStore>());
         var reasoningEffort = Environment.GetEnvironmentVariable("EVAL_REASONING_EFFORT") ?? "xhigh";
-        state.AgentProfile = $"{model}, reasoning effort {reasoningEffort}";
+        var webSearch = bool.TryParse(Environment.GetEnvironmentVariable("EVAL_WEB_SEARCH"), out var webSearchSetting)
+            ? webSearchSetting : AgentSessionFactory.DefaultWebSearch;
+        state.AgentProfile = $"{model}, reasoning effort {reasoningEffort}, web search {(webSearch ? "on" : "off")}";
         await using var factory = AgentSessionFactory.Create(credential, telemetry, identity,
-            AgentSessionFactory.ResolveProjectEndpoint(endpoint, null), model, reasoningEffort, logging, tenant);
+            AgentSessionFactory.ResolveProjectEndpoint(endpoint, null), model, reasoningEffort, logging, tenant, webSearch);
         app.UseSession();
         app.Use(async (context, next) =>
         {
