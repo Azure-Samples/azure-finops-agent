@@ -111,13 +111,16 @@ jobs:
       - name: Prove the image starts and answers
         env:
           TAG: ${{ env.IMAGE }}:${{ steps.meta.outputs.sha }}
+          # The same endpoint production receives below. A placeholder hid the
+          # startup exception: the old account endpoint has no /api/projects/.
+          AOAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
         run: |
           set -u
           docker pull "$TAG"
           docker run -d --name candidate -p 8080:8080 \
             -e ASPNETCORE_URLS=http://+:8080 \
             -e AGENT_HOME=/tmp/agent \
-            -e AzureOpenAI__Endpoint=https://example.services.ai.azure.com/api/projects/preflight \
+            -e AzureOpenAI__Endpoint="$AOAI_ENDPOINT" \
             -e AzureOpenAI__DeploymentName=gpt-6-sol \
             "$TAG"
           ok=false
@@ -137,7 +140,7 @@ jobs:
           code=$(docker inspect candidate --format '{{.State.ExitCode}}')
           docker rm -f candidate > /dev/null 2>&1 || true
           if [[ "$ok" != "true" ]]; then
-            echo "::error::Image did not serve /api/version (container exit code $code; 139 = SIGSEGV). Production was not touched."
+            echo "::error::Image did not serve /api/version (container exit code $code). Production was not touched."
             exit 1
           fi
           echo "Candidate image served /api/version:"; cat candidate.json
@@ -158,43 +161,28 @@ jobs:
             --output json > "$state/current-settings.json"
           node infra/scripts/deployment-smoke.mjs capture "$state"
 
-      # The new agent runtime resolves the Foundry project endpoint at startup and
-      # throws if it is given the old account endpoint, so these must be correct
-      # before the container starts. The evaluated contract normally supplies them;
-      # during this ungated deploy they come straight from the production secret
-      # and the application's own defaults.
+      # ROOT CAUSE of the exit-139 crash loop: AZURE_PROD_OPENAI_ENDPOINT still
+      # holds the Copilot-era account endpoint (*.openai.azure.com, no
+      # /api/projects/), so ResolveProjectEndpoint throws at startup. The test
+      # slot's AZURE_OPENAI_ENDPOINT is the Foundry project endpoint on the same
+      # account. TEMPORARY: use it until the production secret is updated.
       - name: Configure Azure OpenAI settings
         id: apply-settings
         shell: bash
         env:
-          AOAI_ENDPOINT: ${{ secrets.AZURE_PROD_OPENAI_ENDPOINT }}
+          AOAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
         run: |
           umask 077
-          if [[ -z "$AOAI_ENDPOINT" ]]; then
-            echo "Missing the AZURE_PROD_OPENAI_ENDPOINT secret." >&2
+          if [[ "$AOAI_ENDPOINT" != https://*/api/projects/* ]]; then
+            echo "AZURE_OPENAI_ENDPOINT must be the Foundry project endpoint." >&2
             exit 1
           fi
           work=$(mktemp -d "$RUNNER_TEMP/prod-settings.XXXXXX")
           trap 'rm -rf "$work"' EXIT
-          # TEMPORARY crash capture: production segfaults (exit 139) 0.9s into
-          # startup with no output, and nowhere else. The .NET host trace and a
-          # crash report (JSON stack plus at most one small triage dump) land in
-          # /home/LogFiles so the failure path below can read the faulting
-          # frames. Removed again on every path.
           jq -n --arg endpoint "$AOAI_ENDPOINT" \
             '[{name:"AzureOpenAI__Endpoint",value:$endpoint},
               {name:"AzureOpenAI__DeploymentName",value:"gpt-6-sol"},
-              {name:"AzureOpenAI__ReasoningEffort",value:"xhigh"},
-              {name:"COREHOST_TRACE",value:"1"},
-              {name:"COREHOST_TRACE_VERBOSITY",value:"3"},
-              {name:"COREHOST_TRACEFILE",value:"/home/LogFiles/startup-corehost.txt"},
-              {name:"DOTNET_DbgEnableMiniDump",value:"1"},
-              {name:"DOTNET_DbgMiniDumpType",value:"3"},
-              {name:"DOTNET_EnableCrashReport",value:"1"},
-              {name:"DOTNET_EnableCrashReportOnly",value:"1"},
-              {name:"DOTNET_CreateDumpDiagnostics",value:"1"},
-              {name:"DOTNET_CreateDumpLogToFile",value:"/home/LogFiles/startup-createdump.txt"},
-              {name:"DOTNET_DbgMiniDumpName",value:"/home/LogFiles/startup-crash.%p"}]' > "$work/settings.json"
+              {name:"AzureOpenAI__ReasoningEffort",value:"xhigh"}]' > "$work/settings.json"
           az webapp config appsettings set \
             --name "$WEBAPP_NAME" \
             --resource-group "$RESOURCE_GROUP" \
@@ -215,7 +203,7 @@ jobs:
             --output none
 
       # A healthy container answers within about a minute; a crashing one never
-      # does. Keep the outage short and let the failure path collect evidence.
+      # does. Keep any outage short before rolling back.
       - name: Verify deployment
         run: |
           for attempt in $(seq 1 21); do
@@ -233,29 +221,12 @@ jobs:
           echo "Expected production SHA/build/branch did not become active." >&2
           exit 1
 
-      - name: Remove crash capture settings
-        if: success()
-        shell: bash
-        run: |
-          az webapp config appsettings delete --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
-            --setting-names COREHOST_TRACE COREHOST_TRACE_VERBOSITY COREHOST_TRACEFILE \
-              DOTNET_DbgEnableMiniDump DOTNET_DbgMiniDumpType DOTNET_EnableCrashReport DOTNET_EnableCrashReportOnly \
-              DOTNET_CreateDumpDiagnostics DOTNET_CreateDumpLogToFile DOTNET_DbgMiniDumpName \
-            --output none
-          for attempt in $(seq 1 18); do
-            sha=$(curl --connect-timeout 5 --max-time 10 -sf "${VERIFY_URL%/}/api/version" | jq -r '.sha // empty' || true)
-            if [[ "$sha" == "${{ steps.meta.outputs.sha }}" ]]; then
-              echo "Production still serves $sha after removing the crash capture settings."
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "::warning::Production did not answer within 3 minutes of removing the crash capture settings."
-
-      # TEMPORARY: the production chat smoke test is removed for this ungated
-      # deploy because it calls the model endpoint, which is currently in an
-      # Azure AI Foundry regional outage. It would fail and roll back a
-      # perfectly good image. Restore it with the gates tonight.
+      # Only a real turn through production proves its own managed identity
+      # (Foundry User on the account) and settings.
+      - name: Verify a real chat answer through production
+        env:
+          SMOKE_URL: ${{ env.VERIFY_URL }}
+        run: node infra/scripts/deployment-smoke.mjs chat
 
       - name: Restore the previous production image and model settings
         if: (failure() || cancelled()) && steps.rollback-state.outputs.captured == 'true'
@@ -266,76 +237,11 @@ jobs:
             az webapp config appsettings set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
               --settings "@$state/restore-settings.json" --output none
           fi
-          if [[ "${{ steps.apply-settings.outcome }}" != "skipped" ]]; then
-            az webapp config appsettings delete --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
-              --setting-names COREHOST_TRACE COREHOST_TRACE_VERBOSITY COREHOST_TRACEFILE \
-                DOTNET_DbgEnableMiniDump DOTNET_DbgMiniDumpType DOTNET_EnableCrashReport DOTNET_EnableCrashReportOnly \
-                DOTNET_CreateDumpDiagnostics DOTNET_CreateDumpLogToFile DOTNET_DbgMiniDumpName \
-              --output none
-          fi
           az webapp config container set --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
             --container-image-name "$(<"$state/image")" \
             --container-registry-url "https://$(<"$state/registry")" \
             --output none
           echo "::error::Deployment verification failed. Production was restored to its previous image and model settings."
-
-      # Read-only: downloads /home/LogFiles after production is restored and
-      # prints only the faulting frames and redacted startup lines.
-      - name: Print the startup crash evidence
-        if: failure() && steps.apply-settings.outcome == 'success'
-        shell: bash
-        run: |
-          set +e
-          az webapp log download --name "$WEBAPP_NAME" --resource-group "$RESOURCE_GROUP" \
-            --log-file logs.zip --output none
-          mkdir -p logs && unzip -o -q logs.zip -d logs
-          redact() {
-            sed -E \
-              -e "s#${WEBAPP_NAME}#<app>#g" -e "s#${RESOURCE_GROUP}#<rg>#g" -e "s#${ACR_NAME}#<acr>#g" \
-              -e 's#https?://[^[:space:]"]+#<url>#g' \
-              -e 's#[A-Za-z0-9.-]+\.(azurewebsites\.net|azurecr\.io|services\.ai\.azure\.com|openai\.azure\.com)#<host>#g' \
-              -e 's#[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#<guid>#g' \
-              -e 's#[0-9a-fA-F]{24,}#<hex>#g' \
-              -e 's#(Bearer|ey)[A-Za-z0-9._-]{10,}#<token>#g' \
-              -e 's#(-e [A-Za-z0-9_]+)=[^ ]*#\1=...#g'
-          }
-          echo "=================== crash reports ==================="
-          reports=$(find logs -type f -name 'startup-crash.*crashreport.json' -printf '%T@ %p\n' | sort -n | tail -2 | cut -d' ' -f2-)
-          [[ -z "$reports" ]] && echo "No crash report was written (createdump may be blocked, or the crash precedes the runtime)."
-          for report in $reports; do
-            echo "--- $(basename "$report" | redact)"
-            jq -r '
-              "parameters: " + ((.parameters // {}) | with_entries(select(.key | test("Exception|Signal|Version|Code"; "i"))) | tostring),
-              ((.payload.threads // []) as $all
-                | ($all | map(select(.crashed == true))) as $crashed
-                | (if ($crashed | length) > 0 then $crashed else $all[0:1] end)[]
-                | "thread crashed=\(.crashed) managed=\(.is_managed) exception=\(.managed_exception_type // "-")",
-                  ((.stack_frames // [])[0:80][]
-                    | "  \(.filename // .native_module // "?")!\(.method_name // .unmanaged_name // "?")"))
-            ' "$report" | redact
-          done
-          echo "=================== createdump log ==================="
-          dumplog=$(find logs -type f -name 'startup-createdump.txt' | head -1)
-          if [[ -n "$dumplog" ]]; then tail -30 "$dumplog" | redact; else echo "No createdump log was written."; fi
-          echo "=================== .NET host trace (last start) ==================="
-          trace=$(find logs -type f -name 'startup-corehost.txt' | head -1)
-          if [[ -n "$trace" ]]; then
-            echo "starts traced: $(grep -c -- '--- Invoked' "$trace")"
-            last=$(grep -n -- '--- Invoked' "$trace" | tail -1 | cut -d: -f1)
-            tail -n +"${last:-1}" "$trace" | grep -vE 'TRUSTED_PLATFORM_ASSEMBLIES|Adding tpa entry|Probe|probe|Processing TPA|deps entry|Resolved|Replacing' | tail -60 | redact
-          else
-            echo "No host trace was written (dotnet may never have started, or /home/LogFiles is not writable)."
-          fi
-          echo "=================== container output ==================="
-          for file in $(find logs -type f -name '*_default_docker.log' -printf '%T@ %p\n' | sort -n | tail -2 | cut -d' ' -f2-); do
-            echo "--- $(basename "$file" | redact)"
-            tail -60 "$file" | redact
-          done
-          echo "=================== platform container starts ==================="
-          for file in $(find logs -type f -name '*_docker.log' ! -name '*_default_docker.log' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-); do
-            grep -E 'docker run|exit code|exited|Stack|signal|Pulling|pull' "$file" | tail -12 | redact
-          done
-          true
 
       - name: Remove rollback state
         if: always()
