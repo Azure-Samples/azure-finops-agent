@@ -1,21 +1,22 @@
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Text.Json;
 using Azure.Core;
 
 namespace LiveEvaluations;
 
-public sealed class JudgeClient(HttpClient http, TokenCredential credential, Uri endpoint, string model)
+public sealed class JudgeClient(HttpClient http, TokenCredential credential, Uri endpoint, string model,
+    Func<TimeSpan, CancellationToken, Task>? delay = null)
 {
+    public const int MaxAttempts = 4;
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(60);
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
+
     public async Task<string> AssessAsync(EvaluationCase scenario, RunCapture run, CancellationToken cancellationToken)
     {
         if (endpoint.Scheme != "https" || (!endpoint.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase)
             && !endpoint.Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Use an Azure inference endpoint for the judge.");
-        var token = await credential.GetTokenAsync(new TokenRequestContext(["https://cognitiveservices.azure.com/.default"]), cancellationToken);
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(endpoint, "/openai/v1/responses"));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
-        request.Content = JsonContent.Create(new
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new
         {
             model,
             reasoning = new { effort = "xhigh" },
@@ -50,9 +51,8 @@ public sealed class JudgeClient(HttpClient http, TokenCredential credential, Uri
                     }
                 }
             }
-        });
-        using var response = await http.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"Judge HTTP {(int)response.StatusCode}.");
+        }, JsonSerializerOptions.Web);
+        using var response = await SendWithRetryAsync(payload, cancellationToken);
         using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
         var body = document.RootElement;
         if (body.GetProperty("status").GetString() != "completed") throw new InvalidOperationException("Judge did not complete.");
@@ -61,6 +61,43 @@ public sealed class JudgeClient(HttpClient http, TokenCredential credential, Uri
             .SelectMany(item => item.GetProperty("content").EnumerateArray())
             .Where(item => item.GetProperty("type").GetString() == "output_text")
             .Select(item => item.GetProperty("text").GetString()));
+    }
+
+    // The same request is resent only for transient service/transport failures; the verdict itself is never retried.
+    private async Task<HttpResponseMessage> SendWithRetryAsync(byte[] payload, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var token = await credential.GetTokenAsync(new TokenRequestContext(["https://cognitiveservices.azure.com/.default"]), cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(endpoint, "/openai/v1/responses"));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            request.Content = new ByteArrayContent(payload);
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            HttpResponseMessage response;
+            try
+            {
+                response = await http.SendAsync(request, cancellationToken);
+            }
+            catch (HttpRequestException) when (attempt < MaxAttempts)
+            {
+                await _delay(Backoff(attempt, null), cancellationToken);
+                continue;
+            }
+            if (response.IsSuccessStatusCode) return response;
+            var status = (int)response.StatusCode;
+            var retryAfter = response.Headers.RetryAfter?.Delta
+                ?? (response.Headers.RetryAfter?.Date is { } date ? date - DateTimeOffset.UtcNow : null);
+            response.Dispose();
+            if (attempt >= MaxAttempts || status is not (408 or 429 or 500 or 502 or 503 or 504))
+                throw new InvalidOperationException($"Judge HTTP {status}.");
+            await _delay(Backoff(attempt, retryAfter), cancellationToken);
+        }
+    }
+
+    public static TimeSpan Backoff(int attempt, TimeSpan? retryAfter)
+    {
+        var wait = retryAfter is { } hinted && hinted > TimeSpan.Zero ? hinted : TimeSpan.FromSeconds(5 * Math.Pow(2, attempt - 1));
+        return wait < MaxRetryDelay ? wait : MaxRetryDelay;
     }
 
     internal const string EfficiencyInstructions = "Also judge the whole end-to-end session for efficiency, applying your knowledge of the Azure, Microsoft Graph and Log Analytics REST APIs the agent used. session reports agent (model and configured reasoning effort), totalSeconds, firstTokenSeconds, toolCalls against budgets.maxToolCalls and budgets.maxDurationSeconds, failedToolCalls, rounds (sequential groups of tool calls; calls in one round overlapped in time), maxConcurrentTools, toolWallSeconds (time with at least one tool running), modelSeconds (the remainder: reasoning and answer generation) and serviceThrottleNotices. tools lists every call in start order with its round, start and end offsets in seconds, duration, host-classified success, arguments and result. QueryAzure calls issued in the same round run in parallel. First decide what an expert with these APIs would call to answer this exact question, then compare. Count as avoidable only clear waste: a second failed or rejected call, or a failed call left uncorrected; repeating a request whose result was already available (including resending a failed request unchanged); independent reads issued in separate sequential rounds when one round of parallel calls could have fetched them together; downloading broad raw data and paging through it when the API offers server-side filtering, grouping or aggregation that answers directly (for example Cost Management grouping, Resource Graph summarize, OData $filter or $select, KQL summarize); more than one documentation or specification lookup for the same stable, well-known API or command (a search plus reading one of its results is one lookup); or reads unrelated to the question. Do not count as waste, because researching and self-correcting is how this agent is meant to work: one failed call the agent learned from and corrected with a later successful call; one extra call to learn what to do (a documentation, specification, api-version, schema or provider lookup), even when an expert would already know the answer; Cost Management query and forecast calls running one after another (the host serializes them because they are tenant-throttled); time spent waiting after service throttle notices; QueryAzure calls with query and no url (local calculations that take milliseconds and never call the service) and the calls that compute exact totals, counts or rankings; repeating a request once with query after it returned only its schema because the response was too large (the host stores nothing between calls, so that repeat is how a large response is cropped); fetching a structurally filtered Retail Prices set (serviceName, armRegionName, armSkuName, priceType) and selecting product and meter rows locally, because those names cannot be derived and must be read from returned values; verification reads the answer relies on; or model reasoning time inherent to the configured effort. Report the waste as counts, not as a score: avoidableCalls is the number of calls that were clear waste; avoidableRounds is the number of extra sequential rounds that waste or needless serialization added; avoidableSeconds is your estimate, from the start and end offsets, of the elapsed seconds they added, including model time spent between them. Use 0 for all three when the session is at or near the minimal calls and rounds an expert would use. Name every avoidable call by tool order in reason. The host derives the 1-5 efficiency score from these counts and the session totals: 5 with no waste, 4 for one or two avoidable calls or rounds, 3 for more, 2 when the waste roughly doubled the session's elapsed time or its calls compared with an expert, and 1 when it at least tripled them; 3 or higher passes. Efficiency never compensates for a wrong, ungrounded or incomplete answer, and a fast session does not make an incomplete answer complete.";

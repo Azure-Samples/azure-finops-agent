@@ -384,6 +384,57 @@ public sealed class EvaluationGateTests
     [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"efficiencyScore\":5,\"reason\":\"Extra field\"}")]
     public void MissingMalformedOrNegativeJudgeFailsClosed(string judge) => Assert.False(EvaluationGate.Assess(Scenario, Success, judge).Accepted);
 
+    [Fact]
+    public async Task JudgeResendsTheSameRequestAfterTransientServiceFailures()
+    {
+        using var handler = new JudgeRequestHandler(HttpStatusCode.InternalServerError, HttpStatusCode.RequestTimeout);
+        using var http = new HttpClient(handler);
+        var waits = new List<TimeSpan>();
+        var judge = new JudgeClient(http, new JudgeCredential(), new Uri("https://example.openai.azure.com/"), "test-model",
+            (wait, _) => { waits.Add(wait); return Task.CompletedTask; });
+
+        Assert.Equal(Accepted, await judge.AssessAsync(Scenario, Success, CancellationToken.None));
+        Assert.Equal(3, handler.Requests.Count);
+        Assert.All(handler.Requests, body => Assert.Equal(handler.Requests[0], body));
+        Assert.Equal([TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)], waits);
+    }
+
+    [Fact]
+    public async Task JudgeStopsAfterBoundedTransientRetries()
+    {
+        using var handler = new JudgeRequestHandler(Enumerable.Repeat(HttpStatusCode.InternalServerError, 10).ToArray());
+        using var http = new HttpClient(handler);
+        var judge = new JudgeClient(http, new JudgeCredential(), new Uri("https://example.openai.azure.com/"), "test-model",
+            (_, _) => Task.CompletedTask);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => judge.AssessAsync(Scenario, Success, CancellationToken.None));
+        Assert.Equal("Judge HTTP 500.", error.Message);
+        Assert.Equal(JudgeClient.MaxAttempts, handler.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task JudgeNeverRetriesRequestOrAuthorizationFailures(HttpStatusCode status)
+    {
+        using var handler = new JudgeRequestHandler(status);
+        using var http = new HttpClient(handler);
+        var judge = new JudgeClient(http, new JudgeCredential(), new Uri("https://example.openai.azure.com/"), "test-model",
+            (_, _) => Task.CompletedTask);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => judge.AssessAsync(Scenario, Success, CancellationToken.None));
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public void JudgeBackoffHonorsRetryAfterWithinTheCap()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(12), JudgeClient.Backoff(1, TimeSpan.FromSeconds(12)));
+        Assert.Equal(TimeSpan.FromSeconds(60), JudgeClient.Backoff(1, TimeSpan.FromMinutes(5)));
+        Assert.Equal(TimeSpan.FromSeconds(20), JudgeClient.Backoff(3, null));
+    }
+
     private sealed class JudgeCredential : TokenCredential
     {
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) =>
@@ -393,15 +444,18 @@ public sealed class EvaluationGateTests
             ValueTask.FromResult(GetToken(requestContext, cancellationToken));
     }
 
-    private sealed class JudgeRequestHandler : HttpMessageHandler
+    private sealed class JudgeRequestHandler(params HttpStatusCode[] failures) : HttpMessageHandler
     {
-        public string RequestJson { get; private set; } = "";
+        private readonly Queue<HttpStatusCode> _failures = new(failures);
+        public List<string> Requests { get; } = [];
+        public string RequestJson => Requests[^1];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal("/openai/v1/responses", request.RequestUri!.AbsolutePath);
-            RequestJson = await request.Content!.ReadAsStringAsync(cancellationToken);
+            Requests.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            if (_failures.TryDequeue(out var failure)) return new(failure);
             return new(HttpStatusCode.OK)
             {
                 Content = JsonContent.Create(new
