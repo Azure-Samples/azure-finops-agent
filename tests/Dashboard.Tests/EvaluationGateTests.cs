@@ -102,6 +102,7 @@ public sealed class EvaluationGateTests
         using var request = JsonDocument.Parse(handler.RequestJson);
         var root = request.RootElement;
         var instructions = root.GetProperty("input")[0].GetProperty("content").GetString()!;
+        Assert.All(root.GetProperty("input").EnumerateArray(), item => Assert.Equal("message", item.GetProperty("type").GetString()));
         Assert.Contains("Compare every requested metric across the whole answer", instructions);
         Assert.Contains("do not silently correct them from the evidence", instructions);
         Assert.Contains("valid only when they denote the same interval", instructions);
@@ -425,6 +426,26 @@ public sealed class EvaluationGateTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => judge.AssessAsync(Scenario, Success, CancellationToken.None));
         Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task JudgeRejectionReportsTheServiceErrorCodeWithoutEchoedContent()
+    {
+        using var handler = new JudgeErrorHandler(HttpStatusCode.BadRequest,
+            """{"error":{"message":"Invalid value: 'synthetic-echoed-content'.","type":"invalid_request_error","param":"input[0].type","code":"invalid_value"}}""");
+        using var http = new HttpClient(handler);
+        var judge = new JudgeClient(http, new JudgeCredential(), new Uri("https://example.openai.azure.com/"), "test-model",
+            (_, _) => Task.CompletedTask);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => judge.AssessAsync(Scenario, Success, CancellationToken.None));
+        Assert.Equal("Judge HTTP 400 (invalid_value at input[0].type).", error.Message);
+        Assert.DoesNotContain("synthetic-echoed-content", error.Message);
+    }
+
+    private sealed class JudgeErrorHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
     }
 
     [Fact]
