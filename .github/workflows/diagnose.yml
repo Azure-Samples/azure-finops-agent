@@ -1,12 +1,11 @@
 #     TEMPORARY diagnostic. Read-only: it never deploys, restarts or writes to
-#     any Azure resource. It runs the already-built production image locally on
-#     the runner and reproduces the startup crash.
+#     any Azure resource. Endpoint values are never printed, only their shape.
 #
-#     The image starts fine on a bare runner but segfaults (exit 139, ~1s, no
-#     output) on App Service. The App Service detectors in the Azure Monitor
-#     OpenTelemetry distro only activate when WEBSITE_* variables exist, so the
-#     bare runner never exercised that path. Each case below adds one part of
-#     the App Service environment to find which one kills the process.
+#     The production crash report shows an unhandled InvalidOperationException
+#     from Program.<Main>, which is what ResolveProjectEndpoint throws for an
+#     endpoint without /api/projects/ and no AzureOpenAI:ProjectName. This
+#     compares the production and test-slot endpoint secrets and runs the
+#     deployed image with the production one.
 name: Diagnose production startup
 
 on:
@@ -15,7 +14,7 @@ on:
       tag:
         description: Image tag to reproduce against
         required: false
-        default: 6e99d91
+        default: c445c33
 
 permissions:
   id-token: write
@@ -23,9 +22,28 @@ permissions:
 
 jobs:
   repro:
-    name: Reproduce the startup crash
+    name: Reproduce the startup exception
     runs-on: ubuntu-latest
     steps:
+      - name: Describe the endpoint secrets without printing them
+        env:
+          PROD_ENDPOINT: ${{ secrets.AZURE_PROD_OPENAI_ENDPOINT }}
+          SLOT_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+        run: |
+          describe() {
+            local value="$1" host path suffix
+            value="${value//[[:space:]]/}"
+            host="${value#*://}"; host="${host%%/*}"
+            path="/${value#*://*/}"
+            suffix="${host#*.}"
+            echo "  set=$([[ -n "$value" ]] && echo yes || echo no) https=$([[ "$value" == https://* ]] && echo yes || echo no) project_path=$([[ "$path" == */api/projects/* ]] && echo yes || echo no) host_type=*.$suffix path_depth=$(tr -cd / <<<"${value#*://}" | wc -c)"
+          }
+          host_of() { local v="${1//[[:space:]]/}"; v="${v#*://}"; echo "${v%%/*}"; }
+          echo "AZURE_PROD_OPENAI_ENDPOINT (production):"; describe "$PROD_ENDPOINT"
+          echo "AZURE_OPENAI_ENDPOINT (test slot):";      describe "$SLOT_ENDPOINT"
+          echo "same value:   $([[ "$PROD_ENDPOINT" == "$SLOT_ENDPOINT" ]] && echo yes || echo no)"
+          echo "same account: $([[ "$(host_of "$PROD_ENDPOINT" | cut -d. -f1)" == "$(host_of "$SLOT_ENDPOINT" | cut -d. -f1)" ]] && echo yes || echo no)"
+
       - name: Azure Login (OIDC)
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
@@ -34,59 +52,34 @@ jobs:
           subscription-id: ${{ secrets.AZURE_PROD_SUBSCRIPTION_ID }}
 
       - name: Login to ACR
-        run: az acr login --name ${{ vars.PROD_ACR_NAME }}
+        run: az acr login --name ${{ vars.PROD_ACR_NAME }} --output none
 
-      - name: Run the image under increasing amounts of App Service environment
+      - name: Run the deployed image with each endpoint secret
         env:
-          IMAGE: ${{ vars.PROD_CONTAINER_IMAGE }}
-          TAG: ${{ inputs.tag }}
+          IMAGE: ${{ vars.PROD_CONTAINER_IMAGE }}:${{ inputs.tag }}
+          PROD_ENDPOINT: ${{ secrets.AZURE_PROD_OPENAI_ENDPOINT }}
+          SLOT_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
         run: |
           set -u
-          docker pull "$IMAGE:$TAG"
-
-          # A synthetic connection string: the crash is expected from the code
-          # path that reads it, not from any real resource, so no secret is used.
-          FAKE_AI='InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://westeurope-5.in.applicationinsights.azure.com/;LiveEndpoint=https://westeurope.livediagnostics.monitor.azure.com/'
-
-          run_case() {
-            name="$1"; shift
-            echo "=================== CASE: $name ==================="
-            set +e
-            docker run --rm --name "case" \
-              -e ASPNETCORE_URLS=http://+:8080 \
+          docker pull -q "$IMAGE" > /dev/null
+          for case in PROD_ENDPOINT SLOT_ENDPOINT; do
+            echo "=================== $case ==================="
+            docker run --rm \
               -e AGENT_HOME=/tmp/agent \
-              -e AzureOpenAI__Endpoint=https://example.services.ai.azure.com/api/projects/diag \
+              -e AzureOpenAI__Endpoint="${!case}" \
               -e AzureOpenAI__DeploymentName=gpt-6-sol \
-              "$@" \
-              --entrypoint /bin/bash "$IMAGE:$TAG" \
-              -c 'mkdir -p "$AGENT_HOME/users" "$AGENT_HOME/anon"; timeout 25 dotnet Dashboard.dll; echo "EXIT=$?"' 2>&1 \
-              | sed -E 's#https://[^[:space:]",]+#<url>#g' | tail -25
-            set -e
-            echo
-          }
-
-          # 1. Baseline: what the earlier preflight already proved works.
-          run_case "bare runner (no App Service variables)"
-
-          # 2. App Service identity variables only.
-          run_case "WEBSITE_* present" \
-            -e WEBSITE_SITE_NAME=diag-site \
-            -e WEBSITE_RESOURCE_GROUP=diag-rg \
-            -e WEBSITE_OWNER_NAME=00000000-0000-0000-0000-000000000000+diag-rg-EuropeNorthwebspace \
-            -e WEBSITE_INSTANCE_ID=diaginstance \
-            -e WEBSITE_HOSTNAME=diag-site.azurewebsites.net
-
-          # 3. Application Insights only.
-          run_case "Application Insights connection string present" \
-            -e APPLICATIONINSIGHTS_CONNECTION_STRING="$FAKE_AI" \
-            -e ApplicationInsights__ConnectionString="$FAKE_AI"
-
-          # 4. Both, which is what production actually runs with.
-          run_case "full App Service environment (production shape)" \
-            -e WEBSITE_SITE_NAME=diag-site \
-            -e WEBSITE_RESOURCE_GROUP=diag-rg \
-            -e WEBSITE_OWNER_NAME=00000000-0000-0000-0000-000000000000+diag-rg-EuropeNorthwebspace \
-            -e WEBSITE_INSTANCE_ID=diaginstance \
-            -e WEBSITE_HOSTNAME=diag-site.azurewebsites.net \
-            -e APPLICATIONINSIGHTS_CONNECTION_STRING="$FAKE_AI" \
-            -e ApplicationInsights__ConnectionString="$FAKE_AI"
+              -e AzureOpenAI__ReasoningEffort=xhigh \
+              "$IMAGE" > out.txt 2>&1 &
+            pid=$!
+            sleep 15
+            if kill -0 "$pid" 2>/dev/null; then
+              echo "RESULT: still running after 15s (startup passed)"
+              docker ps -q --filter "ancestor=$IMAGE" | xargs -r docker rm -f > /dev/null
+              wait "$pid" 2>/dev/null
+            else
+              wait "$pid"; echo "RESULT: exited with code $?"
+            fi
+            grep -E 'Unhandled exception|Exception:|Now listening|Application starting' out.txt \
+              | sed -E -e 's#https?://[^[:space:]"]+#<url>#g' -e 's#[A-Za-z0-9.-]+\.(azure\.com|azurecr\.io)#<host>#g' \
+              | head -8
+          done
