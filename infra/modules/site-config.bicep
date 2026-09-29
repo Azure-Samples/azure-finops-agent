@@ -37,7 +37,7 @@ func buildSiteConfig(
     { name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE', value: 'true' }
     // Root for sessions, identities, jobs, uploads and artifacts on the
     // persistent mount. The name predates the Agent Framework runtime.
-    { name: 'COPILOT_HOME', value: '/home/copilot' }
+    { name: 'AGENT_HOME', value: '/home/copilot' }
     // The image carries .NET plus a Python data stack; the first cold start
     // after a pull can exceed the 230s default. Allow up to 30 min to warm up.
     { name: 'WEBSITES_CONTAINER_START_TIME_LIMIT', value: '1800' }

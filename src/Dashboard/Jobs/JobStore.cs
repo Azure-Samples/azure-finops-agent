@@ -43,7 +43,7 @@ public sealed class ScheduledJob
 }
 
 /// <summary>
-/// Persisted store for scheduled jobs — single JSON file under COPILOT_HOME
+/// Persisted store for scheduled jobs — single JSON file under AGENT_HOME
 /// (the App Service /home Azure Files mount), same durability story as session
 /// state and titles. All mutations go through <see cref="Save"/> which
 /// serializes under a lock; reads are lock-free off the ConcurrentDictionary.
@@ -51,7 +51,7 @@ public sealed class ScheduledJob
 public sealed class JobStore
 {
     private static readonly string JobsFile = Path.Combine(
-        Environment.GetEnvironmentVariable("COPILOT_HOME") ?? Path.Combine(Path.GetTempPath(), "copilot"),
+        Environment.GetEnvironmentVariable("AGENT_HOME") ?? Environment.GetEnvironmentVariable("COPILOT_HOME") ?? Path.Combine(Path.GetTempPath(), "azure-finops-agent"),
         "scheduled-jobs.json");
 
     private readonly ConcurrentDictionary<string, ScheduledJob> _jobs = new();

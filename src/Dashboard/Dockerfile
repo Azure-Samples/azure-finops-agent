@@ -53,7 +53,9 @@ ENV ASPNETCORE_URLS=http://+:8080
 # history survives container restarts, scale operations and slot swaps. Entra
 # conversations are isolated under a versioned hash of the validated
 # tenant/object pair; anonymous conversations use a generated user id.
-ENV COPILOT_HOME=/home/copilot
+# The /home/copilot path is retained deliberately: it is where existing
+# deployments already hold their conversations, identities and jobs.
+ENV AGENT_HOME=/home/copilot
 EXPOSE 8080
 
 USER $APP_UID

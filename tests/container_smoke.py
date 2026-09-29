@@ -72,7 +72,7 @@ def check_application(connection_string, delivered=None):
             **os.environ,
             "AzureOpenAI__Endpoint": "https://example.invalid/api/projects/synthetic",
             "AzureOpenAI__DeploymentName": "synthetic-test-model",
-            "COPILOT_HOME": directory,
+            "AGENT_HOME": directory,
             "ASPNETCORE_URLS": "http://127.0.0.1:8080",
             "ASPNETCORE_ENVIRONMENT": "Production",
             "APPLICATIONINSIGHTS_CONNECTION_STRING": connection_string,

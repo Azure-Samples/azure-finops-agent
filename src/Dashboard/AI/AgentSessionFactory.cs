@@ -105,8 +105,8 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     // Persistent state root. On Azure App Service /home is an Azure Files mount,
     // so conversations survive restarts.
     private static readonly string StateRoot =
-        Environment.GetEnvironmentVariable("COPILOT_HOME")
-        ?? Path.Combine(Path.GetTempPath(), "copilot");
+        Environment.GetEnvironmentVariable("AGENT_HOME") ?? Environment.GetEnvironmentVariable("COPILOT_HOME")
+        ?? Path.Combine(Path.GetTempPath(), "azure-finops-agent");
 
     public string Deployment => _deployment;
 

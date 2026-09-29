@@ -8,9 +8,9 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 public sealed class ScoreTools
 {
     private const int MaxHistoryEntries = 100;
-    private static readonly string CopilotHome =
-        Environment.GetEnvironmentVariable("COPILOT_HOME")
-        ?? Path.Combine(Path.GetTempPath(), "copilot");
+    private static readonly string AgentHome =
+        Environment.GetEnvironmentVariable("AGENT_HOME") ?? Environment.GetEnvironmentVariable("COPILOT_HOME")
+        ?? Path.Combine(Path.GetTempPath(), "azure-finops-agent");
     private static readonly Lock _fileLock = new();
     private static int _legacyHistoryChecked;
 
@@ -22,7 +22,7 @@ public sealed class ScoreTools
         DeleteLegacySharedHistory();
     }
 
-    private string ScoreFile => Path.Combine(CopilotHome, "scores", $"{_tokens.UserId}.json");
+    private string ScoreFile => Path.Combine(AgentHome, "scores", $"{_tokens.UserId}.json");
 
     public IEnumerable<AIFunction> Create()
     {

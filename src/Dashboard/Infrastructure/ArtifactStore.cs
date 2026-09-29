@@ -17,7 +17,7 @@ internal sealed class ArtifactStore
         "application/x-powershell", "application/x-shellscript"
     };
     internal static ArtifactStore Default { get; } = new(Path.Combine(
-        Environment.GetEnvironmentVariable("COPILOT_HOME") ?? Path.Combine(Path.GetTempPath(), "copilot"), "artifacts"));
+        Environment.GetEnvironmentVariable("AGENT_HOME") ?? Environment.GetEnvironmentVariable("COPILOT_HOME") ?? Path.Combine(Path.GetTempPath(), "azure-finops-agent"), "artifacts"));
 
     internal ArtifactStore(string root)
     {

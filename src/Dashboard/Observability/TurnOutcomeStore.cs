@@ -10,7 +10,7 @@ internal sealed class TurnOutcomeStore
         DateTimeOffset StartedUtc, DateTimeOffset? CompletedUtc, long DurationMs, int AnswerCharacters,
         int ToolsCompleted, int ToolsFailed, string[] ArtifactIds, bool Scheduled);
     internal static TurnOutcomeStore Default { get; } = new(Path.Combine(
-        Environment.GetEnvironmentVariable("COPILOT_HOME") ?? Path.Combine(Path.GetTempPath(), "copilot"), "turn-outcomes"));
+        Environment.GetEnvironmentVariable("AGENT_HOME") ?? Environment.GetEnvironmentVariable("COPILOT_HOME") ?? Path.Combine(Path.GetTempPath(), "azure-finops-agent"), "turn-outcomes"));
     private readonly object _sync = new();
     private readonly string _root;
     private DateTimeOffset _lastCleanupUtc;

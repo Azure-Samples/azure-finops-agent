@@ -24,7 +24,7 @@ internal static class Program
     private static async Task<int> Main()
     {
         var root = Path.Combine(Path.GetTempPath(), "finops-live-eval-" + Guid.NewGuid().ToString("N"));
-        Environment.SetEnvironmentVariable("COPILOT_HOME", root);
+        Environment.SetEnvironmentVariable("AGENT_HOME", root);
         var state = new EvaluationRunState();
         try { return await RunAsync(state); }
         catch (Exception exception)

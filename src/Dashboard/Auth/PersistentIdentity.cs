@@ -9,7 +9,7 @@ namespace AzureFinOps.Dashboard.Auth;
 /// <summary>
 /// Persistent per-user identity + OAuth refresh-token store backed by an
 /// encrypted JSON file under a tenant-and-object scoped directory beneath
-/// <c>$COPILOT_HOME/users/</c>.
+/// <c>$AGENT_HOME/users/</c>.
 ///
 /// Why this exists: the ASP.NET <see cref="ISession"/> store is in-memory
 /// (<c>AddDistributedMemoryCache</c>) so OAuth tokens vanish on every container
@@ -38,13 +38,13 @@ public sealed class PersistentIdentity
     private const string LegacyOwnerFileName = "owner.json";
     private static readonly TimeSpan CookieLifetime = TimeSpan.FromDays(30);
 
-    private static readonly string CopilotHome =
-        Environment.GetEnvironmentVariable("COPILOT_HOME")
-        ?? Path.Combine(Path.GetTempPath(), "copilot");
+    private static readonly string AgentHome =
+        Environment.GetEnvironmentVariable("AGENT_HOME") ?? Environment.GetEnvironmentVariable("COPILOT_HOME")
+        ?? Path.Combine(Path.GetTempPath(), "azure-finops-agent");
 
     private readonly IDataProtector _protector;
     private readonly ILogger<PersistentIdentity> _logger;
-    private readonly string _copilotHome;
+    private readonly string _agentHome;
 
     // Per-principal serialization lock so concurrent SaveIdentity / UpdateRefreshToken
     // / UpdateGraphTier calls can't race on the same file. Cheap: one Semaphore
@@ -61,15 +61,15 @@ public sealed class PersistentIdentity
     private readonly ConcurrentDictionary<string, string> _principalDirectories = new();
 
     public PersistentIdentity(IDataProtectionProvider provider, ILogger<PersistentIdentity> logger)
-        : this(provider, logger, CopilotHome)
+        : this(provider, logger, AgentHome)
     {
     }
 
-    internal PersistentIdentity(IDataProtectionProvider provider, ILogger<PersistentIdentity> logger, string copilotHome)
+    internal PersistentIdentity(IDataProtectionProvider provider, ILogger<PersistentIdentity> logger, string agentHome)
     {
         _protector = provider.CreateProtector("FinOps.Identity.v1");
         _logger = logger;
-        _copilotHome = copilotHome;
+        _agentHome = agentHome;
     }
 
     /// <summary>SHA-256 of the validated Entra tenant and object identifiers,
@@ -224,7 +224,7 @@ public sealed class PersistentIdentity
 
         // Cold path after restart: walk users/ until we find a match. Cheap —
         // O(active users) and only on cache misses.
-        var root = Path.Combine(_copilotHome, "users");
+        var root = Path.Combine(_agentHome, "users");
         if (!Directory.Exists(root)) return null;
         foreach (var path in Directory.EnumerateFiles(root, "identity.json", SearchOption.AllDirectories))
         {
@@ -307,7 +307,7 @@ public sealed class PersistentIdentity
         return _principalDirectories.GetOrAdd(principalKey, _ =>
         {
             var canonical = Path.Combine(
-                _copilotHome, "users", "v2", PrincipalDirectoryName(tenantId, oid));
+                _agentHome, "users", "v2", PrincipalDirectoryName(tenantId, oid));
             var canonicalRecord = LoadRecord(Path.Combine(canonical, "identity.json"));
             if (canonicalRecord is not null)
             {
@@ -316,7 +316,7 @@ public sealed class PersistentIdentity
                 return canonical;
             }
 
-            var legacy = Path.Combine(_copilotHome, "users", oid);
+            var legacy = Path.Combine(_agentHome, "users", oid);
             var legacyRecord = LoadRecord(Path.Combine(legacy, "identity.json"));
             if (legacyRecord is not null && Matches(legacyRecord, tenantId, oid))
             {
@@ -357,7 +357,7 @@ public sealed class PersistentIdentity
 
     private void WriteLegacyOwnerMarker(string directory, string tenantId, string oid)
     {
-        var expectedLegacyDirectory = Path.Combine(_copilotHome, "users", oid);
+        var expectedLegacyDirectory = Path.Combine(_agentHome, "users", oid);
         if (!string.Equals(directory, expectedLegacyDirectory, StringComparison.Ordinal)) return;
         try
         {
@@ -424,8 +424,8 @@ public sealed class PersistentIdentity
     private string LegacyIdentityPath(string oid)
     {
         if (!Guid.TryParse(oid, out _) || Path.GetFileName(oid) != oid)
-            return Path.Combine(_copilotHome, "invalid-legacy-identity");
-        return Path.Combine(_copilotHome, "users", oid, "identity.json");
+            return Path.Combine(_agentHome, "invalid-legacy-identity");
+        return Path.Combine(_agentHome, "users", oid, "identity.json");
     }
 
     /// <summary>Crash-safe write: stage to a sibling .tmp then atomically replace

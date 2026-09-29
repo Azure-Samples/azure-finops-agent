@@ -48,7 +48,7 @@ public sealed class AiTelemetry
     public ConcurrentDictionary<string, string> SessionTitles { get; } = new();
 
     private static readonly string TitlesFile = Path.Combine(
-        Environment.GetEnvironmentVariable("COPILOT_HOME") ?? Path.Combine(Path.GetTempPath(), "copilot"),
+        Environment.GetEnvironmentVariable("AGENT_HOME") ?? Environment.GetEnvironmentVariable("COPILOT_HOME") ?? Path.Combine(Path.GetTempPath(), "azure-finops-agent"),
         "session-titles.json");
 
     private readonly object _titlesLock = new();

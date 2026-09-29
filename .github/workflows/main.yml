@@ -1,15 +1,10 @@
 name: Deploy main to production
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/Dashboard/**"
-      - "tests/**"
-      - "global.json"
-      - ".github/workflows/validate.yml"
-      - ".github/workflows/live-evaluations.yml"
-      - ".github/workflows/main.yml"
+  # TEMPORARY: automatic deployment on push is disabled while the production
+  # container startup failure is being diagnosed. Every ungated attempt took
+  # the live site down for its whole verification window before rolling back.
+  # Restore the push trigger together with the gates.
   workflow_dispatch:
 
 permissions:

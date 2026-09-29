@@ -12,15 +12,15 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// "we found $X of savings"; the ledger closes the loop: proposed → executed
 /// → verified (measured against actual Cost Management data after the fix).
 ///
-/// Stored as one JSON file per user under $COPILOT_HOME/ledger/{userId}.json —
+/// Stored as one JSON file per user under $AGENT_HOME/ledger/{userId}.json —
 /// the same persistent Azure Files mount as chat history and identities, so
 /// it survives restarts and deploys. userId is stable per Entra OID.
 /// </summary>
 public sealed class SavingsLedgerTools
 {
-    private static readonly string CopilotHome =
-        Environment.GetEnvironmentVariable("COPILOT_HOME")
-        ?? Path.Combine(Path.GetTempPath(), "copilot");
+    private static readonly string AgentHome =
+        Environment.GetEnvironmentVariable("AGENT_HOME") ?? Environment.GetEnvironmentVariable("COPILOT_HOME")
+        ?? Path.Combine(Path.GetTempPath(), "azure-finops-agent");
 
     private static readonly object FileLock = new();
 
@@ -28,7 +28,7 @@ public sealed class SavingsLedgerTools
 
     public SavingsLedgerTools(UserTokens tokens) => _tokens = tokens;
 
-    private string LedgerPath => Path.Combine(CopilotHome, "ledger", $"{_tokens.UserId}.json");
+    private string LedgerPath => Path.Combine(AgentHome, "ledger", $"{_tokens.UserId}.json");
 
     public IEnumerable<AIFunction> Create()
     {
