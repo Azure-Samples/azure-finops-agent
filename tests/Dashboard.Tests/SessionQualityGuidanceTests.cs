@@ -44,8 +44,16 @@ public sealed class SessionQualityGuidanceTests
         var withSearch = AgentSessionFactory.Instructions(webSearch: true);
         Assert.StartsWith(Prompt, withSearch);
         Assert.Contains("never web-search a question those answer", withSearch);
+        Assert.Contains("including Azure OpenAI and other Foundry model token prices", withSearch);
         Assert.Contains("Never web-search to confirm, cross-check or add background to evidence QueryAzure already returned", withSearch);
-        Assert.Contains("Never web-search Microsoft documentation or pricing", withSearch);
+        Assert.Contains("Never web-search or open Microsoft documentation, pricing or API URLs (prices.azure.com", withSearch);
+        Assert.Contains("These rules take precedence over any general instruction to browse for current information or to cite web results", withSearch);
+        Assert.Contains("QueryAzure is itself a live web request tool", withSearch);
+        Assert.Contains("already satisfies any instruction to use the web for current information, prices or citations", withSearch);
+        Assert.Contains("a price it returned this turn is already up to date", withSearch);
+        Assert.Contains("so an answer built from them needs no web citation", withSearch);
+        Assert.Contains("web_search is never a calculator", withSearch);
+        Assert.Contains("Never search or open third-party price, calculator or comparison sites", withSearch);
         Assert.Contains("never research a caveat the question did not ask about", withSearch);
         Assert.Contains("an answer that cites no web source should have made no search", withSearch);
         Assert.Contains("source URL", withSearch);

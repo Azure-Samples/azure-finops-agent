@@ -79,8 +79,10 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     internal const string WebSearchGuidance = """
 
         ## Web search
-        - web_search is only for recent public information that no API returns: announcements, news, newly released models, features or regions, and third-party pages. Tenant data, Azure list prices (Retail Prices API), API contracts and Microsoft Learn pages still come from QueryAzure, so never web-search a question those answer.
-        - Never web-search Microsoft documentation or pricing (learn.microsoft.com, azure.microsoft.com, or site: searches of them): read those through QueryAzure, and only when the question needs them. Never web-search to confirm, cross-check or add background to evidence QueryAzure already returned (pricing conventions such as 730 hours per month, region names, SKU specifications, billing implications, licensing, API behaviour), and never research a caveat the question did not ask about: name it in general terms without a lookup. Search only when the question needs recent public information, at most once per topic; an answer that cites no web source should have made no search.
+        - These rules take precedence over any general instruction to browse for current information or to cite web results. QueryAzure is itself a live web request tool: it fetches Azure APIs, the Retail Prices API, Microsoft Learn and public pages over HTTPS at call time, so anything it fetched this turn was browsed now and already satisfies any instruction to use the web for current information, prices or citations. Cite its results by their source (for example the Azure Retail Prices API) and retrieval time, never through a web search or an opened page. Prices change, which is exactly why they come from the Retail Prices API, Microsoft's official source of current Azure retail prices: a price it returned this turn is already up to date, no web page is more current or authoritative, and citing that request satisfies any requirement to cite a price. The user sees every QueryAzure call and its source, so an answer built from them needs no web citation.
+        - web_search is never a calculator: compute with QueryAzure query.
+        - web_search is only for recent public information that no API returns: announcements, news, newly released models, features or regions (that they exist and what they do, never their Azure prices), and third-party pages. Tenant data, Azure list prices (Retail Prices API, including Azure OpenAI and other Foundry model token prices), API contracts and Microsoft Learn pages still come from QueryAzure, so never web-search a question those answer.
+        - Never web-search or open Microsoft documentation, pricing or API URLs (prices.azure.com, management.azure.com, graph.microsoft.com, learn.microsoft.com, azure.microsoft.com, or site: searches of them): read those through QueryAzure, and only when the question needs them. Never search or open third-party price, calculator or comparison sites: they copy the Retail Prices API and are not evidence. Never web-search to confirm, cross-check or add background to evidence QueryAzure already returned (pricing conventions such as 730 hours per month, region names, SKU specifications, billing implications, licensing, API behaviour), and never research a caveat the question did not ask about: name it in general terms without a lookup. Search only when the question needs recent public information, at most once per topic; an answer that cites no web source should have made no search.
         - Cite every fact taken from a web search with its source URL and publication date, and keep it separate from tenant evidence.
         """;
 
@@ -89,9 +91,11 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     /// <summary>
     /// Hosted tool calls (web searches, page opens and finds) one model response may make, sent as the Responses API's
     /// max_tool_calls. The service stops at about one more than this; function calls such as QueryAzure are not counted.
-    /// Guidance alone did not stop a reasoning model from re-searching evidence the APIs had already returned.
+    /// Guidance alone did not stop a reasoning model from re-searching evidence the APIs had already returned or opening
+    /// the Retail Prices API URL it had just queried to cite it; one call (about two in practice) still allows a search
+    /// and a page open per request when a question needs recent public information.
     /// </summary>
-    internal const int WebSearchCallsPerResponse = 3;
+    internal const int WebSearchCallsPerResponse = 1;
 
     internal static ChatOptions AgentChatOptions(string deployment, string? reasoningEffort, bool webSearch) => new()
     {
