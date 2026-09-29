@@ -52,7 +52,7 @@ jobs:
           WEBAPP_NAME: ${{ vars.PROD_WEBAPP_NAME }}
           RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
         run: |
-          set -o pipefail
+          set -u
           az webapp log download --name "$WEBAPP_NAME" --resource-group "$RESOURCE_GROUP" \
             --log-file logs.zip
           mkdir -p logs && unzip -o -q logs.zip -d logs
@@ -70,7 +70,8 @@ jobs:
             latest=$(find logs -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -8 | cut -d' ' -f2-)
           fi
           echo "=================== files downloaded ==================="
-          find logs -type f | head -60
+          find logs -type f > all-logs.txt 2>/dev/null || true
+          head -60 all-logs.txt
           for file in $latest; do
             echo "=================== $file ==================="
             # The crashed container's own stdout is what matters, so keep any
