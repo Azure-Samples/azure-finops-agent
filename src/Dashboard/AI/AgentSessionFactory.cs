@@ -10,6 +10,7 @@ using AzureFinOps.Dashboard.Infrastructure;
 using AzureFinOps.Dashboard.Observability;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using OpenAI.Responses;
 
 namespace AzureFinOps.Dashboard.AI;
 
@@ -51,7 +52,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         - Keep independent estimates distinct: a daily forecast and a budget's currentSpend/forecastSpend can disagree; disclose conflicts instead of choosing one silently.
         - Licensing: assigned or enabled seats and resource licenseType are not invoices; license waste in money needs billed quantities and rates. A current license inventory and an older usage report are different cohorts. Microsoft 365 plus Azure questions need both domains.
         - Advisor alternatives overlap: do not add them into one savings total. Advisor often returns several records for one opportunity (per term, lookback period and lastUpdated), each with its own estimate: show every record as its own row with its impact, recommendation (properties.shortDescription.problem), properties.extendedProperties.term, lookbackPeriod and annualSavingsAmount in savingsCurrency, selected and sorted by impact in one query (never transcribed by reading rows), and label the rows of one opportunity as alternatives instead of collapsing them into ranges or maxima. Before recommending compute downsizing, check active reservations and savings plans that the change could strand.
-        - Public pricing: a fixed quote needs its region. When the user names the region and the products with their sizes or quantities, quote now: retrieve the rates and state conventional defaults as assumptions instead of asking (standard on-demand pay-as-you-go; Linux VMs unless Windows is named; LRS block blobs with capacity only, excluding transactions, retrieval and early deletion; Azure SQL Database General Purpose provisioned Gen5 license-included plus its storage; Premium SSD 1 TB = P30; Standard Load Balancer with its hourly rules charge), and name the main alternatives in one line. Usage-based meters whose quantity the user did not give (data processed, transactions, egress, IO) are quoted as unit rates outside the total, never filled with an invented volume. When the region or a size is missing and the price depends on it, ask one concise question that lists only the price-changing choices (each with its common options, such as East US, West Europe or Southeast Asia for a region) and quote nothing yet, but state in the same message the conventional default you will assume for every other price-changing setting of each product (tier, provisioning or capacity mode, license, OS), so one reply completes the quote; a size or quantity stated once for a comparison (for example "with 500 GB storage") is not asked again, and you say whether you apply it to every compared option or only to the one it follows. A cross-region VM ranking with no OS stated ranks the Linux and Windows on-demand variants separately instead of asking. Default to standard on-demand; compare rates only within the same product and meter; respect volume bands; carry product, tier and purchase-type qualifiers into headlines and chart labels. When the rows you use sit beside other returned meters for the same item (for example a disk's Disk and Disk Mount meters, or paid and zero-priced Free Load Balancer meters), name each such meter and say whether it applies to the stated configuration or is excluded and why, so the total reconciles with every returned row.
+        - Public pricing: a fixed quote needs its region. When the user names the region and the products with their sizes or quantities, quote now: retrieve the rates and state conventional defaults as assumptions instead of asking (standard on-demand pay-as-you-go; Linux VMs unless Windows is named; LRS block blobs with capacity only, excluding transactions, retrieval and early deletion; Azure SQL Database General Purpose provisioned Gen5 license-included plus its storage; Premium SSD 1 TB = P30; Standard Load Balancer with its hourly rules charge), and name the main alternatives in one line. Usage-based meters whose quantity the user did not give (data processed, transactions, egress, IO) are quoted as unit rates outside the total, never filled with an invented volume. When the region or a size is missing and the price depends on it, ask one concise question that lists only the price-changing choices (each with its common options, such as East US, West Europe or Southeast Asia for a region) and quote nothing yet, but state in the same message the conventional default you will assume for every other price-changing setting of each product (tier, provisioning or capacity mode, license, OS), so one reply completes the quote; a size or quantity stated once for a comparison (for example "with 500 GB storage") is not asked again, and you say whether you apply it to every compared option or only to the one it follows. A cross-region VM ranking with no OS stated ranks the Linux and Windows on-demand variants separately instead of asking. Default to standard on-demand; compare rates only within the same product and meter; respect volume bands; carry product, tier and purchase-type qualifiers into headlines and chart labels. When the rows you use sit beside other returned meters for the same item (for example a disk's Disk and Disk Mount meters, where Disk Mount bills each VM a shared Premium SSD is mounted to and so is excluded for a disk attached to one VM, or paid and zero-priced Free Load Balancer meters), name each such meter and say whether it applies to the stated configuration or is excluded and why, so the total reconciles with every returned row.
 
         ## Answer shape
         - Answer in the language of the latest user message; keep identifiers, SKUs and code unchanged.
@@ -84,6 +85,28 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         """;
 
     internal static string Instructions(bool webSearch) => webSearch ? SystemPrompt + WebSearchGuidance : SystemPrompt;
+
+    /// <summary>
+    /// Hosted tool calls (web searches, page opens and finds) one model response may make, sent as the Responses API's
+    /// max_tool_calls. The service stops at about one more than this; function calls such as QueryAzure are not counted.
+    /// Guidance alone did not stop a reasoning model from re-searching evidence the APIs had already returned.
+    /// </summary>
+    internal const int WebSearchCallsPerResponse = 3;
+
+    internal static ChatOptions AgentChatOptions(string deployment, string? reasoningEffort, bool webSearch) => new()
+    {
+        ModelId = deployment,
+        Instructions = Instructions(webSearch),
+        Reasoning = reasoningEffort is null ? null : new ReasoningOptions
+        {
+            Effort = ParseEffort(reasoningEffort),
+            Output = ReasoningOutput.Summary,
+        },
+        Tools = webSearch ? [new HostedWebSearchTool()] : null,
+#pragma warning disable OPENAI001 // The Responses request type MEAI builds; max_tool_calls has no ChatOptions equivalent.
+        RawRepresentationFactory = webSearch ? _ => new CreateResponseOptions { MaxToolCallCount = WebSearchCallsPerResponse } : null,
+#pragma warning restore OPENAI001
+    };
 
     private const string TitleInstructions =
         "Summarise the user's question into a 3-6 word title for a chat sidebar. No quotes, no trailing punctuation, no emoji. Title-case.";
@@ -134,17 +157,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
             .AsAIAgent(new ChatClientAgentOptions
             {
                 Name = "azure-finops-agent",
-                ChatOptions = new ChatOptions
-                {
-                    ModelId = deployment,
-                    Instructions = Instructions(webSearch),
-                    Reasoning = reasoningEffort is null ? null : new ReasoningOptions
-                    {
-                        Effort = ParseEffort(reasoningEffort),
-                        Output = ReasoningOutput.Summary,
-                    },
-                    Tools = webSearch ? [new HostedWebSearchTool()] : null,
-                },
+                ChatOptions = AgentChatOptions(deployment, reasoningEffort, webSearch),
                 AllowConcurrentInvocation = true,
             }, loggerFactory: loggerFactory)
             .AsBuilder()

@@ -33,6 +33,7 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("request period totals with granularity None")]
     [InlineData("test every offered key against billed cost")]
     [InlineData("a Resource Graph tag count is inventory context, never billing evidence")]
+    [InlineData("Disk Mount bills each VM a shared Premium SSD is mounted to")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
