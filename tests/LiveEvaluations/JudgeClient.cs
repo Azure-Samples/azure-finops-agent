@@ -11,6 +11,18 @@ public sealed class JudgeClient(HttpClient http, TokenCredential credential, Uri
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(60);
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
 
+    private bool IsProjectEndpoint => endpoint.AbsolutePath.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The project Responses route, or the account route when the endpoint has no project.</summary>
+    public Uri RequestUri => IsProjectEndpoint
+        ? new Uri($"{endpoint.GetLeftPart(UriPartial.Path).TrimEnd('/')}/openai/v1/responses")
+        : new Uri(endpoint, "/openai/v1/responses");
+
+    // The project route accepts only the Foundry audience; the account route takes the Cognitive Services one.
+    public string Scope => IsProjectEndpoint
+        ? "https://ai.azure.com/.default"
+        : "https://cognitiveservices.azure.com/.default";
+
     public async Task<string> AssessAsync(EvaluationCase scenario, RunCapture run, CancellationToken cancellationToken)
     {
         if (endpoint.Scheme != "https" || (!endpoint.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase)
@@ -68,8 +80,8 @@ public sealed class JudgeClient(HttpClient http, TokenCredential credential, Uri
     {
         for (var attempt = 1; ; attempt++)
         {
-            var token = await credential.GetTokenAsync(new TokenRequestContext(["https://cognitiveservices.azure.com/.default"]), cancellationToken);
-            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(endpoint, "/openai/v1/responses"));
+            var token = await credential.GetTokenAsync(new TokenRequestContext([Scope]), cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Post, RequestUri);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
             request.Content = new ByteArrayContent(payload);
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");

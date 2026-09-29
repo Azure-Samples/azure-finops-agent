@@ -435,6 +435,21 @@ public sealed class EvaluationGateTests
         Assert.Equal(TimeSpan.FromSeconds(20), JudgeClient.Backoff(3, null));
     }
 
+    [Fact]
+    public void JudgeCallsTheSameProjectResponsesEndpointAsTheAgent()
+    {
+        using var http = new HttpClient();
+        var project = new JudgeClient(http, new JudgeCredential(),
+            new Uri("https://example.services.ai.azure.com/api/projects/example-project"), "test-model");
+        Assert.Equal("https://example.services.ai.azure.com/api/projects/example-project/openai/v1/responses",
+            project.RequestUri.AbsoluteUri);
+        Assert.Equal("https://ai.azure.com/.default", project.Scope);
+
+        var account = new JudgeClient(http, new JudgeCredential(), new Uri("https://example.openai.azure.com/"), "test-model");
+        Assert.Equal("https://example.openai.azure.com/openai/v1/responses", account.RequestUri.AbsoluteUri);
+        Assert.Equal("https://cognitiveservices.azure.com/.default", account.Scope);
+    }
+
     private sealed class JudgeCredential : TokenCredential
     {
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) =>
@@ -453,7 +468,7 @@ public sealed class EvaluationGateTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/openai/v1/responses", request.RequestUri!.AbsolutePath);
+            Assert.EndsWith("/openai/v1/responses", request.RequestUri!.AbsolutePath, StringComparison.Ordinal);
             Requests.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
             if (_failures.TryDequeue(out var failure)) return new(failure);
             return new(HttpStatusCode.OK)
