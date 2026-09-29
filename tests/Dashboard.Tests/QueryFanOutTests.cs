@@ -1,5 +1,5 @@
+using System.Text.Json;
 using AzureFinOps.Dashboard.AI.Tools;
-using Microsoft.Extensions.AI;
 
 namespace AzureFinOps.Dashboard.Tests;
 
@@ -12,10 +12,10 @@ public class QueryFanOutTests
         public int Peak => Volatile.Read(ref Counters[1]);
     }
 
-    private static (ProtectedTool Tool, Probe Probe) Create(Func<string, string>? respond = null)
+    private static (Func<string, CancellationToken, Task<string>> Send, Probe Probe) Create(Func<string, string>? respond = null)
     {
         var probe = new Probe();
-        var inner = AIFunctionFactory.Create(async (string url, string method = "GET", string sql = "") =>
+        return (async (url, _) =>
         {
             probe.Calls.Enqueue(url);
             var active = Interlocked.Increment(ref probe.Counters[0]);
@@ -25,67 +25,75 @@ public class QueryFanOutTests
             await Task.Delay(20);
             Interlocked.Decrement(ref probe.Counters[0]);
             return respond?.Invoke(url) ?? $"HTTP 200 OK\n{{\"url\":\"{url}\"}}";
-        }, "QueryAzure");
-        return (new ProtectedTool(inner), probe);
+        }, probe);
     }
+
+    private static Task<string> FanOut(string url, Func<string, CancellationToken, Task<string>> send, string method = "GET", string? body = null, string query = "") =>
+        AzureQueryTools.FanOutAsync(AzureQueryTools.Urls(url), method, body is null ? null : JsonDocument.Parse(body).RootElement.Clone(), query, send, CancellationToken.None);
 
     [Fact]
     public async Task SeveralUrlLinesAreOneCallWithBoundedConcurrencyAndUrlOrder()
     {
-        var (tool, probe) = Create();
+        var (send, probe) = Create();
         var urls = Enumerable.Range(0, 10).Select(index => $"/subscriptions/s/providers/Microsoft.Compute/locations/r{index}/usages?api-version=2024-07-01").ToArray();
 
-        var output = Assert.IsType<string>(await tool.InvokeAsync(new AIFunctionArguments { ["url"] = string.Join("\r\n\n", urls) }));
+        var output = await FanOut(string.Join("\r\n\n", urls), send);
 
         Assert.Equal(10, probe.Calls.Count);
         Assert.InRange(probe.Peak, 2, 4);
         Assert.StartsWith("10 requests succeeded; results follow in url order.\n[1] " + urls[0] + "\n", output);
         Assert.True(output.IndexOf("[9] " + urls[8], StringComparison.Ordinal) < output.IndexOf("[10] " + urls[9], StringComparison.Ordinal));
-        Assert.True(ProtectedTool.InspectEvidence(output) is { Success: true, Partial: false });
+        Assert.True(EvidenceInspector.Inspect(output) is { Success: true, Partial: false });
     }
 
     [Fact]
-    public async Task JsonArraysOfUrlsAreAcceptedAndOneUrlStaysASingleCall()
+    public void JsonArraysOfUrlsAreAccepted()
     {
-        var (tool, probe) = Create();
-
-        var many = Assert.IsType<string>(await tool.InvokeAsync(new AIFunctionArguments { ["url"] = "[\"/a?api-version=1\", \"/b?api-version=1\"]" }));
-        var one = await tool.InvokeAsync(new AIFunctionArguments { ["url"] = "[\"/only?api-version=1\"]" });
-
-        Assert.StartsWith("2 requests succeeded", many);
-        Assert.Equal(["/a?api-version=1", "/b?api-version=1", "/only?api-version=1"], probe.Calls.ToArray().Order());
-        Assert.DoesNotContain("requests succeeded", one?.ToString());
+        Assert.Equal(["/a?api-version=1", "/b?api-version=1"], AzureQueryTools.Urls("[\"/a?api-version=1\", \" /b?api-version=1 \"]"));
+        Assert.Equal(["/only?api-version=1"], AzureQueryTools.Urls("[\"/only?api-version=1\"]"));
+        Assert.Equal(["/a", "/b"], AzureQueryTools.Urls(" /a \r\n\n/b\n"));
     }
 
     [Fact]
     public async Task FailedRequestsAreUnknownAndNeverHideTheFailure()
     {
-        var (partialTool, _) = Create(url => url == "/b" ? "HTTP 404 NotFound\n{\"error\":{\"code\":\"NoRegisteredProviderFound\"}}" : "HTTP 200 OK\n{}");
-        var partial = Assert.IsType<string>(await partialTool.InvokeAsync(new AIFunctionArguments { ["url"] = "/a\n/b\n/c" }));
-        var (failedTool, _) = Create(url => url == "/x" ? throw new InvalidOperationException("synthetic failure") : "HTTP 503 ServiceUnavailable\n{}");
-        var failed = Assert.IsType<string>(await failedTool.InvokeAsync(new AIFunctionArguments { ["url"] = "/x\n/y" }));
+        var (partialSend, _) = Create(url => url == "/b" ? "HTTP 404 NotFound\n{\"error\":{\"code\":\"NoRegisteredProviderFound\"}}" : "HTTP 200 OK\n{}");
+        var partial = await FanOut("/a\n/b\n/c", partialSend);
+        var (failedSend, _) = Create(url => url == "/x" ? throw new InvalidOperationException("synthetic failure") : "HTTP 503 ServiceUnavailable\n{}");
+        var failed = await FanOut("/x\n/y", failedSend);
 
         Assert.StartsWith("PARTIAL RESULT: 1 of 3 requests failed; a failed request is unknown, not empty.\n", partial);
         Assert.Contains("[2] /b\nHTTP 404 NotFound", partial);
-        Assert.True(ProtectedTool.InspectEvidence(partial) is { Success: true, Partial: true });
+        Assert.True(EvidenceInspector.Inspect(partial) is { Success: true, Partial: true });
         Assert.StartsWith("Error: all 2 requests failed.\n", failed);
         Assert.Contains("[1] /x\nError: synthetic failure", failed);
-        Assert.False(ProtectedTool.InspectEvidence(failed).Success);
+        Assert.False(EvidenceInspector.Inspect(failed).Success);
+    }
+
+    [Fact]
+    public async Task QueryRunsOnEachResponseAndRepeatedSchemasAreSharedByReference()
+    {
+        var (send, _) = Create(url => $"HTTP 200 OK\n{{\"value\":[{{\"name\":\"{url.Trim('/')}\",\"limit\":{new string('9', 5)}}}],\"pad\":\"{new string('x', AzureQueryTools.InlineCharacters)}\"}}");
+
+        var cropped = await FanOut("/a\n/b", send, query: "value.Select(x => x.name)");
+        var schemas = await FanOut("/a\n/b\n/c", send);
+
+        Assert.Contains("[1] /a\nHTTP 200 OK\nQuery result:\n[\"a\"]", cropped);
+        Assert.Contains("[2] /b\nHTTP 200 OK\nQuery result:\n[\"b\"]", cropped);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(schemas, "Schema:\n[^t]"));
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(schemas, @"the same schema as \[\d\]").Count);
     }
 
     [Theory]
-    [InlineData("POST", null, 2, false)]
-    [InlineData("GET", "{\"query\":\"x\"}", 2, false)]
-    [InlineData("GET", null, ProtectedTool.MaxUrls + 1, false)]
-    [InlineData("GET", null, 2, true)]
-    public async Task SeveralUrlsAreGetOnlyBoundedAndNeverOperations(string method, string? body, int count, bool operation)
+    [InlineData("POST", null, 2)]
+    [InlineData("GET", "{\"query\":\"x\"}", 2)]
+    [InlineData("GET", null, AzureQueryTools.MaxUrls + 1)]
+    public async Task SeveralUrlsAreGetOnlyAndBounded(string method, string? body, int count)
     {
-        var (tool, probe) = Create();
-        var urls = Enumerable.Range(0, count).Select(index => operation && index == 1 ? "operation:abc" : $"/r{index}").ToArray();
-        var arguments = new AIFunctionArguments { ["url"] = string.Join('\n', urls), ["method"] = method };
-        if (body is not null) arguments["body"] = body;
+        var (send, probe) = Create();
+        var urls = Enumerable.Range(0, count).Select(index => $"/r{index}");
 
-        var output = Assert.IsType<string>(await tool.InvokeAsync(arguments));
+        var output = await FanOut(string.Join('\n', urls), send, method, body);
 
         Assert.StartsWith("HTTP 400 BadRequest\n", output);
         Assert.EndsWith("No request was sent.", output);

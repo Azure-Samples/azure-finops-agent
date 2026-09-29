@@ -12,6 +12,7 @@ namespace AzureFinOps.Dashboard.AI.Runtime;
 [JsonDerivedType(typeof(AssistantMessageEvent), "assistant")]
 [JsonDerivedType(typeof(ToolStartEvent), "tool_start")]
 [JsonDerivedType(typeof(ToolCompleteEvent), "tool_done")]
+[JsonDerivedType(typeof(ApprovalRequestEvent), "approval_request")]
 [JsonDerivedType(typeof(TurnErrorEvent), "error")]
 [JsonDerivedType(typeof(TurnIdleEvent), "idle")]
 public abstract record AgentEvent
@@ -44,6 +45,12 @@ public sealed record UsageEvent(long? InputTokens, long? OutputTokens, string? F
 public sealed record ToolStartEvent(string CallId, string ToolName, string? Arguments) : AgentEvent;
 
 public sealed record ToolCompleteEvent(string CallId, bool Success, string? Result, string? Error) : AgentEvent;
+
+/// <summary>Agent Framework paused the turn until the user approves or rejects this exact tool call.</summary>
+public sealed record ApprovalRequestEvent(string RequestId, string ToolName, string? Arguments) : AgentEvent;
+
+/// <summary>The user's answer to a pending <see cref="ApprovalRequestEvent"/>.</summary>
+public sealed record ApprovalDecision(string RequestId, bool Approved);
 
 public sealed record TurnErrorEvent(string Message, string? Code = null) : AgentEvent;
 

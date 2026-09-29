@@ -173,8 +173,9 @@ public static class SessionEndpoints
             }
 
             var messages = BuildTranscript(events, userId);
-            var pendingChanges = OperationStore.Default.ForSession(userId, sessionId)
-                .Where(operation => operation.Status == "awaitingApproval").Select(OperationStore.Review).ToArray();
+            // A pending approval is answered by the next user message, so only requests after the last one still wait.
+            var lastUser = events.Select((item, index) => (item, index)).LastOrDefault(entry => entry.item is UserMessageEvent).index;
+            var pendingChanges = events.Skip(lastUser).OfType<ApprovalRequestEvent>().Select(ChatEndpoints.PendingChange).ToArray();
             return Results.Ok(new { messages, pendingChanges });
         });
     }

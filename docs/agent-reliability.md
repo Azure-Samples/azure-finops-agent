@@ -29,7 +29,7 @@ The agent's model was separately switched to an existing Luna deployment because
 | FIN-03: ownerless downloads | Explicit owner-bound persistent artifact registry and fail-closed endpoints | Owner/missing/expired/restart tests |
 | FIN-04: short requests lose tools | Only standalone greetings take the no-tool path | Routing tests and live short XLSX follow-up |
 | FIN-05: scheduled idle equals success | Structured host-validated scoped evidence, repeated-failure/goal pause, context compaction | Freshness/scope/outcome tests and real CLI compaction |
-| FIN-06: work continues after timeout | Host cancellation, admitted tool leases, terminal confirmation and quarantine | Actual CLI abort and gate-race tests |
+| FIN-06: work continues after timeout | Run cancellation, terminal confirmation and quarantine; the turn gate stays held until the run stops | Actual abort and gate-race tests |
 | FIN-07: throttling and stale reuse | Tenant serialization, credential/request cache, full retry deadline, sticky turn block | Cooldown/cache/isolation tests |
 | FIN-08: invented file downloads | Real bounded CSV/XLSX/HTML exporters and registered downloads | Python render tests, browser cards, live XLSX bytes/cells |
 | FIN-09: missing transcript recovery | Cached/uncached paths share recovery; unavailable history has an explicit error | Recovery and cancellation tests |
@@ -37,10 +37,10 @@ The agent's model was separately switched to an existing Luna deployment because
 | FIN-11: incomplete file aggregation | Structured filters, multi-column groups, aggregates, sorting and coverage totals | Python and host serialization tests; live filtered CSV totals |
 | FIN-12: volatile uploads | Persistent conversation binding, hashes, expiry and reader leases; reset preserves files | Restart/isolation/expiry tests and desktop/mobile reset |
 | FIN-13: unsupported feasibility claims | Separate quota, SKU/zone restrictions, placement likelihood and VM-origin connectivity | Diagnostic parsing/coverage tests; no allocation guarantee |
-| FIN-14: discarded multi-call results | Parallel per-call bodies, cancellation/unattempted counts, explicit pending/partial state | Parallel GET/operation/cancellation tests |
+| FIN-14: discarded multi-call results | Parallel per-call bodies, fan-out url lines with per-line partial results, cancellation/unattempted counts | Parallel GET/fan-out/cancellation tests |
 | FIN-15: lost pricing variants | Raw retail rows preserve product, meter, region, purchase type, volume band and source coverage for model-side comparison | Synthetic pagination, vocabulary and region tests |
 | FIN-16: fabricated zero rates | Deterministic validated arithmetic with explicit assumptions and rate provenance | Missing/nonfinite/locale/currency tests and live synthetic estimate |
-| FIN-17: accepted writes called complete | Persist intent, exact approval, async polling and prerequisite history; suppress unknown duplicates | Approval/fingerprint/async/restart tests |
+| FIN-17: accepted writes called complete | Agent Framework approval of the exact `ApplyAzureChange` call, polling of the returned async URL, and no re-approval of a change whose approved turn was interrupted | Approval/supersede/stale/interrupted tests |
 | FIN-18: wrong reconnect guidance | Resource-specific structured consent actions with same-origin allowlist | Consent-contract and desktop/mobile URL tests |
 | FIN-19: unknown becomes zero | Nullable unknown/N/A scores and observed-only averages; no empty-RG billable-waste penalty | Maturity/control tests and UI build checks |
 | FIN-20: missing fulfillment diagnostics | Durable redacted outcomes, interrupted-run reconciliation, corrected host sampling, one browser exception path | Outcome and browser telemetry tests; original notification crash not reproduced |
@@ -48,9 +48,9 @@ The agent's model was separately switched to an existing Luna deployment because
 ## Source And Execution Semantics
 
 - A budget `currentSpend` value is a periodically evaluated snapshot. Retrieval time is not billing data time. Preserve `_finops` and aggregate `sourceEvidence`; cached results during cooldown are not fresh measurements.
-- Pricing responses are raw Retail Prices API rows plus source metadata. Missing rates remain unknown, `complete=false` means catalogue coverage is partial, and SQL arithmetic is an estimate, not a measured bill or proof of a commercial rate.
+- Pricing responses are raw Retail Prices API rows plus source metadata. Missing rates remain unknown, `complete=false` means catalogue coverage is partial, and `query` arithmetic is an estimate, not a measured bill or proof of a commercial rate.
 - Quota headroom and SKU availability are necessary evidence, not guaranteed capacity. Effective inherited Azure Policy and successful allocation are not inferred. Connectivity is probed from a specified existing Azure VM, not the app host.
-- ARM PUT/PATCH first returns an approval proposal. Approve requires the exact stored request and explicit cost acknowledgement. HTTP 202, in-progress and unknown outcomes require polling, not a retry of the write. Background jobs cannot purchase capacity without the same approval.
+- ARM PUT/PATCH runs only through `ApplyAzureChange`, which Agent Framework holds for approval. The UI shows the exact method, URL and body, and only an explicit approval of that request id on the next turn runs it; any other message rejects it. HTTP 202, in-progress and unknown outcomes require polling, not a retry of the write. Background jobs cannot purchase capacity without the same approval.
 - `ReportJobOutcome` is checked against host-observed source calls. A later read replaces earlier evidence only for identical canonical arguments. Unknown/partial scope must be reported as such. This does not independently prove that a model chose every scope implied by an arbitrary natural-language request.
 - Durable turn `status` describes execution. Normal chat `fulfillment` is `not_evaluated`; scheduled fulfillment stores the validated run outcome. Neither SDK idle nor HTTP 200 proves the user's business objective was met.
 
@@ -64,13 +64,12 @@ All registries live under host-configured `COPILOT_HOME`; filesystem paths are n
 | Bound uploads | 24-hour sliding expiry, maximum seven days from creation; active reads hold leases |
 | Removed uploads/native-image handoff | Tombstoned for 30 minutes to allow an outstanding read |
 | Generated artifacts | 24 hours, exact owner check; expired/ownerless payloads swept |
-| Unapproved write proposals | 30 minutes, then payload removed and state marked expired |
-| Terminal operation records | Seven days after last update |
-| Unresolved operations | Retained for reconciliation and duplicate-write protection; not silently expired |
+| Pending change approvals | In the conversation's `session.json` until the next turn answers them; a message other than the approval rejects them |
+| Tool responses | Not stored: cropped in memory and returned to the model within the turn; the Foundry response chain keeps model context |
 | Turn outcomes | 30 days; interrupted running records reconciled on startup |
 | Conversation history | Existing explicit-delete/30-day idle policy |
 
-Use a single active application instance. Per-session admission, cooldowns, upload leases and approval locks are process-local. A shared persistent volume is not a distributed lock service. Anonymous continuity still depends on retaining the browser's application identity.
+Use a single active application instance. Per-session admission (which also serializes approvals), cooldowns and upload leases are process-local. A shared persistent volume is not a distributed lock service. Anonymous continuity still depends on retaining the browser's application identity.
 
 ## Verification Gates
 
@@ -132,15 +131,15 @@ The descriptive review classified 25 histories as pass, 38 partial, 16 blocked, 
 
 | Priority mechanism | Local improvement and verification |
 | --- | --- |
-| Financial arithmetic and scenario drift | Stored response SQL performs totals, shares, rankings and scenario math over verified rows with explicit scope, units and currency; synthetic backup and calendar-denominator regressions reconcile totals. |
+| Financial arithmetic and scenario drift | `query` expressions perform totals, shares, rankings and scenario math over verified rows with explicit scope, units and currency; synthetic backup and calendar-denominator regressions reconcile totals. |
 | Chart/schema rejection | Canonical `type` with a guarded legacy `chart` adapter; documented optional inputs have real defaults. Real SDK/CLI and omitted-argument tests cover the boundary. |
 | Pricing rows hidden by verbose output | Global top-N selection happens after pagination and within compatible variants. Facets omit irrelevant identifiers; ranking/detail completeness and volume thresholds remain explicit. |
 | Unsupported Graph query options and stale report guidance | Endpoint-specific preflight and current Copilot report routes/response formats replace generic query-option guessing. |
-| Copilot reports too large for model context | Raw Microsoft Graph report calls through `QueryAzure` are stored in the per-conversation SQLite table and summarized with read-only SQL; malformed, duplicate, mixed-period and mixed-date reports fail explicitly. |
+| Copilot reports too large for model context | Raw Microsoft Graph report calls through `QueryAzure` return the report's schema when large and are summarized with a `query` over its rows; malformed, duplicate, mixed-period and mixed-date reports fail explicitly. |
 | Reservation-utilization scope errors | Each path requires discovered billing/reservation scope; guidance no longer prescribes a provider-root call or cycles versions to repair it. |
-| Currency/unit corruption | SQL uses source currency/unit fields from stored evidence, preserves pricing bands and never infers FX or taxes. |
+| Currency/unit corruption | `query` uses source currency/unit fields from the response, preserves pricing bands and never infers FX or taxes. |
 | Incompatible report and inventory cohorts | Activity classification uses the report's own date and identities. Current assignments must not be subtracted from older aggregate activity. |
-| SDK failures hidden from host outcomes | Admitted failures before callbacks count once, and failed auxiliary tools produce partial execution rather than a clean outcome. |
+| SDK failures hidden from host outcomes | Tool calls whose results report errors count as failures, and failed auxiliary tools produce partial execution rather than a clean outcome. |
 | Conflicting follow-up instructions | The requested deliverable takes precedence; maturity-scoring context and public prompt links do not require another follow-up tool round. |
 
 Additional hardening emits an `empty_result` event for genuinely empty terminal turns, without relabeling explicit Stop or a structured chart/score/artifact result as empty. A retained blank answer alone is not proof of this failure; host cancellation must be checked.

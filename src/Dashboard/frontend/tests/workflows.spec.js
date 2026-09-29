@@ -2,15 +2,14 @@ import { expect, test } from "@playwright/test";
 
 const sessionId = "synthetic-conversation";
 const artifactId = "11111111111111111111111111111111";
-const operationId = "22222222222222222222222222222222";
+const requestId = "synthetic-approval-request";
 const change = {
-  operationId,
+  requestId,
+  tool: "ApplyAzureChange",
   method: "PATCH",
   target: "/synthetic/resource/with-a-long-name-for-mobile-layout",
   body: '{"tags":{"Owner":"Synthetic team"}}',
   status: "awaitingApproval",
-  costImpact:
-    "Review the configuration and potential charges before approving.",
 };
 
 async function arrange(
@@ -85,17 +84,6 @@ async function arrange(
       return route.fulfill({ json: { active: false } });
     if (path === "/api/jobs")
       return route.fulfill({ json: { jobs: [], entraRequired: true } });
-    if (path.endsWith("/approve"))
-      return route.fulfill({
-        json: {
-          result: {
-            status: "accepted",
-            nextAction: "Check the operation for terminal state.",
-          },
-        },
-      });
-    if (path.endsWith("/reject"))
-      return route.fulfill({ json: { rejected: true } });
     if (path.startsWith("/api/download/"))
       return route.fulfill({
         contentType:
@@ -275,14 +263,14 @@ test("tool validation errors remain failures when the SDK callback succeeded", a
       type: "tool_start",
       tool: "QueryAzure",
       id: "invalid-calculation",
-      args: '{"sql":"SELECT nope FROM responses"}',
+      args: '{"query":"new { monthly = nope * 730 }"}',
     },
     {
       type: "tool_done",
       tool: "QueryAzure",
       id: "invalid-calculation",
       success: true,
-      result: "Error: SQL failed: no such column: nope",
+      result: "Error: the calculation failed: Unknown identifier 'nope'",
     },
     { type: "message", content: "The calculation input was rejected." },
   ]);
@@ -1340,10 +1328,10 @@ test("HTML report preview preserves contrast and stays isolated", async ({
   expect(errors).toEqual([]);
 });
 
-test("approval requires explicit acknowledgement and sends only the opaque identifier", async ({
+test("approval requires explicit acknowledgement and answers the held call with the next turn", async ({
   page,
 }, testInfo) => {
-  const { errors } = await arrange(page, [
+  const { errors, requests } = await arrange(page, [
     { type: "approval_required", change },
     {
       type: "delta",
@@ -1351,7 +1339,6 @@ test("approval requires explicit acknowledgement and sends only the opaque ident
     },
   ]);
   await send(page, "Apply this tag");
-  await page.locator(".change-review summary").click();
   const approve = page.getByRole("button", {
     name: "Approve change",
     exact: true,
@@ -1367,22 +1354,42 @@ test("approval requires explicit acknowledgement and sends only the opaque ident
     path: testInfo.outputPath("approval.png"),
     animations: "disabled",
   });
-  const sent = page.waitForRequest((request) =>
-    request.url().endsWith(`/api/changes/${operationId}/approve`),
-  );
   await approve.click();
-  expect((await sent).postDataJSON()).toEqual({ acknowledgeCostImpact: true });
   await expect(page.locator(".change-review summary")).toContainText(
-    "accepted",
+    "approved",
   );
-  await expect(
-    page.getByRole("button", { name: "Check operation" }),
-  ).toBeVisible();
+  expect(requests).toHaveLength(2);
+  expect(requests[0].approval).toBeUndefined();
+  expect(requests[1].approval).toEqual({ requestId, approved: true });
+  expect(requests[1].prompt).toBe(`Approved: PATCH ${change.target}`);
+  await expect(approve).toHaveCount(0);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBeTruthy();
+  expect(errors).toEqual([]);
+});
+
+test("a new message instead of a decision rejects the held change", async ({
+  page,
+}) => {
+  const { errors, requests } = await arrange(page, [
+    { type: "approval_required", change },
+    { type: "delta", content: "The change is awaiting your review." },
+  ]);
+  await send(page, "Apply this tag");
+  await expect(page.locator(".change-review summary")).toContainText(
+    "awaiting your approval",
+  );
+  await send(page, "Actually, show my costs instead");
+  expect(requests[1].approval).toBeUndefined();
+  await expect(page.locator(".change-review summary")).toContainText(
+    "not applied",
+  );
+  await expect(
+    page.getByRole("button", { name: "Approve change", exact: true }),
+  ).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 

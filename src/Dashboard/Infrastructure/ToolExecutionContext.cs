@@ -8,16 +8,13 @@ internal sealed class ToolExecutionContext : IDisposable
     internal string? SessionId { get; }
     internal long? UserId { get; }
     internal CancellationToken CancellationToken { get; }
-    internal string? ApprovedOperationId { get; }
-    internal string? ToolCallId { get; init; }
 
-    internal ToolExecutionContext(string? sessionId, long? userId, CancellationToken cancellationToken, string? approvedOperationId = null)
+    internal ToolExecutionContext(string? sessionId, long? userId, CancellationToken cancellationToken)
     {
         _previous = Ambient.Value;
         SessionId = sessionId;
         UserId = userId;
         CancellationToken = cancellationToken;
-        ApprovedOperationId = approvedOperationId;
         Ambient.Value = this;
     }
 

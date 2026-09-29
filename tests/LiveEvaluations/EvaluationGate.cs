@@ -65,7 +65,7 @@ public static class EvaluationGate
     {
         if (!tool.Success || !string.IsNullOrWhiteSpace(tool.Error)) return false;
         var text = tool.Result.TrimStart();
-        if (!ProtectedTool.InspectEvidence(text).Success
+        if (!EvidenceInspector.Inspect(text).Success
             || text.Contains("Output too large to read at once", StringComparison.OrdinalIgnoreCase)) return false;
         if (text.StartsWith("HTTP ", StringComparison.Ordinal) && text.IndexOf('\n') is var end && end >= 0) text = text[(end + 1)..];
         try

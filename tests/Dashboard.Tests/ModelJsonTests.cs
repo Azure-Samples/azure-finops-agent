@@ -29,9 +29,9 @@ public sealed class ModelJsonTests
     [Fact]
     public void JsonParametersAdvertiseNativeJson()
     {
-        var properties = new AzureQueryTools(new AzureFinOps.Dashboard.Auth.UserTokens { UserId = 101 }).Create().Single().JsonSchema.GetProperty("properties");
+        var properties = new AzureQueryTools(new AzureFinOps.Dashboard.Auth.UserTokens { UserId = 101 }).Create().First().JsonSchema.GetProperty("properties");
         Assert.False(properties.GetProperty("body").TryGetProperty("type", out _));
         Assert.Equal("string", properties.GetProperty("url").GetProperty("type").GetString());
-        Assert.Equal("string", properties.GetProperty("sql").GetProperty("type").GetString());
+        Assert.Equal("string", properties.GetProperty("query").GetProperty("type").GetString());
     }
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AzureFinOps.Dashboard.AI;
+using AzureFinOps.Dashboard.AI.Runtime;
 using AzureFinOps.Dashboard.Observability;
 
 namespace Dashboard.Tests;
@@ -54,7 +55,7 @@ public sealed class TurnOutcomeTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task FailedToolsCannotLookLikeCleanExecution(bool rejectedBeforeCallback)
+    public async Task FailedToolsCannotLookLikeCleanExecution(bool neverStarted)
     {
         var root = Path.Combine(Path.GetTempPath(), "finops-outcome-failure-" + Guid.NewGuid().ToString("N"));
         var store = new TurnOutcomeStore(root);
@@ -62,8 +63,8 @@ public sealed class TurnOutcomeTests
         try
         {
             turn.RecordAnswer("A synthetic fallback answer is not proof the requested chart was delivered.");
-            if (rejectedBeforeCallback)
-                turn.RecordRejectedTool();
+            if (neverStarted)
+                turn.RecordToolResult(new("unknown-call", false, null, "Error: Function failed."));
             else
                 turn.RecordTool(false);
             store.Complete(turn);

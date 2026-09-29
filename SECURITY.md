@@ -41,7 +41,7 @@ Microsoft follows the principle of [Coordinated Vulnerability Disclosure](https:
 ## Application Boundaries
 
 - The agent runtime exposes registered host tools only; native shell, MCP and cross-session memory tools are disabled on both creation and resume. The application container runs as a non-root user.
-- ARM writes require a stored, owner/session-bound proposal and explicit acknowledgement in the application. Azure resource deletion and mutating action POSTs remain blocked. Standard Graph consent tiers are read-only.
+- ARM writes run only through `ApplyAzureChange`, which Agent Framework holds until the user explicitly approves the exact method, URL and body in the application. Azure resource deletion and mutating action POSTs remain blocked. Standard Graph consent tiers are read-only.
 - Downloads, transcripts, uploads, operation records and outcomes require the caller's application identity. Generated HTML is sandboxed without same-origin access, including direct downloads viewed inline.
 - The host does not screen or redact credentials in chat, job, tool or SSE content; recognizing and refusing secrets is left to the model. Do not upload or paste credentials. Existing retained transcripts/uploads are not automatically scrubbed; rotate any disclosed credential and apply the deployment's retention policy.
 - Host and browser telemetry are separate pipelines. Agent prompt/response content capture is disabled; browser diagnostic properties and URLs are redacted. Protect the persistent volume and telemetry stores as customer data.

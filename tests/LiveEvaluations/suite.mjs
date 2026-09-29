@@ -57,7 +57,7 @@ const CURATED_CASE_IDS = Object.freeze([
     "126bedbbf645cbd1", // Batched token pricing per million tokens
     "f75b5b6527c41d5c", // Waste evidence and a reviewable script
     "062a296be5be951f", // H200 Spot incident
-    "ce95482a745e0a66", // English deterministic SQL calculation incident
+    "3c99447cf28f786c", // English deterministic query calculation incident
 ]);
 // Cost Management quota is tenant-wide, so every case that may query it shares one paced
 // lane. Only cases listed here, which never need Cost Management, run in parallel lanes;
@@ -77,7 +77,7 @@ const PARALLEL_LANES = Object.freeze({
         "f9b2c97a215d8923",
         "160eca54c580c4f8",
         "126bedbbf645cbd1",
-        "ce95482a745e0a66",
+        "3c99447cf28f786c",
     ]),
 });
 export const COST_MANAGEMENT_LANE = "cost-management";
@@ -195,7 +195,7 @@ export function buildCatalog() {
         ["QueryAzure"],
     );
     add(
-        "Calculate the monthly total for 2 units at USD 3 per unit with zero discount and tax, using QueryAzure sql rather than mental arithmetic. Report the total in English. Do not look up prices.",
+        "Calculate the monthly total for 2 units at USD 3 per unit with zero discount and tax, using a QueryAzure query rather than mental arithmetic. Report the total in English. Do not look up prices.",
         "English calculation result",
         "incident:language",
         ["QueryAzure"],

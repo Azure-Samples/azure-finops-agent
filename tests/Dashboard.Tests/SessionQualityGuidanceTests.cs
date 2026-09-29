@@ -22,7 +22,7 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("azure-rest-api-specs")]
     [InlineData("apiVersions")]
     [InlineData("one at a time")]
-    [InlineData("query rows")]
+    [InlineData("from query results")]
     [InlineData("retrievedAtUtc")]
     [InlineData("Never delete resources")]
     [InlineData("approves in the UI")]
@@ -57,7 +57,7 @@ public sealed class SessionQualityGuidanceTests
     [Fact]
     public void PublicFaqSubmissionRequiresAnExplicitUserRequest()
     {
-        var tool = new FaqTools(new UserTokens { UserId = 101 }).Create().Single();
+        var tool = new FaqTools(new UserTokens { UserId = 101 }).Create().First();
         Assert.Contains("only when the user explicitly requests", tool.Description);
         Assert.Contains("Pending review is not publication", tool.Description);
     }
@@ -65,7 +65,7 @@ public sealed class SessionQualityGuidanceTests
     [Fact]
     public void QueryToolsPointAtAuthoritativeApiReferences()
     {
-        var azure = new AzureQueryTools(new UserTokens { UserId = 101 }).Create().Single();
+        var azure = new AzureQueryTools(new UserTokens { UserId = 101 }).Create().First();
         Assert.Equal("QueryAzure", azure.Name);
         Assert.Contains("azure-rest-api-specs", azure.Description);
         Assert.Contains("apiVersions", azure.Description);

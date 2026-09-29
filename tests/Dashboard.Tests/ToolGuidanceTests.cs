@@ -22,7 +22,7 @@ public sealed class ToolGuidanceTests
                     .Take(dimensions).Select(name => new { type = "Dimension", name })
             }
         });
-        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().Single();
+        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().First();
         var result = (await tool.InvokeAsync(new AIFunctionArguments { ["method"] = "POST", ["url"] = path, ["body"] = body }))!.ToString()!;
         Assert.Contains("at most two grouping dimensions", result);
         Assert.Contains("No request was sent", result);
@@ -55,8 +55,10 @@ public sealed class ToolGuidanceTests
     [InlineData("QueryAzure", null, "OData")]
     [InlineData("QueryAzure", null, "pricesheet download")]
     [InlineData("QueryAzure", null, "not tenant-specific")]
-    [InlineData("QueryAzure", "sql", "read-only")]
-    [InlineData("QueryAzure", "url", "operation:")]
+    [InlineData("QueryAzure", "query", "LINQ")]
+    [InlineData("QueryAzure", "url", "one per line")]
+    [InlineData("ApplyAzureChange", null, "only after they approve")]
+    [InlineData("ApplyAzureChange", null, "GenerateScript")]
     [InlineData("QueryUploadedFile", "paramsJson", "filters")]
     [InlineData("GetSavingsLedger", "status", "filter")]
     [InlineData("GetSavingsLedger", "limit", "limit")]
@@ -65,7 +67,7 @@ public sealed class ToolGuidanceTests
         var tokens = new UserTokens { UserId = 101 };
         var tools = toolName switch
         {
-            "QueryAzure" => new AzureQueryTools(tokens).Create(),
+            "QueryAzure" or "ApplyAzureChange" => new AzureQueryTools(tokens).Create(),
             "QueryUploadedFile" => new UploadedFileTools(tokens).Create(),
             "GetSavingsLedger" => new SavingsLedgerTools(tokens).Create(),
             _ => throw new InvalidOperationException("Unexpected query tool.")
@@ -82,7 +84,7 @@ public sealed class ToolGuidanceTests
     [Fact]
     public void ScriptGuidanceRequiresCompleteCodeWithoutHostExecution()
     {
-        var tool = new ScriptTools(101).Create().Single();
+        var tool = new ScriptTools(101).Create().First();
         Assert.Contains("complete code", tool.Description);
         Assert.Contains("never executes", tool.Description);
         Assert.DoesNotContain("ONLY AFTER", tool.Description);

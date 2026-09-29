@@ -18,20 +18,21 @@ public sealed class QueryAzureRoutingTests
         StorageToken = "synthetic-test-only",
     };
 
-    private static async Task<string> InvokeAsync(AIFunctionArguments arguments)
+    private static async Task<string> InvokeAsync(AIFunctionArguments arguments, string name = "QueryAzure")
     {
-        var result = await new AzureQueryTools(Tokens).Create().Single().InvokeAsync(arguments);
+        var result = await new AzureQueryTools(Tokens).Create().First(tool => tool.Name == name).InvokeAsync(arguments);
         return result is JsonElement { ValueKind: JsonValueKind.String } element ? element.GetString()! : result!.ToString()!;
     }
 
     [Fact]
-    public void OneToolCoversEveryEndpoint()
+    public void OneToolReadsEveryEndpointAndOneProposesChanges()
     {
-        var tool = Assert.Single(new AzureQueryTools(Tokens).Create());
-        Assert.Equal("QueryAzure", tool.Name);
-        Assert.False(tool.JsonSchema.TryGetProperty("required", out var required) && required.GetArrayLength() > 0);
-        foreach (var parameter in new[] { "url", "method", "body", "sql" })
-            Assert.True(tool.JsonSchema.GetProperty("properties").TryGetProperty(parameter, out _), parameter);
+        var tools = new AzureQueryTools(Tokens).Create().ToArray();
+        Assert.Equal(["QueryAzure", "ApplyAzureChange"], tools.Select(tool => tool.Name));
+        Assert.False(tools[0].JsonSchema.TryGetProperty("required", out var required) && required.GetArrayLength() > 0);
+        foreach (var parameter in new[] { "url", "method", "body", "query" })
+            Assert.True(tools[0].JsonSchema.GetProperty("properties").TryGetProperty(parameter, out _), parameter);
+        Assert.IsType<ApprovalRequiredAIFunction>(tools[1]);
     }
 
     [Theory]
@@ -78,8 +79,8 @@ public sealed class QueryAzureRoutingTests
     [InlineData("{\"url\":\"https://169.254.169.254/metadata/instance\"}", "not reachable")]
     [InlineData("{\"url\":\"https://graph.microsoft.com/me\"}", "/v1.0/ or /beta/")]
     [InlineData("{\"url\":\"https://api.loganalytics.io/workspaces/w/query\",\"method\":\"POST\"}", "/v1/workspaces")]
-    [InlineData("{\"url\":\"https://api.loganalytics.io/v1/workspaces/w/query\",\"method\":\"PUT\"}", "GET or POST")]
-    [InlineData("{\"url\":\"https://exports01.blob.core.windows.net/c/b.csv\",\"method\":\"PUT\"}", "read-only")]
+    [InlineData("{\"url\":\"https://api.loganalytics.io/v1/workspaces/w/query\",\"method\":\"PUT\"}", "ApplyAzureChange")]
+    [InlineData("{\"url\":\"https://exports01.blob.core.windows.net/c/b.csv\",\"method\":\"PATCH\"}", "ApplyAzureChange")]
     [InlineData("{\"url\":\"https://prices.azure.com/api/retail/prices?currencyCode=USD\"}", "$filter")]
     [InlineData("{\"url\":\"https://prices.azure.com/api/retail/prices?currencyCode=US&$filter=serviceName eq 'Storage'\"}", "three-letter")]
     [InlineData("{\"url\":\"https://prices.azure.com/api/retail/prices?$filter=x\",\"method\":\"POST\"}", "GET only")]
@@ -91,20 +92,31 @@ public sealed class QueryAzureRoutingTests
         var result = await InvokeAsync(new AIFunctionArguments(parsed.ToDictionary(pair => pair.Key, pair => (object?)pair.Value)));
         Assert.StartsWith("HTTP 4", result);
         Assert.Contains(error, result);
-        Assert.False(ProtectedTool.InspectEvidence(result).Success);
+        Assert.False(EvidenceInspector.Inspect(result).Success);
     }
     [Fact]
-    public async Task EmptyUrlWithoutSqlReturnsBadRequest()
+    public async Task EmptyUrlReturnsBadRequestAndQueryAloneIsACalculation()
     {
-        var result = await InvokeAsync(new AIFunctionArguments());
-        Assert.Equal("HTTP 400 BadRequest\nProvide url for a request, or sql alone to read stored responses. No request was sent.", result);
+        var result = await InvokeAsync(new AIFunctionArguments { ["url"] = " " });
+        Assert.Equal("HTTP 400 BadRequest\nProvide url, or query alone for a calculation. No request was sent.", result);
+
+        var calculation = await InvokeAsync(new AIFunctionArguments { ["query"] = "new { total = Math.Round(2 * 3.0 * (1 + 0.0), 2) }" });
+        Assert.Equal(CalculationPrefix + "\n{\"total\":6}", calculation);
+        Assert.StartsWith("Error: the calculation failed: ", await InvokeAsync(new AIFunctionArguments { ["query"] = "Environment.MachineName" }));
     }
 
-    [Fact]
-    public async Task OperationListRequiresActiveConversation()
+    [Theory]
+    [InlineData("GET", "/subscriptions/s/resourceGroups/rg?api-version=2021-04-01", "PUT or PATCH")]
+    [InlineData("POST", "/subscriptions/s/resourceGroups/rg?api-version=2021-04-01", "PUT or PATCH")]
+    [InlineData("DELETE", "/subscriptions/s/resourceGroups/rg?api-version=2021-04-01", "PUT or PATCH")]
+    [InlineData("PATCH", "https://graph.microsoft.com/v1.0/users/u", "Azure Resource Manager")]
+    [InlineData("PUT", "https://exports01.blob.core.windows.net/c/b.csv", "Azure Resource Manager")]
+    public async Task ChangesAreArmPutOrPatchOnly(string method, string url, string error)
     {
-        var result = await InvokeAsync(new AIFunctionArguments { ["url"] = "operation:" });
-        Assert.Equal("Error: no active conversation.", result);
+        var result = await InvokeAsync(new AIFunctionArguments { ["method"] = method, ["url"] = url }, "ApplyAzureChange");
+        Assert.StartsWith("HTTP 400 BadRequest\n", result);
+        Assert.Contains(error, result);
+        Assert.EndsWith("No request was sent.", result);
     }
 
     [Fact]
@@ -114,7 +126,7 @@ public sealed class QueryAzureRoutingTests
         {
             var result = await InvokeAsync(new AIFunctionArguments { ["url"] = url, ["method"] = "DELETE" });
             Assert.Contains("DELETE", result, StringComparison.OrdinalIgnoreCase);
-            Assert.False(ProtectedTool.InspectEvidence(result).Success);
+            Assert.False(EvidenceInspector.Inspect(result).Success);
         }
     }
 
@@ -154,7 +166,7 @@ public sealed class QueryAzureRoutingTests
         Assert.Equal(2, json.RootElement.GetProperty("pagesRead").GetInt32());
         Assert.True(json.RootElement.GetProperty("complete").GetBoolean());
         Assert.Single(fetched);
-        Assert.Equal((true, true, false), ProtectedTool.InspectEvidence(result));
+        Assert.Equal((true, true, false), EvidenceInspector.Inspect(result));
     }
 
     [Fact]
@@ -186,7 +198,7 @@ public sealed class QueryAzureRoutingTests
             Assert.Contains("HTTP 503", json.RootElement.GetProperty("pageFailure").GetString());
             Assert.False(json.RootElement.TryGetProperty("error", out _));
         }
-        Assert.Equal((true, true, true), ProtectedTool.InspectEvidence(failed));
+        Assert.Equal((true, true, true), EvidenceInspector.Inspect(failed));
     }
 
     [Fact]
@@ -219,7 +231,7 @@ public sealed class QueryAzureRoutingTests
         using var document = JsonDocument.Parse(ResponseShaper.CsvToJson("Name,Cost\nvm1,1\nvm2,2\nvm", truncated: true)!);
         Assert.Equal(2, document.RootElement.GetProperty("rowCount").GetInt32());
         Assert.False(document.RootElement.GetProperty("complete").GetBoolean());
-        Assert.Equal((true, true, true), ProtectedTool.InspectEvidence(document.RootElement.GetRawText()));
+        Assert.Equal((true, true, true), EvidenceInspector.Inspect(document.RootElement.GetRawText()));
     }
 
     [Fact]

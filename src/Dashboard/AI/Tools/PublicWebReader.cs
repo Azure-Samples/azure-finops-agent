@@ -29,7 +29,7 @@ internal static class PublicWebReader
         DefaultRequestVersion = HttpVersion.Version20,
     };
 
-    private const int MaxBytes = 8_000_000; // pages, JSON/XML/CSV and specs are stored whole and read with SQL
+    private const int MaxBytes = 8_000_000; // pages, JSON/XML/CSV and specs are read whole, then cropped with a LINQ query
 
     static PublicWebReader()
     {

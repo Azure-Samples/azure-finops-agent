@@ -49,10 +49,10 @@ Keep source capabilities in endpoint-specific contracts. A parameter is useful o
 
 The following remain deterministic host policy:
 
-- Per-user/session ownership and exact tool-call admission.
+- Per-user/session ownership and one active turn per conversation.
 - Approved request destinations and reserved host-owned fields.
 - No Azure deletion and no unrestricted mutating POST.
-- Exact stored PUT/PATCH approval in the application.
+- ARM PUT/PATCH only through `ApplyAzureChange`, held by Agent Framework until the user approves that exact call in the UI.
 - Sandboxed generated HTML.
 - Cost Management serialization, full retry deadlines and final same-turn blocking.
 

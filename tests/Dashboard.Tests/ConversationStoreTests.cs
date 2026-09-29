@@ -81,14 +81,20 @@ public sealed class ConversationStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public void EachRunExposesOnlyOwnerBoundHostTools()
+    public void EachRunExposesPlainToolsAndOnlyChangesNeedApproval()
     {
-        var options = _factory.RunOptions(101, "00000000-0000-0000-0000-000000000001", lightweight: false);
+        var options = _factory.RunOptions(101, lightweight: false);
         var tools = options.ChatOptions!.Tools!;
         Assert.Contains(tools, tool => tool.Name == "QueryAzure");
-        Assert.All(tools, tool => Assert.IsType<ProtectedTool>(tool));
+        Assert.IsType<ApprovalRequiredAIFunction>(Assert.Single(tools, tool => tool.Name == "ApplyAzureChange"));
+        Assert.Single(tools, tool => tool is ApprovalRequiredAIFunction);
         Assert.Null(options.ChatOptions.Reasoning);
-        Assert.Equal(ReasoningEffort.Low, _factory.RunOptions(101, "00000000-0000-0000-0000-000000000001", lightweight: true).ChatOptions!.Reasoning!.Effort);
+        Assert.Equal(ReasoningEffort.Low, _factory.RunOptions(101, lightweight: true).ChatOptions!.Reasoning!.Effort);
+
+        var invoker = _factory.Agent.GetService<FunctionInvokingChatClient>();
+        Assert.NotNull(invoker);
+        Assert.True(invoker.IncludeDetailedErrors);
+        Assert.NotNull(invoker.FunctionInvoker);
     }
 
     public async Task DisposeAsync()

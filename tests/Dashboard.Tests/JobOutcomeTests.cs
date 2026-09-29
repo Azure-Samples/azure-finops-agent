@@ -22,7 +22,7 @@ public sealed class JobOutcomeTests
     [InlineData("HTTP 429 TooManyRequests\nCurrent UTC time: 2026-01-01 00:00:00\n{\"error\":{\"code\":\"429\"},\"_finops\":{\"cacheStatus\":\"not_available\"}}", false, false, false)]
     public void EvidenceClassificationParsesStructuredMetadata(string text, bool success, bool fresh, bool partial)
     {
-        Assert.Equal((success, fresh, partial), ProtectedTool.InspectEvidence(text));
+        Assert.Equal((success, fresh, partial), EvidenceInspector.Inspect(text));
     }
     [Fact]
     public async Task AGoodReadCannotHideAnotherIncompleteReadOfTheSameTool()

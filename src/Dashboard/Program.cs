@@ -407,7 +407,6 @@ app.MapSessionEndpoints(agentFactory, telemetry, jobStore, logger);
 AzureFinOps.Dashboard.Jobs.JobEndpoints.MapJobEndpoints(app, jobStore, jobScheduler, logger);
 app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
-app.MapOperationEndpoints(agentFactory, tokenStore);
 app.MapUploadEndpoints();
 app.MapSeoEndpoints();
 

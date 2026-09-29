@@ -49,7 +49,7 @@ public sealed class ApiQueryContractTests
     [Fact]
     public async Task ResourceGraphReadsRejectMissingScopeBeforeDispatch()
     {
-        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().Single();
+        var tool = new AzureQueryTools(new UserTokens { UserId = 101, AzureToken = "synthetic-test-only" }).Create().First();
         const string body = "{\"query\":\"resources | summarize count()\"}";
         var result = (await tool.InvokeAsync(new AIFunctionArguments { ["method"] = "POST", ["url"] = ResourceGraphPath, ["body"] = body }))!.ToString()!;
         Assert.Contains("Implicit tenant-wide scope is not supported", result);

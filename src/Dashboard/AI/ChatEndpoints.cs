@@ -110,6 +110,12 @@ public static class ChatEndpoints
                 var sidStr = sidProp.GetString();
                 if (!string.IsNullOrWhiteSpace(sidStr)) requestedSessionId = sidStr;
             }
+            // The user's answer to a change awaiting approval; any other send rejects pending changes.
+            ApprovalDecision? approval = null;
+            if (bodyDoc.RootElement.TryGetProperty("approval", out var approvalProp) && approvalProp.ValueKind == JsonValueKind.Object
+                && approvalProp.TryGetProperty("requestId", out var requestIdProp) && requestIdProp.ValueKind == JsonValueKind.String
+                && approvalProp.TryGetProperty("approved", out var approvedProp) && approvedProp.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                approval = new ApprovalDecision(requestIdProp.GetString() ?? "", approvedProp.GetBoolean());
 
             if (string.IsNullOrWhiteSpace(prompt))
             {
@@ -392,6 +398,13 @@ public static class ChatEndpoints
                 }
                 turnGateSessionId = activeSessionId;
                 chatActivity?.SetTag("request.id", turnState.RequestId);
+                if (approval is not null && !session.HasPendingApproval(approval.RequestId))
+                {
+                    await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "error", code = "approval_stale", message = "That change is no longer awaiting approval, so nothing was sent. Ask again to get a fresh proposal." })}\n\n");
+                    await ctx.Response.WriteAsync("data: [DONE]\n\n");
+                    await ctx.Response.Body.FlushAsync();
+                    return;
+                }
                 PrepareUploads(activeSessionId);
 
                 // Greetings run at low reasoning effort (a ~2-3s first token instead of ~6s);
@@ -603,7 +616,7 @@ public static class ChatEndpoints
                         status = notice.Status,
                         retryAtUtc = notice.RetryAtUtc,
                         willRetry = notice.WillRetry,
-                        toolCallId = ToolExecutionContext.Current?.ToolCallId
+                        toolCallId = Microsoft.Extensions.AI.FunctionInvokingChatClient.CurrentContext?.CallContent.CallId
                     }));
                 };
                 // Belt-and-braces cleanup on request abort.
@@ -611,7 +624,7 @@ public static class ChatEndpoints
                 ctx.RequestAborted.Register(() => Infrastructure.HttpHelper.RetryReporters.TryRemove(turnKeyForAbort, out _));
 
                 dispatchAttempted = true;
-                await session.SendAsync(prompt, imageAttachments, trivialTurn);
+                await session.SendAsync(prompt, imageAttachments, trivialTurn, approval);
 
                 // Images are consumed by the message they rode in on and now live in
                 // the model context. Delist them so later turns don't re-attach the
@@ -1004,6 +1017,10 @@ public static class ChatEndpoints
         {
             sseData = await HandleToolDoneAsync(toolDone, emit, toolTracker, telemetry, userId, activeSessionId, userLogin, logger);
         }
+        else if (evt is ApprovalRequestEvent approvalRequest)
+        {
+            sseData = JsonSerializer.Serialize(new { type = "approval_required", change = PendingChange(approvalRequest) });
+        }
         else if (evt is TurnErrorEvent error)
         {
             sseData = JsonSerializer.Serialize(new { type = "error", code = error.Code, message = error.Message });
@@ -1024,6 +1041,26 @@ public static class ChatEndpoints
             await emit("[DONE]");
             done.TrySetResult();
         }
+    }
+
+    /// <summary>What the UI shows for a change awaiting approval: the exact request the tool will send once approved.</summary>
+    internal static object PendingChange(ApprovalRequestEvent request)
+    {
+        string? method = null, target = null, body = null;
+        try
+        {
+            using var arguments = JsonDocument.Parse(request.Arguments ?? "{}");
+            var root = arguments.RootElement;
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                method = root.TryGetProperty("method", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString()?.Trim().ToUpperInvariant() : null;
+                target = root.TryGetProperty("url", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null;
+                body = root.TryGetProperty("body", out var b) && b.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)
+                    ? b.ValueKind == JsonValueKind.String ? b.GetString() : b.GetRawText() : null;
+            }
+        }
+        catch (JsonException) { }
+        return new { requestId = request.RequestId, tool = request.ToolName, method, target, body, arguments = request.Arguments, status = "awaitingApproval" };
     }
 
     internal static string? EmptyResultNotice(TurnExecution turn) =>
@@ -1069,20 +1106,6 @@ public static class ChatEndpoints
         var consentActions = HttpHelper.ConsentActions(resultText);
         if (consentActions.Length > 0)
             await emit(JsonSerializer.Serialize(new { type = "consent_required", actions = consentActions }));
-
-        if (resultText is not null && (resultText.StartsWith("HTTP 409 ApprovalRequired\n", StringComparison.Ordinal)
-            || toolName == "QueryAzure" && resultText.StartsWith('{') && resultText.Contains("\"operationId\"", StringComparison.Ordinal)))
-        {
-            try
-            {
-                using var proposal = JsonDocument.Parse(resultText.StartsWith("HTTP ") ? resultText[(resultText.IndexOf('\n') + 1)..] : resultText);
-                if (proposal.RootElement.ValueKind == JsonValueKind.Object && proposal.RootElement.TryGetProperty("operationId", out var operationId)
-                    && OperationStore.Default.Find(operationId.GetString() ?? "", userId) is { Status: "awaitingApproval" } operation
-                    && operation.SessionId == sessionId)
-                    await emit(JsonSerializer.Serialize(new { type = "approval_required", change = OperationStore.Review(operation) }));
-            }
-            catch (JsonException) { }
-        }
 
         // Marker-based side channels (chart / html / script / maturity).
         // If a marker is detected we emit the tool_done event followed by the

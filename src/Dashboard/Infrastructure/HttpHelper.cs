@@ -97,39 +97,11 @@ public static class HttpHelper
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken, ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
+        // A change is sent once: repeating a PUT/PATCH after an ambiguous failure could apply it twice.
         var mutation = method == HttpMethod.Put || method == HttpMethod.Patch;
-        OperationStore.Operation? operation = null;
-        if (mutation && OperationStore.IsArmUrl(url))
-        {
-            var context = ToolExecutionContext.Current;
-            if (context?.UserId is not { } owner || context.SessionId is null)
-                return "HTTP 403 Forbidden\nA host-owned active turn is required for Azure changes.";
-            cancellation.Token.ThrowIfCancellationRequested();
-            if (context.ApprovedOperationId is { } approvedId)
-            {
-                operation = OperationStore.Default.Find(approvedId, owner);
-                if (operation is null || !OperationStore.Default.MatchesApproved(operation, owner, context.SessionId, method!.Method, url, jsonBody))
-                    return "HTTP 403 Forbidden\nThe approved operation does not match this request.";
-            }
-            else
-            {
-                operation = OperationStore.Default.Begin(owner, context.SessionId, method!.Method, url, jsonBody, out var created, requiresApproval: true);
-                return (operation.Status == "awaitingApproval" ? "HTTP 409 ApprovalRequired\n" : "HTTP 202 Accepted\n") + OperationStore.Envelope(operation, duplicate: !created);
-            }
-        }
-        async Task<string> Send(CancellationToken requestToken)
-        {
-            try
-            {
-                return await SendCoreAsync(url, token, activity, telemetryPrefix, method, jsonBody, includeTimestamp, extraHeaders,
-                    maxResponseChars, bypassCostManagementGate, mutation ? 1 : maxAttemptsOverride, requestToken, operation);
-            }
-            catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException)
-            {
-                if (operation is not null) OperationStore.Default.MarkUncertain(operation);
-                throw;
-            }
-        }
+        Task<string> Send(CancellationToken requestToken) =>
+            SendCoreAsync(url, token, activity, telemetryPrefix, method, jsonBody, includeTimestamp, extraHeaders,
+                maxResponseChars, bypassCostManagementGate, mutation ? 1 : maxAttemptsOverride, requestToken);
         if (!IsInteractiveCostQueryUrl(url)) return await Send(cancellation.Token);
         return await CostQueries.ExecuteAsync(CostQueryCoordinator.TenantKey(token),
             CostQueryCoordinator.RequestKey(token, (method ?? HttpMethod.Get).Method, url, jsonBody), Send, cancellation.Token,
@@ -166,8 +138,7 @@ public static class HttpHelper
         int? maxResponseChars = null,
         bool bypassCostManagementGate = false,
         int? maxAttemptsOverride = null,
-        CancellationToken cancellationToken = default,
-        OperationStore.Operation? pendingOperation = null)
+        CancellationToken cancellationToken = default)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken, ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
@@ -327,15 +298,9 @@ public static class HttpHelper
         var result = $"HTTP {(int)res.StatusCode} {res.StatusCode}\n";
         if (includeTimestamp)
             result += $"Current UTC time: {DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)}\n";
-
-        if (OperationStore.IsArmUrl(url) && (method == HttpMethod.Put || method == HttpMethod.Patch || method == HttpMethod.Post && (int)res.StatusCode == 202)
-            && ToolExecutionContext.Current is { UserId: { } owner, SessionId: { } sessionId })
-        {
-            var operation = pendingOperation is not null
-                ? OperationStore.Default.ObserveResponse(pendingOperation, res, responseBody)
-                : OperationStore.Default.Register(owner, sessionId, method.Method, url, jsonBody, res, responseBody);
-            return result + OperationStore.Envelope(operation);
-        }
+        // Asynchronous ARM/Graph operations return where to poll; without it the model cannot learn the final state.
+        foreach (var header in new[] { "Azure-AsyncOperation", "Location", "Retry-After" })
+            if (res.Headers.TryGetValues(header, out var values)) result += $"{header}: {string.Join(", ", values)}\n";
 
         if (maxResponseChars.HasValue && responseBody.Length > maxResponseChars.Value)
         {

@@ -1,4 +1,3 @@
-import ctypes
 import gzip
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,8 +20,6 @@ def run():
             probe.write(b"storage-check")
 
     subprocess.run(["python3", "-c", "import pandas, openpyxl, pyarrow, pdfminer"], check=True, timeout=30)
-    # Stored-response SQL uses the SQLite that Microsoft.Data.Sqlite publishes, not an OS package.
-    assert ctypes.CDLL("/app/libe_sqlite3.so").sqlite3_libversion_number() >= 3_045_000, "Bundled SQLite is missing or too old"
     check_application("")
     check_application("InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://127.0.0.1:9/;LiveEndpoint=https://127.0.0.1:9/")
     received = []

@@ -19,20 +19,26 @@ internal static partial class ResponseShaper
     internal static string TimestampLine() =>
         TimestampPrefix + DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + "\n";
 
+    /// <summary>Splits the status, timestamp and response-header lines the host writes above a body from the body itself.</summary>
     internal static (string Preamble, string Body) SplitPreamble(string response)
     {
-        var body = response;
-        var preamble = new StringBuilder();
-        var first = true;
-        while (first && body.StartsWith("HTTP ", StringComparison.Ordinal) || body.StartsWith(TimestampPrefix, StringComparison.Ordinal))
+        var start = 0;
+        while (start < response.Length)
         {
-            first = false;
-            var end = body.IndexOf('\n');
-            if (end < 0) return (preamble.Append(body).Append('\n').ToString(), "");
-            preamble.Append(body, 0, end + 1);
-            body = body[(end + 1)..];
+            var end = response.IndexOf('\n', start);
+            if (end < 0)
+            {
+                // A preamble with no body, such as a bare status line.
+                if (start == 0 && response.StartsWith("HTTP ", StringComparison.Ordinal)) return (response + "\n", "");
+                break;
+            }
+            var line = response.AsSpan(start, end - start).TrimEnd('\r');
+            if (!(start == 0 && line.StartsWith("HTTP ") || start > 0 && line.IsEmpty || line.StartsWith(TimestampPrefix)
+                || line.StartsWith("Final URL: ") || line.StartsWith("Content-Type: ") || line.StartsWith("Bytes on wire: ") || line.StartsWith("UTC: ")
+                || line.StartsWith("Azure-AsyncOperation: ") || line.StartsWith("Location: ") || line.StartsWith("Retry-After: "))) break;
+            start = end + 1;
         }
-        return (preamble.ToString(), body);
+        return (response[..start], response[start..]);
     }
 
     /// <summary>Returns the response with a CSV or XML success body converted to JSON, otherwise unchanged.</summary>

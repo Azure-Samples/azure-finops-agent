@@ -1,4 +1,5 @@
 using AzureFinOps.Dashboard.AI;
+using AzureFinOps.Dashboard.AI.Runtime;
 
 namespace Dashboard.Tests;
 
@@ -17,21 +18,6 @@ public sealed class TurnExecutionTests
     }
 
     [Fact]
-    public async Task TerminalSignalDoesNotReleaseRunningHostTools()
-    {
-        var sessionId = Guid.NewGuid().ToString();
-        Assert.True(TurnExecution.TryBegin(sessionId, 101, null, out var turn));
-        var lease = turn.AcquireTool(101);
-        turn.ConfirmTerminal();
-        var finish = turn.FinishAsync();
-        Assert.False(finish.IsCompleted);
-        Assert.False(TurnExecution.TryBegin(sessionId, 101, null, out _));
-        lease.Dispose();
-        Assert.True(await finish);
-        Assert.False(TurnExecution.Active.ContainsKey(sessionId));
-    }
-
-    [Fact]
     public async Task LateCompletionCannotReleaseAReplacementTurn()
     {
         var sessionId = Guid.NewGuid().ToString();
@@ -46,42 +32,41 @@ public sealed class TurnExecutionTests
     }
 
     [Fact]
-    public async Task CancellationClosesAdmissionAndRejectsWrongOwner()
+    public async Task CancellationHoldsTheGateUntilTheRunIsTerminal()
     {
         var sessionId = Guid.NewGuid().ToString();
         Assert.True(TurnExecution.TryBegin(sessionId, 101, null, out var turn));
-        Assert.Throws<UnauthorizedAccessException>(() => turn.AcquireTool(202));
         turn.Cancel();
         Assert.True(turn.CancellationToken.IsCancellationRequested);
-        Assert.Throws<OperationCanceledException>(() => turn.AcquireTool(101));
         Assert.False(await turn.FinishAsync());
         Assert.True(TurnExecution.Active.ContainsKey(sessionId));
         turn.ConfirmTerminal();
         Assert.True(await turn.FinishAsync());
+        Assert.False(TurnExecution.Active.ContainsKey(sessionId));
     }
 
     [Fact]
-    public async Task ToolsCannotStartAfterTheTurnEnded()
-    {
-        Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
-        using (turn.AcquireTool(101)) { }
-        turn.ConfirmTerminal();
-        Assert.Throws<OperationCanceledException>(() => turn.AcquireTool(101));
-        Assert.True(await turn.FinishAsync());
-    }
-
-    [Fact]
-    public async Task RejectedCallsCountAsFailedToolsWithoutFreshEvidence()
+    public async Task EvidenceIsWhatTheToolReturnedNotTheModelsAccount()
     {
         Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));
         try
         {
-            turn.RecordRejectedTool();
-            Assert.Equal(1, turn.ToolsCompleted);
-            Assert.Equal(1, turn.ToolsFailed);
-            var evidence = Assert.Single(turn.ToolEvidence);
-            Assert.False(evidence.Success);
-            Assert.False(evidence.Fresh);
+            turn.RecordToolStart(new("call-1", "QueryAzure", """{"url":"/subscriptions/s/providers/Microsoft.CostManagement/query?api-version=2025-03-01"}"""));
+            turn.RecordToolResult(new("call-1", true, "HTTP 200 OK\nCurrent UTC time: 2026-09-25 20:20:56\n{\"value\":[]}", null));
+            turn.RecordToolStart(new("call-2", "QueryAzure", """{"url":"/subscriptions/s/resources?api-version=2021-04-01"}"""));
+            turn.RecordToolResult(new("call-2", true, "HTTP 403 Forbidden\n{\"error\":{\"code\":\"AuthorizationFailed\"}}", null));
+            turn.RecordToolResult(new("never-started", false, null, "Error: Function failed."));
+            turn.RecordToolStart(new("call-3", "QueryAzure", """{"query":"2 * 3"}"""));
+            turn.RecordToolResult(new("call-3", true, AzureFinOps.Dashboard.AI.Tools.AzureQueryTools.CalculationPrefix + "\n6", null));
+
+            Assert.Equal(4, turn.ToolsCompleted);
+            Assert.Equal(2, turn.ToolsFailed);
+            var evidence = turn.ToolEvidence.ToArray();
+            Assert.Equal(3, evidence.Length);
+            Assert.True(evidence[0] is { Name: "QueryAzure", Success: true, Fresh: true, Partial: false });
+            Assert.NotNull(evidence[0].ScopeKey);
+            Assert.True(evidence[1] is { Name: "QueryAzure", Success: false });
+            Assert.True(evidence[2] is { Name: "unknown", Success: false, Fresh: false });
         }
         finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
     }

@@ -1313,22 +1313,21 @@
             </div>
             <div
               v-for="change in activeChanges"
-              :key="change.operationId"
+              :key="change.requestId"
               class="change-review"
             >
-              <details>
+              <details :open="change.status === 'awaitingApproval'">
                 <summary>
-                  {{ change.method }} change: {{ change.status }}
+                  {{ change.method }} change: {{ changeStatusLabel(change) }}
                 </summary>
                 <div class="change-review-target">{{ change.target }}</div>
                 <pre>{{ change.body || "No request body" }}</pre>
-                <p>{{ change.costImpact }}</p>
                 <template v-if="change.status === 'awaitingApproval'">
                   <label
                     ><input
                       v-model="change.acknowledged"
                       type="checkbox"
-                      :disabled="change.pending"
+                      :disabled="streaming"
                     />
                     I reviewed this change and its potential charges</label
                   >
@@ -1336,9 +1335,7 @@
                     <button
                       type="button"
                       class="html-deck-card-btn"
-                      :disabled="
-                        !change.acknowledged || change.pending || streaming
-                      "
+                      :disabled="!change.acknowledged || streaming"
                       @click="reviewChange(change, true)"
                     >
                       Approve change
@@ -1346,31 +1343,13 @@
                     <button
                       type="button"
                       class="html-deck-card-btn"
-                      :disabled="change.pending"
+                      :disabled="streaming"
                       @click="reviewChange(change, false)"
                     >
                       Reject
                     </button>
                   </div>
                 </template>
-                <button
-                  v-else-if="
-                    ['accepted', 'inProgress', 'unknown'].includes(
-                      change.status,
-                    )
-                  "
-                  type="button"
-                  class="html-deck-card-btn"
-                  :disabled="streaming"
-                  @click="
-                    sendQuestion(
-                      `Check operation:${change.operationId} with QueryAzure and report its actual state.`,
-                    )
-                  "
-                >
-                  Check operation
-                </button>
-                <p v-if="change.error" role="alert">{{ change.error }}</p>
               </details>
             </div>
 
@@ -3440,40 +3419,46 @@ const activeChanges = computed(
   () => sessionChanges.get(currentSessionId.value) || [],
 );
 function rememberChange(sessionId, change) {
-  if (!/^[a-f0-9]{32}$/.test(change?.operationId || "")) return;
+  if (!/^[\w.:-]{1,128}$/.test(change?.requestId || "")) return;
   const changes = sessionChanges.get(sessionId) || [];
-  if (changes.some((item) => item.operationId === change.operationId)) return;
+  if (changes.some((item) => item.requestId === change.requestId)) return;
   sessionChanges.set(sessionId, [
     ...changes,
-    { ...change, acknowledged: false, pending: false, error: "" },
+    { ...change, acknowledged: false },
   ]);
 }
-async function reviewChange(change, approve) {
-  change.pending = true;
-  change.error = "";
-  try {
-    const response = await fetch(
-      `/api/changes/${encodeURIComponent(change.operationId)}/${approve ? "approve" : "reject"}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          acknowledgeCostImpact: change.acknowledged === true,
-        }),
-      },
-    );
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok)
-      throw new Error(
-        result.error || `Change request failed (${response.status})`,
-      );
-    change.status = approve ? result.result?.status || "unknown" : "rejected";
-    if (approve && result.result?.nextAction)
-      change.costImpact = result.result.nextAction;
-  } catch (error) {
-    change.error = error.message || "Unable to review this change.";
-  } finally {
-    change.pending = false;
+const changeStatusLabels = {
+  awaitingApproval: "awaiting your approval",
+  approved: "approved",
+  rejected: "rejected",
+  superseded: "not applied (a new message was sent instead)",
+  expired: "no longer awaiting approval",
+};
+function changeStatusLabel(change) {
+  return changeStatusLabels[change.status] || change.status;
+}
+// The answer travels with the next chat turn: Agent Framework runs the held
+// call only when that turn approves it, and any other message rejects it.
+let pendingApproval = null;
+function reviewChange(change, approve) {
+  if (streaming.value || change.status !== "awaitingApproval") return;
+  if (approve && change.acknowledged !== true) return;
+  pendingApproval = { requestId: change.requestId, approved: approve };
+  sendQuestion(
+    approve
+      ? `Approved: ${change.method} ${change.target}`
+      : `Rejected: ${change.method} ${change.target}`,
+  );
+}
+function settleChanges(sessionId, approval) {
+  for (const change of sessionChanges.get(sessionId) || []) {
+    if (change.status !== "awaitingApproval") continue;
+    change.status =
+      approval?.requestId === change.requestId
+        ? approval.approved
+          ? "approved"
+          : "rejected"
+        : "superseded";
   }
 }
 const consentActionLabels = {
@@ -7609,6 +7594,8 @@ function copyScript(script) {
 }
 
 async function send() {
+  const approval = pendingApproval;
+  pendingApproval = null;
   if (!props.user || clearing.value) return;
   // Enter can arrive while an upload is still in flight even though the send
   // button is disabled. Hold that one send until every attachment has either
@@ -7798,6 +7785,7 @@ async function send() {
         prompt,
         model: selectedModel.value,
         sessionId: currentSessionId.value || undefined,
+        approval: approval || undefined,
         fileIds: [...attachments.value, ...consumedImages]
           .filter((attachment) => attachment.fileId && !attachment.error)
           .map((attachment) => attachment.fileId),
@@ -7809,6 +7797,9 @@ async function send() {
       const failure = await res.json().catch(() => null);
       throw new Error(failure?.error || `Request failed (${res.status})`);
     }
+    // The server answers every held change with this turn: the approved one
+    // runs, and any other message rejects what was still awaiting approval.
+    if (startSessionId) settleChanges(startSessionId, approval);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -8314,6 +8305,12 @@ async function send() {
             break;
 
           case "error":
+            if (data.code === "approval_stale" && approval) {
+              const stale = (sessionChanges.get(streamingId) || []).find(
+                (item) => item.requestId === approval.requestId,
+              );
+              if (stale) stale.status = "expired";
+            }
             failureForTurn = describeTurnFailure(
               data.message,
               data.code === "empty_result" ? "empty" : "error",

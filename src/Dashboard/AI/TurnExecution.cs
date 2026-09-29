@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using AzureFinOps.Dashboard.AI.Runtime;
+using AzureFinOps.Dashboard.AI.Tools;
+using AzureFinOps.Dashboard.Infrastructure;
 using AzureFinOps.Dashboard.Jobs;
 using AzureFinOps.Dashboard.Observability;
 
@@ -10,15 +12,14 @@ internal sealed class TurnExecution
     internal static readonly ConcurrentDictionary<string, TurnExecution> Active = new();
     private readonly object _sync = new();
     private readonly Dictionary<string, int> _answerLengths = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ToolStartEvent> _calls = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _cancellation = new();
-    private int _tools;
     private int _costQueriesBlocked;
     private int _answerCharacters;
     private int _toolsCompleted;
     private int _toolsFailed;
     private int _visibleOutputs;
     private int _emptyNoticeSent;
-    private bool _closed;
     private bool _handlerFinished;
     private bool _released;
     private IDisposable? _terminalSubscription;
@@ -83,34 +84,38 @@ internal sealed class TurnExecution
         Session = session;
         _terminalSubscription = session?.On(item =>
         {
-            if (item is AssistantMessageEvent message) RecordAnswer(message.Content, message.MessageId);
-            if (item is ToolCompleteEvent { Success: false, Error: { } error } && error.StartsWith(RejectedToolPrefix, StringComparison.Ordinal))
-                RecordRejectedTool();
-            if (item is TurnErrorEvent) Cancel("error");
+            switch (item)
+            {
+                case AssistantMessageEvent message: RecordAnswer(message.Content, message.MessageId); break;
+                case ToolStartEvent start: RecordToolStart(start); break;
+                case ToolCompleteEvent done: RecordToolResult(done); break;
+                case ApprovalRequestEvent: RecordVisibleOutput(); break;
+                case TurnErrorEvent: Cancel("error"); break;
+            }
             if (item is TurnIdleEvent or TurnErrorEvent) ConfirmTerminal();
             return Task.CompletedTask;
         });
     }
 
-    internal const string RejectedToolPrefix = "The tool call was rejected.";
+    internal void RecordToolStart(ToolStartEvent start) => _calls[start.CallId] = start;
 
-    // A call the model made that never reached a protected tool (unknown name or rejected
-    // before dispatch) still counts as a failed tool for outcome classification.
-    internal void RecordRejectedTool()
+    // Outcomes and scheduled-run validation read what each tool actually returned, never the model's account of it.
+    internal void RecordToolResult(ToolCompleteEvent done)
     {
-        RecordTool(false);
-        ToolEvidence.Enqueue(new("unknown", false, false, false, DateTimeOffset.UtcNow));
-    }
-
-    internal IDisposable AcquireTool(long owner)
-    {
-        lock (_sync)
-        {
-            if (owner != UserId) throw new UnauthorizedAccessException("Tool ownership could not be verified.");
-            if (_closed || _released) throw new OperationCanceledException("The originating turn is no longer accepting tools.", CancellationToken);
-            _tools++;
-        }
-        return new ToolLease(this);
+        _calls.TryGetValue(done.CallId, out var call);
+        var name = call?.ToolName ?? "unknown";
+        var text = done.Result ?? done.Error ?? "";
+        var evidence = EvidenceInspector.Inspect(text);
+        var success = done.Success && evidence.Success;
+        RecordTool(success);
+        if (EvidenceInspector.EvidenceTools.Contains(name) && !text.StartsWith(AzureQueryTools.CalculationPrefix, StringComparison.Ordinal))
+            ToolEvidence.Enqueue(new(name, success, evidence.Fresh, evidence.Partial, DateTimeOffset.UtcNow,
+                CostQueryCoordinator.RequestKey("", name, "", call?.Arguments ?? "")));
+        else if (name == "unknown" && !success) ToolEvidence.Enqueue(new(name, false, false, false, DateTimeOffset.UtcNow));
+        if (success && name is "RenderChart" or "RenderAdvancedChart" or "ReportMaturityScore") RecordVisibleOutput();
+        if ((text.StartsWith("__HTML_READY__:", StringComparison.Ordinal) || text.StartsWith("__SCRIPT_READY__:", StringComparison.Ordinal))
+            && text.Split(':').ElementAtOrDefault(1) is { Length: > 0 } identifier && ArtifactStore.Default.Find(identifier, UserId) is not null)
+            ArtifactIds.Enqueue(identifier);
     }
 
     internal void Cancel(string reason = "stopped")
@@ -118,7 +123,6 @@ internal sealed class TurnExecution
         lock (_sync)
         {
             if (_released) return;
-            _closed = true;
             CancellationReason ??= reason;
             _cancellation.Cancel();
         }
@@ -126,7 +130,7 @@ internal sealed class TurnExecution
 
     internal void ConfirmTerminal()
     {
-        lock (_sync) { _closed = true; Terminal.TrySetResult(); }
+        Terminal.TrySetResult();
         TryRelease();
     }
 
@@ -157,7 +161,7 @@ internal sealed class TurnExecution
             ConfirmTerminal();
         }
         if (!Terminal.Task.IsCompleted) await AbortAsync("interrupted");
-        lock (_sync) { _closed = true; _handlerFinished = true; }
+        lock (_sync) _handlerFinished = true;
         TryRelease();
         if (!Terminal.Task.IsCompleted) return false;
         try { await Completion.Task.WaitAsync(TimeSpan.FromSeconds(10)); return true; }
@@ -168,24 +172,13 @@ internal sealed class TurnExecution
     {
         lock (_sync)
         {
-            if (_released || !_handlerFinished || !Terminal.Task.IsCompleted || _tools != 0) return;
+            if (_released || !_handlerFinished || !Terminal.Task.IsCompleted) return;
             _released = true;
             if (Session is not null) TurnOutcomeStore.Default.Complete(this);
             Active.TryRemove(new KeyValuePair<string, TurnExecution>(SessionId, this));
             _terminalSubscription?.Dispose();
             _cancellation.Dispose();
             Completion.TrySetResult();
-        }
-    }
-
-    private sealed class ToolLease(TurnExecution turn) : IDisposable
-    {
-        private int _disposed;
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            lock (turn._sync) turn._tools--;
-            turn.TryRelease();
         }
     }
 }

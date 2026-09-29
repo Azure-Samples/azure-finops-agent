@@ -24,7 +24,7 @@ public sealed class ThinToolBoundaryTests
         using var json = JsonDocument.Parse(lines[2]);
         Assert.False(json.RootElement.GetProperty("reportServiceProvisioned").GetBoolean());
         Assert.False(json.RootElement.TryGetProperty("error", out _));
-        Assert.True(ProtectedTool.InspectEvidence(result).Success);
+        Assert.True(EvidenceInspector.Inspect(result).Success);
     }
 
     [Theory]
@@ -44,7 +44,7 @@ public sealed class ThinToolBoundaryTests
             ["queryJson"] = argument.RootElement.Clone(),
             ["limit"] = JsonDocument.Parse("5").RootElement.Clone(),
         };
-        ProtectedTool.CoerceScalarStrings(schema.RootElement, arguments);
+        ModelJson.CoerceScalarStrings(schema.RootElement, arguments);
         Assert.Equal("""{"mode":"query","path":"$.value[*]"}""", arguments["queryJson"]);
         Assert.Equal("5", arguments["limit"]);
     }
@@ -58,7 +58,7 @@ public sealed class ThinToolBoundaryTests
             ["recipient_name"] = "functions.QueryUploadedFile",
             ["parameters"] = envelope.RootElement.Clone(),
         };
-        ProtectedTool.UnwrapCallEnvelope("QueryUploadedFile", arguments);
+        ModelJson.UnwrapCallEnvelope("QueryUploadedFile", arguments);
         Assert.Equal(["queryJson", "resultId"], arguments.Keys.Order());
         Assert.Equal("abc", ((JsonElement)arguments["resultId"]!).GetString());
 
@@ -67,7 +67,7 @@ public sealed class ThinToolBoundaryTests
             ["recipient_name"] = JsonDocument.Parse("\"QueryUploadedFile\"").RootElement.Clone(),
             ["parameters"] = """{"resultId":"abc"}""",
         };
-        ProtectedTool.UnwrapCallEnvelope("QueryUploadedFile", stringified);
+        ModelJson.UnwrapCallEnvelope("QueryUploadedFile", stringified);
         Assert.Equal(["resultId"], stringified.Keys);
     }
 
@@ -82,7 +82,7 @@ public sealed class ThinToolBoundaryTests
             ["recipient_name"] = recipient,
             ["parameters"] = JsonDocument.Parse("""{"resultId":"abc"}""").RootElement.Clone(),
         };
-        ProtectedTool.UnwrapCallEnvelope("QueryUploadedFile", arguments);
+        ModelJson.UnwrapCallEnvelope("QueryUploadedFile", arguments);
         Assert.True(arguments.ContainsKey("recipient_name"));
 
         var extra = new Microsoft.Extensions.AI.AIFunctionArguments
@@ -91,7 +91,7 @@ public sealed class ThinToolBoundaryTests
             ["parameters"] = JsonDocument.Parse("""{"resultId":"abc"}""").RootElement.Clone(),
             ["resultId"] = "other",
         };
-        ProtectedTool.UnwrapCallEnvelope("QueryUploadedFile", extra);
+        ModelJson.UnwrapCallEnvelope("QueryUploadedFile", extra);
         Assert.Equal("other", extra["resultId"]);
         Assert.True(extra.ContainsKey("parameters"));
     }
