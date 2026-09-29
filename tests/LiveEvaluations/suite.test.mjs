@@ -329,6 +329,9 @@ test("both deployment workflows require every live evaluation", async () => {
     assert.match(live, /environment: ai-evaluation/);
     assert.match(live, /EVAL_CLIENT_ID EVAL_TENANT_ID EVAL_LOGIN_SUBSCRIPTION/);
     assert.match(live, /exit 1/);
+    // Every deployment stops at the first failed case; the gate already requires all of them.
+    assert.match(live, /EVAL_FAIL_FAST: "true"/);
+    assert.doesNotMatch(live, /inputs\.fail-fast/);
     for (const match of live.matchAll(/uses: (?!\.\/)([^\n]+)/g))
         assert.match(match[1], /@[a-f0-9]{40} # v\d/);
 });
