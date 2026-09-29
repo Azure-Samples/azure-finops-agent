@@ -156,6 +156,23 @@ public sealed class AgentConversation : IAsyncDisposable
     internal Task ToolCompletedAsync(string callId, bool success, string? result, string? error) =>
         _completedCalls.TryAdd(callId, 0) ? PublishAsync(new ToolCompleteEvent(callId, success, result, error)) : Task.CompletedTask;
 
+    // A hosted web_search item starts before the service fills in its action, so the query, opened page
+    // or in-page find is known only from the completed item carried by the result.
+#pragma warning disable OPENAI001, CS0618 // Experimental Responses item types; Query is the older single-query field.
+    internal static string WebSearchOutcome(object? completedItem) =>
+        (completedItem as OpenAI.Responses.WebSearchCallResponseItem)?.Action switch
+        {
+            OpenAI.Responses.WebSearchSearchAction { Queries.Count: > 0 } search =>
+                $"Web search completed: searched {JsonSerializer.Serialize(search.Queries)}.",
+            OpenAI.Responses.WebSearchSearchAction { Query.Length: > 0 } search =>
+                $"Web search completed: searched {JsonSerializer.Serialize(new[] { search.Query })}.",
+            OpenAI.Responses.WebSearchOpenPageAction open => $"Web search completed: opened page {open.Uri}.",
+            OpenAI.Responses.WebSearchFindInPageAction find =>
+                $"Web search completed: found {JsonSerializer.Serialize(find.Pattern)} in page {find.Uri}.",
+            _ => "Web search completed."
+        };
+#pragma warning restore OPENAI001, CS0618
+
     internal async Task PublishAsync(AgentEvent item)
     {
         await _publish.WaitAsync();
@@ -266,7 +283,7 @@ public sealed class AgentConversation : IAsyncDisposable
                                 search.Queries is { Count: > 0 } queries ? JsonSerializer.Serialize(new { queries }) : null);
                             break;
                         case WebSearchToolResultContent searchResult:
-                            await ToolCompletedAsync(searchResult.CallId, true, "Web search completed.", null);
+                            await ToolCompletedAsync(searchResult.CallId, true, WebSearchOutcome(searchResult.RawRepresentation), null);
                             break;
                         case UsageContent usage:
                             await PublishAsync(new UsageEvent(usage.Details.InputTokenCount, usage.Details.OutputTokenCount, update.FinishReason?.Value));

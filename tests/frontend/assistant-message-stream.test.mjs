@@ -38,8 +38,8 @@ test('a final message can attach an ID to preceding legacy deltas', () => {
 test('interleaved messages preserve order and exact identifiers', () => {
   const stream = createAssistantMessageStream();
   stream.append('MDE.', 'first');
-  stream.append('gpt-5.', 'second');
+  stream.append('gpt-6-', 'second');
   stream.append('Linux', 'first');
-  stream.complete('gpt-5.6-luna', 'second');
-  assert.equal(stream.text(), 'MDE.Linux\n\ngpt-5.6-luna');
+  stream.complete('gpt-6-sol', 'second');
+  assert.equal(stream.text(), 'MDE.Linux\n\ngpt-6-sol');
 });
