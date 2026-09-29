@@ -122,10 +122,14 @@ jobs:
             --container-image-name ${{ env.IMAGE }}:${{ steps.meta.outputs.sha }} \
             --container-registry-url https://${{ env.ACR_LOGIN }} \
             --output none
+          az webapp restart \
+            --name ${{ env.WEBAPP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --output none
 
       - name: Verify deployment
         run: |
-          for attempt in $(seq 1 24); do
+          for attempt in $(seq 1 90); do
             payload=$(curl --connect-timeout 10 --max-time 20 -sf "${VERIFY_URL%/}/api/version" || true)
             sha=$(jq -r '.sha // empty' <<<"$payload")
             build=$(jq -r '.build // empty' <<<"$payload")
@@ -134,8 +138,8 @@ jobs:
               echo "Verified production build $build ($sha) on main."
               exit 0
             fi
-            echo "Waiting for expected production build (attempt $attempt/24)..."
-            sleep 5
+            echo "Waiting for expected production build (attempt $attempt/90, currently ${sha:-none}/${build:-none})..."
+            sleep 10
           done
           echo "Expected production SHA/build/branch did not become active." >&2
           exit 1
