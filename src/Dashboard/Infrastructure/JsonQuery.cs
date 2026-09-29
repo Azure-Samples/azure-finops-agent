@@ -136,10 +136,11 @@ internal static partial class JsonQuery
                 // A missing member followed by '.' is reported as an unknown type name; parsing only up to that member names its host type.
                 if (NestedType().Match(message) is { Success: true } nested && Probe(config, text, nested.Groups["chain"].Value, error.Position, parameter) is { } probed)
                     message = probed;
-                if (attempt < MaxRepairs && Widen(shape, message, absent)) { Resolve(shape, "it", numeric); continue; }
+                if (attempt < MaxRepairs && Widen(shape, message, text, absent)) { Resolve(shape, "it", numeric); continue; }
                 // Math has no double? overloads; only then are double? arguments passed as double (a null one fails with a clear message).
                 if (attempt < MaxRepairs && config == Config && MathOverload().IsMatch(message)) { config = MathConfig; continue; }
                 if (MathOverload().IsMatch(message)) message += ". Numbers are double?; unwrap them for Math with ?? (Math.Max(0, (x.a ?? 0) - (x.b ?? 0)))";
+                if (DuplicateName().IsMatch(message)) message += "; name each projected member once (new { x.kind, propertiesKind = x.properties.kind })";
                 throw new ArgumentException(absent.Count == 0 ? message : $"{message}. {Absent(absent)}", error);
             }
         }
@@ -166,17 +167,35 @@ internal static partial class JsonQuery
 
     private static string Absent(List<string> members) => $"Not in this response, so read as null: {string.Join(", ", members)}.";
 
-    private static bool Widen(Node shape, string message, List<string> absent)
+    private static bool Widen(Node shape, string message, string text, List<string> absent)
     {
         var changed = false;
-        if (MissingMember().Match(message) is { Success: true } missing)
+        var missing = MissingMember().Match(message);
+        if (missing.Success && missing.Groups["type"].Value == "Char")
+        {
+            // A never-seen member the query iterates (b.properties.notifications.Select(p => p.Key)) is a list of unknown
+            // items, not a string of characters.
+            var iterated = Iterated().Matches(text).Select(match => match.Groups["m"].Value).ToHashSet(StringComparer.Ordinal);
+            foreach (var (node, path) in Walk(shape, "it").ToList())
+                if (node.Unknown && !node.ForceList && node.Properties.Count == 0 && Segment(path) is { } name && iterated.Contains(name))
+                {
+                    node.ForceList = true;
+                    changed = true;
+                }
+        }
+        else if (missing.Success)
         {
             var member = missing.Groups["member"].Value;
             var type = missing.Groups["type"].Value;
+            // A never-seen node gains the member only where the query reads it through that node (x.properties.kind widens
+            // properties, never a sibling x.kind the query compares as a string). List items and map values are read through
+            // lambda parameters, so they always qualify.
+            var reads = MemberReads().Matches(text).Select(match => match.Groups["host"].Value + "." + match.Groups["member"].Value).ToHashSet(StringComparer.Ordinal);
             foreach (var (node, path) in Walk(shape, "it").ToList())
             {
                 var observed = node.Members is not null && (node.Clr!.Name == type || node.Clr.FullName == type);
-                if (!observed && !(type == "String" && node.Clr == typeof(string) && node.Unknown) || node.Properties.ContainsKey(member)
+                var unknown = type == "String" && node.Clr == typeof(string) && node.Unknown && (Segment(path) is not { } name || reads.Contains(name + "." + member));
+                if (!observed && !unknown || node.Properties.ContainsKey(member)
                     || node.Members?.Values.Any(known => known.Identifier.Equals(member, StringComparison.OrdinalIgnoreCase)) == true)
                     continue;
                 node.Properties[member] = new Node();
@@ -200,16 +219,30 @@ internal static partial class JsonQuery
     {
         yield return (node, path);
         List<(Node Node, string Path)> children = node.IsMap ? node.Value is null ? [] : [(node.Value, path + "[key]")]
-            : node.Arrays > 0 && node.Element is not null ? [(node.Element, path + "[]")]
+            : (node.Arrays > 0 || node.ForceList) && node.Element is not null ? [(node.Element, path + "[]")]
             : node.Members?.Select(member => (node.Properties[member.Key], path + "." + member.Value.Identifier)).ToList() ?? [];
         foreach (var (child, childPath) in children)
             foreach (var item in Walk(child, childPath)) yield return item;
     }
 
+    // The member name a path ends with; null for a list item or map value.
+    private static string? Segment(string path) => path.EndsWith(']') ? null : path[(path.LastIndexOf('.') + 1)..];
+
     private static readonly HashSet<string> CollectionMethods = [.. typeof(Enumerable).GetMethods().Select(method => method.Name)];
 
     [System.Text.RegularExpressions.GeneratedRegex(@"No property or field '(?<member>\w+)' exists in type '(?<type>[^']+)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex MissingMember();
+
+    // host.member pairs the query reads (x.properties.kind yields x.properties and properties.kind).
+    [System.Text.RegularExpressions.GeneratedRegex(@"\b(?<host>\w+)(?=\s*\??\.\s*(?<member>\w+))", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex MemberReads();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^The identifier '\w+' was defined more than once", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex DuplicateName();
+
+    // Members the query enumerates with a lambda or a LINQ operator.
+    [System.Text.RegularExpressions.GeneratedRegex(@"\b(?<m>\w+)\s*\??\.\s*(?:Select|SelectMany|Where|Any|All|Count|Sum|Average|Min|Max|OrderBy|OrderByDescending|GroupBy|First|FirstOrDefault|Last|LastOrDefault|Take|Skip|Distinct|ToList|ToArray)\s*\(", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex Iterated();
 
     [System.Text.RegularExpressions.GeneratedRegex(@"No applicable (aggregate )?method '(?<method>\w+)' exists in type '(?<type>[^']+)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex NotCollection();
@@ -324,6 +357,7 @@ internal static partial class JsonQuery
         public Dictionary<string, (string Identifier, PropertyInfo Property)>? Members;
         public bool IsMap;
         public bool ForceMap;
+        public bool ForceList;
         public Node? Value;
 
         // Nothing but null was seen here (an empty list's items, a null or absent member), so a query may read it as anything.
@@ -379,6 +413,13 @@ internal static partial class JsonQuery
         node.Members = null;
         node.Value = null;
         var kinds = (node.Strings > 0 ? 1 : 0) + (node.Numbers > 0 ? 1 : 0) + (node.Bools > 0 ? 1 : 0) + (node.Objects > 0 ? 1 : 0) + (node.Arrays > 0 ? 1 : 0);
+        if (node.Unknown && node.ForceList)
+        {
+            node.Element ??= new Node();
+            Resolve(node.Element, name, numeric);
+            node.Clr = typeof(List<>).MakeGenericType(node.Element.Clr!);
+            return;
+        }
         if (node.Unknown && node.Properties.Count == 0) { node.Clr = numeric.Contains(name) ? typeof(double?) : typeof(string); return; }
         if (kinds > 1 || node.Strings > 0) { node.Clr = typeof(string); return; }
         if (node.Numbers > 0) { node.Clr = typeof(double?); return; }
@@ -708,10 +749,11 @@ internal static partial class JsonQuery
             return call.Type == typeof(string) ? Expression.Call(Expression.Constant(budget), nameof(Budget.Text), null, call) : call;
         }
 
-        // Every sequence handed to a method is enumerated through the step budget.
+        // Every sequence handed to a method is enumerated through the step budget. A string is a sequence only as a LINQ
+        // source; there a never-seen member (typed string, null at run time) enumerates as empty like a missing list.
         private Expression Watch(Expression argument, Type parameterType)
         {
-            if (argument.Type == typeof(string) || !typeof(IEnumerable).IsAssignableFrom(argument.Type)) return argument;
+            if (argument.Type == typeof(string) && parameterType != typeof(IEnumerable<char>) || !typeof(IEnumerable).IsAssignableFrom(argument.Type)) return argument;
             var element = argument.Type.IsGenericType && argument.Type.GetGenericTypeDefinition() == typeof(IEnumerable<>) ? argument.Type.GetGenericArguments()[0]
                 : argument.Type.GetInterfaces().FirstOrDefault(face => face.IsGenericType && face.GetGenericTypeDefinition() == typeof(IEnumerable<>))?.GetGenericArguments()[0];
             if (element is null) return argument;

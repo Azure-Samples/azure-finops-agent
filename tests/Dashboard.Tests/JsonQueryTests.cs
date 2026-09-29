@@ -263,8 +263,35 @@ public sealed class JsonQueryTests
     [InlineData("""{"totalRecords":0,"count":0,"data":[],"facets":[],"resultTruncated":"false"}""",
         "new { groups = it.data.Select(x => new { x.type, x.licenseChoice, x.resources }).ToList(), groupCount = it.data.Count(), resourcesTotal = it.data.Sum(x => x.resources ?? 0) }",
         """{"groups":[],"groupCount":0,"resourcesTotal":0}""")]
+    // Run 36629196068: the budgets query that had just succeeded on a subscription failed on resource groups without budgets,
+    // and a scheduled-actions query failed because reading x.properties.kind turned the sibling x.kind into an object.
+    [InlineData("""{"value":[]}""",
+        "new { count = value.Count(), budgets = value.Select(b => new { b.id, b.name, b.properties.amount, b.properties.timeGrain, b.properties.timePeriod, b.properties.currentSpend, b.properties.forecastSpend, notifications = b.properties.notifications.Select(p => new { p.Key, p.Value.enabled, p.Value.threshold, p.Value.thresholdType, p.Value.operator }) }) }",
+        """{"count":0,"budgets":[]}""")]
+    [InlineData("""{"value":[],"nextLink":null}""",
+        "new { count = value.Count(), insightAlerts = value.Count(x => x.kind == \"InsightAlert\" || x.properties.kind == \"InsightAlert\"), actions = value.Select(x => new { x.id, x.name, x.kind, alertKind = x.properties.kind, x.properties.status, x.properties.notification }) }",
+        """{"count":0,"insightAlerts":0,"actions":[]}""")]
+    [InlineData("""{"value":[],"nextLink":null}""",
+        "value.Where(x => x.kind == \"InsightAlert\" || x.properties.kind == \"InsightAlert\").Select(x => new { x.name, alertKind = x.properties.kind, total = x.properties.items.Sum(i => i.cost), x.properties.tags.Count })",
+        """[]""")]
+    // Same run: one query over the custom policy definition and set definition lists failed on the definition list, whose
+    // items never carry the set-only policyDefinitions member, and a built-in definition read failed counting that member.
+    [InlineData("""{"value":[{"id":"/d1","properties":{"displayName":"Block VM SKU Sizes","policyType":"Custom","policyRule":{"then":{"effect":"deny"}}}}]}""",
+        "new { count = value.Count(), definitions = value.Select(x => new { x.id, x.properties.displayName, x.properties.policyType, effect = x.properties.policyRule.then.effect, definitions = x.properties.policyDefinitions.Select(d => new { d.policyDefinitionId, d.parameters }) }) }",
+        """{"count":1,"definitions":[{"id":"/d1","displayName":"Block VM SKU Sizes","policyType":"Custom","effect":"deny","definitions":[]}]}""")]
+    [InlineData("""{"properties":{"displayName":"Resources should not be created in West Europe","policyType":"BuiltIn","policyRule":{"then":{"effect":"deny"}}},"id":"/providers/Microsoft.Authorization/policyDefinitions/p"}""",
+        "new { id, properties.displayName, properties.policyType, effect = properties.policyRule.then.effect, definitionCount = properties.policyDefinitions.Count() }",
+        """{"id":"/providers/Microsoft.Authorization/policyDefinitions/p","displayName":"Resources should not be created in West Europe","policyType":"BuiltIn","effect":"deny","definitionCount":0}""")]
     public void LiveEvaluationFirstCallQueriesRun(string body, string query, string expected) =>
         Assert.Equal(expected, Run(body, query));
+
+    [Fact]
+    public void ADuplicateProjectedNameIsReportedAsSuch()
+    {
+        var error = Assert.ThrowsAny<Exception>(() => Run("""{"value":[],"nextLink":null}""",
+            "value.Select(x => new { x.id, x.kind, x.properties.kind })"));
+        Assert.StartsWith("The identifier 'kind' was defined more than once; name each projected member once", error.Message);
+    }
 
     [Fact]
     public void FailuresAreReturnedVerbatim()

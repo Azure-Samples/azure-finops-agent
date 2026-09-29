@@ -57,6 +57,9 @@ public sealed class ToolGuidanceTests
     [InlineData("QueryAzure", null, "not tenant-specific")]
     [InlineData("QueryAzure", "query", "LINQ")]
     [InlineData("QueryAzure", "url", "one per line")]
+    [InlineData("ReportMaturityScore", null, "/providers/Microsoft.CostManagement/exports?api-version=2026-08-01")]
+    [InlineData("ReportMaturityScore", null, "/providers/Microsoft.CostManagement/scheduledActions?api-version=2026-08-01")]
+    [InlineData("ReportMaturityScore", null, "with no provider, documentation or spec lookup first")]
     [InlineData("ApplyAzureChange", null, "only after they approve")]
     [InlineData("ApplyAzureChange", null, "GenerateScript")]
     [InlineData("QueryUploadedFile", "paramsJson", "filters")]
@@ -68,6 +71,7 @@ public sealed class ToolGuidanceTests
         var tools = toolName switch
         {
             "QueryAzure" or "ApplyAzureChange" => new AzureQueryTools(tokens).Create(),
+            "ReportMaturityScore" => new ScoreTools(tokens).Create(),
             "QueryUploadedFile" => new UploadedFileTools(tokens).Create(),
             "GetSavingsLedger" => new SavingsLedgerTools(tokens).Create(),
             _ => throw new InvalidOperationException("Unexpected query tool.")
