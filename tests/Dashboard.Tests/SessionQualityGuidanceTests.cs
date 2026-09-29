@@ -43,6 +43,8 @@ public sealed class SessionQualityGuidanceTests
         var withSearch = AgentSessionFactory.Instructions(webSearch: true);
         Assert.StartsWith(Prompt, withSearch);
         Assert.Contains("never web-search a question those answer", withSearch);
+        Assert.Contains("Never web-search to confirm, cross-check or add background to evidence QueryAzure already returned", withSearch);
+        Assert.Contains("an answer that cites no web source should have made no search", withSearch);
         Assert.Contains("source URL", withSearch);
         Assert.Equal(Prompt, AgentSessionFactory.Instructions(webSearch: false));
     }

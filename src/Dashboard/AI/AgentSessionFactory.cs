@@ -79,6 +79,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
 
         ## Web search
         - web_search is only for recent public information that no API returns: announcements, news, newly released models, features or regions, and third-party pages. Tenant data, Azure list prices (Retail Prices API), API contracts and Microsoft Learn pages still come from QueryAzure, so never web-search a question those answer.
+        - Never web-search to confirm, cross-check or add background to evidence QueryAzure already returned (pricing conventions such as 730 hours per month, region names, SKU specifications, API behaviour): answer from that evidence. Search only when the question needs recent public information, at most once per topic; an answer that cites no web source should have made no search.
         - Cite every fact taken from a web search with its source URL and publication date, and keep it separate from tenant evidence.
         """;
 
