@@ -104,7 +104,6 @@ public sealed class JsonQueryTests
     [InlineData("Environment.GetEnvironmentVariable(\"PATH\")")]
     [InlineData("System.IO.File.ReadAllText(\"/etc/passwd\")")]
     [InlineData("Activator.CreateInstance(\"System.Net.WebClient\")")]
-    [InlineData("AppDomain.CurrentDomain")]
     [InlineData("typeof(string)")]
     [InlineData("string.Format(\"{0}\", 1)")]
     public void OnlyDataMembersAreCallable(string query) =>
@@ -184,15 +183,88 @@ public sealed class JsonQueryTests
     [Fact]
     public void AQueryErrorReturnsTheSchemaToCorrectAgainst()
     {
-        var cropped = AzureQueryTools.Crop("HTTP 200 OK\n" + Vms, "value.Select(x => x.missing)", null, CancellationToken.None);
+        var cropped = AzureQueryTools.Crop("HTTP 200 OK\n" + Vms, "value.Select(x => x.Name)", null, CancellationToken.None);
 
         Assert.StartsWith("Error: the query failed: ", cropped);
-        Assert.Contains("missing", cropped);
+        Assert.Contains("'Name'", cropped);
         Assert.Contains("Correct the query against this schema and repeat the request.", cropped);
         Assert.Contains("\nSchema:\nit: ", cropped);
         Assert.DoesNotContain("AnonymousType", cropped);
         Assert.False(EvidenceInspector.Inspect(cropped).Success);
     }
+
+    // Each case is a first-call query that failed in the live evaluations against a response of this shape.
+    [Fact]
+    public void ReadsAreAsForgivingAsJson()
+    {
+        // An empty list has no items to type, so any member read of an item parses.
+        Assert.Equal("""{"total":0,"exports":[]}""",
+            Run("""{"value":[]}""", "new { total = value.Count(), exports = value.Select(e => new { e.name, e.properties.schedule.status }).ToList() }"));
+        Assert.Equal("[]", Run("""{"totalRecords":0,"count":0,"data":[],"facets":[],"resultTruncated":"false"}""",
+            "data.Select(r => new { r.keyName, r.taggedResources }).OrderByDescending(r => r.taggedResources)"));
+
+        // Reading through a null or absent member is null, not an exception; the result names what was absent.
+        const string definitions = """{"value":[{"id":"a","properties":{"displayName":"Require a tag"}},{"id":"b","properties":{"policyType":"Custom"}}]}""";
+        Assert.Equal("1", Run(definitions, "value.Where(d => d.properties.displayName.ToLower().Contains(\"tag\") || d.id.ToLower().Contains(\"sku\")).Count()"));
+        var (json, note) = JsonQuery.Evaluate(JsonQuery.Parse(definitions), "value.Select(d => new { d.id, d.properties.policyRule.then.effect })", 48 * 1024, CancellationToken.None);
+        Assert.Equal("""[{"id":"a","effect":null},{"id":"b","effect":null}]""", json);
+        Assert.Equal("Not in this response, so read as null: it.value[].properties.policyRule.", note);
+        Assert.Equal("""["prod",null,null]""", Run(Vms, "value.Select(x => x.tags[\"env\"])"));
+
+        // An unknown name is an absent data member, never a type: nothing outside the response is reachable.
+        (json, note) = JsonQuery.Evaluate(JsonQuery.Parse(Vms), "AppDomain.CurrentDomain", 48 * 1024, CancellationToken.None);
+        Assert.Equal("null", json);
+        Assert.Equal("Not in this response, so read as null: it.AppDomain.", note);
+
+        // A keyed object read as a collection is a dictionary of its values.
+        const string budgets = """{"value":[{"name":"b","properties":{"notifications":{"Actual_GreaterThan_80_Percent":{"enabled":true,"operator":"GreaterThan","threshold":80},"Forecasted_GreaterThan_100_Percent":{"enabled":false,"threshold":100}}}}]}""";
+        Assert.Equal("""[{"name":"b","count":2,"notifications":[{"Key":"Actual_GreaterThan_80_Percent","enabled":true,"operator":"GreaterThan","threshold":80},{"Key":"Forecasted_GreaterThan_100_Percent","enabled":false,"operator":null,"threshold":100}]}]""",
+            Run(budgets, "value.Select(b => new { b.name, count = b.properties.notifications.Count(), notifications = b.properties.notifications.Select(n => new { n.Key, n.Value.enabled, n.Value.operator, n.Value.threshold }).ToList() })"));
+
+        // An object over the cap keeps its fields and trims its largest list.
+        var large = JsonSerializer.Serialize(new { count = 500, value = Enumerable.Range(0, 500).Select(index => new { name = "policy-" + index, rule = new string('x', 200) }) });
+        (json, note) = JsonQuery.Evaluate(JsonQuery.Parse(large), "new { count, value }", 8 * 1024, CancellationToken.None);
+        Assert.True(json.Length <= 8 * 1024);
+        Assert.StartsWith("{\"count\":500,\"value\":[{\"name\":\"policy-0\"", json);
+        Assert.Matches(@"^Result truncated to the 8 KB cap: result\.value shows \d+ of 500 items\.", note);
+
+        // A case mistake is still an error; Math accepts a double? and names the fix only when a null reaches it.
+        Assert.Contains("'Name'", Assert.ThrowsAny<Exception>(() => Run(Vms, "value.Select(x => x.Name)")).Message);
+        Assert.Equal("[12.5,7.25]", Run(Vms, "value.Where(x => x.cost != null).Select(x => Math.Max(0, x.cost))"));
+        Assert.Contains("?? (Math.Max(0, x.a ?? 0))", Assert.ThrowsAny<Exception>(() => Run(Vms, "value.Select(x => Math.Max(0, x.cost))")).Message);
+    }
+
+    // The exact first-call queries that failed in live evaluation run 36541681695, against bodies of the logged shapes.
+    [Theory]
+    [InlineData("""{"totalRecords":0,"count":0,"data":[],"facets":[],"resultTruncated":"false"}""",
+        "new { keys = data.Select(r => new { r.keyName, r.taggedResources, r.placeholders }).ToList(), variants = data.Count(), placeholderTotal = data.Sum(r => r.placeholders ?? 0) }",
+        """{"keys":[],"variants":0,"placeholderTotal":0}""")]
+    [InlineData("""{"value":[{"id":"/b","name":"FDPOAzureBudget","properties":{"amount":100,"timeGrain":"Monthly","timePeriod":{"startDate":"2026-01-01"},"currentSpend":{"amount":12},"notifications":{"Actual_GreaterThan_80_Percent":{"enabled":true,"operator":"GreaterThan","threshold":80,"thresholdType":"Actual"}}}}]}""",
+        "new { n = value.Count(), budgets = value.Select(b => new { b.name, b.id, b.properties.amount, b.properties.timeGrain, b.properties.timePeriod, b.properties.currentSpend, b.properties.forecastSpend, notificationCount = b.properties.notifications.Count(), notifications = b.properties.notifications.Select(n => new { n.Key, n.Value.enabled, n.Value.operator, n.Value.threshold, n.Value.thresholdType }).ToList() }).ToList() }",
+        """{"n":1,"budgets":[{"name":"FDPOAzureBudget","id":"/b","amount":100,"timeGrain":"Monthly","timePeriod":{"startDate":"2026-01-01"},"currentSpend":{"amount":12},"forecastSpend":null,"notificationCount":1,"notifications":[{"Key":"Actual_GreaterThan_80_Percent","enabled":true,"operator":"GreaterThan","threshold":80,"thresholdType":"Actual"}]}]}""")]
+    [InlineData("""{"value":[]}""",
+        "new { total = value.Count(), exports = value.Select(e => new { e.name, e.properties.schedule.status, e.properties.schedule.recurrence }).ToList() }",
+        """{"total":0,"exports":[]}""")]
+    [InlineData("""{"value":[],"nextLink":null}""",
+        "new { total = value.Count(), byKind = value.GroupBy(a => a.kind).Select(g => new { kind = g.Key, n = g.Count() }).ToList(), actions = value.Select(a => new { a.name, a.kind, a.properties.status }).ToList() }",
+        """{"total":0,"byKind":[],"actions":[]}""")]
+    [InlineData("""{"value":[{"id":"/s","properties":{"displayName":"Set","policyType":"Custom","policyDefinitions":[{"policyDefinitionId":"/d"}]}}]}""",
+        "new { total = value.Count(), definitions = value.Select(d => new { d.id, d.properties.displayName, d.properties.policyType, d.properties.policyRule, d.properties.policyDefinitions }).ToList() }",
+        """{"total":1,"definitions":[{"id":"/s","displayName":"Set","policyType":"Custom","policyRule":null,"policyDefinitions":[{"policyDefinitionId":"/d"}]}]}""")]
+    [InlineData("""{"value":[{"id":"/d1","properties":{"displayName":"Require a cost tag","policyRule":{"then":{"effect":"deny"}}}},{"id":"/d2","properties":{"policyType":"Custom"}}]}""",
+        "new { total = value.Count(), finops = value.Where(d => d.properties.displayName.ToLower().Contains(\"tag\") || d.properties.displayName.ToLower().Contains(\"cost\") || d.properties.displayName.ToLower().Contains(\"budget\") || d.properties.displayName.ToLower().Contains(\"sku\")).Select(d => new { d.id, d.properties.displayName, d.properties.policyRule.then.effect }).ToList() }",
+        """{"total":2,"finops":[{"id":"/d1","displayName":"Require a cost tag","effect":"deny"}]}""")]
+    [InlineData("""{"value":[{"skuId":"s1","skuPartNumber":"E5","consumedUnits":2,"capabilityStatus":"Enabled","appliesTo":"User","prepaidUnits":{"enabled":50,"suspended":0,"warning":0}}]}""",
+        "new { totalSkus = it.value.Count(), skus = it.value.Select(x => new { x.skuId, x.skuPartNumber, x.capabilityStatus, x.appliesTo, enabled = x.prepaidUnits.enabled, suspended = x.prepaidUnits.suspended, warning = x.prepaidUnits.warning, assigned = x.consumedUnits, unassigned = Math.Max(0, x.prepaidUnits.enabled - x.consumedUnits) }).OrderBy(x => x.skuPartNumber).ToList(), enabledTotal = it.value.Sum(x => x.prepaidUnits.enabled), assignedTotal = it.value.Sum(x => x.consumedUnits), unassignedTotal = it.value.Sum(x => Math.Max(0, x.prepaidUnits.enabled - x.consumedUnits)) }",
+        """{"totalSkus":1,"skus":[{"skuId":"s1","skuPartNumber":"E5","capabilityStatus":"Enabled","appliesTo":"User","enabled":50,"suspended":0,"warning":0,"assigned":2,"unassigned":48}],"enabledTotal":50,"assignedTotal":2,"unassignedTotal":48}""")]
+    [InlineData("""{"value":[]}""",
+        "new { visibleAccounts = it.value.Count(), accounts = it.value.Select(x => new { x.id, x.name, x.properties.displayName, x.properties.agreementType }).ToList() }",
+        """{"visibleAccounts":0,"accounts":[]}""")]
+    [InlineData("""{"totalRecords":0,"count":0,"data":[],"facets":[],"resultTruncated":"false"}""",
+        "new { groups = it.data.Select(x => new { x.type, x.licenseChoice, x.resources }).ToList(), groupCount = it.data.Count(), resourcesTotal = it.data.Sum(x => x.resources ?? 0) }",
+        """{"groups":[],"groupCount":0,"resourcesTotal":0}""")]
+    public void LiveEvaluationFirstCallQueriesRun(string body, string query, string expected) =>
+        Assert.Equal(expected, Run(body, query));
 
     [Fact]
     public void FailuresAreReturnedVerbatim()

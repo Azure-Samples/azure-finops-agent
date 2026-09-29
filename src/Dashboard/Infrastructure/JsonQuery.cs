@@ -2,6 +2,7 @@ using System.Collections;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq.Dynamic.Core;
+using System.Linq.Dynamic.Core.Exceptions;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
@@ -15,23 +16,42 @@ namespace AzureFinOps.Dashboard.Infrastructure;
 /// schema and sends a Dynamic LINQ expression (C# lambda syntax) that returns only the data it needs. Nothing is
 /// stored. Only LINQ, string, math and date members are callable, every enumeration is metered, and the output is capped.
 /// </summary>
-internal static class JsonQuery
+internal static partial class JsonQuery
 {
     internal const int MaxExpressionLength = 4000;
     private const long MaxSteps = 20_000_000;
     private const int MaxDepth = 16;
     private const int MaxMapKeys = 64;
+    private const int MaxRepairs = 16;
     private const int MaxText = 65_536;
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(10);
-    private static readonly ParsingConfig Config = new()
+    private static readonly ParsingConfig Config = Settings();
+    private static readonly ParsingConfig MathConfig = Settings(nullableMath: true);
+
+    private static ParsingConfig Settings(bool nullableMath = false)
     {
-        AllowNewToEvaluateAnyType = false,
-        AllowEqualsAndToStringMethodsOnObject = true,
-        IsCaseSensitive = true,
-        DisableMemberAccessToIndexAccessorFallback = true,
-        NumberParseCulture = CultureInfo.InvariantCulture,
-        PrioritizePropertyOrFieldOverTheType = true,
-    };
+        var config = new ParsingConfig
+        {
+            AllowNewToEvaluateAnyType = false,
+            AllowEqualsAndToStringMethodsOnObject = true,
+            IsCaseSensitive = true,
+            DisableMemberAccessToIndexAccessorFallback = true,
+            NumberParseCulture = CultureInfo.InvariantCulture,
+            PrioritizePropertyOrFieldOverTheType = true,
+        };
+        if (nullableMath) config.ExpressionPromoter = new NullableArguments(config);
+        return config;
+    }
+
+    // Lets a double? argument fill a double parameter. Used only after a Math call rejected one, because it would also turn
+    // lifted double? arithmetic elsewhere in the query into plain double arithmetic.
+    private sealed class NullableArguments(ParsingConfig config) : System.Linq.Dynamic.Core.Parser.ExpressionPromoter(config)
+    {
+        public override Expression? Promote(Expression source, Type type, bool exact, bool convertExpression) =>
+            base.Promote(source, type, exact, convertExpression)
+            ?? (exact || !type.IsValueType || Nullable.GetUnderlyingType(type) is not null || Nullable.GetUnderlyingType(source.Type) is not { } underlying ? null
+                : base.Promote(Expression.Convert(source, underlying), type, exact, convertExpression));
+    }
 
     /// <summary>A response body as a JSON tree: JSON as is, with column/row tables as objects; any other text as its lines.</summary>
     internal static JsonNode Parse(string body)
@@ -58,29 +78,152 @@ internal static class JsonQuery
     internal static (string Json, string? Note) Evaluate(JsonNode root, string expression, int maxCharacters, CancellationToken cancellationToken)
     {
         if (expression.Length > MaxExpressionLength) throw new ArgumentException($"query is longer than {MaxExpressionLength} characters.");
-        var shape = Infer(root);
-        var instance = Materialize(root, shape);
-        var parameter = Expression.Parameter(shape.Clr!, "it");
+        var text = Projections(expression);
+        var numeric = NumericMembers().Matches(text).Select(match => match.Groups["m"].Value).ToHashSet(StringComparer.Ordinal);
+        var shape = Infer(root, numeric);
         var culture = CultureInfo.CurrentCulture;
         CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         try
         {
-            var lambda = DynamicExpressionParser.ParseLambda(Config, [parameter], null, Projections(expression));
+            var (lambda, parameter, absent) = ParseRepaired(shape, text, numeric);
+            var instance = Materialize(root, shape);
             var budget = new Budget(cancellationToken);
-            var body = new Hoist(parameter).Visit(new Guard(budget).Visit(lambda.Body))!;
+            var body = new Hoist(parameter).Visit(new NullSafe().Visit(new Guard(budget).Visit(lambda.Body)))!;
             var compiled = Expression.Lambda(Expression.Convert(body, typeof(object)), parameter).Compile();
-            return Serialize(compiled.DynamicInvoke(instance), maxCharacters, budget);
+            var (json, note) = Serialize(compiled.DynamicInvoke(instance), maxCharacters, budget);
+            return absent.Count == 0 ? (json, note) : (json, (note is null ? "" : note + "\n") + Absent(absent));
         }
         catch (TargetInvocationException error) when (error.InnerException is not null)
         {
+            if (NullMath(error.InnerException)) throw NullMathError(error.InnerException);
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(error.InnerException);
             throw;
+        }
+        catch (InvalidOperationException error) when (NullMath(error))
+        {
+            throw NullMathError(error);
         }
         finally
         {
             CultureInfo.CurrentCulture = culture;
         }
     }
+
+    // A double? unwrapped for Math (MathConfig) was null in the data.
+    private static bool NullMath(Exception error) =>
+        error is InvalidOperationException && error.Message.StartsWith("Nullable object must have a value", StringComparison.Ordinal);
+
+    private static InvalidOperationException NullMathError(Exception error) =>
+        new("A null number was passed to Math; unwrap it with ?? (Math.Max(0, x.a ?? 0)).", error);
+
+    // The shape is inferred from this one response, which omits null members and has no items in an empty list. When the
+    // query reads a member this response lacks, or reads a keyed object as a collection, the shape widens to match (the
+    // member reads as null) and the query parses again; the result names the absent members so a typo is not silent.
+    private static (LambdaExpression Lambda, ParameterExpression Parameter, List<string> Absent) ParseRepaired(Node shape, string text, IReadOnlySet<string> numeric)
+    {
+        var absent = new List<string>();
+        var config = Config;
+        for (var attempt = 0; ; attempt++)
+        {
+            var parameter = Expression.Parameter(shape.Clr!, "it");
+            try
+            {
+                return (DynamicExpressionParser.ParseLambda(config, [parameter], null, text), parameter, absent);
+            }
+            catch (ParseException error)
+            {
+                var message = error.Message;
+                // A missing member followed by '.' is reported as an unknown type name; parsing only up to that member names its host type.
+                if (NestedType().Match(message) is { Success: true } nested && Probe(config, text, nested.Groups["chain"].Value, error.Position, parameter) is { } probed)
+                    message = probed;
+                if (attempt < MaxRepairs && Widen(shape, message, absent)) { Resolve(shape, "it", numeric); continue; }
+                // Math has no double? overloads; only then are double? arguments passed as double (a null one fails with a clear message).
+                if (attempt < MaxRepairs && config == Config && MathOverload().IsMatch(message)) { config = MathConfig; continue; }
+                if (MathOverload().IsMatch(message)) message += ". Numbers are double?; unwrap them for Math with ?? (Math.Max(0, (x.a ?? 0) - (x.b ?? 0)))";
+                throw new ArgumentException(absent.Count == 0 ? message : $"{message}. {Absent(absent)}", error);
+            }
+        }
+    }
+
+    private static string? Probe(ParsingConfig config, string text, string chain, int position, ParameterExpression parameter)
+    {
+        var start = text[..Math.Clamp(position, 0, text.Length)].LastIndexOf(chain, StringComparison.Ordinal);
+        if (start < 0) return null;
+        try
+        {
+            DynamicExpressionParser.ParseLambda(config, [parameter], null, text[..(start + chain.Split('.')[0].Length)]);
+            return null;
+        }
+        catch (ParseException error) when (MissingMember().IsMatch(error.Message))
+        {
+            return error.Message;
+        }
+        catch (ParseException)
+        {
+            return null;
+        }
+    }
+
+    private static string Absent(List<string> members) => $"Not in this response, so read as null: {string.Join(", ", members)}.";
+
+    private static bool Widen(Node shape, string message, List<string> absent)
+    {
+        var changed = false;
+        if (MissingMember().Match(message) is { Success: true } missing)
+        {
+            var member = missing.Groups["member"].Value;
+            var type = missing.Groups["type"].Value;
+            foreach (var (node, path) in Walk(shape, "it").ToList())
+            {
+                var observed = node.Members is not null && (node.Clr!.Name == type || node.Clr.FullName == type);
+                if (!observed && !(type == "String" && node.Clr == typeof(string) && node.Unknown) || node.Properties.ContainsKey(member)
+                    || node.Members?.Values.Any(known => known.Identifier.Equals(member, StringComparison.OrdinalIgnoreCase)) == true)
+                    continue;
+                node.Properties[member] = new Node();
+                if (!node.Unknown) absent.Add($"{path}.{member}");
+                changed = true;
+            }
+        }
+        else if (NotCollection().Match(message) is { Success: true } method && CollectionMethods.Contains(method.Groups["method"].Value))
+        {
+            foreach (var (node, _) in Walk(shape, "it"))
+                if (node.Members is not null && (node.Clr!.Name == method.Groups["type"].Value || node.Clr.FullName == method.Groups["type"].Value) && !node.ForceMap)
+                {
+                    node.ForceMap = true;
+                    changed = true;
+                }
+        }
+        return changed;
+    }
+
+    private static IEnumerable<(Node Node, string Path)> Walk(Node node, string path)
+    {
+        yield return (node, path);
+        List<(Node Node, string Path)> children = node.IsMap ? node.Value is null ? [] : [(node.Value, path + "[key]")]
+            : node.Arrays > 0 && node.Element is not null ? [(node.Element, path + "[]")]
+            : node.Members?.Select(member => (node.Properties[member.Key], path + "." + member.Value.Identifier)).ToList() ?? [];
+        foreach (var (child, childPath) in children)
+            foreach (var item in Walk(child, childPath)) yield return item;
+    }
+
+    private static readonly HashSet<string> CollectionMethods = [.. typeof(Enumerable).GetMethods().Select(method => method.Name)];
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"No property or field '(?<member>\w+)' exists in type '(?<type>[^']+)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex MissingMember();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"No applicable (aggregate )?method '(?<method>\w+)' exists in type '(?<type>[^']+)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex NotCollection();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"No applicable method '\w+' exists in type 'Math'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex MathOverload();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^Type '(?<chain>\w+(\.\w+)*)' not found", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex NestedType();
+
+    // Member names the query uses as numbers: x.m ?? 0, x.m * 2, x.m > 5, 1 - x.m, Sum(r => r.m), Math.Round(x.m, ...).
+    // A member never seen with a value (in an empty list, or null or absent throughout) takes double? when used this way.
+    [System.Text.RegularExpressions.GeneratedRegex(@"\.(?<m>\w+)\s*(?:\?\?\s*[-+]?\d|[*/%-]|<=?|>=?|[!=]=\s*[-+]?\d)|(?:[*/%-]|<=?|(?<![=-])>=?)\s*\w+(?:\.\w+)*\.(?<m>\w+)\b(?!\s*\()|(?:Sum|Average|Min|Max)\(\s*\w+\s*=>\s*\w+(?:\.\w+)*\.(?<m>\w+)\s*\)|Math\.\w+\(\s*\(?\s*\w+(?:\.\w+)*\.(?<m>\w+)", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex NumericMembers();
 
     /// <summary>Dynamic LINQ spells projections <c>new (expr as name)</c>; C#'s <c>new { name = expr }</c> is accepted too.</summary>
     internal static string Projections(string expression)
@@ -180,13 +323,18 @@ internal static class JsonQuery
         public Type? Clr;
         public Dictionary<string, (string Identifier, PropertyInfo Property)>? Members;
         public bool IsMap;
+        public bool ForceMap;
+        public Node? Value;
+
+        // Nothing but null was seen here (an empty list's items, a null or absent member), so a query may read it as anything.
+        public bool Unknown => Strings + Numbers + Bools + Objects + Arrays == 0;
     }
 
-    private static Node Infer(JsonNode root)
+    private static Node Infer(JsonNode root, IReadOnlySet<string>? numeric = null)
     {
         var shape = new Node();
         Observe(root, shape, 0);
-        Resolve(shape, "it");
+        Resolve(shape, "it", numeric ?? new HashSet<string>());
         return shape;
     }
 
@@ -225,32 +373,39 @@ internal static class JsonQuery
         }
     }
 
-    private static void Resolve(Node node, string name)
+    private static void Resolve(Node node, string name, IReadOnlySet<string> numeric)
     {
+        node.IsMap = false;
+        node.Members = null;
+        node.Value = null;
         var kinds = (node.Strings > 0 ? 1 : 0) + (node.Numbers > 0 ? 1 : 0) + (node.Bools > 0 ? 1 : 0) + (node.Objects > 0 ? 1 : 0) + (node.Arrays > 0 ? 1 : 0);
-        if (kinds != 1 || node.Strings > 0) { node.Clr = typeof(string); return; }
+        if (node.Unknown && node.Properties.Count == 0) { node.Clr = numeric.Contains(name) ? typeof(double?) : typeof(string); return; }
+        if (kinds > 1 || node.Strings > 0) { node.Clr = typeof(string); return; }
         if (node.Numbers > 0) { node.Clr = typeof(double?); return; }
         if (node.Bools > 0) { node.Clr = typeof(bool?); return; }
         if (node.Arrays > 0)
         {
-            if (node.Element is null || node.Element.Strings + node.Element.Numbers + node.Element.Bools + node.Element.Objects + node.Element.Arrays + node.Element.Nulls == 0)
-                node.Element = new Node { Strings = 1 };
-            Resolve(node.Element, name);
+            node.Element ??= new Node();
+            Resolve(node.Element, name, numeric);
             node.Clr = typeof(List<>).MakeGenericType(node.Element.Clr!);
             return;
         }
-        // Objects with open-ended keys (tags, or more keys than a real type has) are maps of text.
-        if (name is "tags" || node.Properties.Count is 0 or > MaxMapKeys)
+        // Objects with open-ended keys (tags, more keys than a real type has, or read as a collection) are maps of their merged values.
+        if (node.ForceMap || name is "tags" || node.Properties.Count is 0 or > MaxMapKeys)
         {
+            var value = new Node();
+            foreach (var child in node.Properties.Values) Merge(value, child);
+            Resolve(value, name, numeric);
             node.IsMap = true;
-            node.Clr = typeof(Dictionary<string, string?>);
+            node.Value = value;
+            node.Clr = typeof(Dictionary<,>).MakeGenericType(typeof(string), value.Clr!);
             return;
         }
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var properties = new List<(string Json, string Identifier, Node Node)>();
         foreach (var (json, child) in node.Properties)
         {
-            Resolve(child, json);
+            Resolve(child, json, numeric);
             var identifier = Identifier(json);
             while (!used.Add(identifier)) identifier += "_";
             properties.Add((json, identifier, child));
@@ -258,6 +413,27 @@ internal static class JsonQuery
         node.Clr = properties.Count == 0 ? typeof(DynamicClass)
             : DynamicClassFactory.CreateType([.. properties.Select(property => new DynamicProperty(property.Identifier, property.Node.Clr!))], createParameterCtor: false);
         node.Members = properties.ToDictionary(property => property.Json, property => (property.Identifier, node.Clr.GetProperty(property.Identifier)!), StringComparer.Ordinal);
+    }
+
+    private static void Merge(Node into, Node from)
+    {
+        into.Strings += from.Strings;
+        into.Numbers += from.Numbers;
+        into.Bools += from.Bools;
+        into.Objects += from.Objects;
+        into.Arrays += from.Arrays;
+        into.Nulls += from.Nulls;
+        into.Items += from.Items;
+        into.MaxItems = Math.Max(into.MaxItems, from.MaxItems);
+        into.Min = Math.Min(into.Min, from.Min);
+        into.Max = Math.Max(into.Max, from.Max);
+        foreach (var text in from.Distinct) { if (into.Distinct.Count <= 12) into.Distinct.Add(text); }
+        foreach (var (name, child) in from.Properties)
+        {
+            if (!into.Properties.TryGetValue(name, out var property)) into.Properties[name] = property = new Node();
+            Merge(property, child);
+        }
+        if (from.Element is not null) Merge(into.Element ??= new Node(), from.Element);
     }
 
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase) { "it", "parent", "root", "new", "iif", "np", "true", "false", "null", "and", "or", "not", "as", "is", "in", "mod", "eq", "ne", "lt", "le", "gt", "ge" };
@@ -285,7 +461,11 @@ internal static class JsonQuery
         }
         if (value is not JsonObject item) return null;
         if (node.IsMap)
-            return item.ToDictionary(pair => pair.Key, pair => pair.Value is JsonValue text && text.GetValueKind() == JsonValueKind.String ? text.GetValue<string>() : pair.Value?.ToJsonString());
+        {
+            var map = (IDictionary)Activator.CreateInstance(node.Clr!)!;
+            foreach (var (name, child) in item) map[name] = Materialize(child, node.Value!);
+            return map;
+        }
         var instance = Activator.CreateInstance(node.Clr!)!;
         foreach (var (name, child) in item)
             if (node.Members!.TryGetValue(name, out var member)) member.Property.SetValue(instance, Materialize(child, node.Properties[name]));
@@ -325,6 +505,7 @@ internal static class JsonQuery
         lines.Add(line);
         if (lines.Count >= maxLines) { lines.Add($"{pad}… schema truncated"); return; }
         var target = node.Element is not null && node.Arrays > 0 ? Unwrap(node) : node;
+        if (target.IsMap && target.Value?.Members is not null) target = target.Value;
         if (target.Members is null) return;
         foreach (var (json, member) in target.Members)
         {
@@ -341,8 +522,8 @@ internal static class JsonQuery
 
     private static string TypeName(Node node) =>
         node.Clr == typeof(string) ? "string" : node.Clr == typeof(double?) ? "double?" : node.Clr == typeof(bool?) ? "bool?"
-        : node.IsMap ? "Dictionary<string,string> (x.tags[\"key\"]; check ContainsKey first)"
-        : node.Arrays > 0 && node.Element is not null ? $"List<{TypeName(node.Element)}>" : "object";
+        : node.IsMap ? $"Dictionary<string,{TypeName(node.Value!)}> (m[\"key\"] is null when absent; m.Select(p => p.Value))"
+        : node.Arrays > 0 && node.Element is not null ? $"List<{(node.Element.Unknown ? "object" : TypeName(node.Element))}>" : "object";
 
     private static string Detail(Node node)
     {
@@ -379,8 +560,11 @@ internal static class JsonQuery
     {
         if (result is null or string || result is not IEnumerable sequence)
         {
-            var single = JsonSerializer.Serialize(Plain(result), Plain(result)?.GetType() ?? typeof(object));
-            return single.Length <= maxCharacters ? (single, null)
+            var node = JsonSerializer.SerializeToNode(Plain(result), Plain(result)?.GetType() ?? typeof(object));
+            var single = node?.ToJsonString() ?? "null";
+            if (single.Length <= maxCharacters) return (single, null);
+            return Shrink(node!, maxCharacters) is { } cut
+                ? (node!.ToJsonString(), $"Result truncated to the {maxCharacters / 1024} KB cap: {cut}. Narrow with Where, select fewer fields, or aggregate.")
                 : throw new InvalidOperationException($"The result is {single.Length:N0} characters, over the {maxCharacters / 1024} KB cap; return a list, fewer fields or an aggregate.");
         }
         var text = new StringBuilder("[");
@@ -405,6 +589,32 @@ internal static class JsonQuery
             value?.GetType().GetInterfaces().FirstOrDefault(face => face.IsGenericType && face.GetGenericTypeDefinition() == typeof(IGrouping<,>)) is { } grouping
                 ? new Dictionary<string, object?> { ["Key"] = grouping.GetProperty("Key")!.GetValue(value), ["Items"] = ((IEnumerable)value).Cast<object?>().ToList() }
                 : value;
+    }
+
+    // An object result over the cap keeps its fields and trims its outermost lists from the end, largest first.
+    private static string? Shrink(JsonNode node, int maxCharacters)
+    {
+        var lists = new List<(string Path, JsonArray List, int Count)>();
+        Outermost(node, "result");
+        var size = node.ToJsonString().Length;
+        for (var round = 0; size > maxCharacters && round < 64; round++)
+        {
+            var sized = lists.Where(entry => entry.List.Count > 0).Select(entry => (entry.List, Size: entry.List.ToJsonString().Length)).ToList();
+            if (sized.Count == 0) break;
+            var (list, listSize) = sized.MaxBy(entry => entry.Size);
+            var keep = (int)Math.Clamp((long)list.Count * (listSize - (size - maxCharacters)) / Math.Max(1, listSize) - 1, 0, list.Count - 1);
+            while (list.Count > keep) list.RemoveAt(list.Count - 1);
+            size = node.ToJsonString().Length;
+        }
+        return size > maxCharacters ? null
+            : string.Join(", ", lists.Where(entry => entry.List.Count < entry.Count).Select(entry => $"{entry.Path} shows {entry.List.Count} of {entry.Count} items"));
+
+        void Outermost(JsonNode? value, string path)
+        {
+            if (value is JsonArray list) lists.Add((path, list, list.Count));
+            else if (value is JsonObject item)
+                foreach (var (name, child) in item) Outermost(child, path + "." + name);
+        }
     }
 
     /// <summary>The response's own coverage and provenance fields (completeness, paging, cache state, source), kept beside a cropped result.</summary>
@@ -443,8 +653,9 @@ internal static class JsonQuery
             return value;
         }
 
-        public IEnumerable<T> Watch<T>(IEnumerable<T> source)
+        public IEnumerable<T> Watch<T>(IEnumerable<T>? source)
         {
+            if (source is null) yield break;
             foreach (var item in source)
             {
                 Step();
@@ -566,6 +777,12 @@ internal static class JsonQuery
                 return base.VisitLambda(node);
             }
 
+            protected override Expression VisitBlock(BlockExpression node)
+            {
+                _bound.UnionWith(node.Variables);
+                return base.VisitBlock(node);
+            }
+
             protected override Expression VisitParameter(ParameterExpression node)
             {
                 if (node == root) _root = true;
@@ -586,5 +803,63 @@ internal static class JsonQuery
             Has = true;
             return value;
         }
+    }
+
+    // Reads are as forgiving as JSON: a member, method or key read through a missing value is null (false or 0 for a
+    // plain value), a missing key or index reads as null, and a missing list enumerates as empty (Budget.Watch).
+    private sealed class NullSafe : ExpressionVisitor
+    {
+        protected override Expression VisitMember(MemberExpression node)
+        {
+            var target = Visit(node.Expression);
+            return Nullable(target) ? Guarded(target!, value => node.Update(value)) : node.Update(target);
+        }
+
+        protected override Expression VisitMethodCall(MethodCallExpression node)
+        {
+            var target = Visit(node.Object);
+            var arguments = Visit(node.Arguments);
+            if (target is not null && node.Method.Name == "get_Item" && arguments.Count == 1 && Lookup(target.Type, arguments[0].Type) is { } lookup)
+                return Guarded(target, value => Expression.Call(lookup, value, arguments[0]));
+            return Nullable(target) ? Guarded(target!, value => node.Update(value, arguments)) : node.Update(target, arguments);
+        }
+
+        protected override Expression VisitIndex(IndexExpression node)
+        {
+            var target = Visit(node.Object)!;
+            var arguments = Visit(node.Arguments);
+            if (arguments.Count == 1 && Lookup(target.Type, arguments[0].Type) is { } lookup)
+                return Guarded(target, value => Expression.Call(lookup, value, arguments[0]));
+            return Nullable(target) ? Guarded(target, value => node.Update(value, arguments)) : node.Update(target, arguments);
+        }
+
+        // Host constants (the budget, memos) are never null; value types cannot be.
+        private static bool Nullable(Expression? target) => target is not null and not ConstantExpression && !target.Type.IsValueType;
+
+        private static MethodInfo? Lookup(Type type, Type key)
+        {
+            if (!type.IsGenericType) return null;
+            var definition = type.GetGenericTypeDefinition();
+            var arguments = type.GetGenericArguments();
+            return definition == typeof(Dictionary<,>) && key == arguments[0] ? typeof(Reads).GetMethod(nameof(Reads.Key))!.MakeGenericMethod(arguments)
+                : definition == typeof(List<>) && key == typeof(int) ? typeof(Reads).GetMethod(nameof(Reads.At))!.MakeGenericMethod(arguments)
+                : null;
+        }
+
+        private static Expression Guarded(Expression target, Func<Expression, Expression> read)
+        {
+            var value = Expression.Variable(target.Type);
+            var result = read(value);
+            return Expression.Block(result.Type, [value], Expression.Assign(value, target),
+                Expression.Condition(Expression.ReferenceEqual(value, Expression.Constant(null, target.Type)), Expression.Default(result.Type), result));
+        }
+    }
+
+    private static class Reads
+    {
+        public static TValue? Key<TKey, TValue>(Dictionary<TKey, TValue> map, TKey key) where TKey : notnull =>
+            key is not null && map.TryGetValue(key, out var value) ? value : default;
+
+        public static T? At<T>(List<T> list, int index) => index >= 0 && index < list.Count ? list[index] : default;
     }
 }
