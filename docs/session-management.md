@@ -15,7 +15,7 @@ Three independent persistence layers cooperate:
 | Layer                           | What it stores                                                          | Where                                                                               | Lifetime                            |
 | ------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------- |
 | **Conversation state**          | `session.json` (serialized Agent Framework `AgentSession` + listing metadata) and the UI transcript `events.jsonl` | `{workdir}/sessions/{sessionId}/` (Azure Files `/home`)                              | Until explicit delete or 30-day TTL |
-| **Per-user workdir**            | Owner directory; a conversation is visible only under its owner's workdir | `$COPILOT_HOME/users/v2/{sha256(tid,oid)}` (Entra) or `$COPILOT_HOME/anon/{userId}` | Same as conversation state          |
+| **Per-user workdir**            | Owner directory; a conversation is visible only under its owner's workdir | `$AGENT_HOME/users/v2/{sha256(tid,oid)}` (Entra) or `$AGENT_HOME/anon/{userId}` | Same as conversation state          |
 | **`PersistentIdentity` record** | Encrypted `oid`, `tenantId`, derived `userId`, refresh token, GraphTier | Principal workdir `identity.json` (DataProtection-encrypted) + `finops_id` cookie   | 30 days, sliding                    |
 
 The combination is what makes restart-survivable login possible: the cookie tells us _who_ the user is, the identity record gives us a fresh access token (via the persisted refresh token), and the conversation's saved `AgentSession` resumes the model context on the next prompt. The model context itself is the service-stored response chain (retained about 30 days); only its latest response ID is stored locally.
@@ -122,7 +122,7 @@ The project client takes a `TokenCredential` (managed identity in Azure), which 
 
 ### 7.5 Listing & path comparison
 
-`ListAllManagedSessions` (used by the janitor) enumerates only `$COPILOT_HOME/users` and `…/anon`. Anything outside those two roots is some other component's state and we leave it alone.
+`ListAllManagedSessions` (used by the janitor) enumerates only `$AGENT_HOME/users` and `…/anon`. Anything outside those two roots is some other component's state and we leave it alone.
 
 ### 7.6 Title generation
 
@@ -153,7 +153,7 @@ The Vue chat UI lists the user's conversations beside the chat. Deletion is a si
 
 ## 11. End-to-end flow after these changes
 
-1. **First visit, anon** — middleware finds no cookie, mints a random anon `userId`, the user chats; session state is written to `$COPILOT_HOME/anon/{userId}/`.
+1. **First visit, anon** — middleware finds no cookie, mints a random anon `userId`, the user chats; session state is written to `$AGENT_HOME/anon/{userId}/`.
 2. **Click "Connect Azure"** — OAuth callback derives `userId` from `tid + oid`, migrates in-memory state, writes `identity.json`, and sets a pair-bound `finops_id` cookie. Future sessions use the principal-owned workdir.
 3. **Container restart / new browser on another device** — cookie arrives → hydration middleware decrypts it, loads `identity.json`, restores session blobs. Sidebar fetches `/api/sessions`, shows all the user's past chats. Picking one reopens it from disk and resumes its saved model context.
 4. **Token expiry mid-conversation** - the credential obtains a fresh token for the next model request without replacing the conversation.

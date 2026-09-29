@@ -34,7 +34,7 @@ ARM PUT/PATCH runs only through `ApplyAzureChange`, which Agent Framework holds 
 
 ## Persistence And Retention
 
-All state lives under host-configured `COPILOT_HOME`; filesystem paths are never accepted from model arguments.
+All state lives under host-configured `AGENT_HOME`; filesystem paths are never accepted from model arguments.
 
 | Data | Retention |
 | --- | --- |
