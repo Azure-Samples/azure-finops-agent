@@ -32,13 +32,15 @@ public sealed class ConversationStoreTests : IAsyncLifetime
         var conversation = await _factory.CreateNewAsync(userId, "synthetic", Tenant, owner);
         await conversation.PublishAsync(new UserMessageEvent("Synthetic question"));
         await conversation.PublishAsync(new MessageDeltaEvent("m", "live only"));
+        await conversation.PublishAsync(new ReasoningDeltaEvent("live only"));
+        await conversation.PublishAsync(new ReasoningEvent("**Synthetic thinking**"));
         await conversation.PublishAsync(new ToolStartEvent("call-1", "QueryAzure", "{}"));
         await conversation.PublishAsync(new ToolCompleteEvent("call-1", true, "{}", null));
         await conversation.PublishAsync(new AssistantMessageEvent("m", "Synthetic answer"));
         await conversation.PublishAsync(new TurnIdleEvent());
 
         var events = await _factory.LoadTranscriptAsync(conversation.SessionId, userId, Tenant, owner);
-        Assert.Equal([typeof(UserMessageEvent), typeof(ToolStartEvent), typeof(ToolCompleteEvent), typeof(AssistantMessageEvent), typeof(TurnIdleEvent)],
+        Assert.Equal([typeof(UserMessageEvent), typeof(ReasoningEvent), typeof(ToolStartEvent), typeof(ToolCompleteEvent), typeof(AssistantMessageEvent), typeof(TurnIdleEvent)],
             events.Select(item => item.GetType()));
 
         var other = Guid.NewGuid().ToString();

@@ -425,6 +425,13 @@ public static class ChatEndpoints
                 // Context dedup: only prepend [CONTEXT:]/[UPLOADED FILES:] blocks
                 // when their content changed for THIS session — they persist in
                 // the conversation history, so once sent the model retains them.
+                // A turn that starts a fresh model context (compaction or an
+                // expired response chain) no longer has them, so it gets them again.
+                if (session.StartsFreshContext)
+                {
+                    LastConnectionContext.TryRemove(activeSessionId, out _);
+                    LastUploadsContext.TryRemove(activeSessionId, out _);
+                }
                 var contextBits = new List<string>(2);
                 if (!LastConnectionContext.TryGetValue(activeSessionId, out var prevConn) || prevConn != connectionContext)
                 {

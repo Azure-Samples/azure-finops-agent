@@ -10,25 +10,16 @@
     aria-label="Request progress"
   >
     <div class="request-progress-art" aria-hidden="true">
-      <svg width="44" height="44" viewBox="0 0 64 64" fill="none">
-        <g class="request-progress-cloud">
-          <path
-            d="M18 40a10 10 0 0 1-1-20 15 15 0 0 1 29-1 11 11 0 0 1 0 22H18Z"
-            fill="currentColor"
-            fill-opacity=".12"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linejoin="round"
-          />
-          <path v-if="progress.phase === 'stopped'" d="M28 26v9m8-9v9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
-          <path v-else d="M26 30h12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-        </g>
-        <g v-if="progress.phase !== 'stopped'" fill="currentColor">
-          <circle class="request-progress-dot" cx="24" cy="51" r="2" />
-          <circle class="request-progress-dot" cx="32" cy="51" r="2" />
-          <circle class="request-progress-dot" cx="40" cy="51" r="2" />
-        </g>
-      </svg>
+      <AppIcon
+        class="request-progress-cloud request-progress-main-icon"
+        :name="progress.phase === 'stopped' ? 'stop' : 'schedule'"
+        size="32"
+      />
+      <span v-if="progress.phase !== 'stopped'" class="request-progress-dots">
+        <span class="request-progress-dot"></span>
+        <span class="request-progress-dot"></span>
+        <span class="request-progress-dot"></span>
+      </span>
     </div>
     <div class="request-progress-body">
       <div class="request-progress-header">
@@ -70,6 +61,8 @@
 </template>
 
 <script setup>
+import AppIcon from "./AppIcon.vue";
+
 defineProps({
   progress: { type: Object, required: true },
   paused: { type: Boolean, default: false },
@@ -82,26 +75,35 @@ defineProps({
   grid-template-columns: 44px minmax(0, 1fr);
   gap: 12px;
   width: 100%;
-  max-width: 760px;
+  max-width: 756px;
   min-width: 0;
   padding: 16px 18px;
-  border: 1px solid #e5e5e5;
-  border-radius: 16px;
-  background: #f7f7f8;
-  color: #1f1f1f;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--card);
+  color: var(--ink);
   text-align: left;
 }
 .request-progress-art {
-  color: #4b7ccd;
-}
-.request-progress-art svg {
-  display: block;
-  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--activity-dot);
 }
 .request-progress-cloud {
   animation: request-breathe 3s ease-in-out infinite;
 }
+.request-progress-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .request-progress-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
   animation: request-dot 2.4s ease-in-out infinite;
 }
 .request-progress-dot:nth-child(2) {
@@ -123,24 +125,24 @@ defineProps({
 h3 {
   flex: 1 1 220px;
   margin: 0;
-  font-size: 16px;
+  font-size: var(--text-title-size);
   font-weight: 500;
-  line-height: 1.5;
+  line-height: var(--text-title-line);
 }
 .request-progress-badge {
   padding: 2px 10px;
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: #fff;
-  color: #676767;
-  font-size: 12px;
-  line-height: 18px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
   white-space: nowrap;
 }
 p {
   margin: 8px 0 0;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
 }
 .request-progress-timing {
   display: flex;
@@ -149,8 +151,9 @@ p {
   justify-content: space-between;
   gap: 8px 20px;
   margin-top: 10px;
-  font-size: 12px;
-  color: #676767;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
 }
 .request-progress-countdown,
 .request-progress-deadline {
@@ -159,14 +162,14 @@ p {
   gap: 2px;
 }
 .request-progress-countdown-value {
-  color: #1f1f1f;
+  color: var(--ink);
   font-size: 24px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
 time {
-  color: #1f1f1f;
+  color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
 .request-progress-track {
@@ -174,30 +177,30 @@ time {
   margin-top: 10px;
   overflow: hidden;
   border-radius: 4px;
-  background: #e3eaf7;
+  background: rgba(54, 120, 232, 0.16);
 }
 .request-progress-fill {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: #4b7ccd;
+  background: var(--activity-dot);
   transition: width .25s linear;
 }
 .request-progress-resource-note {
-  color: #676767;
-  font-size: 12px;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
 }
 .request-progress--stopped {
-  border-color: #ecdcbf;
-  background: #fffaf2;
+  border-color: rgba(191, 135, 0, 0.25);
+  background: rgba(191, 135, 0, 0.08);
 }
 .request-progress--stopped .request-progress-art,
 .request-progress--stopped .request-progress-badge,
 .request-progress--stopped .request-progress-countdown-value {
-  color: #805600;
+  color: var(--warning);
 }
 .request-progress--stopped .request-progress-badge {
-  border-color: #ecdcbf;
+  border-color: rgba(191, 135, 0, 0.25);
 }
 .request-progress--stopped * {
   animation: none;

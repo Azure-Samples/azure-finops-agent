@@ -1,9 +1,6 @@
 <template>
   <section class="turn-failure" role="alert">
-    <svg class="turn-failure-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v6m0 3v1" />
-    </svg>
+    <AppIcon class="turn-failure-icon" name="error" size="20" />
     <div class="turn-failure-body">
       <h3>{{ failure.title }}</h3>
       <p>{{ failure.text }}</p>
@@ -17,6 +14,8 @@
 </template>
 
 <script setup>
+import AppIcon from "./AppIcon.vue";
+
 defineProps({
   failure: { type: Object, required: true },
   canEdit: { type: Boolean, default: false },
@@ -30,18 +29,18 @@ defineEmits(["edit"]);
   display: flex;
   gap: 12px;
   width: 100%;
-  max-width: 760px;
+  max-width: 756px;
   padding: 16px;
-  border: 1px solid #edc7c9;
-  border-left: 3px solid #a4262c;
-  border-radius: 8px;
-  background: #fff8f8;
-  color: #323130;
+  border: 1px solid rgba(209, 52, 56, 0.22);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-card);
+  background: rgba(209, 52, 56, 0.06);
+  color: var(--ink);
   text-align: left;
 }
 .turn-failure-icon {
   flex-shrink: 0;
-  color: #a4262c;
+  color: var(--danger);
   margin-top: 2px;
 }
 .turn-failure-body {
@@ -50,16 +49,19 @@ defineEmits(["edit"]);
 }
 h3 {
   margin: 0 0 6px;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--text-title-size);
+  line-height: var(--text-title-line);
+  font-weight: 500;
 }
 p {
   margin: 0 0 10px;
-  font-size: 14px;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
 }
 .turn-failure-hint {
-  font-size: 12px;
-  color: #605e5c;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
 }
 p:last-child {
   margin-bottom: 0;
@@ -67,18 +69,18 @@ p:last-child {
 button {
   margin-bottom: 8px;
   padding: 6px 12px;
-  border: 1px solid #8a8886;
-  border-radius: 4px;
-  background: #fff;
-  color: #323130;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  color: var(--ink);
   font: inherit;
   cursor: pointer;
 }
 button:hover:not(:disabled) {
-  background: #f3f2f1;
+  background: var(--user-bubble);
 }
 button:focus-visible {
-  outline: 2px solid #0078d4;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 button:disabled {

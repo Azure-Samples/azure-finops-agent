@@ -49,38 +49,74 @@ async function logout() {
 }
 
 :root {
+  --font-sans:
+    "Google Sans Flex", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", SFMono-Regular, Consolas,
+    monospace;
+  --font-variation-body: "ROND" 0, "wdth" 92;
+  --font-variation-greeting: "ROND" 100, "wdth" 100;
+
   --bg: #ffffff;
   --surface: #ffffff;
-  --border: #e5e5e5;
+  --primary: #0d0d0d;
+  --ink: #1f1f1f;
   --text: #1f1f1f;
   --text-muted: #676767;
-  --accent: #0078d4;
-  --accent-hover: #106ebe;
-  --green: #107c10;
-  --red: #d13438;
-  --azure-blue: #0078d4;
-  --azure-dark-blue: #005a9e;
-  --azure-header: #0078d4;
+  --text-hint: #73777d;
+  --user-bubble: #f4f4f4;
+  --card: #f7f7f8;
+  --border: #e5e5e5;
+  --focus: #3678e8;
+  --accent: #3678e8;
+  --accent-hover: #245fbe;
+  --danger: #d13438;
+  --success: #1a7f37;
+  --warning: #bf8700;
+
+  --sidebar-bg: #fcfdff;
+  --sidebar-border: rgba(44, 76, 124, 0.14);
+  --sidebar-selected: rgba(44, 76, 124, 0.1);
+  --sidebar-hover: rgba(44, 76, 124, 0.06);
+  --sidebar-secondary: #3e4755;
+
+  --chart-border: #dce5f4;
+  --chart-shadow: rgba(37, 61, 103, 0.08);
+  --activity-dot: #4b7ccd;
+
+  --radius-composer: 32px;
+  --radius-composer-mobile: 40px;
+  --radius-bubble: 20px;
+  --radius-card: 12px;
+  --radius-chip: 14px;
+  --radius-chart: 20px;
+  --shadow-composer: 0 2px 10px rgba(0, 0, 0, 0.05);
+
+  --text-body-size: 17px;
+  --text-body-line: 24px;
+  --text-label-size: 14px;
+  --text-label-line: 20px;
+  --text-caption-size: 12px;
+  --text-caption-line: 18px;
+  --text-title-size: 16px;
+  --text-title-line: 24px;
+
+  --motion-fast: 150ms ease-out;
+  --motion-enter: 300ms ease-out;
+  --motion-collapse: 350ms cubic-bezier(0.33, 1, 0.68, 1);
 }
 
 body {
-  font-family:
-    "Google Sans Flex",
-    "Segoe UI",
-    -apple-system,
-    BlinkMacSystemFont,
-    Roboto,
-    Helvetica,
-    Arial,
-    sans-serif;
-  font-variation-settings: "ROND" 0;
+  font-family: var(--font-sans);
+  font-variation-settings: var(--font-variation-body);
   font-stretch: 92%;
   background: var(--bg);
   color: var(--text);
-  line-height: 1.5;
+  line-height: var(--text-body-line);
   letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
-  font-size: 14px;
+  font-size: var(--text-body-size);
+  font-weight: 400;
 }
 
 button,

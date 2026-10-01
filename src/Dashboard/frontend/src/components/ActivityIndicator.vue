@@ -43,7 +43,7 @@ defineProps({
   min-width: 0;
   max-width: 100%;
   padding: 2px 0 8px;
-  color: #1f1f1f;
+  color: var(--ink);
   text-align: left;
 }
 .activity-dots {
@@ -59,7 +59,7 @@ defineProps({
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #4b7ccd;
+  background: var(--activity-dot);
   opacity: 0.7;
   transform: translateY(-1.25px);
   animation: activity-pulse 1.2s linear infinite;
@@ -91,8 +91,8 @@ defineProps({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 16px;
-  line-height: 24px;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
   font-weight: 400;
   -webkit-mask-image: linear-gradient(90deg, #000 33.333%, transparent 50%);
   mask-image: linear-gradient(90deg, #000 33.333%, transparent 50%);
@@ -110,17 +110,17 @@ defineProps({
 }
 .activity-elapsed {
   flex-shrink: 0;
-  color: #676767;
-  font-size: 12px;
-  line-height: 18px;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .activity-detail {
   margin-top: 2px;
-  color: #676767;
-  font-size: 13px;
-  line-height: 18px;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
   font-variant-numeric: tabular-nums;
 }
 .activity--paused .activity-dots i,

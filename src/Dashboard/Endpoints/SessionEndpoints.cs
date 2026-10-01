@@ -193,6 +193,7 @@ public static class SessionEndpoints
 
         var messages = new List<object>();
         string? pendingAssistantText = null;
+        var pendingThinking = new List<string>();
         var pendingTools = new List<object>();
         var pendingCharts = new List<string>();
         object? pendingHtml = null;
@@ -202,17 +203,23 @@ public static class SessionEndpoints
         void FlushAssistant()
         {
             if (pendingAssistantText is null && pendingTools.Count == 0
-                && pendingCharts.Count == 0 && pendingHtml is null && pendingScript is null) return;
+                && pendingCharts.Count == 0 && pendingHtml is null && pendingScript is null)
+            {
+                pendingThinking.Clear();
+                return;
+            }
             messages.Add(new
             {
                 role = "assistant",
                 content = pendingAssistantText ?? "",
+                thinking = pendingThinking.Count > 0 ? string.Join("\n\n", pendingThinking) : null,
                 toolCalls = pendingTools.ToArray(),
                 charts = pendingCharts.ToArray(),
                 html = pendingHtml,
                 script = pendingScript,
             });
             pendingAssistantText = null;
+            pendingThinking.Clear();
             pendingTools.Clear();
             pendingCharts.Clear();
             pendingHtml = null;
@@ -235,6 +242,10 @@ public static class SessionEndpoints
             {
                 if (!string.IsNullOrEmpty(am.Content))
                     pendingAssistantText = (pendingAssistantText is null ? "" : pendingAssistantText + "\n\n") + am.Content;
+            }
+            else if (evt is ReasoningEvent thought)
+            {
+                if (!string.IsNullOrWhiteSpace(thought.Content)) pendingThinking.Add(thought.Content);
             }
             else if (evt is ToolStartEvent r)
             {
@@ -343,6 +354,10 @@ public static class SessionEndpoints
     {
         return StripLeadingBracketBlocks(raw);
     }
+
+    /// <summary>The user's own words in a persisted prompt without host-injected context; null when nothing the user wrote remains.</summary>
+    internal static string? VisibleUserText(string raw) =>
+        IsInjectedUserContext(raw) || StripContextPrefix(raw) is not { } text || string.IsNullOrWhiteSpace(text) ? null : text;
 
     private static bool IsInjectedUserContext(string raw)
     {

@@ -923,16 +923,20 @@ test("activity row narrates tools and reasoning, then gives way to the answer", 
       "**Comparing month over month**\n\nCompute grew after the new scale set.",
   });
   await expect(label).toHaveText("Comparing month over month");
-  const toggle = activity.getByRole("button", { name: "Show thinking" });
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(page.locator(".reasoning-panel")).toHaveCount(0);
-  await toggle.click();
-  await expect(
-    activity.getByRole("button", { name: "Hide thinking" }),
-  ).toHaveAttribute("aria-expanded", "true");
+  const thinking = page.locator(".ai-row--live .thinking");
+  const toggle = thinking.getByRole("button", { name: "Thinking" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator(".reasoning-panel")).toContainText(
     "Compute grew after the new scale set.",
   );
+  await expect(page.locator(".reasoning-panel strong")).toHaveText(
+    "Comparing month over month",
+  );
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".reasoning-panel")).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await page.screenshot({
     path: testInfo.outputPath("activity-thinking.png"),
     animations: "disabled",
@@ -943,7 +947,15 @@ test("activity row narrates tools and reasoning, then gives way to the answer", 
     "Costs rose 12%",
   );
   await expect(activity).toHaveCount(0);
-  await expect(page.locator(".reasoning-panel")).toHaveCount(0);
+  // The reasoning stays visible above the answer for the whole turn.
+  await expect(page.locator(".reasoning-panel")).toContainText(
+    "Compute grew after the new scale set.",
+  );
+  const thinkingBox = await thinking.boundingBox();
+  const answerBox = await page
+    .locator(".ai-row--live .message-text")
+    .boundingBox();
+  expect(thinkingBox.y).toBeLessThan(answerBox.y);
 
   await emitActivity(page, {
     type: "tool_start",
@@ -975,6 +987,9 @@ test("activity row narrates tools and reasoning, then gives way to the answer", 
   await expect(page.locator(".activity")).toHaveCount(0);
   const reply = page.locator(".message-row--ai .ai-row").last();
   await expect(reply).toContainText("Costs rose 12% because compute grew.");
+  await expect(reply.locator(".thinking .reasoning-panel")).toContainText(
+    "Compute grew after the new scale set.",
+  );
   await expect
     .poll(() =>
       reply.evaluate(

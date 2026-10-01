@@ -10,6 +10,7 @@ namespace AzureFinOps.Dashboard.AI.Runtime;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(UserMessageEvent), "user")]
 [JsonDerivedType(typeof(AssistantMessageEvent), "assistant")]
+[JsonDerivedType(typeof(ReasoningEvent), "thinking")]
 [JsonDerivedType(typeof(ToolStartEvent), "tool_start")]
 [JsonDerivedType(typeof(ToolCompleteEvent), "tool_done")]
 [JsonDerivedType(typeof(ApprovalRequestEvent), "approval_request")]
@@ -34,6 +35,9 @@ public sealed record ReasoningDeltaEvent(string Content) : AgentEvent
 {
     public override bool Persisted => false;
 }
+
+/// <summary>The model's reasoning summary that preceded the next tool call or answer, kept so a reopened conversation still shows it.</summary>
+public sealed record ReasoningEvent(string Content) : AgentEvent;
 
 public sealed record AssistantMessageEvent(string MessageId, string Content) : AgentEvent;
 

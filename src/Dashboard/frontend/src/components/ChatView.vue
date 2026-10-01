@@ -4,7 +4,7 @@
     :class="{ 'chat-view--hidden': documentIsHidden }"
     @keydown.esc="closeMobileSidebar"
   >
-    <!-- Azure Portal-style top bar -->
+    <!-- AskMe-style top bar -->
     <header class="portal-header">
       <div class="portal-header-left">
         <button
@@ -15,20 +15,7 @@
           aria-controls="chat-navigation"
           :aria-expanded="sidebarVisible"
         >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <line x1="3" y1="6" x2="21" y2="6" />
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="18" x2="21" y2="18" />
-          </svg>
+          <AppIcon name="menu" size="20" />
         </button>
         <a
           class="portal-trustline-link"
@@ -85,19 +72,7 @@
           @click="disconnectAzure"
           title="Disconnect Azure"
         >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
+          <AppIcon name="close" size="18" />
         </button>
       </div>
     </header>
@@ -166,21 +141,33 @@
                       ? starColor(maturityOverall(cat.key))
                       : '#c8c6c4',
                   }"
-                  >{{
+                  :aria-label="
                     maturityScores[cat.key]
-                      ? starsText(maturityOverall(cat.key))
-                      : "☆☆☆☆☆"
-                  }}</span
+                      ? `${Math.max(0, Math.min(5, Math.round(maturityOverall(cat.key) || 0)))} out of 5`
+                      : 'Not scored'
+                  "
                 >
-                <svg
+                  <AppIcon
+                    v-for="(star, starIndex) in maturityStarIcons(
+                      maturityScores[cat.key]
+                        ? maturityOverall(cat.key)
+                        : undefined,
+                    )"
+                    :key="`${cat.key}-${starIndex}`"
+                    :name="star"
+                    size="15"
+                  />
+                </span>
+                >
+                <AppIcon
                   v-if="maturityScores[cat.key]"
+                  name="moreDown"
+                  size="16"
                   class="collapse-chevron maturity-card-chevron"
                   :class="{
                     'collapse-chevron--collapsed':
                       collapsedSections['cm_' + cat.key],
                   }"
-                  viewBox="0 0 16 16"
-                  fill="none"
                   role="button"
                   tabindex="0"
                   :aria-label="
@@ -188,15 +175,7 @@
                   "
                   @click.stop="toggleSection('cm_' + cat.key)"
                   @keydown.enter.stop="toggleSection('cm_' + cat.key)"
-                >
-                  <path
-                    d="M4 6l4 4 4-4"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
+                />
               </div>
               <!-- Per-dimension breakdown (only after scoring) -->
               <div
@@ -218,13 +197,16 @@
                       class="assessment-stars"
                       :style="{ color: starColor(sc.score) }"
                     >
-                      {{
-                        sc.status === "notApplicable"
-                          ? "N/A"
-                          : sc.status === "unknown"
-                            ? "Unknown"
-                            : starsText(sc.score)
-                      }}
+                      <span v-if="sc.status === 'notApplicable'">N/A</span>
+                      <span v-else-if="sc.status === 'unknown'">Unknown</span>
+                      <span v-else class="assessment-star-icons">
+                        <AppIcon
+                          v-for="(star, starIndex) in maturityStarIcons(sc.score)"
+                          :key="`${sc.id}-${starIndex}`"
+                          :name="star"
+                          size="13"
+                        />
+                      </span>
                     </div>
                     <div class="assessment-detail-text">{{ sc.detail }}</div>
                   </div>
@@ -245,23 +227,15 @@
                   >
                 </div>
                 <div class="sidebar-category-right">
-                  <svg
+                  <AppIcon
+                    name="moreDown"
+                    size="16"
                     class="collapse-chevron"
                     :class="{
                       'collapse-chevron--collapsed':
                         collapsedSections.playbookRoot,
                     }"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                  >
-                    <path
-                      d="M4 6l4 4 4-4"
-                      stroke="currentColor"
-                      stroke-width="1.5"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
+                  />
                 </div>
               </div>
               <div
@@ -280,23 +254,15 @@
                     @click="toggleSection('pb_' + grp.key)"
                   >
                     <span>{{ grp.label }}</span>
-                    <svg
+                    <AppIcon
+                      name="moreDown"
+                      size="16"
                       class="collapse-chevron"
                       :class="{
                         'collapse-chevron--collapsed':
                           collapsedSections['pb_' + grp.key],
                       }"
-                      viewBox="0 0 16 16"
-                      fill="none"
-                    >
-                      <path
-                        d="M4 6l4 4 4-4"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
+                    />
                   </div>
                   <div
                     class="collapse-body"
@@ -334,22 +300,14 @@
                 <span>{{ pricingCategory.label }}</span>
               </div>
               <div class="sidebar-category-right">
-                <svg
+                <AppIcon
+                  name="moreDown"
+                  size="16"
                   class="collapse-chevron"
                   :class="{
                     'collapse-chevron--collapsed': collapsedSections.pricing,
                   }"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                >
-                  <path
-                    d="M4 6l4 4 4-4"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
+                />
               </div>
             </div>
             <div
@@ -381,22 +339,14 @@
               @click="toggleSection('subs')"
             >
               <span>Subscriptions ({{ azureSubscriptions.length }})</span>
-              <svg
+              <AppIcon
+                name="moreDown"
+                size="16"
                 class="collapse-chevron"
                 :class="{
                   'collapse-chevron--collapsed': collapsedSections.subs,
                 }"
-                viewBox="0 0 16 16"
-                fill="none"
-              >
-                <path
-                  d="M4 6l4 4 4-4"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
+              />
             </div>
             <div
               class="collapse-body"
@@ -432,20 +382,7 @@
           <div v-if="!azureConnected" class="azure-connect">
             <!-- Admin approval / consent error banner -->
             <div v-if="tenantError" class="tenant-error-banner">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="#d13438"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
+              <AppIcon name="error" size="14" />
               <span
                 >Your home tenant blocked this app. Pick a tenant below or type
                 one manually.</span
@@ -461,19 +398,7 @@
                 @click="switchTenant(t.tenantId)"
                 :title="t.tenantId"
               >
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                  <polyline points="9 22 9 12 15 12 15 22" />
-                </svg>
+                <AppIcon name="home" size="11" />
                 {{
                   t.displayName ||
                   t.defaultDomain ||
@@ -544,19 +469,7 @@
                 @click="disconnectAzure"
                 title="Disconnect session (keeps Entra ID consent)"
               >
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
+                <AppIcon name="close" size="12" />
               </button>
             </div>
             <!-- Tenant switcher -->
@@ -565,33 +478,13 @@
                 class="tenant-switch-label"
                 @click="showTenantSwitcher = !showTenantSwitcher"
               >
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                  <polyline points="9 22 9 12 15 12 15 22" />
-                </svg>
+                <AppIcon name="home" size="11" />
                 Switch tenant ({{ availableTenants.length }})
-                <svg
+                <AppIcon
+                  name="moreDown"
+                  size="10"
                   :class="['tenant-chevron', { open: showTenantSwitcher }]"
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
+                />
               </label>
               <div v-if="showTenantSwitcher" class="tenant-list">
                 <button
@@ -631,21 +524,13 @@
                   <span class="addons-title">Add scopes</span>
                   <span class="addons-sub">· Delegated &amp; read-only</span>
                 </span>
-                <svg
+                <AppIcon
+                  name="moreDown"
+                  size="14"
                   class="addons-heading-chevron"
                   :class="{ open: addonsOpen }"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
                   aria-hidden="true"
-                >
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
+                />
               </button>
 
               <div class="addons-body-wrap" :class="{ open: addonsOpen }">
@@ -664,27 +549,16 @@
                       @click="clickScopeRow(0)"
                       title="Show details"
                     >
-                      <span v-if="licensesEnabled" class="scope-row-mark"
-                        >✓</span
-                      >
+                      <span v-if="licensesEnabled" class="scope-row-mark">
+                        <AppIcon name="check" size="14" />
+                      </span>
                       <span class="scope-row-title">License Optimization</span>
                       <span
                         class="scope-row-chevron"
                         @click.stop="addonRowsOpen[0] = !addonRowsOpen[0]"
                         title="Show details"
                       >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <polyline points="6 9 12 15 18 9" />
-                        </svg>
+                        <AppIcon name="moreDown" size="14" />
                       </span>
                     </button>
                     <div class="scope-row-detail-wrap">
@@ -693,9 +567,10 @@
                           Read M365 license inventory &amp; Copilot adoption
                         </p>
                         <div class="scope-row-meta">
-                          <span class="scope-badge scope-badge--delegated"
-                            >👤 Delegated</span
-                          >
+                          <span class="scope-badge scope-badge--delegated">
+                            <AppIcon name="person" size="13" />
+                            Delegated
+                          </span>
                           <span class="scope-badge">Microsoft Graph</span>
                         </div>
                         <p class="scope-row-perms">
@@ -710,7 +585,10 @@
                         >
                           Add scope
                         </button>
-                        <span v-else class="scope-row-status">✓ Consented</span>
+                        <span v-else class="scope-row-status">
+                          <AppIcon name="checkCircle" size="14" />
+                          Consented
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -729,9 +607,9 @@
                       @click="clickScopeRow(1)"
                       title="Show details"
                     >
-                      <span v-if="chargebackEnabled" class="scope-row-mark"
-                        >✓</span
-                      >
+                      <span v-if="chargebackEnabled" class="scope-row-mark">
+                        <AppIcon name="check" size="14" />
+                      </span>
                       <span class="scope-row-title"
                         >Cost Allocation &amp; Chargeback</span
                       >
@@ -740,18 +618,7 @@
                         @click.stop="addonRowsOpen[1] = !addonRowsOpen[1]"
                         title="Show details"
                       >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <polyline points="6 9 12 15 18 9" />
-                        </svg>
+                        <AppIcon name="moreDown" size="14" />
                       </span>
                     </button>
                     <div class="scope-row-detail-wrap">
@@ -760,9 +627,10 @@
                           Map Azure costs to users, teams &amp; cost centers
                         </p>
                         <div class="scope-row-meta">
-                          <span class="scope-badge scope-badge--delegated"
-                            >👤 Delegated</span
-                          >
+                          <span class="scope-badge scope-badge--delegated">
+                            <AppIcon name="person" size="13" />
+                            Delegated
+                          </span>
                           <span class="scope-badge">Microsoft Graph</span>
                         </div>
                         <p class="scope-row-perms">
@@ -780,7 +648,10 @@
                         >
                           Add scope
                         </button>
-                        <span v-else class="scope-row-status">✓ Consented</span>
+                        <span v-else class="scope-row-status">
+                          <AppIcon name="checkCircle" size="14" />
+                          Consented
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -799,9 +670,9 @@
                       @click="clickScopeRow(2)"
                       title="Show details"
                     >
-                      <span v-if="logAnalyticsEnabled" class="scope-row-mark"
-                        >✓</span
-                      >
+                      <span v-if="logAnalyticsEnabled" class="scope-row-mark">
+                        <AppIcon name="check" size="14" />
+                      </span>
                       <span class="scope-row-title"
                         >Log Analytics Deep Dives</span
                       >
@@ -810,18 +681,7 @@
                         @click.stop="addonRowsOpen[2] = !addonRowsOpen[2]"
                         title="Show details"
                       >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <polyline points="6 9 12 15 18 9" />
-                        </svg>
+                        <AppIcon name="moreDown" size="14" />
                       </span>
                     </button>
                     <div class="scope-row-detail-wrap">
@@ -831,9 +691,10 @@
                           analysis
                         </p>
                         <div class="scope-row-meta">
-                          <span class="scope-badge scope-badge--delegated"
-                            >👤 Delegated</span
-                          >
+                          <span class="scope-badge scope-badge--delegated">
+                            <AppIcon name="person" size="13" />
+                            Delegated
+                          </span>
                           <span class="scope-badge">Log Analytics API</span>
                         </div>
                         <p class="scope-row-perms">Data.Read</p>
@@ -849,7 +710,10 @@
                         >
                           Add scope
                         </button>
-                        <span v-else class="scope-row-status">✓ Consented</span>
+                        <span v-else class="scope-row-status">
+                          <AppIcon name="checkCircle" size="14" />
+                          Consented
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -868,27 +732,16 @@
                       @click="clickScopeRow(3)"
                       title="Show details"
                     >
-                      <span v-if="storageEnabled" class="scope-row-mark"
-                        >✓</span
-                      >
+                      <span v-if="storageEnabled" class="scope-row-mark">
+                        <AppIcon name="check" size="14" />
+                      </span>
                       <span class="scope-row-title">Cost Exports</span>
                       <span
                         class="scope-row-chevron"
                         @click.stop="addonRowsOpen[3] = !addonRowsOpen[3]"
                         title="Show details"
                       >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <polyline points="6 9 12 15 18 9" />
-                        </svg>
+                        <AppIcon name="moreDown" size="14" />
                       </span>
                     </button>
                     <div class="scope-row-detail-wrap">
@@ -898,9 +751,10 @@
                           Account
                         </p>
                         <div class="scope-row-meta">
-                          <span class="scope-badge scope-badge--delegated"
-                            >👤 Delegated</span
-                          >
+                          <span class="scope-badge scope-badge--delegated">
+                            <AppIcon name="person" size="13" />
+                            Delegated
+                          </span>
                           <span class="scope-badge">Azure Storage</span>
                         </div>
                         <p class="scope-row-perms">user_impersonation</p>
@@ -913,9 +767,10 @@
                         >
                           Add scope
                         </button>
-                        <span v-if="storageEnabled" class="scope-row-status"
-                          >✓ Consented</span
-                        >
+                        <span v-if="storageEnabled" class="scope-row-status">
+                          <AppIcon name="checkCircle" size="14" />
+                          Consented
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -935,7 +790,9 @@
                     @click="startAuth('azure', '/auth/microsoft?tier=all')"
                     title="Walk through each remaining delegated add-on scope with a separate Microsoft consent screen. Grants apply only to your signed-in user."
                   >
-                    <span class="scope-grant-all-icon">🛡</span>
+                    <span class="scope-grant-all-icon">
+                      <AppIcon name="shield" size="18" />
+                    </span>
                     <span class="scope-grant-all-body">
                       <span class="scope-grant-all-title"
                         >Grant all remaining add-ons</span
@@ -1067,6 +924,27 @@
                 {{ msg.content }}
               </div>
               <div v-else class="ai-row">
+                <div v-if="msg.thinking" class="thinking">
+                  <button
+                    type="button"
+                    class="reasoning-toggle"
+                    :aria-expanded="msg.thinkingOpen === false ? 'false' : 'true'"
+                    @click="msg.thinkingOpen = msg.thinkingOpen === false"
+                  >
+                    <AppIcon name="autoAwesome" size="14" />
+                    Thinking
+                    <AppIcon class="reasoning-chevron" name="moreDown" size="16" />
+                  </button>
+                  <div
+                    v-if="msg.thinkingOpen !== false"
+                    class="reasoning-panel reasoning-panel--done"
+                  >
+                    <div
+                      class="reasoning-md"
+                      v-html="renderContent(msg.thinking)"
+                    ></div>
+                  </div>
+                </div>
                 <div class="ai-content">
                   <div
                     v-for="(chart, ci) in msg.charts || []"
@@ -1093,18 +971,7 @@
                   </div>
                   <div v-if="msg.html" class="html-deck-card">
                     <div class="html-deck-card-icon">
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.8"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <rect x="3" y="4" width="18" height="14" rx="2" />
-                        <line x1="8" y1="21" x2="16" y2="21" />
-                        <line x1="12" y1="18" x2="12" y2="21" />
-                      </svg>
+                      <AppIcon name="slideshow" size="24" />
                     </div>
                     <div class="html-deck-card-body">
                       <div class="html-deck-card-title">
@@ -1146,19 +1013,7 @@
                   <div v-if="msg.script" class="script-inline-block">
                     <div class="script-header">
                       <div class="script-header-left">
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <polyline points="16 18 22 12 16 6" />
-                          <polyline points="8 6 2 12 8 18" />
-                        </svg>
+                        <AppIcon name="code" size="14" />
                         <span class="script-filename">{{
                           msg.script.fileName
                         }}</span>
@@ -1182,64 +1037,23 @@
                                 : 'Copy to clipboard'
                             "
                           >
-                            <svg
+                            <AppIcon
                               v-if="copiedScriptId === msg.script.fileId"
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              stroke-width="2.5"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                            >
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                            <svg
+                              name="check"
+                              size="14"
+                            />
+                            <AppIcon
                               v-else
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              stroke-width="2"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                            >
-                              <rect
-                                x="9"
-                                y="9"
-                                width="13"
-                                height="13"
-                                rx="2"
-                                ry="2"
-                              />
-                              <path
-                                d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                              />
-                            </svg>
+                              name="contentCopy"
+                              size="14"
+                            />
                           </button>
                           <a
                             :href="'/api/download/script/' + msg.script.fileId"
                             class="script-download-btn"
                             download
                           >
-                            <svg
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              stroke-width="2"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                            >
-                              <path
-                                d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
-                              />
-                              <polyline points="7 10 12 15 17 10" />
-                              <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
+                            <AppIcon name="download" size="14" />
                             Download
                           </a>
                         </template>
@@ -1369,6 +1183,24 @@
               class="message-row message-row--ai"
             >
               <div class="ai-row ai-row--live">
+                <div v-if="streamReasoning" class="thinking">
+                  <button
+                    type="button"
+                    class="reasoning-toggle"
+                    :aria-expanded="reasoningOpen ? 'true' : 'false'"
+                    @click="reasoningOpen = !reasoningOpen"
+                  >
+                    <AppIcon name="autoAwesome" size="14" />
+                    Thinking
+                    <AppIcon class="reasoning-chevron" name="moreDown" size="16" />
+                  </button>
+                  <div v-if="reasoningOpen" class="reasoning-panel">
+                    <div
+                      class="reasoning-md"
+                      v-html="renderContent(streamReasoning)"
+                    ></div>
+                  </div>
+                </div>
                 <div
                   v-if="streamCharts.length || streamBuffer"
                   class="ai-content"
@@ -1391,39 +1223,7 @@
                   :label="streamActivityLabel"
                   :elapsed="liveTurnElapsed"
                   :paused="documentIsHidden"
-                >
-                  <button
-                    v-if="streamReasoning"
-                    type="button"
-                    class="reasoning-toggle"
-                    :aria-expanded="reasoningOpen ? 'true' : 'false'"
-                    @click="reasoningOpen = !reasoningOpen"
-                  >
-                    {{ reasoningOpen ? "Hide thinking" : "Show thinking" }}
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2.4"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      aria-hidden="true"
-                    >
-                      <polyline points="6 9 12 15 18 9"></polyline>
-                    </svg>
-                  </button>
-                </ActivityIndicator>
-                <div
-                  v-if="showStreamActivity && reasoningOpen && streamReasoning"
-                  class="reasoning-panel"
-                >
-                  <div
-                    class="reasoning-md"
-                    v-html="renderContent(streamReasoning)"
-                  ></div>
-                </div>
+                />
                 <TurnFailureNotice
                   v-if="streaming && streamFailure"
                   :failure="streamFailure"
@@ -1446,19 +1246,7 @@
             title="Jump to the latest message"
             @click="forceScrollToBottom(true)"
           >
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M12 5v14" />
-              <path d="m19 12-7 7-7-7" />
-            </svg>
+            <AppIcon name="arrowDownward" size="13" />
             {{ streaming ? "New activity" : "Latest" }}
           </button>
         </div>
@@ -1466,18 +1254,7 @@
         <!-- HTML deck (streaming) — compact card -->
         <div v-if="htmlReady" class="html-deck-card">
           <div class="html-deck-card-icon">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <rect x="3" y="4" width="18" height="14" rx="2" />
-              <line x1="8" y1="21" x2="16" y2="21" />
-              <line x1="12" y1="18" x2="12" y2="21" />
-            </svg>
+            <AppIcon name="slideshow" size="24" />
           </div>
           <div class="html-deck-card-body">
             <div class="html-deck-card-title">
@@ -1513,19 +1290,7 @@
           <div class="script-inline-block">
             <div class="script-header">
               <div class="script-header-left">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polyline points="16 18 22 12 16 6" />
-                  <polyline points="8 6 2 12 8 18" />
-                </svg>
+                <AppIcon name="code" size="14" />
                 <span class="script-filename">{{ scriptReady.fileName }}</span>
                 <span class="script-meta"
                   >{{ scriptReady.lineCount }} lines &middot;
@@ -1546,55 +1311,23 @@
                       : 'Copy to clipboard'
                   "
                 >
-                  <svg
+                  <AppIcon
                     v-if="copiedScriptId === scriptReady.fileId"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  <svg
+                    name="check"
+                    size="14"
+                  />
+                  <AppIcon
                     v-else
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                    <path
-                      d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                    />
-                  </svg>
+                    name="contentCopy"
+                    size="14"
+                  />
                 </button>
                 <a
                   :href="'/api/download/script/' + scriptReady.fileId"
                   class="script-download-btn"
                   download
                 >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
+                  <AppIcon name="download" size="14" />
                   Download
                 </a>
               </div>
@@ -1621,20 +1354,7 @@
           @drop.prevent.stop="onDrop"
         >
           <div class="drop-overlay-card">
-            <svg
-              width="48"
-              height="48"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
+            <AppIcon name="uploadFile" size="48" />
             <div class="drop-overlay-title">Drop to attach</div>
             <div class="drop-overlay-sub">
               CSV · TSV · JSON · TXT · XLSX · PDF · Parquet (≤ 100 MB) · PNG/JPG
@@ -1652,7 +1372,7 @@
                way to steer it. -->
           <div v-if="currentJob" class="job-context-bar">
             <span class="job-context-label">
-              ⚙ {{ currentJob.name }} ·
+              <AppIcon name="settings" size="16" /> {{ currentJob.name }} ·
               {{
                 currentJob.running
                   ? "running now…"
@@ -1668,7 +1388,7 @@
                 @click="askJobQuick('deck')"
                 title="Build an executive HTML deck from this job's run history"
               >
-                📊 Build deck
+                <AppIcon name="barChart" size="16" /> Build deck
               </button>
               <button
                 class="job-context-btn"
@@ -1676,14 +1396,14 @@
                 @click="askJobQuick('summary')"
                 title="Summarize the trend across all runs so far"
               >
-                ✨ Summarize runs
+                <AppIcon name="autoAwesome" size="16" /> Summarize runs
               </button>
               <button
                 class="job-context-btn"
                 @click="editJob(currentJob)"
                 title="Change what this job does each run"
               >
-                ✎ Edit job
+                <AppIcon name="edit" size="16" /> Edit job
               </button>
             </span>
             <span class="job-context-hint"
@@ -1717,22 +1437,7 @@
                   class="attachment-chip-thumb"
                   alt=""
                 />
-                <svg
-                  v-else
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path
-                    d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
-                  />
-                  <polyline points="14 2 14 8 20 8" />
-                </svg>
+                <AppIcon v-else name="file" size="14" />
                 <span class="attachment-chip-name">{{ att.fileName }}</span>
                 <span v-if="att.uploading" class="attachment-chip-meta"
                   >uploading…</span
@@ -1748,7 +1453,7 @@
                   @click="removeAttachment(att)"
                   title="Remove"
                 >
-                  ✕
+                  <AppIcon name="close" size="14" />
                 </button>
               </div>
             </div>
@@ -1782,20 +1487,7 @@
                   @click="openFilePicker"
                   title="Attach file (CSV, JSON, TXT, XLSX, PDF, Parquet, PNG/JPG screenshots — or paste an image)"
                 >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path
-                      d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
-                    />
-                  </svg>
+                  <AppIcon name="attachFile" size="16" />
                   <span>Attach</span>
                 </button>
                 <button
@@ -1804,21 +1496,7 @@
                   @click="clearMessages()"
                   title="Clear chat"
                 >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path
-                      d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
-                    />
-                    <path d="M3 3v5h5" />
-                  </svg>
+                  <AppIcon name="refresh" size="16" />
                   <span>Clear</span>
                 </button>
                 <button
@@ -1828,19 +1506,7 @@
                   @click="requestAnalyze()"
                   title="Find biggest cost waste and recommend actions"
                 >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <circle cx="11" cy="11" r="7" />
-                    <line x1="21" y1="21" x2="16.5" y2="16.5" />
-                  </svg>
+                  <AppIcon name="search" size="16" />
                   <span>Analyze</span>
                 </button>
                 <button
@@ -1849,20 +1515,7 @@
                   @click="requestPresentation()"
                   title="Generate Presentation"
                 >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <rect x="3" y="4" width="18" height="14" rx="2" />
-                    <line x1="8" y1="21" x2="16" y2="21" />
-                    <line x1="12" y1="18" x2="12" y2="21" />
-                  </svg>
+                  <AppIcon name="slideshow" size="16" />
                   <span>Presentation</span>
                 </button>
                 <button
@@ -1871,19 +1524,7 @@
                   @click="requestScript()"
                   title="Generate Script"
                 >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <polyline points="16 18 22 12 16 6" />
-                    <polyline points="8 6 2 12 8 18" />
-                  </svg>
+                  <AppIcon name="code" size="16" />
                   <span>Script</span>
                 </button>
               </div>
@@ -1898,15 +1539,7 @@
                   title="Stop generating"
                   @click="stopGeneration"
                 >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                  >
-                    <rect x="6" y="6" width="12" height="12" rx="2" />
-                  </svg>
+                  <AppIcon name="stop" size="16" />
                 </button>
                 <button
                   v-else
@@ -1921,21 +1554,7 @@
                   title="Send message"
                   @click="send"
                 >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.4"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <line x1="12" y1="19" x2="12" y2="5" />
-                    <polyline points="5 12 12 5 19 12" />
-                  </svg>
+                  <AppIcon name="arrowUpward" size="18" />
                 </button>
               </div>
             </div>
@@ -1974,7 +1593,7 @@
                 ><span
                   class="jobs-chevron"
                   :class="{ 'jobs-chevron--collapsed': agentCollapsed }"
-                  >▾</span
+                  ><AppIcon name="moreDown" size="18" /></span
                 >Agent execution</span
               >
               <span class="tools-sidebar-status">
@@ -2007,33 +1626,14 @@
                 @keydown.enter.prevent="tc.expanded = !tc.expanded"
                 @keydown.space.prevent="tc.expanded = !tc.expanded"
               >
-                <svg
+                <AppIcon
                   class="st-icon st-icon--cooler"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <circle
-                    cx="8"
-                    cy="8"
-                    r="6"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  />
-                  <path
-                    :d="
-                      progressView(tc).phase === 'stopped'
-                        ? 'M6 5v6m4-6v6'
-                        : 'M8 4v4l3 2'
-                    "
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                  />
-                </svg>
+                  :name="progressView(tc).phase === 'stopped' ? 'stop' : 'schedule'"
+                  size="16"
+                />
                 <span class="st-name">{{ progressView(tc).title }}</span>
                 <span class="st-time">{{ progressView(tc).sidebarLabel }}</span>
-                <div v-if="tc.expanded" class="st-cooler-detail" @click.stop>
+                <div v-show="tc.expanded" class="st-cooler-detail" @click.stop>
                   <div class="st-cooler-row">
                     <strong>Tool:</strong> {{ tc.tool }}
                   </div>
@@ -2067,64 +1667,24 @@
                   tc.done && (hoveredTool = hoveredTool === tc ? null : tc)
                 "
               >
-                <svg
+                <AppIcon
                   v-if="!tc.done"
                   class="st-icon st-icon--spin"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                >
-                  <circle
-                    cx="8"
-                    cy="8"
-                    r="6"
-                    stroke="#bf8700"
-                    stroke-width="2"
-                    stroke-dasharray="28"
-                    stroke-dashoffset="8"
-                    stroke-linecap="round"
-                  />
-                </svg>
-                <svg
+                  name="refresh"
+                  size="16"
+                />
+                <AppIcon
                   v-else-if="tc.success && !isThrottledTool(tc)"
                   class="st-icon st-icon--ok"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                >
-                  <circle
-                    cx="8"
-                    cy="8"
-                    r="7"
-                    stroke="#1a7f37"
-                    stroke-width="1.5"
-                  />
-                  <path
-                    d="M5 8.2 7 10.2 11 6"
-                    stroke="#1a7f37"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-                <svg
+                  name="checkCircle"
+                  size="16"
+                />
+                <AppIcon
                   v-else
                   class="st-icon st-icon--fail"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                >
-                  <circle
-                    cx="8"
-                    cy="8"
-                    r="7"
-                    stroke="#cf222e"
-                    stroke-width="1.5"
-                  />
-                  <path
-                    d="M5.5 5.5 10.5 10.5M10.5 5.5 5.5 10.5"
-                    stroke="#cf222e"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                  />
-                </svg>
+                  name="error"
+                  size="16"
+                />
                 <span class="st-name">{{ friendlyToolLabel(tc) }}</span>
                 <span v-if="tc.done" class="st-time">{{
                   formatDuration(tc.durationMs)
@@ -2156,7 +1716,7 @@
                 ><span
                   class="jobs-chevron"
                   :class="{ 'jobs-chevron--collapsed': sessionsCollapsed }"
-                  >▾</span
+                  ><AppIcon name="moreDown" size="18" /></span
                 >Conversations</span
               >
               <span class="tools-sidebar-status">
@@ -2269,7 +1829,7 @@
                 ><span
                   class="jobs-chevron"
                   :class="{ 'jobs-chevron--collapsed': jobsCollapsed }"
-                  >▾</span
+                  ><AppIcon name="moreDown" size="18" /></span
                 >Scheduled jobs</span
               >
               <span class="tools-sidebar-status">
@@ -2302,7 +1862,7 @@
             <div v-else-if="jobs.length === 0" class="sessions-empty">
               No jobs yet — run FinOps checks on a schedule.
               <button class="jobs-empty-cta" @click="openNewJob">
-                ＋ Schedule your first job
+                <AppIcon name="schedule" size="16" /> Schedule your first job
               </button>
             </div>
             <div
@@ -2399,7 +1959,7 @@
                   title="Run once now"
                   aria-label="Run job now"
                 >
-                  ▶
+                  <AppIcon name="playArrow" size="16" />
                 </button>
                 <button
                   class="job-row-btn"
@@ -2407,7 +1967,7 @@
                   title="Edit job"
                   aria-label="Edit job"
                 >
-                  ✎
+                  <AppIcon name="edit" size="16" />
                 </button>
                 <button
                   class="job-switch"
@@ -2430,7 +1990,7 @@
                   title="Delete this job (its conversation is kept)"
                   aria-label="Delete job"
                 >
-                  ×
+                  <AppIcon name="delete" size="16" />
                 </button>
               </div>
             </div>
@@ -2469,7 +2029,7 @@
               aria-label="Close preview"
               @click="closeDeckPreview"
             >
-              ×
+              <AppIcon name="close" size="20" />
             </button>
           </div>
           <div class="deck-preview-body">
@@ -2505,8 +2065,12 @@
           <span class="tool-popover-time">{{
             formatDuration(hoveredTool.durationMs)
           }}</span>
-          <button class="tool-popover-close" @click="hoveredTool = null">
-            &times;
+          <button
+            class="tool-popover-close"
+            aria-label="Close tool details"
+            @click="hoveredTool = null"
+          >
+            <AppIcon name="close" size="18" />
           </button>
         </div>
         <div class="tool-popover-body">
@@ -2549,7 +2113,9 @@
           "
         >
           <div class="job-modal-header">
-            <div class="job-modal-icon">⚙</div>
+            <div class="job-modal-icon">
+              <AppIcon name="settings" size="22" />
+            </div>
             <div class="job-modal-heading">
               <div class="job-modal-title">
                 {{
@@ -2570,7 +2136,7 @@
               @click="closeJobModal"
               aria-label="Close"
             >
-              ×
+              <AppIcon name="close" size="20" />
             </button>
           </div>
           <div class="job-modal-body">
@@ -2586,7 +2152,9 @@
                 :title="t.prompt"
                 @click="applyTemplate(t)"
               >
-                <span class="job-tpl-emoji">{{ t.emoji }}</span>
+                <span class="job-tpl-emoji">
+                  <AppIcon name="schedule" size="16" />
+                </span>
                 <span class="job-tpl-name">{{ t.label }}</span>
               </button>
             </div>
@@ -2716,7 +2284,7 @@ import {
   watch,
 } from "vue";
 import { createAssistantMessageStream } from "../assistantMessageStream.js";
-import { stripCitationMarkers } from "../modelText.js";
+import { renderMarkdown } from "../markdown.js";
 import {
   describeServerTurn,
   describeTurnFailure,
@@ -2727,6 +2295,7 @@ import {
 import TurnFailureNotice from "./TurnFailureNotice.vue";
 import RequestProgressCard from "./RequestProgressCard.vue";
 import ActivityIndicator from "./ActivityIndicator.vue";
+import AppIcon from "./AppIcon.vue";
 import { JOB_TEMPLATES } from "../data/jobTemplates.js";
 import {
   createRequestProgress,
@@ -2797,7 +2366,8 @@ const streamReasoning = ref("");
 // Reasoning since the last tool or text boundary; its latest **heading** is
 // the live status while the model thinks between tool rounds.
 const reasoningSegment = ref("");
-const reasoningOpen = ref(false);
+const reasoningOpen = ref(true);
+const MAX_THINKING_CHARS = 60000;
 // True while answer text is the newest stream event, so the activity row
 // steps aside for the text and returns when the model goes back to tools.
 const streamWriting = ref(false);
@@ -4645,6 +4215,7 @@ async function reloadSessionTranscript(sessionId) {
         return {
           role: m.role,
           content: failure?.text || m.content || "",
+          thinking: m.role === "assistant" ? m.thinking || null : null,
           terminalStatus: m.terminalStatus,
           failure,
           toolCalls: (m.toolCalls || []).map((tc) => ({
@@ -4842,8 +4413,8 @@ async function attachToServerTurn(sessionId) {
       setNotice(
         "working",
         isJobRun
-          ? "⚙ A scheduled run is in progress — its result will appear here when it finishes."
-          : "⏳ Still working on your last question — the answer will appear here when ready.",
+          ? "A scheduled run is in progress — its result will appear here when it finishes."
+          : "Still working on your last question — the answer will appear here when ready.",
       );
     while (token === serverTurnPollToken) {
       await new Promise((res) => setTimeout(res, 4000));
@@ -5583,7 +5154,7 @@ const agentStatus = computed(() => {
 function resetStreamActivity() {
   streamReasoning.value = "";
   reasoningSegment.value = "";
-  reasoningOpen.value = false;
+  reasoningOpen.value = true;
   streamWriting.value = false;
 }
 
@@ -6014,9 +5585,15 @@ function maturityNumeric(level) {
 }
 
 function starsText(score) {
-  if (!Number.isFinite(score) || score < 0) return "☆☆☆☆☆";
-  const full = Math.min(score, 5);
-  return "★".repeat(full) + "☆".repeat(5 - full);
+  const full = Number.isFinite(score) ? Math.max(0, Math.min(5, Math.round(score))) : 0;
+  return `${full}/5`;
+}
+
+function maturityStarIcons(score) {
+  const full = Number.isFinite(score) ? Math.max(0, Math.min(5, Math.round(score))) : 0;
+  return Array.from({ length: 5 }, (_, index) =>
+    index < full ? "star" : "starOutline",
+  );
 }
 
 function starColor(score) {
@@ -7545,7 +7122,7 @@ function scrollToBottom() {
   if (!stickToBottom.value) return;
   nextTick(() => {
     const el = messagesEl.value;
-    if (el && stickToBottom.value) {
+    if (el && stickToBottom.value && messages.value.length) {
       el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
     }
   });
@@ -7556,6 +7133,13 @@ function scrollToBottom() {
 // short hops; instant when far away (a multi-screen smooth crawl is
 // dizzying) or when repainting a whole transcript.
 function forceScrollToBottom(smooth = false) {
+  if (!messages.value.length) {
+    nextTick(() => {
+      const el = messagesEl.value;
+      if (el) el.scrollTo({ top: 0, behavior: "instant" });
+    });
+    return;
+  }
   stickToBottom.value = true;
   nextTick(() => {
     const el = messagesEl.value;
@@ -7590,221 +7174,8 @@ watch(streaming, async (val) => {
   }
 });
 
-// ── Wow markdown tables ──
-// Builds a glassmorphism table styled like the FinOps Cosmos reference:
-//  - uppercase letter-spaced headers
-//  - mono numerics, hover row tint
-//  - auto-color delta cells (▲/▼/+/-N%) green/red/orange
-//  - status pills (OK / Watch / Alert / Optimal / Critical)
-//  - mini gradient bar in the rightmost numeric column showing relative magnitude
-function buildWowTable(headerCells, dataRows) {
-  const colCount = headerCells.length;
-  // Detect numeric columns and find rightmost numeric column for the mini bar
-  const numericCounts = new Array(colCount).fill(0);
-  const totalRows = dataRows.length;
-  const colNumericValues = new Array(colCount).fill(0).map(() => []);
-  for (const row of dataRows) {
-    for (let c = 0; c < colCount; c++) {
-      const cell = row[c] || "";
-      const n = parseNumeric(cell);
-      if (n !== null) {
-        numericCounts[c]++;
-        colNumericValues[c].push(Math.abs(n));
-      }
-    }
-  }
-  const numericColumns = numericCounts.map(
-    (n, c) => n > 0 && n / Math.max(1, totalRows) >= 0.6,
-  );
-  // Pick rightmost numeric column for mini bar
-  let barColumn = -1;
-  for (let c = colCount - 1; c >= 0; c--) {
-    if (numericColumns[c]) {
-      barColumn = c;
-      break;
-    }
-  }
-  const barColMax =
-    barColumn >= 0 ? Math.max(1, ...colNumericValues[barColumn]) : 1;
-
-  const headHtml = headerCells
-    .map(
-      // Cells arrive pre-escaped — renderContent escapes the whole text
-      // before any transform. Re-escaping here would double-encode &.
-      (h, c) => `<th class="${numericColumns[c] ? "wt-num" : ""}">${h}</th>`,
-    )
-    .join("");
-
-  const bodyHtml = dataRows
-    .map((row) => {
-      const cells = headerCells
-        .map((_, c) => {
-          const raw = row[c] ?? "";
-          const isNum = numericColumns[c];
-          const inner = enhanceCell(raw);
-          return `<td class="${isNum ? "wt-num" : ""}">${inner}</td>`;
-        })
-        .join("");
-      return `<tr>${cells}</tr>`;
-    })
-    .join("");
-  return `<div class="wt-wrap"><table class="wow-table"><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`;
-}
-
-function parseNumeric(cell) {
-  if (!cell) return null;
-  // Strip $, %, commas, leading +/▲/▼, trailing K/M/B
-  const m = String(cell)
-    .replace(/[▲▼↑↓]/g, "")
-    .match(/-?[\d,]+\.?\d*\s*[kKmMbB%]?/);
-  if (!m) return null;
-  let raw = m[0].replace(/,/g, "").trim();
-  let mult = 1;
-  if (/k$/i.test(raw)) {
-    mult = 1e3;
-    raw = raw.slice(0, -1);
-  } else if (/m$/i.test(raw)) {
-    mult = 1e6;
-    raw = raw.slice(0, -1);
-  } else if (/b$/i.test(raw)) {
-    mult = 1e9;
-    raw = raw.slice(0, -1);
-  } else if (/%$/.test(raw)) {
-    raw = raw.slice(0, -1);
-  }
-  const n = parseFloat(raw);
-  return isFinite(n) ? n * mult : null;
-}
-
-function enhanceCell(raw) {
-  // NOTE: `raw` is already HTML-escaped — renderContent escapes the whole
-  // text up front. Do NOT re-escape here (it would double-encode &amp;).
-  const safe = raw;
-  // Status pills
-  const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
-  const goodWords = [
-    "ok",
-    "optimal",
-    "healthy",
-    "good",
-    "pass",
-    "✓",
-    "yes",
-    "active",
-  ];
-  const warnWords = [
-    "watch",
-    "warning",
-    "warn",
-    "caution",
-    "pending",
-    "medium",
-  ];
-  const badWords = [
-    "alert",
-    "critical",
-    "fail",
-    "failed",
-    "error",
-    "high",
-    "✗",
-    "no",
-    "down",
-    "orphan",
-    "orphaned",
-    "unattached",
-    "idle",
-  ];
-  if (goodWords.includes(lower))
-    return `<span class="wt-tag wt-tag-g">${safe}</span>`;
-  if (warnWords.includes(lower))
-    return `<span class="wt-tag wt-tag-w">${safe}</span>`;
-  if (badWords.includes(lower))
-    return `<span class="wt-tag wt-tag-b">${safe}</span>`;
-
-  // Delta arrows  ▲ +14%   ▼ -8%   — flat
-  const upMatch = trimmed.match(/^(?:▲|↑|\+)\s*([\d.,]+\s*%?)$/);
-  if (upMatch) return `<span class="wt-up">▲ ${upMatch[1]}</span>`;
-  const downMatch = trimmed.match(/^(?:▼|↓|-)\s*([\d.,]+\s*%?)$/);
-  if (downMatch) return `<span class="wt-down">▼ ${downMatch[1]}</span>`;
-  if (/^(—|flat|n\/a|-)$/i.test(trimmed))
-    return `<span class="wt-flat">—</span>`;
-
-  // Currency / percent stays as-is but rendered via mono in CSS
-  return safe;
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function renderContent(text) {
-  if (!text) return "";
-  // SECURITY: escape ALL HTML entities up front. Model output can carry
-  // attacker-influenced content (fetched web pages, uploaded file contents,
-  // Azure resource names/tags) — raw markup must never reach v-html. CSP
-  // blocks script execution, but injected anchors/layout would still be a
-  // phishing/defacement vector. Every transform below operates on the
-  // escaped text; downstream helpers (buildWowTable/enhanceCell) must NOT
-  // re-escape.
-  // The & escape preserves entities the model already wrote (&lt; &#65; …):
-  // entities in text nodes only ever decode to characters, never elements,
-  // so passing them through is safe and keeps display fidelity.
-  let html = stripCitationMarkers(String(text))
-    .replace(/&(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#x[\da-fA-F]+);)/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  html = html.replace(
-    /```(\w*)\n([\s\S]*?)```/g,
-    '<pre><code class="lang-$1">$2</code></pre>',
-  );
-  html = html.replace(
-    /((?:^|\n)\|.+\|(?:\n\|[-:| ]+\|)(?:\n\|.+\|)+)/g,
-    (match) => {
-      const lines = match.trim().split("\n");
-      if (lines.length < 2) return match;
-      // Strip outer pipes then split — keeps interior empty cells aligned.
-      const splitRow = (line) =>
-        line
-          .trim()
-          .replace(/^\||\|$/g, "")
-          .split("|")
-          .map((c) => c.trim());
-      const headerCells = splitRow(lines[0]);
-      const dataRows = lines.slice(2).map(splitRow);
-      return buildWowTable(headerCells, dataRows);
-    },
-  );
-  // Clickable prompt chips: the model marks suggested questions with
-  // [label](prompt:full question). Render as a chip; a delegated click
-  // handler sends the question. Runs AFTER table building — the global
-  // escape above only touches &<> so the [label](prompt:...) syntax
-  // survives into table cells and is transformed here. Deterministic — no
-  // guessing which text is clickable. Works in tables, lists, and prose.
-  // label/q are already entity-escaped; only quotes need escaping for the
-  // attribute value (getAttribute decodes entities back to the original).
-  html = html.replace(
-    /\[([^\]]+)\]\(prompt:([^)]+)\)/g,
-    (_, label, q) =>
-      `<button type="button" class="prompt-chip" data-prompt="${q.trim().replace(/"/g, "&quot;")}">${label.trim()}</button>`,
-  );
-  html = html.replace(/^### (.+)$/gm, "<h4>$1</h4>");
-  html = html.replace(/^## (.+)$/gm, "<h3>$1</h3>");
-  html = html.replace(/^# (.+)$/gm, "<h2>$1</h2>");
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-  html = html.replace(/^- (.+)$/gm, "<li>$1</li>");
-  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, "<ul>$1</ul>");
-  html = html.replace(/\n/g, "<br/>");
-  html = html.replace(/<\/(table|pre|ul|h[234])><br\/>/g, "</$1>");
-  html = html.replace(/<br\/><(table|pre|ul|h[234])/g, "<$1");
-  return html;
-}
+// Model text is rendered by the escape-first Markdown module; see markdown.js.
+const renderContent = renderMarkdown;
 
 async function sendPrompt(text) {
   if (!props.user || clearing.value) return;
@@ -7969,6 +7340,7 @@ async function send() {
   };
   streamBuffer.value = "";
   streamFailure.value = null;
+  resetStreamActivity();
   activeTools.value = [];
   forceScrollToBottom(true);
 
@@ -7988,6 +7360,10 @@ async function send() {
   let hasDeltas = false;
   let wasBusy = false;
   const assistantMessages = createAssistantMessageStream();
+  // The turn's reasoning summary stays visible above its answer; each stretch
+  // between tool calls or answer text starts its own paragraph.
+  let turnThinking = "";
+  let thinkingBreak = false;
   // Artifacts produced by THIS stream. Kept stream-local (not in the shared
   // htmlReady/scriptReady refs) so a deck/script finishing in a background
   // session can't pop into whichever conversation is currently in view —
@@ -8284,8 +7660,8 @@ async function send() {
           }
 
           case "delta":
+            thinkingBreak = true;
             if (isActiveView()) {
-              streamReasoning.value = "";
               reasoningSegment.value = "";
               streamWriting.value = true;
             }
@@ -8310,16 +7686,21 @@ async function send() {
             break;
 
           case "reasoning":
-            // Reasoning summary: its newest **heading** becomes the live
-            // status, and the rolling tail is available behind "Show thinking".
-            if (data.content && isActiveView()) {
-              const merged = streamReasoning.value + data.content;
-              streamReasoning.value =
-                merged.length > 1500 ? "…" + merged.slice(-1500) : merged;
-              reasoningSegment.value = (
-                reasoningSegment.value + data.content
-              ).slice(-1500);
-              streamWriting.value = false;
+            // Reasoning summary: shown above the answer for the whole turn,
+            // and its newest **heading** becomes the live status.
+            if (data.content) {
+              const lead = thinkingBreak && turnThinking ? "\n\n" : "";
+              thinkingBreak = false;
+              turnThinking = (turnThinking + lead + data.content).slice(
+                -MAX_THINKING_CHARS,
+              );
+              if (isActiveView()) {
+                streamReasoning.value = turnThinking;
+                reasoningSegment.value = (
+                  reasoningSegment.value + data.content
+                ).slice(-1500);
+                streamWriting.value = false;
+              }
             }
             break;
 
@@ -8361,16 +7742,17 @@ async function send() {
                 textAnimFrame = null;
                 pendingText = "";
                 streamBuffer.value = completeText;
-                streamReasoning.value = "";
                 reasoningSegment.value = "";
                 streamWriting.value = true;
               }
+              thinkingBreak = true;
               hasDeltas = true;
             }
             break;
 
           case "tool_start":
             assistantMessages.toolBoundary();
+            thinkingBreak = true;
             activeTools.value = [...activeTools.value, data.tool];
             {
               const existingIdx = toolCalls.findIndex((t) => t.id === data.id);
@@ -8634,6 +8016,8 @@ async function send() {
     const msgObj = {
       role: "assistant",
       content: clean,
+      thinking: turnThinking.trim() || null,
+      thinkingOpen: reasoningOpen.value,
       toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
       charts: [...charts],
       followUp: streamFollowUpForTurn ? { ...streamFollowUpForTurn } : null,
@@ -8764,6 +8148,8 @@ async function send() {
             messages.value.push({
               role: "assistant",
               content: streamBuffer.value + "\n\n*(generation stopped)*",
+              thinking: turnThinking.trim() || null,
+              thinkingOpen: reasoningOpen.value,
               toolCalls: toolCalls.map((tc) => ({ ...tc, expanded: false })),
               charts: [...charts],
             });
@@ -8886,52 +8272,38 @@ async function send() {
 /* ===== Modern, smooth scrollbars (all scrollables) ===== */
 :deep(*) {
   scrollbar-width: thin;
-  scrollbar-color: rgba(15, 23, 42, 0.18) transparent;
+  scrollbar-color: rgba(136, 136, 136, 0.2) transparent;
 }
 :deep(*::-webkit-scrollbar) {
-  width: 10px;
-  height: 10px;
+  width: 6px;
+  height: 6px;
 }
 :deep(*::-webkit-scrollbar-track) {
   background: transparent;
 }
 :deep(*::-webkit-scrollbar-thumb) {
-  background: rgba(15, 23, 42, 0.18);
+  background: rgba(136, 136, 136, 0.2);
   border-radius: 999px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
   transition: background 0.15s;
 }
 :deep(*::-webkit-scrollbar-thumb:hover) {
-  background: rgba(15, 23, 42, 0.32);
-  background-clip: padding-box;
-  border: 2px solid transparent;
+  background: rgba(136, 136, 136, 0.4);
 }
 :deep(*::-webkit-scrollbar-corner) {
   background: transparent;
 }
-/*
- * ══════════════════════════════════════════════════════════
- * Design tokens (Fluent / Azure Portal)
- *
- * Text:       #323130 (primary), #605e5c (secondary)
- * Accent:     #0078d4 (hover: #106ebe)
- * Borders:    #e1dfdd
- * Hover bg:   #f3f2f1
- * Surfaces:   #fff
- * Font:       14px "Segoe UI" base, 13px body text
- * Radius:     4px (controls), 8px (cards/panels)
- * ══════════════════════════════════════════════════════════
- */
-
 /* ── Layout shell ── */
 .chat-view {
-  --portal-header-height: 40px;
+  --portal-header-height: 48px;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
 }
 .portal-body {
   display: flex;
@@ -8941,18 +8313,19 @@ async function send() {
   overflow: hidden;
 }
 
-/* ── Azure Portal Top Bar ── */
+/* ── Minimal top bar ── */
 .portal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: var(--portal-header-height);
-  background: linear-gradient(90deg, #005a9e 0%, #0078d4 55%, #0098e0 100%);
-  color: #fff;
-  padding: 0 12px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 0 16px;
   flex-shrink: 0;
   z-index: 100;
   position: relative;
+  border-bottom: 1px solid var(--border);
 }
 .portal-trustline {
   display: inline-flex;
@@ -8962,7 +8335,7 @@ async function send() {
   font-weight: 500;
   letter-spacing: 0.03em;
   line-height: 1;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8972,7 +8345,7 @@ async function send() {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--accent);
   flex-shrink: 0;
   opacity: 0.85;
 }
@@ -8997,14 +8370,18 @@ async function send() {
   text-decoration: none;
   opacity: 0.95;
   transition:
-    color 0.15s,
-    opacity 0.15s;
+    color var(--motion-fast),
+    background var(--motion-fast),
+    opacity var(--motion-fast);
+  padding: 6px 10px;
+  border-radius: 999px;
 }
 .portal-trustline-link svg {
   display: block;
 }
 .portal-trustline-link:hover {
-  color: #ffffff;
+  color: var(--primary);
+  background: var(--sidebar-hover);
   opacity: 1;
 }
 @media (max-width: 520px) {
@@ -9023,38 +8400,47 @@ async function send() {
 .portal-header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .portal-burger {
-  background: none;
+  width: 36px;
+  height: 36px;
+  background: transparent;
   border: none;
-  color: #fff;
+  color: var(--ink);
   cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
+  padding: 0;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast),
+    transform var(--motion-fast);
 }
 .portal-burger:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--sidebar-hover);
+  color: var(--primary);
+}
+.portal-burger:active {
+  transform: scale(0.96);
 }
 .sidebar-backdrop {
   display: none;
 }
 .portal-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #fff;
+  font-size: var(--text-label-size);
+  font-weight: 500;
+  color: var(--ink);
 }
 .portal-readonly-badge {
   font-size: 10px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.85);
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 3px;
+  color: var(--text-muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
   padding: 1px 6px;
   margin-left: 8px;
   letter-spacing: 0.3px;
@@ -9070,33 +8456,35 @@ async function send() {
   align-items: center;
   gap: 6px;
   margin-left: auto;
-  padding: 3px 10px;
-  border-radius: 10px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--text-caption-size);
+  font-weight: 500;
+  letter-spacing: 0;
+  background: var(--card);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 .portal-build-badge--preview {
-  background: #ffb900;
-  color: #1f1f1f;
+  background: rgba(54, 120, 232, 0.1);
+  border-color: rgba(54, 120, 232, 0.2);
+  color: var(--accent);
 }
 .portal-build-badge-sep {
   opacity: 0.6;
 }
 .portal-build-badge-branch {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-family: var(--font-mono);
   text-transform: lowercase;
   max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .portal-header-email {
-  font-size: 14px;
-  font-weight: 600;
-  color: #fff;
+  font-size: var(--text-label-size);
+  font-weight: 500;
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -9105,7 +8493,7 @@ async function send() {
 .portal-header-disconnect {
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--text-muted);
   cursor: pointer;
   padding: 4px;
   border-radius: 4px;
@@ -9117,8 +8505,8 @@ async function send() {
     color 0.15s;
 }
 .portal-header-disconnect:hover {
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
+  background: var(--sidebar-hover);
+  color: var(--danger);
 }
 .portal-user-identity {
   display: flex;
@@ -9130,7 +8518,7 @@ async function send() {
   transition: background 0.15s;
 }
 .portal-user-identity:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--sidebar-hover);
 }
 .portal-user-identity--anon {
   cursor: default;
@@ -9145,9 +8533,9 @@ async function send() {
   line-height: 1.2;
 }
 .portal-user-email {
-  font-size: 13px;
+  font-size: var(--text-caption-size);
   font-weight: 400;
-  color: #fff;
+  color: var(--ink);
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -9156,15 +8544,15 @@ async function send() {
 .portal-user-tenant {
   font-size: 11px;
   font-weight: 400;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-muted);
   text-transform: uppercase;
 }
 .portal-user-avatar {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
+  background: var(--card);
+  color: var(--ink);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -9173,16 +8561,16 @@ async function send() {
 
 /* ── Left sidebar ── */
 .sidebar {
-  width: 290px;
+  width: 300px;
   flex-shrink: 0;
-  border-right: 1px solid #e1dfdd;
-  background: #fff;
+  border-right: 1px solid var(--sidebar-border);
+  background: var(--sidebar-bg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   transition:
-    width 0.25s ease,
-    opacity 0.2s ease;
+    width var(--motion-collapse),
+    opacity var(--motion-enter);
 }
 .sidebar--collapsed {
   width: 0;
@@ -9196,17 +8584,18 @@ async function send() {
 .sidebar-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 8px 0 12px;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 .sidebar-category-label {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 500;
   text-transform: none;
   letter-spacing: 0;
-  color: #323130;
+  color: var(--text-muted);
   margin-bottom: 4px;
   padding: 0 16px;
 }
@@ -9220,16 +8609,16 @@ async function send() {
   justify-content: space-between;
   cursor: pointer;
   user-select: none;
-  border-radius: 2px;
-  padding: 4px 16px;
+  border-radius: 8px;
+  padding: 6px 16px;
 }
 .sidebar-category-label--toggle:hover {
-  background: #f3f2f1;
+  background: var(--sidebar-hover);
 }
 .collapse-chevron {
   width: 14px;
   height: 14px;
-  transition: transform 0.15s ease;
+  transition: transform var(--motion-fast);
   flex-shrink: 0;
 }
 .collapse-chevron--collapsed {
@@ -9240,8 +8629,8 @@ async function send() {
   max-height: 2000px;
   opacity: 1;
   transition:
-    max-height 0.3s ease,
-    opacity 0.25s ease;
+    max-height var(--motion-collapse),
+    opacity var(--motion-enter);
 }
 .collapse-body--collapsed {
   max-height: 0;
@@ -9253,28 +8642,29 @@ async function send() {
 .sidebar-question {
   display: flex;
   align-items: center;
-  width: calc(100% - 20px);
-  margin: 1px 10px;
-  padding: 8px 12px;
+  width: calc(100% - 24px);
+  min-height: 44px;
+  margin: 1px 12px;
+  padding: 10px 12px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
-  font-size: 13px;
+  font-size: var(--text-label-size);
   font-weight: 400;
-  color: #323130;
+  color: var(--sidebar-secondary);
   cursor: pointer;
   text-align: left;
   line-height: 1.4;
   transition:
-    background 0.15s ease,
-    box-shadow 0.15s ease,
-    color 0.15s ease;
+    background var(--motion-fast),
+    box-shadow var(--motion-fast),
+    color var(--motion-fast);
   font-family: inherit;
 }
 .sidebar-question:hover:not(:disabled) {
-  background: rgba(15, 23, 42, 0.04);
-  color: #1a1a1a;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  background: var(--sidebar-hover);
+  color: var(--primary);
+  box-shadow: none;
 }
 .sidebar-question:disabled {
   opacity: 0.4;
@@ -9291,14 +8681,14 @@ async function send() {
   border: 1px solid transparent;
   border-radius: 6px;
   text-align: center;
-  color: #0078d4;
+  color: var(--accent);
   width: calc(100% - 24px);
   font-weight: 600;
 }
 .sidebar-question--score-cta:hover {
-  background: rgba(0, 120, 212, 0.06);
-  color: #005a9e;
-  box-shadow: 0 1px 2px rgba(0, 120, 212, 0.08);
+  background: rgba(54, 120, 232, 0.08);
+  color: var(--accent-hover);
+  box-shadow: none;
 }
 
 /* ── Maturity score cards (Crawl / Walk / Run) — clickable hero cards ── */
@@ -9308,25 +8698,23 @@ async function send() {
   gap: 6px;
   margin: 8px 12px;
   padding: 14px 14px 12px;
-  border: 1px solid #e1dfdd;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
   cursor: pointer;
   box-shadow:
-    0 2px 4px rgba(15, 23, 42, 0.06),
-    0 1px 2px rgba(15, 23, 42, 0.04);
+    0 2px 8px var(--chart-shadow),
+    0 1px 2px rgba(37, 61, 103, 0.04);
   transition:
-    border-color 0.2s ease,
-    box-shadow 0.25s ease,
-    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast),
+    transform var(--motion-fast);
   user-select: none;
 }
 .maturity-card:hover:not(.maturity-card--disabled) {
-  border-color: #c8c6c4;
-  box-shadow:
-    0 8px 16px rgba(15, 23, 42, 0.12),
-    0 2px 4px rgba(15, 23, 42, 0.08);
-  transform: translateY(-2px);
+  border-color: var(--chart-border);
+  box-shadow: 0 8px 24px var(--chart-shadow);
+  transform: translateY(-1px);
 }
 .maturity-card:focus,
 .maturity-card:focus-visible {
@@ -9337,7 +8725,7 @@ async function send() {
   cursor: default;
 }
 .maturity-card--scored {
-  background: #fff;
+  background: var(--surface);
 }
 .maturity-card-header {
   display: flex;
@@ -9352,27 +8740,28 @@ async function send() {
   min-width: 0;
 }
 .maturity-card-label {
-  font-size: 14px;
-  font-weight: 700;
-  color: #1f2328;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 500;
+  color: var(--ink);
   letter-spacing: 0.2px;
 }
 .maturity-card-subtitle {
-  font-size: 11px;
+  font-size: var(--text-caption-size);
   font-weight: 400;
-  color: #656d76;
+  color: var(--text-muted);
 }
 .maturity-card-cta {
   flex-shrink: 0;
   font-size: 11px;
   font-weight: 600;
-  color: #8a8886;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.4px;
   white-space: nowrap;
 }
 .maturity-card:hover:not(.maturity-card--disabled) .maturity-card-cta {
-  color: #1f2328;
+  color: var(--primary);
 }
 .maturity-card-body {
   display: flex;
@@ -9382,14 +8771,16 @@ async function send() {
   margin-top: 2px;
 }
 .maturity-card-stars {
-  font-size: 22px;
-  letter-spacing: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  letter-spacing: 0;
   line-height: 1;
 }
 .maturity-card-chevron {
   width: 16px;
   height: 16px;
-  color: #8a8886;
+  color: var(--text-muted);
   cursor: pointer;
   padding: 2px;
   border-radius: 4px;
@@ -9399,8 +8790,8 @@ async function send() {
     color 0.15s ease;
 }
 .maturity-card-chevron:hover {
-  background: rgba(15, 23, 42, 0.06);
-  color: #1f2328;
+  background: var(--sidebar-hover);
+  color: var(--primary);
 }
 .maturity-card-chevron:focus,
 .maturity-card-chevron:focus-visible {
@@ -9481,10 +8872,14 @@ async function send() {
   line-height: 1.3;
 }
 .assessment-stars {
-  font-size: 22px;
-  letter-spacing: 3px;
+  letter-spacing: 0;
   line-height: 1;
   padding: 2px 0;
+}
+.assessment-star-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
 }
 .assessment-detail-text {
   font-size: 11px;
@@ -9986,6 +9381,7 @@ async function send() {
 .scope-badge {
   display: inline-flex;
   align-items: center;
+  gap: 3px;
   padding: 1px 6px;
   border-radius: 3px;
   background: #f3f2f1;
@@ -10029,6 +9425,9 @@ async function send() {
   border-color: #106ebe;
 }
 .scope-row-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11.5px;
   font-weight: 600;
   color: #107c10;
@@ -10293,12 +9692,13 @@ async function send() {
      streaming; smooth only for short deliberate hops). */
 }
 .messages-inner {
-  padding: 1rem 2rem;
+  padding: 24px 24px 16px;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 16px;
   width: 100%;
-  max-width: 100%;
+  max-width: 756px;
+  margin: 0 auto;
   min-width: 0;
   flex: 1;
 }
@@ -10320,13 +9720,14 @@ async function send() {
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  border: 1px solid rgba(15, 23, 42, 0.12);
+  border: 1px solid var(--border);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(8px);
-  color: #1f2328;
-  font-size: 0.78rem;
-  font-weight: 600;
+  color: var(--ink);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 500;
   font-family: inherit;
   cursor: pointer;
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.14);
@@ -10344,8 +9745,8 @@ async function send() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 2rem 2rem 1rem;
-  max-width: 720px;
+  padding: clamp(18px, 5vh, 44px) 0 16px;
+  max-width: 756px;
   margin: 0 auto;
   width: 100%;
   animation: fadeSlideIn 0.35s ease;
@@ -10376,13 +9777,13 @@ async function send() {
 /* ===== Modern hero (empty-state landing) ===== */
 .hero {
   width: 100%;
-  max-width: 880px;
+  max-width: 756px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: clamp(1rem, 4vh, 2.5rem) 1rem;
+  padding: 0;
 }
 .hero-eyebrow {
   display: inline-flex;
@@ -10416,41 +9817,39 @@ async function send() {
   }
 }
 .hero-title {
-  font-size: clamp(2.2rem, 5.5vw, 4.5rem);
-  font-weight: 800;
-  line-height: 1.05;
-  letter-spacing: -0.035em;
-  margin: 0 0 0.6rem;
-  color: #111827;
+  font-size: 36px;
+  font-weight: 320;
+  line-height: 44px;
+  letter-spacing: 0;
+  font-variation-settings: var(--font-variation-greeting);
+  margin: 0 0 8px;
+  color: var(--primary);
 }
 .hero-title-accent {
-  background: linear-gradient(135deg, #005a9e 0%, #0078d4 50%, #0098e0 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  color: var(--primary);
 }
 .hero-tagline {
-  font-size: clamp(1rem, 1.4vw, 1.25rem);
-  font-weight: 500;
-  color: #4b5563;
-  margin: 0.4rem 0 clamp(1.6rem, 4vh, 2.6rem);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+  font-weight: 400;
+  color: var(--text-muted);
+  margin: 0 0 28px;
   max-width: 640px;
-  line-height: 1.5;
 }
 .hero-cards {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
+  gap: 12px;
   width: 100%;
 }
 .hero-card {
-  background: #ffffff;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 14px;
-  padding: 18px 18px 20px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 16px;
   text-align: left;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
+  animation: fadeSlideIn var(--motion-enter) both;
 }
 .hero-card-icon {
   display: inline-flex;
@@ -10466,16 +9865,17 @@ async function send() {
   margin-bottom: 10px;
 }
 .hero-card-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: #111827;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 500;
+  color: var(--ink);
   margin-bottom: 4px;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 .hero-card-desc {
-  font-size: 12.5px;
-  color: #6b7280;
-  line-height: 1.45;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
 }
 @media (max-width: 720px) {
   .hero-cards {
@@ -10923,8 +10323,9 @@ async function send() {
   display: flex;
   width: 100%;
   min-width: 0;
-  max-width: 100%;
-  animation: messageSlideIn 0.3s ease;
+  max-width: 756px;
+  margin: 0 auto;
+  animation: messageSlideIn var(--motion-enter);
 }
 @keyframes messageSlideIn {
   from {
@@ -10946,15 +10347,15 @@ async function send() {
   justify-content: center;
 }
 .system-notice {
-  max-width: 72%;
+  max-width: 100%;
   margin: 2px 0;
   padding: 8px 16px;
   border-radius: 16px;
-  background: #f7f7f8;
-  border: 1px solid #e5e5e5;
-  color: #676767;
-  font-size: 13px;
-  line-height: 1.45;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
   text-align: center;
 }
 .session-notice--activity {
@@ -10964,12 +10365,12 @@ async function send() {
 .change-review {
   width: 100%;
   min-width: 0;
-  border: 1px solid #e1dfdd;
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
   padding: 12px 16px;
-  color: #323130;
-  font-size: 13px;
+  color: var(--ink);
+  font-size: var(--text-label-size);
 }
 .change-review summary {
   cursor: pointer;
@@ -11007,13 +10408,13 @@ async function send() {
   cursor: not-allowed;
 }
 .bubble--user {
-  max-width: 82%;
-  border-radius: 20px;
-  padding: 10px 16px;
-  background: #f4f4f4;
-  color: #1f1f1f;
-  font-size: 16px;
-  line-height: 1.5;
+  max-width: min(82%, 692px);
+  border-radius: var(--radius-bubble);
+  padding: 12px 16px;
+  background: var(--user-bubble);
+  color: var(--ink);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
   word-wrap: break-word;
 }
 .ai-row {
@@ -11030,10 +10431,10 @@ async function send() {
   overflow-x: auto;
 }
 .message-text {
-  font-size: 16px;
-  line-height: 1.65;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
   word-wrap: break-word;
-  color: #1f1f1f;
+  color: var(--ink);
 }
 /* Model-marked clickable prompt suggestions — [label](prompt:...) links. */
 :deep(.prompt-chip) {
@@ -11061,11 +10462,21 @@ async function send() {
 :deep(.prompt-chip:active) {
   transform: translateY(0);
 }
+/* The turn's reasoning summary, shown above its answer while streaming and
+   after it completes. Collapsible, but open by default. */
+.thinking {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
 .reasoning-toggle {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  margin-left: -8px;
   padding: 2px 8px;
   border: 0;
   border-radius: 999px;
@@ -11084,35 +10495,41 @@ async function send() {
   outline: 2px solid #3678e8;
   outline-offset: 1px;
 }
-.reasoning-toggle svg {
-  transition: transform 0.2s ease;
+.reasoning-chevron {
+  transition: transform var(--motion-fast);
 }
-.reasoning-toggle[aria-expanded="true"] svg {
-  transform: rotate(180deg);
+.reasoning-toggle[aria-expanded="false"] .reasoning-chevron {
+  transform: rotate(-90deg);
 }
-/* Rolling window under the activity row, aligned with its label; the newest
-   reasoning stays pinned at the bottom. */
 .reasoning-panel {
-  margin: -4px 0 4px 36px;
-  padding: 2px 0 2px 14px;
+  align-self: stretch;
+  margin: 0 0 6px 1px;
+  padding: 0 0 0 14px;
   border-left: 2px solid #e5e5e5;
   color: #676767;
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.6;
   word-break: break-word;
-  max-height: 168px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
+  animation: reasoning-in var(--motion-enter);
+}
+.reasoning-panel--done {
+  animation: none;
+}
+@keyframes reasoning-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .reasoning-toggle svg {
+  .reasoning-chevron,
+  .reasoning-panel {
     transition: none;
+    animation: none;
   }
 }
 /* Markdown inside the thinking panel. The reasoning stream is rendered through
-   the same (HTML-escaping) renderContent as the main answer, but the answer
+   the same (HTML-escaping) Markdown renderer as the main answer, but the answer
    styles are scoped to .message-text, so these compact overrides keep headings,
    lists, code and tables from blowing up the small rolling window. */
 .reasoning-md :deep(h2),
@@ -11130,6 +10547,10 @@ async function send() {
 .reasoning-md :deep(p) {
   margin: 0 0 6px;
 }
+.reasoning-md :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.reasoning-md :deep(ol),
 .reasoning-md :deep(ul) {
   margin: 2px 0;
   padding-left: 18px;
@@ -11191,42 +10612,36 @@ async function send() {
   padding: 0;
 }
 .message-text :deep(.wt-wrap) {
-  margin: 12px 0;
+  margin: 12px 0 16px;
   border-radius: 12px;
   background: #ffffff;
-  border: 1px solid #e1dfdd;
-  box-shadow:
-    0 4px 16px rgba(0, 120, 212, 0.06),
-    0 1px 3px rgba(0, 0, 0, 0.04);
-  overflow: hidden;
+  border: 1px solid var(--border);
+  overflow-x: auto;
 }
 .message-text :deep(.wow-table) {
   border-collapse: collapse;
   width: 100%;
-  font-size: 13px;
-  color: #1f2328;
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--ink);
   background: transparent;
-  display: table;
-  overflow-x: auto;
 }
 .message-text :deep(.wow-table th) {
   text-align: left;
-  padding: 11px 14px;
-  color: #656d76;
+  padding: 10px 14px;
+  color: var(--text-muted);
   font-weight: 600;
-  font-size: 10.5px;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-  border-bottom: 1px solid #e1dfdd;
-  background: #f6f8fa;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  background: #f7f7f8;
   white-space: nowrap;
 }
 .message-text :deep(.wow-table td) {
   padding: 10px 14px;
   border: none;
-  border-bottom: 1px solid #f0f2f5;
-  color: #1f2328;
-  vertical-align: middle;
+  border-bottom: 1px solid #f0f0f0;
+  color: var(--ink);
+  vertical-align: top;
 }
 .message-text :deep(.wow-table tbody tr:last-child td) {
   border-bottom: none;
@@ -11327,25 +10742,94 @@ async function send() {
 .message-text :deep(h2),
 .message-text :deep(h3),
 .message-text :deep(h4) {
-  margin: 12px 0 4px;
+  margin: 20px 0 8px;
   font-weight: 600;
-  color: #323130;
+  color: var(--ink);
 }
 .message-text :deep(h2) {
-  font-size: 18px;
+  font-size: 22px;
+  line-height: 28px;
 }
 .message-text :deep(h3) {
-  font-size: 16px;
+  font-size: 19px;
+  line-height: 26px;
 }
 .message-text :deep(h4) {
-  font-size: 14px;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
 }
+.message-text :deep(p) {
+  margin: 0 0 12px;
+}
+.message-text > :deep(:last-child),
+.message-text :deep(li > p:last-child) {
+  margin-bottom: 0;
+}
+.message-text > :deep(:first-child) {
+  margin-top: 0;
+}
+.message-text :deep(ol),
 .message-text :deep(ul) {
-  margin: 4px 0;
+  margin: 4px 0 12px;
   padding-left: 1.5rem;
 }
 .message-text :deep(li) {
-  margin: 2px 0;
+  margin: 4px 0;
+}
+.message-text :deep(li > ol),
+.message-text :deep(li > ul) {
+  margin: 4px 0;
+}
+.message-text :deep(li::marker) {
+  color: #676767;
+}
+.message-text :deep(.md-task) {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin: 0 8px -2px -20px;
+  border: 1.5px solid #8f8f8f;
+  border-radius: 4px;
+  vertical-align: baseline;
+}
+.message-text :deep(li:has(> .md-task)) {
+  list-style: none;
+}
+.message-text :deep(.md-task--done) {
+  background: #3678e8;
+  border-color: #3678e8;
+}
+.message-text :deep(blockquote) {
+  margin: 8px 0 12px;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid #e5e5e5;
+  color: #676767;
+}
+.message-text :deep(hr) {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid #e5e5e5;
+}
+.message-text :deep(a) {
+  color: #3678e8;
+  text-decoration: underline;
+  text-decoration-color: rgba(54, 120, 232, 0.35);
+  text-underline-offset: 2px;
+}
+.message-text :deep(a:hover) {
+  text-decoration-color: currentColor;
+}
+.message-text :deep(strong) {
+  font-weight: 600;
+}
+.message-text :deep(del) {
+  color: #676767;
+}
+.message-text :deep(.wow-table .wt-c) {
+  text-align: center;
+}
+.message-text :deep(.wow-table .wt-r) {
+  text-align: right;
 }
 
 /* ── Charts ── */
@@ -11374,8 +10858,8 @@ async function send() {
 /* ── Input area ── */
 .input-area {
   flex-shrink: 0;
-  padding: 12px 16px;
-  max-width: 900px;
+  padding: 12px 24px;
+  max-width: 740px;
   margin: 0 auto;
   width: 100%;
   padding-bottom: max(12px, env(safe-area-inset-bottom));
@@ -11391,14 +10875,15 @@ async function send() {
   gap: 10px;
   flex-wrap: wrap;
   padding: 6px 10px;
-  border: 1px solid #e3e6ea;
-  border-radius: 8px;
-  background: #f8f9fb;
-  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--card);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
 }
 .job-context-label {
   font-weight: 600;
-  color: #3b3f46;
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -11410,20 +10895,23 @@ async function send() {
 }
 .job-context-btn {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-caption-size);
   padding: 3px 10px;
-  border: 1px solid #d0d4d9;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: #fff;
-  color: #3b3f46;
+  background: var(--surface);
+  color: var(--ink);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   transition:
     border-color 0.12s ease,
     color 0.12s ease;
 }
 .job-context-btn:hover {
-  border-color: #0f6cbd;
-  color: #0f6cbd;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .job-context-btn:disabled {
   opacity: 0.5;
@@ -11431,30 +10919,32 @@ async function send() {
 }
 .job-context-hint {
   margin-left: auto;
-  color: #9a9da3;
-  font-size: 11px;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
   font-style: italic;
 }
 .input-wrapper {
   display: flex;
   flex-direction: column;
-  border: 1px solid #e5e5e5;
-  border-radius: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-composer);
   padding: 14px 18px 10px 20px;
-  background: #fff;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  background: var(--surface);
+  box-shadow: var(--shadow-composer);
   transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast);
   flex: 1;
   min-width: 0;
 }
 .input-wrapper:focus-within {
-  border-color: #c9c9c9;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
+  border-color: var(--focus);
+  box-shadow:
+    var(--shadow-composer),
+    0 0 0 3px rgba(54, 120, 232, 0.12);
 }
 .input-wrapper--disabled {
-  background: #f7f7f8;
+  background: var(--card);
   opacity: 0.6;
 }
 .input-field {
@@ -11468,12 +10958,12 @@ async function send() {
   width: 100%;
   background: transparent;
   border: none;
-  color: #1f1f1f;
-  font-size: 16px;
+  color: var(--ink);
+  font-size: var(--text-body-size);
   font-family: inherit;
   padding: 0;
   outline: none;
-  line-height: 1.5;
+  line-height: var(--text-body-line);
   resize: none;
   overflow-y: hidden;
   max-height: 400px;
@@ -11481,7 +10971,7 @@ async function send() {
   box-sizing: border-box;
 }
 .input-field::placeholder {
-  color: #73777d;
+  color: var(--text-hint);
 }
 .input-bottom-bar {
   display: flex;
@@ -11501,24 +10991,27 @@ async function send() {
   display: flex;
   align-items: center;
   gap: 5px;
-  height: 30px;
+  height: 32px;
   padding: 0 10px;
   border-radius: 15px;
   border: none;
   background: transparent;
-  color: #676767;
+  color: var(--text-muted);
   cursor: pointer;
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
   font-weight: 500;
   white-space: nowrap;
   transition:
-    color 0.15s,
-    background 0.15s;
+    color var(--motion-fast),
+    background var(--motion-fast),
+    transform var(--motion-fast);
 }
 .input-action-btn:hover:not(:disabled) {
-  background: #f4f4f4;
-  color: #1f1f1f;
+  background: var(--user-bubble);
+  color: var(--ink);
+  transform: translateY(-1px);
 }
 .input-action-btn:disabled {
   opacity: 0.35;
@@ -11559,28 +11052,32 @@ async function send() {
   border: none;
   cursor: pointer;
   transition:
-    background 0.15s,
-    color 0.15s;
+    background var(--motion-fast),
+    color var(--motion-fast),
+    transform var(--motion-fast);
+}
+.action-btn:active {
+  transform: scale(0.96);
 }
 .action-btn:focus-visible {
-  outline: 2px solid #3678e8;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 .action-btn--active {
-  background: #0d0d0d;
-  color: #fff;
+  background: var(--primary);
+  color: var(--surface);
 }
 .action-btn--active:hover {
   background: #2b2b2b;
 }
 .action-btn--disabled {
-  background: #e5e5e5;
+  background: var(--border);
   color: #9e9e9e;
   cursor: default;
 }
 .action-btn--stop {
-  background: #0d0d0d;
-  color: #fff;
+  background: var(--primary);
+  color: var(--surface);
 }
 .action-btn--stop:hover {
   background: #2b2b2b;
@@ -11590,16 +11087,17 @@ async function send() {
 .tools-sidebar {
   width: 0;
   flex-shrink: 0;
-  border-left: 1px solid #e1dfdd;
-  background: #fff;
+  border-left: 1px solid var(--sidebar-border);
+  background: var(--sidebar-bg);
   overflow: hidden;
-  transition: width 0.25s ease;
+  transition: width var(--motion-collapse);
   display: flex;
   flex-direction: column;
-  font-size: 13px;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
 }
 .tools-sidebar--open {
-  width: 250px;
+  width: 300px;
 }
 .chat-view--hidden .tools-sidebar {
   transition: none;
@@ -11608,7 +11106,8 @@ async function send() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
+  min-height: 48px;
+  padding: 6px 12px;
   flex-shrink: 0; /* headers stay pinned while the pane's scroll area shrinks */
 }
 .tools-sidebar-header-text {
@@ -11618,18 +11117,23 @@ async function send() {
   min-width: 0;
 }
 .tools-sidebar-title {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: #1a1a1a;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--ink);
 }
 .tools-sidebar-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 10.5px;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
   font-weight: 500;
-  color: #605e5c;
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -11640,14 +11144,14 @@ async function send() {
   white-space: nowrap;
 }
 .tools-sidebar-status-dot {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: #d0d0d0;
+  background: var(--border);
   flex-shrink: 0;
 }
 .tools-sidebar-status-dot--live {
-  background: #1a7f37;
+  background: var(--success);
   box-shadow: 0 0 0 0 rgba(26, 127, 55, 0.5);
   animation: agent-pulse 1.4s ease-out infinite;
 }
@@ -11665,7 +11169,7 @@ async function send() {
 .tools-sidebar-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 8px;
+  padding: 4px 8px 8px;
   scrollbar-width: thin;
 }
 /* ── Right sidebar split: Agent (top) + Conversations + Jobs ──
@@ -11677,19 +11181,22 @@ async function send() {
   display: grid;
   grid-template-rows: auto 1fr;
   min-height: 0;
+  transition:
+    grid-template-rows var(--motion-collapse),
+    max-height var(--motion-collapse);
 }
 .tools-sidebar-pane > .tools-sidebar-scroll {
   min-height: 0;
   opacity: 1;
   transform: translateY(0);
   transition:
-    opacity 0.22s ease,
-    transform 0.22s ease;
+    opacity var(--motion-enter),
+    transform var(--motion-enter),
+    padding var(--motion-collapse);
 }
 .tools-sidebar-pane--collapsed > .tools-sidebar-scroll {
   opacity: 0;
   transform: translateY(-8px);
-  transition: none; /* swap OUT with the snap; swap IN animates */
 }
 .tools-sidebar-pane--collapsed > .tools-sidebar-scroll {
   /* the 0fr row removes the content; also remove the scroll padding so the
@@ -11707,8 +11214,8 @@ async function send() {
 .tools-sidebar-pane--sessions {
   flex: 1 1 0;
   min-height: 140px;
-  border-top: 1px solid #e1dfdd;
-  background: #fff;
+  border-top: 1px solid var(--sidebar-border);
+  background: var(--sidebar-bg);
 }
 /* Collapsed pane = just its header; the content row glides to zero and the
    freed space flows to whichever pane(s) remain expanded — collapse two and
@@ -11733,16 +11240,17 @@ async function send() {
   max-height: none;
 }
 .sessions-header {
-  background: #fff;
+  background: var(--sidebar-bg);
 }
 .sessions-new-btn {
-  font-size: 13px;
-  font-weight: 600;
-  padding: 6px 14px;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 500;
+  padding: 6px 12px;
   border-radius: 6px;
-  border: 1px solid #e1dfdd;
-  background: #fff;
-  color: #323130;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
   cursor: pointer;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   transition:
@@ -11751,9 +11259,9 @@ async function send() {
     box-shadow 0.15s;
 }
 .sessions-new-btn:hover:not(:disabled) {
-  background: #fff;
-  border-color: #d2d0ce;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  background: var(--sidebar-hover);
+  border-color: var(--sidebar-border);
+  box-shadow: none;
 }
 .sessions-new-btn:disabled {
   opacity: 0.5;
@@ -11764,8 +11272,9 @@ async function send() {
 }
 .sessions-empty {
   padding: 12px 8px;
-  font-size: 11.5px;
-  color: #8a8886;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
   font-style: italic;
   text-align: center;
 }
@@ -11777,7 +11286,7 @@ async function send() {
   flex: 0 1 auto;
   max-height: 42%;
   min-height: 36px; /* never less than the header — the pane stays reachable */
-  border-top: 1px solid #e8eaed;
+  border-top: 1px solid var(--sidebar-border);
 }
 .jobs-scroll {
   overflow-y: auto;
@@ -11789,55 +11298,54 @@ async function send() {
   cursor: pointer;
   user-select: none;
 }
-/* One glyph that rotates (▾ → ▸) — big, with a quick simple turn. */
 .jobs-chevron {
-  display: inline-block;
-  font-size: 27px;
-  line-height: 0.6;
-  vertical-align: -4px;
-  color: #57606a;
-  margin-right: 7px;
-  transform-origin: 42% 42%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transform-origin: center;
   transition:
-    transform 0.15s ease,
-    color 0.15s ease;
+    transform var(--motion-collapse),
+    color var(--motion-fast);
 }
 .jobs-chevron--collapsed {
   transform: rotate(-90deg);
 }
 .jobs-header-toggle:hover .jobs-chevron {
-  color: #0f6cbd;
+  color: var(--accent);
 }
 .jobs-attention {
-  font-size: 11px;
-  color: #cf222e;
+  font-size: var(--text-caption-size);
+  color: var(--danger);
   font-weight: 600;
   margin-left: 4px;
 }
 .jobs-header-toggle:focus-visible {
-  outline: 2px solid #0f6cbd;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: 6px;
 }
 .jobs-empty-cta {
-  display: block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin: 10px auto 2px;
   font: inherit;
   font-size: 12.5px;
   font-weight: 600;
   padding: 7px 16px;
-  border: 1px solid #0f6cbd;
+  border: 1px solid var(--accent);
   border-radius: 8px;
-  background: #fff;
-  color: #0f6cbd;
+  background: var(--surface);
+  color: var(--accent);
   cursor: pointer;
   transition:
     background 0.12s ease,
     color 0.12s ease;
 }
 .jobs-empty-cta:hover {
-  background: #0f6cbd;
-  color: #fff;
+  background: var(--accent);
+  color: var(--surface);
 }
 /* Template picker — compact 2-col grid of prefill chips inside the form. */
 .job-tpl-label {
@@ -11889,13 +11397,13 @@ async function send() {
   white-space: nowrap;
 }
 .job-row--paused .session-row-title {
-  color: #9a9da4;
+  color: var(--text-muted);
 }
 /* Alive: enabled + waiting for its next run — calm blue "breathing" glow so a
    returning user instantly sees the job is armed. Distinct from the green
    agent-pulse used while a run is actually executing. */
 .job-dot--alive {
-  background: #0078d4;
+  background: var(--accent);
   animation: job-breathe 2.6s ease-in-out infinite;
 }
 @keyframes job-breathe {
@@ -11925,11 +11433,11 @@ async function send() {
   }
 }
 .job-time--running {
-  color: #1a7f37;
+  color: var(--success);
   font-weight: 600;
 }
 .job-time--dead {
-  color: #cf222e;
+  color: var(--danger);
   font-weight: 600;
 }
 /* ── Run-immediately checkbox in the create modal ── */
@@ -11954,17 +11462,17 @@ async function send() {
   flex: 0 0 auto;
   border: none;
   background: none;
-  font-size: 11px;
+  font-size: var(--text-caption-size);
   line-height: 1;
-  color: #7a7d85;
+  color: var(--text-muted);
   cursor: pointer;
   padding: 4px;
   border-radius: 5px;
   transition: background 0.12s ease;
 }
 .job-row-btn:hover {
-  background: #e3e6ea;
-  color: #1f2328;
+  background: var(--sidebar-hover);
+  color: var(--ink);
 }
 .job-row-btn:disabled {
   opacity: 0.35;
@@ -11988,7 +11496,7 @@ async function send() {
   background: linear-gradient(
     to right,
     rgba(245, 246, 247, 0),
-    var(--job-row-bg, #f5f6f7) 24px
+    var(--job-row-bg, var(--sidebar-bg)) 24px
   );
   opacity: 0;
   pointer-events: none;
@@ -12000,7 +11508,7 @@ async function send() {
   pointer-events: auto;
 }
 .session-row--current.job-row {
-  --job-row-bg: #f3f2f1;
+  --job-row-bg: var(--sidebar-selected);
 }
 .job-actions .session-row-delete {
   opacity: 1; /* container controls reveal — no double fade */
@@ -12024,8 +11532,8 @@ async function send() {
     border-color 0.15s ease;
 }
 .job-switch--on {
-  background: #0f6cbd;
-  border-color: #0f6cbd;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 .job-switch-knob {
   position: absolute;
@@ -12334,34 +11842,36 @@ async function send() {
   align-items: center;
   gap: 8px;
   width: calc(100% - 8px);
-  margin: 0 4px;
-  padding: 4px 8px;
+  min-height: 44px;
+  margin: 2px 4px;
+  padding: 6px 8px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   cursor: pointer;
   transition:
-    background 0.15s ease,
-    box-shadow 0.15s ease,
-    color 0.15s ease;
+    background var(--motion-fast),
+    box-shadow var(--motion-fast),
+    color var(--motion-fast);
   position: relative;
+  animation: sidebar-row-enter var(--motion-enter) both;
 }
 .session-row:hover {
-  background: rgba(15, 23, 42, 0.04);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  background: var(--sidebar-hover);
+  box-shadow: none;
 }
 .session-row--current {
-  background: #f3f2f1;
+  background: var(--sidebar-selected);
 }
 .session-row--current:hover {
-  background: #f3f2f1;
+  background: var(--sidebar-selected);
 }
 .sessions-delete-error {
   margin: 4px 8px 6px;
   padding: 6px 8px;
-  border-left: 3px solid #a4262c;
-  background: #fde7e9;
-  color: #5c2b29;
+  border-left: 3px solid var(--danger);
+  background: rgba(209, 52, 56, 0.08);
+  color: var(--danger);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -12373,17 +11883,19 @@ async function send() {
   gap: 1px;
 }
 .session-row-title {
-  font-size: 13px;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
   font-weight: 400;
-  color: #323130;
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1.4;
 }
 .session-row-time {
-  font-size: 10.5px;
-  color: #8a8886;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -12397,7 +11909,7 @@ async function send() {
   border-radius: 4px;
   font-size: 16px;
   line-height: 1;
-  color: #a19f9d;
+  color: var(--text-muted);
   cursor: pointer;
   opacity: 0;
   transition:
@@ -12419,8 +11931,8 @@ async function send() {
   opacity: 1;
 }
 .session-row-delete:hover:not(:disabled) {
-  background: #fde7e9;
-  color: #a4262c;
+  background: rgba(209, 52, 56, 0.08);
+  color: var(--danger);
 }
 .session-row-delete:disabled {
   cursor: not-allowed;
@@ -12432,21 +11944,23 @@ async function send() {
   }
 }
 .st-count {
-  font-size: 11px;
-  font-weight: 600;
-  background: #f3f2f1;
-  color: #605e5c;
-  border-radius: 4px;
-  padding: 1px 7px;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 500;
+  background: var(--card);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 1px 8px;
   min-width: 20px;
   text-align: center;
 }
 .st-icon {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
 }
 .st-icon--spin {
+  color: var(--accent);
   animation: icon-spin 0.9s linear infinite;
 }
 @keyframes icon-spin {
@@ -12455,7 +11969,11 @@ async function send() {
   }
 }
 .st-icon--ok {
+  color: var(--success);
   animation: icon-pop 0.3s ease-out;
+}
+.st-icon--fail {
+  color: var(--danger);
 }
 @keyframes icon-pop {
   0% {
@@ -12474,21 +11992,25 @@ async function send() {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 16px;
-  border-radius: 0;
+  min-height: 44px;
+  margin: 2px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
   cursor: default;
   user-select: none;
-  transition: background 0.1s;
-  min-height: 28px;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast);
+  animation: sidebar-row-enter var(--motion-enter) both;
 }
 .st-row:hover {
-  background: #f3f2f1;
+  background: var(--sidebar-hover);
 }
 .st-row--clickable {
   cursor: pointer;
 }
 .st-row--running {
-  background: #f4f7fd;
+  background: rgba(54, 120, 232, 0.08);
 }
 .st-name {
   flex: 1;
@@ -12496,14 +12018,17 @@ async function send() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #1f1f1f;
+  color: var(--ink);
   font-weight: 400;
-  font-size: 13px;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
 }
 .st-time {
   flex-shrink: 0;
-  color: #605e5c;
-  font-size: 11px;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Cooling-down ghost row (ephemeral, 429/5xx) ── */
@@ -12515,53 +12040,48 @@ async function send() {
   cursor: pointer;
   position: relative;
   flex-wrap: wrap;
-  background: linear-gradient(
-    90deg,
-    #005a9e 0%,
-    #0078d4 25%,
-    #0098e0 50%,
-    #0078d4 75%,
-    #005a9e 100%
-  );
-  background-size: 200% 100%;
-  animation: cool-sweep 2.4s linear infinite;
+  background: rgba(54, 120, 232, 0.1);
+  border: 1px solid rgba(54, 120, 232, 0.18);
+  animation:
+    sidebar-row-enter var(--motion-enter) both,
+    cool-sweep 2.4s linear infinite;
 }
 .st-row--cooler:hover {
-  filter: brightness(1.05);
+  background: rgba(54, 120, 232, 0.14);
 }
 .st-row--cooler .st-name,
 .st-row--cooler .st-time {
-  color: #fff;
+  color: var(--ink);
 }
 .st-icon--cooler {
-  width: 14px;
-  height: 14px;
-  color: #fff;
+  color: var(--accent);
 }
 .st-cooler-detail {
   flex-basis: 100%;
   margin-top: 6px;
-  padding: 8px 10px;
-  background: rgba(0, 0, 0, 0.25);
-  border-radius: 4px;
-  color: #fff;
-  font-size: 11px;
-  line-height: 1.5;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
   cursor: default;
+  animation: detail-open var(--motion-collapse) both;
 }
 .st-cooler-row {
   margin-bottom: 2px;
 }
 .st-cooler-row strong {
-  color: #fff;
+  color: var(--ink);
   font-weight: 600;
   margin-right: 4px;
 }
 .st-cooler-url code {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--card);
   padding: 2px 4px;
   border-radius: 3px;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   word-break: break-all;
   display: inline-block;
@@ -12569,10 +12089,30 @@ async function send() {
 }
 @keyframes cool-sweep {
   0% {
-    background-position: 0% 50%;
+    box-shadow: inset 0 0 0 0 rgba(54, 120, 232, 0.18);
   }
   100% {
-    background-position: 200% 50%;
+    box-shadow: inset 0 0 0 999px rgba(54, 120, 232, 0);
+  }
+}
+@keyframes sidebar-row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes detail-open {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -13335,11 +12875,11 @@ async function send() {
     width: 80vw;
     max-width: 320px;
     z-index: 150;
-    background: #fff;
+    background: var(--sidebar-bg);
     box-shadow: none;
     visibility: hidden;
     opacity: 1;
-    border-right: 1px solid #e1dfdd;
+    border-right: 1px solid var(--sidebar-border);
     transform: translateX(-100%);
     transition: transform 0.2s ease;
   }
@@ -13353,7 +12893,7 @@ async function send() {
   .sidebar--mobile-open {
     visibility: visible;
     transform: translateX(0);
-    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.18);
+    box-shadow: 8px 0 28px rgba(37, 61, 103, 0.16);
   }
   .chat-view--hidden .sidebar {
     transition: none;
@@ -13364,7 +12904,7 @@ async function send() {
     inset: var(--portal-header-height) 0 0;
     z-index: 140;
     border: 0;
-    background: rgba(0, 0, 0, 0.15);
+    background: rgba(31, 31, 31, 0.16);
     cursor: pointer;
   }
   .tools-sidebar {
@@ -13392,18 +12932,31 @@ async function send() {
     grid-template-columns: 1fr;
   }
   .empty-state {
-    padding: 1rem;
-    justify-content: center;
+    padding: 56px 0 8px;
+    justify-content: flex-start;
     flex: 1;
   }
   .messages-inner {
     padding: 12px;
+    max-width: 100%;
     flex: 1;
     display: flex;
     flex-direction: column;
   }
   .input-area {
     padding: 8px 12px;
+    max-width: 100%;
+  }
+  .hero-title {
+    font-size: 32px;
+    line-height: 38px;
+    font-weight: 360;
+  }
+  .hero-tagline {
+    margin-bottom: 18px;
+  }
+  .input-wrapper {
+    border-radius: var(--radius-composer-mobile);
   }
   .input-pill-label {
     display: none;
@@ -13429,6 +12982,31 @@ async function send() {
   }
   .es-tagline-mobile {
     display: block !important;
+  }
+}
+.chat-view--hidden .message-row,
+.chat-view--hidden .hero-card,
+.chat-view--hidden .session-row,
+.chat-view--hidden .st-row,
+.chat-view--hidden .st-cooler-detail {
+  animation-play-state: paused;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-row,
+  .hero-card,
+  .session-row,
+  .st-row,
+  .st-cooler-detail,
+  .tools-sidebar,
+  .tools-sidebar-pane,
+  .tools-sidebar-pane > .tools-sidebar-scroll,
+  .jobs-chevron,
+  .input-wrapper,
+  .input-action-btn,
+  .action-btn {
+    animation: none !important;
+    transition: none !important;
   }
 }
 </style>

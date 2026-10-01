@@ -101,13 +101,79 @@ public sealed class AgentConversation : IAsyncDisposable
         _run = run;
         _startedCalls.Clear();
         _completedCalls.Clear();
+        string? recap = null;
+        if (CompactsNextTurn)
+        {
+            recap = Recap(await GetEventsAsync());
+            System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("finops.context.compacted",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["finops.context.input_tokens"] = _meta.ContextTokens }));
+        }
         await PublishAsync(new UserMessageEvent(prompt));
         if (string.IsNullOrWhiteSpace(_meta.Summary))
         {
             _meta.Summary = prompt.Length > 400 ? prompt[..400] : prompt;
             SaveMeta();
         }
-        _runTask = Task.Run(() => RunAsync(prompt, images, lightweight, approval, run.Token));
+        _runTask = Task.Run(() => RunAsync(prompt, recap, images, lightweight, approval, run.Token));
+    }
+
+    /// <summary>
+    /// Model input, in tokens, above which the next turn starts a fresh model context. The chained context keeps every
+    /// earlier tool result; in production, calls above about 180k input tokens waited 10-17 s for their first token
+    /// (about 1 s below 100k) even when nearly all input was cached, and one turn can add 50k tokens of tool results.
+    /// </summary>
+    internal const long CompactAfterInputTokens = 100_000;
+
+    /// <summary>Whether the next turn starts without the chained model context, so per-session context such as the connection context must be sent again.</summary>
+    internal bool StartsFreshContext => _meta.AgentSession is null || CompactsNextTurn;
+
+    private bool CompactsNextTurn =>
+        ShouldCompact(_meta.ContextTokens, _meta.AgentSession is not null, _meta.PendingApprovals is { Count: > 0 });
+
+    /// <summary>A pending approval must be answered in the context that proposed it, so it postpones compaction.</summary>
+    internal static bool ShouldCompact(long? contextTokens, bool hasModelContext, bool hasPendingApprovals) =>
+        hasModelContext && !hasPendingApprovals && contextTokens > CompactAfterInputTokens;
+
+    internal const int RecapCharacters = 24_000;
+    internal const int RecapMessageCharacters = 4_000;
+
+    /// <summary>
+    /// The visible exchanges a compacted turn carries into its fresh model context: user questions without host-injected
+    /// context and the assistant's answers, newest kept first within <see cref="RecapCharacters"/>. Tool results are left out.
+    /// </summary>
+    internal static string? Recap(IReadOnlyList<AgentEvent> events)
+    {
+        var entries = new List<(bool User, string Text)>();
+        foreach (var item in events)
+        {
+            if (item is UserMessageEvent user && Endpoints.SessionEndpoints.VisibleUserText(user.Content) is { } question)
+                entries.Add((true, question));
+            else if (item is AssistantMessageEvent answer && answer.Content.Trim() is { Length: > 0 } text)
+            {
+                if (entries.Count > 0 && !entries[^1].User) entries[^1] = (false, entries[^1].Text + "\n\n" + text);
+                else entries.Add((false, text));
+            }
+        }
+        var kept = new List<string>();
+        var used = 0;
+        for (var i = entries.Count - 1; i >= 0; i--)
+        {
+            var text = entries[i].Text.Length > RecapMessageCharacters
+                ? entries[i].Text[..RecapMessageCharacters] + " …[truncated]"
+                : entries[i].Text;
+            var entry = (entries[i].User ? "User: " : "Assistant: ") + text;
+            if (used + entry.Length > RecapCharacters) break;
+            kept.Add(entry);
+            used += entry.Length;
+        }
+        if (kept.Count == 0) return null;
+        kept.Reverse();
+        var omitted = entries.Count - kept.Count;
+        return "[CONVERSATION SO FAR: the earlier model context was reset to keep answers fast, so earlier tool results are no longer available. " +
+               "These are the messages already exchanged; use them for continuity and query again whenever the new message needs figures, rows or identifiers they do not show.]\n" +
+               (omitted > 0 ? $"({omitted} earlier messages omitted)\n\n" : "") +
+               string.Join("\n\n", kept) +
+               "\n[END OF CONVERSATION SO FAR. The user's new message follows.]";
     }
 
     /// <summary>Whether <paramref name="requestId"/> is a change this conversation is still waiting for the user to approve.</summary>
@@ -128,6 +194,7 @@ public sealed class AgentConversation : IAsyncDisposable
     {
         if (IsRunning) throw new InvalidOperationException("A turn is running in this conversation.");
         _meta.AgentSession = null;
+        _meta.ContextTokens = null;
         _meta.PendingApprovals = null;
         _meta.InterruptedApproval = null;
         SaveMeta();
@@ -172,7 +239,51 @@ public sealed class AgentConversation : IAsyncDisposable
                 $"Web search completed: found {JsonSerializer.Serialize(find.Pattern)} in page {find.Uri}.",
             _ => "Web search completed."
         };
+
+    /// <summary>The (reasoning item, summary part) a streamed reasoning-summary delta belongs to, when the raw update says.</summary>
+    internal static (string? Item, int Index)? ReasoningPart(object? raw) => raw switch
+    {
+        OpenAI.Responses.StreamingResponseReasoningSummaryTextDeltaUpdate delta => (delta.ItemId, delta.SummaryIndex),
+        AgentResponseUpdate agent when !ReferenceEquals(agent.RawRepresentation, agent) => ReasoningPart(agent.RawRepresentation),
+        ChatResponseUpdate chat when !ReferenceEquals(chat.RawRepresentation, chat) => ReasoningPart(chat.RawRepresentation),
+        _ => null,
+    };
 #pragma warning restore OPENAI001, CS0618
+
+    /// <summary>
+    /// Collects one turn's streamed reasoning summary. The service streams every summary part (a bold
+    /// heading and its paragraph) back to back, so a new part is started on its own paragraph instead of
+    /// gluing its heading to the previous sentence. <see cref="Take"/> returns the text gathered since the
+    /// last tool call or answer so it can be kept with the transcript.
+    /// </summary>
+    internal sealed class ReasoningText
+    {
+        private readonly StringBuilder _segment = new();
+        private (string? Item, int Index)? _part;
+        private int _trailingNewlines = -1;
+
+        /// <summary>Records one delta and returns what to stream, including any paragraph break before a new part.</summary>
+        public string Append(string delta, (string? Item, int Index)? part)
+        {
+            var chunk = delta;
+            if (_trailingNewlines >= 0 && part is not null && _part is not null && part != _part && _trailingNewlines < 2)
+                chunk = new string('\n', 2 - _trailingNewlines) + delta;
+            if (part is not null) _part = part;
+            _segment.Append(chunk);
+            var newlines = 0;
+            for (var i = chunk.Length - 1; i >= 0 && chunk[i] == '\n' && newlines < 2; i--) newlines++;
+            _trailingNewlines = newlines == chunk.Length && _trailingNewlines > 0 ? Math.Min(2, _trailingNewlines + newlines) : newlines;
+            return chunk;
+        }
+
+        public string Take()
+        {
+            if (_segment.Length == 0) return string.Empty;
+            var text = _segment.ToString().Trim();
+            _segment.Clear();
+            return text;
+        }
+    }
 
     internal async Task PublishAsync(AgentEvent item)
     {
@@ -196,15 +307,23 @@ public sealed class AgentConversation : IAsyncDisposable
         finally { _publish.Release(); }
     }
 
-    private async Task RunAsync(string prompt, IReadOnlyList<ImageAttachment>? images, bool lightweight, ApprovalDecision? approval, CancellationToken cancellationToken)
+    private async Task RunAsync(string prompt, string? recap, IReadOnlyList<ImageAttachment>? images, bool lightweight, ApprovalDecision? approval, CancellationToken cancellationToken)
     {
         var text = new StringBuilder();
+        var thinking = new ReasoningText();
         string? messageId = null;
         var messageIndex = 0;
         string? approvedRequest = null;
+        long? contextTokens = null;
+
+        async Task FlushThinkingAsync()
+        {
+            if (thinking.Take() is { Length: > 0 } summary) await PublishAsync(new ReasoningEvent(summary));
+        }
 
         async Task FlushMessageAsync()
         {
+            await FlushThinkingAsync();
             var content = StripCitationMarkers(text.ToString());
             if (content.Length > 0) await PublishAsync(new AssistantMessageEvent(messageId ?? $"{SessionId}:{messageIndex}", content));
             text.Clear();
@@ -240,11 +359,13 @@ public sealed class AgentConversation : IAsyncDisposable
                 else _completedCalls.TryAdd(call.CallId, 0);
             }
             if (answers.Count > 0) messages.Add(new ChatMessage(ChatRole.User, answers));
-            List<AIContent> contents = [new TextContent(prompt)];
+            List<AIContent> contents = recap is null ? [new TextContent(prompt)] : [new TextContent(recap), new TextContent(prompt)];
             foreach (var image in images ?? [])
                 contents.Add(await DataContent.LoadFromAsync(image.Path, image.MimeType, cancellationToken));
             messages.Add(new ChatMessage(ChatRole.User, contents));
-            var session = await RestoreSessionAsync(agent, cancellationToken);
+            var session = CompactsNextTurn
+                ? await agent.CreateSessionAsync(cancellationToken)
+                : await RestoreSessionAsync(agent, cancellationToken);
             var surfaced = new List<JsonElement>();
             var completion = new ModelRunCompletion();
 
@@ -259,11 +380,13 @@ public sealed class AgentConversation : IAsyncDisposable
                             var id = update.MessageId ?? update.ResponseId;
                             if (messageId is not null && id is not null && id != messageId) await FlushMessageAsync();
                             messageId ??= id;
+                            await FlushThinkingAsync();
                             text.Append(delta.Text);
                             await PublishAsync(new MessageDeltaEvent(messageId ?? $"{SessionId}:{messageIndex}", delta.Text));
                             break;
                         case TextReasoningContent { Text.Length: > 0 } reasoning:
-                            await PublishAsync(new ReasoningDeltaEvent(reasoning.Text));
+                            var part = ReasoningPart(reasoning.RawRepresentation) ?? ReasoningPart(update.RawRepresentation);
+                            await PublishAsync(new ReasoningDeltaEvent(thinking.Append(reasoning.Text, part)));
                             break;
                         case FunctionCallContent call:
                             await FlushMessageAsync();
@@ -288,6 +411,7 @@ public sealed class AgentConversation : IAsyncDisposable
                             await ToolCompletedAsync(searchResult.CallId, true, WebSearchOutcome(searchResult.RawRepresentation), null);
                             break;
                         case UsageContent usage:
+                            if (usage.Details.InputTokenCount is { } input) contextTokens = Math.Max(contextTokens ?? 0, input);
                             await PublishAsync(new UsageEvent(usage.Details.InputTokenCount, usage.Details.OutputTokenCount, update.FinishReason?.Value));
                             break;
                     }
@@ -297,6 +421,7 @@ public sealed class AgentConversation : IAsyncDisposable
             await CompleteOpenCallsAsync();
             if (completion.Failure is { } failure) throw new IncompleteModelResponseException(failure);
             _meta.AgentSession = await agent.SerializeSessionAsync(session, cancellationToken: cancellationToken);
+            _meta.ContextTokens = contextTokens;
             _meta.PendingApprovals = surfaced.Count > 0 ? surfaced : null;
             _meta.InterruptedApproval = null;
             await PublishAsync(new TurnIdleEvent());
@@ -319,6 +444,7 @@ public sealed class AgentConversation : IAsyncDisposable
                 && expired.Message.Contains("previous response", StringComparison.OrdinalIgnoreCase))
             {
                 _meta.AgentSession = null;
+                _meta.ContextTokens = null;
                 _meta.PendingApprovals = null;
                 _meta.InterruptedApproval = null;
             }
@@ -397,6 +523,8 @@ public sealed class AgentConversation : IAsyncDisposable
         public DateTimeOffset Created { get; set; }
         public DateTimeOffset Modified { get; set; }
         public string? Summary { get; set; }
+        /// <summary>Largest model input, in tokens, of the last completed turn; drives automatic compaction.</summary>
+        public long? ContextTokens { get; set; }
         /// <summary>Approval requests the last completed turn surfaced; the next turn must answer each one.</summary>
         public List<JsonElement>? PendingApprovals { get; set; }
         /// <summary>An approved change whose turn stopped before it finished; it is never re-run, only reported as unknown.</summary>

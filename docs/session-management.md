@@ -114,7 +114,7 @@ Every `AgentConversation` lives under the principal-owned Entra workdir or `…/
 
 ### 7.3 Model credentials and chain recovery
 
-The project client takes a `TokenCredential` (managed identity in Azure), which refreshes tokens on demand; no conversation holds a model token. The response chain advances only after a successful turn, so a stopped or failed turn leaves the previous response ID and no unanswered tool calls. An expired chain resets to a fresh model context while the visible transcript remains. Genuinely unavailable history returns `history_unavailable` rather than a fabricated empty transcript.
+The project client takes a `TokenCredential` (managed identity in Azure), which refreshes tokens on demand; no conversation holds a model token. The response chain advances only after a successful turn, so a stopped or failed turn leaves the previous response ID and no unanswered tool calls. An expired chain resets to a fresh model context while the visible transcript remains. When a completed turn's largest model input exceeds 100k tokens, the next turn also starts a fresh model context, seeded with a bounded recap of the visible questions and answers, so long conversations keep a fast first token. Reasoning-summary segments are persisted as `thinking` events and replayed with their answer. Genuinely unavailable history returns `history_unavailable` rather than a fabricated empty transcript.
 
 ### 7.4 IDOR guard with graceful fallback
 

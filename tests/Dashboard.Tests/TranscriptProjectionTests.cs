@@ -66,6 +66,36 @@ public sealed class TranscriptProjectionTests
         Assert.Equal(1, reply.GetProperty("charts").GetArrayLength());
     }
 
+    [Fact]
+    public void PersistedThinkingReplaysWithItsAnswer()
+    {
+        var question = new UserMessageEvent("Synthetic question");
+        var firstThought = new ReasoningEvent("**Checking scope**\n\nReading the subscription list.");
+        var start = new ToolStartEvent("call-1", "QueryAzure", "{}");
+        var done = new ToolCompleteEvent("call-1", true, "{}", null);
+        var secondThought = new ReasoningEvent("**Summarizing**\n\nTotals are ready.");
+        var answer = new AssistantMessageEvent("answer", "Synthetic answer");
+        var next = new UserMessageEvent("Next question");
+        var plain = new AssistantMessageEvent("plain", "Plain answer");
+        using var result = Project(question, firstThought, start, done, secondThought, answer, next, plain);
+        var reply = result.RootElement[1];
+        Assert.Equal("**Checking scope**\n\nReading the subscription list.\n\n**Summarizing**\n\nTotals are ready.",
+            reply.GetProperty("thinking").GetString());
+        Assert.Equal("Synthetic answer", reply.GetProperty("content").GetString());
+        Assert.Equal(JsonValueKind.Null, result.RootElement[3].GetProperty("thinking").ValueKind);
+    }
+
+    [Fact]
+    public void ThinkingAloneDoesNotBecomeAnAnswer()
+    {
+        var question = new UserMessageEvent("Synthetic question");
+        var thought = new ReasoningEvent("**Planning**");
+        var error = new TurnErrorEvent("Synthetic failure", "model_error");
+        using var result = Project(question, thought, error);
+        Assert.Equal(2, result.RootElement.GetArrayLength());
+        Assert.Equal("system", result.RootElement[1].GetProperty("role").GetString());
+    }
+
     private static JsonDocument Project(params AgentEvent[] events) =>
         JsonDocument.Parse(JsonSerializer.Serialize(SessionEndpoints.BuildTranscript(events, 101)));
 }
