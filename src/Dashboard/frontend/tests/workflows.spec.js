@@ -800,7 +800,58 @@ async function startRequestProgress(page) {
   ).toBeVisible();
 }
 
-test("assistant avatar mark replaces both AI circles and keeps completed replies static", async ({
+// Scripted SSE turn: tests push events one at a time through
+// window.__activity.emit() and end the turn with window.__activity.finish().
+async function arrangeActivityStream(page) {
+  await page.addInitScript((session) => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (input, options) => {
+      if (
+        new URL(typeof input === "string" ? input : input.url, location.href)
+          .pathname !== "/api/chat"
+      )
+        return originalFetch(input, options);
+      const encoder = new TextEncoder();
+      return Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              const emit = (data) =>
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify(data)}\n\n`),
+                );
+              emit({ type: "session", id: session });
+              window.__activity = {
+                emit,
+                finish(content) {
+                  if (content) emit({ type: "message", content });
+                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                  controller.close();
+                },
+              };
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    };
+  }, sessionId);
+  return arrange(page, []);
+}
+
+async function startActivityTurn(page, prompt = "Why did my costs rise?") {
+  await expect(page.locator("textarea")).toBeEnabled();
+  await expect(page.locator(".action-btn--stop")).toHaveCount(0);
+  await page.locator("textarea").fill(prompt);
+  await page.locator("textarea").press("Enter");
+  await expect(page.locator(".action-btn--stop")).toBeVisible();
+  await page.waitForFunction(() => !!window.__activity);
+}
+
+const emitActivity = (page, data) =>
+  page.evaluate((event) => window.__activity.emit(event), data);
+
+test("activity row narrates tools and reasoning, then gives way to the answer", async ({
   page,
 }, testInfo) => {
   const browserErrors = [];
@@ -811,144 +862,201 @@ test("assistant avatar mark replaces both AI circles and keeps completed replies
     browserErrors.push(request.failure()?.errorText),
   );
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  const { errors } = await arrangeRequestProgress(page);
-  await startRequestProgress(page);
-  const active = page.getByRole("img", {
-    name: "Azure FinOps assistant, working",
-    exact: true,
+  const { errors } = await arrangeActivityStream(page);
+  await startActivityTurn(page);
+  const activity = page.locator(".stream-activity");
+  const label = activity.locator(".activity-label");
+  const dots = activity.getByRole("img", { name: "Working", exact: true });
+
+  await expect(label).toHaveText("Thinking");
+  await expect(dots).toBeVisible();
+  await expect(dots.locator("i").first()).toHaveCSS(
+    "animation-name",
+    /^activity-pulse/,
+  );
+  await expect(dots.locator("i").first()).toHaveCSS(
+    "animation-play-state",
+    "running",
+  );
+  await expect(label).toHaveCSS("font-family", /Google Sans Flex/);
+  await expect(page.locator(".assistant-avatar, .streaming-cursor")).toHaveCount(
+    0,
+  );
+  await expect(activity.locator("[aria-live]")).toHaveCount(0);
+  const stopBox = await page.locator(".action-btn--stop").boundingBox();
+  expect(stopBox.x + stopBox.width).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
+
+  await emitActivity(page, {
+    type: "tool_start",
+    tool: "QueryAzure",
+    id: "cost",
+    args: JSON.stringify({
+      url: "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CostManagement/query?api-version=2025-03-01",
+    }),
   });
-  const historical = page.getByRole("img", {
-    name: "Azure FinOps assistant",
-    exact: true,
+  await expect(label).toHaveText("Querying Cost Management");
+  await emitActivity(page, {
+    type: "tool_start",
+    tool: "QueryAzure",
+    id: "price",
+    args: {
+      url: "https://prices.azure.com/api/retail/prices?$filter=armSkuName eq 'Standard_D4s_v5'",
+    },
   });
-  await expect(active).toBeVisible();
-  await expect(active.locator("svg")).toHaveAttribute("aria-hidden", "true");
-  await expect(active.locator("svg")).toHaveAttribute("focusable", "false");
-  await expect(active.locator(".assistant-avatar-orbit")).not.toHaveCSS(
-    "animation-name",
-    "none",
+  await expect(label).toHaveText(
+    "Checking retail prices for Standard_D4s_v5 and 1 more",
   );
-  await expect(active).toHaveCSS("width", "32px");
-  await expect(active).toHaveCSS("height", "32px");
-  await expect(page.locator(".ai-avatar")).toHaveCount(0);
-  await expect(active.locator("img, image, text")).toHaveCount(0);
-  await page.evaluate(() => window.__finishCostRetry());
-  await expect(active).toHaveCount(0);
-  await expect(historical).toHaveCount(1);
-  await expect(historical.locator(".assistant-avatar-orbit")).toHaveCSS(
-    "animation-name",
-    "none",
+  for (const id of ["cost", "price"])
+    await emitActivity(page, {
+      type: "tool_done",
+      tool: "QueryAzure",
+      id,
+      success: true,
+      result: "HTTP 200\n{}",
+    });
+
+  await emitActivity(page, {
+    type: "reasoning",
+    content:
+      "**Comparing month over month**\n\nCompute grew after the new scale set.",
+  });
+  await expect(label).toHaveText("Comparing month over month");
+  const toggle = activity.getByRole("button", { name: "Show thinking" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".reasoning-panel")).toHaveCount(0);
+  await toggle.click();
+  await expect(
+    activity.getByRole("button", { name: "Hide thinking" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator(".reasoning-panel")).toContainText(
+    "Compute grew after the new scale set.",
   );
-  expect(
-    await historical.evaluate(
-      (element) => element.getAnimations({ subtree: true }).length,
-    ),
-  ).toBe(0);
-  await startRequestProgress(page);
-  await expect(historical).toHaveCount(1);
-  await expect(active).toBeVisible();
-  await expect(historical.locator(".assistant-avatar-orbit")).toHaveCSS(
-    "animation-name",
-    "none",
-  );
-  await expect(active.locator(".assistant-avatar-orbit")).not.toHaveCSS(
-    "animation-name",
-    "none",
-  );
-  const gradients = await page
-    .locator(".assistant-avatar linearGradient")
-    .evaluateAll((elements) => elements.map((element) => element.id));
-  expect(gradients).toHaveLength(4);
-  expect(new Set(gradients).size).toBe(gradients.length);
   await page.screenshot({
-    path: testInfo.outputPath("assistant-avatar-history-and-thinking.png"),
+    path: testInfo.outputPath("activity-thinking.png"),
     animations: "disabled",
   });
+
+  await emitActivity(page, { type: "delta", content: "Costs rose 12% " });
+  await expect(page.locator(".message-row--ai .message-text")).toContainText(
+    "Costs rose 12%",
+  );
+  await expect(activity).toHaveCount(0);
+  await expect(page.locator(".reasoning-panel")).toHaveCount(0);
+
+  await emitActivity(page, {
+    type: "tool_start",
+    tool: "RenderChart",
+    id: "chart",
+    args: {},
+  });
+  await expect(label).toHaveText("Drawing the chart");
+  const textBox = await page
+    .locator(".ai-row--live .message-text")
+    .boundingBox();
+  const activityBox = await activity.boundingBox();
+  expect(activityBox.y).toBeGreaterThan(textBox.y);
+  await page.screenshot({
+    path: testInfo.outputPath("activity-after-text.png"),
+    animations: "disabled",
+  });
+  await emitActivity(page, {
+    type: "tool_done",
+    tool: "RenderChart",
+    id: "chart",
+    success: true,
+    result: "{}",
+  });
+  await page.evaluate(() =>
+    window.__activity.finish("Costs rose 12% because compute grew."),
+  );
+  await expect(page.locator(".action-btn--stop")).toHaveCount(0);
+  await expect(page.locator(".activity")).toHaveCount(0);
+  const reply = page.locator(".message-row--ai .ai-row").last();
+  await expect(reply).toContainText("Costs rose 12% because compute grew.");
+  await expect
+    .poll(() =>
+      reply.evaluate(
+        (element) => element.getAnimations({ subtree: true }).length,
+      ),
+    )
+    .toBe(0);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
-    ),
-  ).toBeTruthy();
-  await page.evaluate(() => window.__finishCostRetry());
-  await expect(active).toHaveCount(0);
-  await expect(historical).toHaveCount(2);
-  expect(
-    await historical.evaluateAll((elements) =>
-      elements.every(
-        (element) => element.getAnimations({ subtree: true }).length === 0,
-      ),
     ),
   ).toBeTruthy();
   expect(errors).toEqual([]);
   expect(browserErrors).toEqual([]);
 });
 
-test("assistant avatar thinking motion respects reduced motion and hidden tabs", async ({
+test("activity motion respects reduced motion and hidden tabs", async ({
   page,
 }, testInfo) => {
-  await page.clock.install();
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const { errors } = await arrangeRequestProgress(page);
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
-  await startRequestProgress(page);
-  const avatar = page.getByRole("img", {
-    name: "Azure FinOps assistant, working",
-    exact: true,
+  const { errors } = await arrangeActivityStream(page);
+  await startActivityTurn(page);
+  await emitActivity(page, {
+    type: "tool_start",
+    tool: "QueryAzure",
+    id: "graph",
+    args: {
+      url: "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2024-04-01",
+    },
   });
-  const orbit = avatar.locator(".assistant-avatar-orbit");
-  await expect(avatar).toBeVisible();
-  await expect(orbit).toHaveCSS("animation-name", "none");
+  const activity = page.locator(".stream-activity");
+  const dot = activity.locator(".activity-dots i").first();
+  const label = activity.locator(".activity-label");
+  await expect(label).toHaveText(/^Querying /);
+  await expect(dot).toHaveCSS("animation-name", "none");
+  await expect(label).toHaveCSS("animation-name", "none");
   expect(
-    await avatar.evaluate(
+    await activity.evaluate(
       (element) => element.getAnimations({ subtree: true }).length,
     ),
   ).toBe(0);
   await page.screenshot({
-    path: testInfo.outputPath("assistant-avatar-reduced-motion.png"),
+    path: testInfo.outputPath("activity-reduced-motion.png"),
     animations: "disabled",
   });
+
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await expect(orbit).not.toHaveCSS("animation-name", "none");
-  await expect(orbit).toHaveCSS("animation-duration", "12s");
-  await expect(orbit).toHaveCSS("animation-play-state", "running");
-  await page.evaluate(() => {
-    Object.defineProperty(document, "hidden", {
-      configurable: true,
-      get: () => true,
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  await expect(avatar).toHaveClass(/assistant-avatar--paused/);
-  await expect(orbit).toHaveCSS("animation-play-state", "paused");
-  await expect(orbit).toHaveCSS("transition-duration", "0s");
+  await expect(dot).toHaveCSS("animation-name", /^activity-pulse/);
+  await expect(dot).toHaveCSS("animation-duration", "1.2s");
+  await expect(dot).toHaveCSS("animation-play-state", "running");
+  const setHidden = (hidden) =>
+    page.evaluate((value) => {
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        get: () => value,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, hidden);
+  await setHidden(true);
+  await expect(activity).toHaveClass(/activity--paused/);
+  await expect(dot).toHaveCSS("animation-play-state", "paused");
   expect(
-    await avatar.evaluate((element) =>
+    await activity.evaluate((element) =>
       element
         .getAnimations({ subtree: true })
         .every((animation) => animation.playState === "paused"),
     ),
   ).toBeTruthy();
-  await page.clock.runFor(2000);
-  await expect(avatar).toHaveCSS("width", "32px");
-  await expect(avatar).toHaveCSS("height", "32px");
-  await page.evaluate(() => {
-    Object.defineProperty(document, "hidden", {
-      configurable: true,
-      get: () => false,
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
+  await setHidden(false);
+  await expect(activity).not.toHaveClass(/activity--paused/);
+  await expect(dot).toHaveCSS("animation-play-state", "running");
+
+  await emitActivity(page, {
+    type: "tool_done",
+    tool: "QueryAzure",
+    id: "graph",
+    success: true,
+    result: "HTTP 200\n{}",
   });
-  await expect(avatar).not.toHaveClass(/assistant-avatar--paused/);
-  await expect(orbit).toHaveCSS("animation-play-state", "running");
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(orbit).toHaveCSS("animation-name", "none");
-  await page.evaluate(() => window.__finishCostRetry());
-  await expect(avatar).toHaveCount(0);
-  await page.emulateMedia({ reducedMotion: "no-preference" });
-  await expect(page.locator(".assistant-avatar-orbit")).toHaveCSS(
-    "animation-name",
-    "none",
-  );
+  await page.evaluate(() => window.__activity.finish("42 resources found."));
+  await expect(page.locator(".action-btn--stop")).toHaveCount(0);
+  await expect(page.locator(".activity")).toHaveCount(0);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
@@ -956,7 +1064,6 @@ test("assistant avatar thinking motion respects reduced motion and hidden tabs",
   ).toBeTruthy();
   expect(errors).toEqual([]);
 });
-
 test("cost cooldown remains visible after automatic retries are exhausted", async ({
   page,
 }, testInfo) => {

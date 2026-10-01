@@ -28,6 +28,18 @@ async function logout() {
 </script>
 
 <style>
+/* Google Sans Flex (SIL OFL 1.1, see assets/fonts/OFL.txt). Self-hosted: the
+   CSP only allows same-origin fonts. One variable file covers wght 300-700
+   and wdth 92-100. */
+@font-face {
+  font-family: "Google Sans Flex";
+  src: url("./assets/fonts/GoogleSansFlex.ttf") format("truetype");
+  font-weight: 300 700;
+  font-stretch: 92% 100%;
+  font-style: normal;
+  font-display: swap;
+}
+
 *,
 *::before,
 *::after {
@@ -39,9 +51,9 @@ async function logout() {
 :root {
   --bg: #ffffff;
   --surface: #ffffff;
-  --border: #e1dfdd;
-  --text: #323130;
-  --text-muted: #605e5c;
+  --border: #e5e5e5;
+  --text: #1f1f1f;
+  --text-muted: #676767;
   --accent: #0078d4;
   --accent-hover: #106ebe;
   --green: #107c10;
@@ -53,19 +65,31 @@ async function logout() {
 
 body {
   font-family:
+    "Google Sans Flex",
     "Segoe UI",
-    "Segoe UI Web (West European)",
     -apple-system,
     BlinkMacSystemFont,
     Roboto,
     Helvetica,
     Arial,
     sans-serif;
+  font-variation-settings: "ROND" 0;
+  font-stretch: 92%;
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
   font-size: 14px;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-stretch: inherit;
+  font-variation-settings: inherit;
 }
 
 .app {

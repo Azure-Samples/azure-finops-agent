@@ -37,4 +37,17 @@ public class WebSearchOutcomeTests
         Assert.Equal("Web search completed.", AgentConversation.WebSearchOutcome(null));
         Assert.Equal("Web search completed.", AgentConversation.WebSearchOutcome("not an item"));
     }
+
+    [Fact]
+    public void CitationMarkersAreRemovedFromAnswersWithoutTouchingContent()
+    {
+        Assert.Equal("Retail rates, not invoice prices.*  \n*Retrieved UTC: `2026-10-01T19:25:55Z`.*",
+            AgentConversation.StripCitationMarkers(
+                "Retail rates, not invoice prices.* \uE200cite\uE202turn0search0\uE201  \n*Retrieved UTC: `2026-10-01T19:25:55Z`.*"));
+        Assert.Equal("Sweden Central launched it.",
+            AgentConversation.StripCitationMarkers("Sweden Central launched it\uE200cite\uE202turn0search0\uE202turn1view0\uE201."));
+        Assert.Equal("Partial answer", AgentConversation.StripCitationMarkers("Partial answer \uE200cite\uE202turn0"));
+        const string plain = "Standard_D4s_v5 costs USD 0.192/hour (gpt-6.1-sol, `eastus`).";
+        Assert.Same(plain, AgentConversation.StripCitationMarkers(plain));
+    }
 }

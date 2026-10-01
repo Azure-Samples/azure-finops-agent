@@ -55,6 +55,7 @@ public sealed class ToolGuidanceTests
     [InlineData("QueryAzure", null, "OData")]
     [InlineData("QueryAzure", null, "pricesheet download")]
     [InlineData("QueryAzure", null, "not tenant-specific")]
+    [InlineData("QueryAzure", null, "license-included pricing adds the tier's '- SQL License' product")]
     [InlineData("QueryAzure", "query", "LINQ")]
     [InlineData("QueryAzure", "url", "one per line")]
     [InlineData("ReportMaturityScore", null, "/providers/Microsoft.CostManagement/exports?api-version=2026-08-01")]

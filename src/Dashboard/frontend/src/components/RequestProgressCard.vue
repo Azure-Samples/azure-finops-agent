@@ -84,17 +84,15 @@ defineProps({
   width: 100%;
   max-width: 760px;
   min-width: 0;
-  padding: 16px;
-  border: 1px solid #c7e0f4;
-  border-left: 3px solid #0078d4;
-  border-radius: 8px;
-  background: #f7fbff;
-  color: #323130;
-  box-shadow: 0 2px 6px #003b6408;
+  padding: 16px 18px;
+  border: 1px solid #e5e5e5;
+  border-radius: 16px;
+  background: #f7f7f8;
+  color: #1f1f1f;
   text-align: left;
 }
 .request-progress-art {
-  color: #0078d4;
+  color: #4b7ccd;
 }
 .request-progress-art svg {
   display: block;
@@ -125,16 +123,18 @@ defineProps({
 h3 {
   flex: 1 1 220px;
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.4;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.5;
 }
 .request-progress-badge {
-  padding: 2px 7px;
-  border: 1px solid #c7e0f4;
-  border-radius: 4px;
-  color: #005a9e;
-  font-size: 11px;
+  padding: 2px 10px;
+  border: 1px solid #e5e5e5;
+  border-radius: 999px;
+  background: #fff;
+  color: #676767;
+  font-size: 12px;
+  line-height: 18px;
   white-space: nowrap;
 }
 p {
@@ -150,7 +150,7 @@ p {
   gap: 8px 20px;
   margin-top: 10px;
   font-size: 12px;
-  color: #605e5c;
+  color: #676767;
 }
 .request-progress-countdown,
 .request-progress-deadline {
@@ -159,14 +159,14 @@ p {
   gap: 2px;
 }
 .request-progress-countdown-value {
-  color: #005a9e;
+  color: #1f1f1f;
   font-size: 24px;
-  font-weight: 600;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
 time {
-  color: #323130;
+  color: #1f1f1f;
   font-variant-numeric: tabular-nums;
 }
 .request-progress-track {
@@ -174,22 +174,21 @@ time {
   margin-top: 10px;
   overflow: hidden;
   border-radius: 4px;
-  background: #deecf9;
+  background: #e3eaf7;
 }
 .request-progress-fill {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: #0078d4;
+  background: #4b7ccd;
   transition: width .25s linear;
 }
 .request-progress-resource-note {
-  color: #605e5c;
+  color: #676767;
   font-size: 12px;
 }
 .request-progress--stopped {
-  border-color: #e6d5b8;
-  border-left-color: #8a5e15;
+  border-color: #ecdcbf;
   background: #fffaf2;
 }
 .request-progress--stopped .request-progress-art,
@@ -198,7 +197,7 @@ time {
   color: #805600;
 }
 .request-progress--stopped .request-progress-badge {
-  border-color: #e6d5b8;
+  border-color: #ecdcbf;
 }
 .request-progress--stopped * {
   animation: none;

@@ -2,6 +2,7 @@ using System.ClientModel;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using AzureFinOps.Dashboard.Infrastructure;
@@ -204,7 +205,8 @@ public sealed class AgentConversation : IAsyncDisposable
 
         async Task FlushMessageAsync()
         {
-            if (text.Length > 0) await PublishAsync(new AssistantMessageEvent(messageId ?? $"{SessionId}:{messageIndex}", text.ToString()));
+            var content = StripCitationMarkers(text.ToString());
+            if (content.Length > 0) await PublishAsync(new AssistantMessageEvent(messageId ?? $"{SessionId}:{messageIndex}", content));
             text.Clear();
             messageId = null;
             messageIndex++;
@@ -330,6 +332,16 @@ public sealed class AgentConversation : IAsyncDisposable
 
     private static string Arguments(FunctionCallContent call) =>
         JsonSerializer.Serialize(call.Arguments ?? new Dictionary<string, object?>(), AIJsonUtilities.DefaultOptions);
+
+    // Hosted web search makes the model write private-use citation tokens such as
+    // U+E200 "cite" U+E202 "turn0search0" U+E201 into its text. They are not content
+    // and render as garbage, so they are removed (with an unterminated one at the end).
+    private static readonly Regex CitationMarker = new(
+        "[ \\t]*\\uE200cite\\uE202[^\\uE200\\uE201]{0,500}\\uE201|[ \\t]*\\uE200[^\\uE200\\uE201]{0,500}$",
+        RegexOptions.CultureInvariant);
+
+    internal static string StripCitationMarkers(string text) =>
+        text.Contains('\uE200') ? CitationMarker.Replace(text, string.Empty) : text;
 
     internal static string? ResultText(object? result) => result switch
     {

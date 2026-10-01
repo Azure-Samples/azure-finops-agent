@@ -1067,9 +1067,6 @@
                 {{ msg.content }}
               </div>
               <div v-else class="ai-row">
-                <div class="ai-header">
-                  <AssistantAvatar :paused="documentIsHidden" />
-                </div>
                 <div class="ai-content">
                   <div
                     v-for="(chart, ci) in msg.charts || []"
@@ -1291,8 +1288,19 @@
                 :progress="progressView(sessionNotice.progress)"
                 :paused="documentIsHidden"
               />
+              <div
+                v-else-if="noticeActivity"
+                class="session-notice session-notice--activity"
+              >
+                <ActivityIndicator
+                  wrap
+                  :label="noticeActivity.label"
+                  :detail="noticeActivity.detail"
+                  :paused="documentIsHidden"
+                />
+              </div>
               <div v-else class="system-notice session-notice">
-                {{ sessionNoticeText }}
+                {{ stripNoticeIcon(sessionNoticeText) }}
               </div>
             </div>
             <div
@@ -1351,7 +1359,8 @@
               </details>
             </div>
 
-            <!-- Streaming indicator -->
+            <!-- Live reply: the streamed answer plus one activity row saying
+                 what the agent is doing right now. -->
             <div
               v-if="
                 streaming &&
@@ -1359,56 +1368,61 @@
               "
               class="message-row message-row--ai"
             >
-              <div class="ai-row">
-                <div class="ai-header">
-                  <AssistantAvatar
-                    :thinking="!streamFailure"
-                    :paused="documentIsHidden"
-                  />
-                  <span v-if="streamIntent" class="stream-intent">
-                    {{ streamIntent }}
-                  </span>
-                  <span
-                    v-if="liveTurnElapsed"
-                    class="stream-elapsed"
-                    aria-hidden="true"
-                    >{{ liveTurnElapsed }}</span
-                  >
-                </div>
-                <div class="ai-content">
+              <div class="ai-row ai-row--live">
+                <div
+                  v-if="streamCharts.length || streamBuffer"
+                  class="ai-content"
+                >
                   <div
                     v-for="(chart, ci) in streamCharts"
                     :key="'stream-chart-' + ci"
                     class="chart-container"
                     :ref="(el) => el && mountChart(el, chart)"
                   ></div>
-                  <div class="message-text" v-if="streamBuffer">
-                    <span v-html="renderContent(streamBuffer)"></span>
-                    <span v-if="!streamFailure" class="streaming-cursor"></span>
-                  </div>
                   <div
-                    v-else-if="streamReasoning && !streamFailure"
-                    class="stream-reasoning-block"
-                  >
-                    <div class="reasoning-label">
-                      <span class="thinking-dots"><i></i><i></i><i></i></span>
-                      Thinking
-                    </div>
-                    <div class="reasoning-body">
-                      <div
-                        class="reasoning-md"
-                        v-html="renderContent(streamReasoning)"
-                      ></div>
-                    </div>
-                  </div>
-                  <div
+                    v-if="streamBuffer"
                     class="message-text"
-                    v-else-if="!streamIntent && !streamFailure"
+                    v-html="renderContent(streamBuffer)"
+                  ></div>
+                </div>
+                <ActivityIndicator
+                  v-if="showStreamActivity"
+                  class="stream-activity"
+                  :label="streamActivityLabel"
+                  :elapsed="liveTurnElapsed"
+                  :paused="documentIsHidden"
+                >
+                  <button
+                    v-if="streamReasoning"
+                    type="button"
+                    class="reasoning-toggle"
+                    :aria-expanded="reasoningOpen ? 'true' : 'false'"
+                    @click="reasoningOpen = !reasoningOpen"
                   >
-                    <span class="thinking-dots thinking-dots--lg"
-                      ><i></i><i></i><i></i
-                    ></span>
-                  </div>
+                    {{ reasoningOpen ? "Hide thinking" : "Show thinking" }}
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                  </button>
+                </ActivityIndicator>
+                <div
+                  v-if="showStreamActivity && reasoningOpen && streamReasoning"
+                  class="reasoning-panel"
+                >
+                  <div
+                    class="reasoning-md"
+                    v-html="renderContent(streamReasoning)"
+                  ></div>
                 </div>
                 <TurnFailureNotice
                   v-if="streaming && streamFailure"
@@ -1903,18 +1917,21 @@
                       : 'action-btn--disabled'
                   "
                   :disabled="!input.trim() || hasPendingUploads"
+                  aria-label="Send message"
+                  title="Send message"
                   @click="send"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
+                    width="18"
+                    height="18"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
-                    stroke-width="2.5"
+                    stroke-width="2.4"
                     stroke-linecap="round"
                     stroke-linejoin="round"
+                    aria-hidden="true"
                   >
                     <line x1="12" y1="19" x2="12" y2="5" />
                     <polyline points="5 12 12 5 19 12" />
@@ -2699,6 +2716,7 @@ import {
   watch,
 } from "vue";
 import { createAssistantMessageStream } from "../assistantMessageStream.js";
+import { stripCitationMarkers } from "../modelText.js";
 import {
   describeServerTurn,
   describeTurnFailure,
@@ -2708,7 +2726,7 @@ import {
 } from "../turnRecovery.js";
 import TurnFailureNotice from "./TurnFailureNotice.vue";
 import RequestProgressCard from "./RequestProgressCard.vue";
-import AssistantAvatar from "./AssistantAvatar.vue";
+import ActivityIndicator from "./ActivityIndicator.vue";
 import { JOB_TEMPLATES } from "../data/jobTemplates.js";
 import {
   createRequestProgress,
@@ -2775,8 +2793,14 @@ const streamCoolers = computed(
   () => perSessionCoolers.get(currentSessionId.value || "__pending__") || [],
 );
 const streamFollowUp = ref(null);
-const streamIntent = ref("");
 const streamReasoning = ref("");
+// Reasoning since the last tool or text boundary; its latest **heading** is
+// the live status while the model thinks between tool rounds.
+const reasoningSegment = ref("");
+const reasoningOpen = ref(false);
+// True while answer text is the newest stream event, so the activity row
+// steps aside for the text and returns when the model goes back to tools.
+const streamWriting = ref(false);
 const htmlReady = ref(null);
 const scriptReady = ref(null);
 const deckPreview = ref(null);
@@ -2794,7 +2818,6 @@ const chartResizeObservers = [];
 let chartSizePollTimer = null;
 let chartSizePollWorker = null;
 let chartSizePollWorkerUrl = "";
-let intentAnimTimer = null;
 
 function disposeMountedCharts() {
   for (const observer of chartResizeObservers) {
@@ -4585,15 +4608,10 @@ async function reloadSessionTranscript(sessionId) {
   streamFollowUp.value = null;
   streamBuffer.value = "";
   streamFailure.value = null;
-  streamIntent.value = "";
-  streamReasoning.value = "";
+  resetStreamActivity();
   // A fresh view starts with no transient status pill — attachToServerTurn
   // re-sets it below if a server-side turn is genuinely still running.
   clearNotice();
-  if (intentAnimTimer) {
-    clearInterval(intentAnimTimer);
-    intentAnimTimer = null;
-  }
   activeTools.value = [];
   hoveredTool.value = null;
   scriptReady.value = null;
@@ -5479,12 +5497,7 @@ async function clearMessages() {
   perSessionCharts.clear();
   streamFollowUp.value = null;
   streamBuffer.value = "";
-  streamIntent.value = "";
-  streamReasoning.value = "";
-  if (intentAnimTimer) {
-    clearInterval(intentAnimTimer);
-    intentAnimTimer = null;
-  }
+  resetStreamActivity();
   scriptReady.value = null;
   htmlReady.value = null;
   // Reset preserves files bound to the previous conversation. Pending uploads
@@ -5566,6 +5579,141 @@ const agentStatus = computed(() => {
   if (running) return friendlyToolLabel(running) + "…";
   return "thinking…";
 });
+
+function resetStreamActivity() {
+  streamReasoning.value = "";
+  reasoningSegment.value = "";
+  reasoningOpen.value = false;
+  streamWriting.value = false;
+}
+
+const runningStreamTools = computed(() =>
+  streamToolCalls.value.filter((tc) => !tc.done),
+);
+
+// The activity row under the live answer: shown until text arrives, and again
+// whenever the model goes back to tools or thinking. A cooldown has its own
+// card, so the row steps aside rather than describing the same wait twice.
+const showStreamActivity = computed(
+  () =>
+    streaming.value &&
+    !streamFailure.value &&
+    !sessionNotice.value?.progress &&
+    !noticeActivity.value &&
+    (runningStreamTools.value.length > 0 ||
+      !streamBuffer.value ||
+      !streamWriting.value),
+);
+
+function reasoningHeading(text) {
+  let heading = "";
+  for (const match of String(text || "").matchAll(/\*\*([^*\n]{2,90})\*\*/g))
+    heading = match[1].trim();
+  return heading;
+}
+
+const streamActivityLabel = computed(() => {
+  const running = runningStreamTools.value;
+  if (running.length) {
+    const phrase = activityPhrase(running[running.length - 1]);
+    return running.length > 1
+      ? `${phrase} and ${running.length - 1} more`
+      : phrase;
+  }
+  return reasoningHeading(reasoningSegment.value) || "Thinking";
+});
+
+// Sentence-case counterpart of friendlyToolLabel for the activity row.
+const ACTIVITY_SOURCES = {
+  ARM: "Azure Resource Manager",
+  Azure: "Azure",
+  Graph: "Microsoft Graph",
+  KQL: "Log Analytics",
+};
+function activityPhrase(tc) {
+  if (tc?.cooling && !tc.done) return progressView(tc.cooling).title;
+  let args = tc?.args;
+  if (args && typeof args === "string") {
+    try {
+      args = JSON.parse(args);
+    } catch {
+      args = null;
+    }
+  }
+  switch (tc?.tool) {
+    case "QueryAzure": {
+      const urls = String(args?.url || "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (!urls.length && args?.query) return "Calculating";
+      const label = _query_label({ ...args, url: urls[0] || "" });
+      const source = label.split(" · ")[0];
+      let phrase;
+      if (source === "Pricing")
+        phrase = label.includes(" · ")
+          ? `Checking retail prices for ${label.split(" · ")[1]}`
+          : "Checking retail prices";
+      else if (source === "Docs") phrase = "Reading Microsoft Learn";
+      else if (source === "Specs") phrase = "Checking the API specification";
+      else if (source === "Health") phrase = "Checking Azure status";
+      else if (source === "Export" || source === "Exports")
+        phrase = "Reading cost exports";
+      else if (source === "Web")
+        phrase = label.includes(" · ") ? `Reading ${label.split(" · ")[1]}` : "Reading the web";
+      else if (source.startsWith("Batch")) phrase = "Running queries";
+      else phrase = `Querying ${ACTIVITY_SOURCES[source] || source}`;
+      return urls.length > 1 ? `${phrase} (${urls.length} requests)` : phrase;
+    }
+    case "QueryUploadedFile":
+      return "Reading your file";
+    case "GenerateScript":
+      return "Writing the script";
+    case "GenerateHtmlPresentation":
+      return "Building the deck";
+    case "GenerateMaturityReport":
+      return "Building the report";
+    case "GenerateDataReport":
+      return "Preparing the file";
+    case "RenderChart":
+    case "RenderAdvancedChart":
+      return "Drawing the chart";
+    case "ReportMaturityScore":
+      return "Scoring";
+    case "GetScoreHistory":
+      return "Reading score history";
+    case "ApplyAzureChange":
+      return "Preparing the change for your approval";
+    case "RecordSavingsAction":
+    case "UpdateSavingsAction":
+      return "Updating the savings ledger";
+    case "GetSavingsLedger":
+      return "Reading the savings ledger";
+    case "SuggestFollowUp":
+      return "Suggesting next steps";
+    case "PublishFAQ":
+      return "Publishing the FAQ";
+    case "ReportJobOutcome":
+      return "Recording the run outcome";
+    default:
+      return "Working";
+  }
+}
+
+// Working / reconnecting notices describe a live turn, so they share the
+// activity row; one-off notices (busy, errors) stay a quiet pill.
+const noticeActivity = computed(() => {
+  const notice = sessionNotice.value;
+  if (!notice || notice.progress) return null;
+  if (!["working", "reconnecting"].includes(notice.kind)) return null;
+  return {
+    label: stripNoticeIcon(notice.text),
+    detail: serverTurnDetail.value,
+  };
+});
+function stripNoticeIcon(text) {
+  return String(text || "").replace(/^[\u2300-\u23ff\u2600-\u27bf\ufe0f\s]+/u, "");
+}
 
 function formatDuration(ms) {
   if (ms == null) return "";
@@ -7433,7 +7581,7 @@ watch(() => messages.value.length, scrollToBottom);
 // covers layout-only growth (charts mounting, images, composer resize).
 watch(streamBuffer, scrollToBottom);
 watch(streamReasoning, scrollToBottom);
-watch(streamIntent, scrollToBottom);
+watch(streamWriting, scrollToBottom);
 
 watch(streaming, async (val) => {
   if (!val) {
@@ -7606,7 +7754,7 @@ function renderContent(text) {
   // The & escape preserves entities the model already wrote (&lt; &#65; …):
   // entities in text nodes only ever decode to characters, never elements,
   // so passing them through is safe and keeps display fidelity.
-  let html = String(text)
+  let html = stripCitationMarkers(String(text))
     .replace(/&(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#x[\da-fA-F]+);)/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
@@ -8136,10 +8284,11 @@ async function send() {
           }
 
           case "delta":
-            clearInterval(intentAnimTimer);
-            intentAnimTimer = null;
-            streamIntent.value = "";
-            streamReasoning.value = "";
+            if (isActiveView()) {
+              streamReasoning.value = "";
+              reasoningSegment.value = "";
+              streamWriting.value = true;
+            }
             {
               const completeText = assistantMessages.append(
                 data.content,
@@ -8161,13 +8310,16 @@ async function send() {
             break;
 
           case "reasoning":
-            // Live "thinking" panel — accumulate the reasoning summary (multi-
-            // row, newlines preserved) and keep a rolling tail so the panel
-            // reads like the model's stream of thought without growing forever.
-            if (data.content) {
+            // Reasoning summary: its newest **heading** becomes the live
+            // status, and the rolling tail is available behind "Show thinking".
+            if (data.content && isActiveView()) {
               const merged = streamReasoning.value + data.content;
               streamReasoning.value =
                 merged.length > 1500 ? "…" + merged.slice(-1500) : merged;
+              reasoningSegment.value = (
+                reasoningSegment.value + data.content
+              ).slice(-1500);
+              streamWriting.value = false;
             }
             break;
 
@@ -8209,10 +8361,9 @@ async function send() {
                 textAnimFrame = null;
                 pendingText = "";
                 streamBuffer.value = completeText;
-                clearInterval(intentAnimTimer);
-                intentAnimTimer = null;
-                streamIntent.value = "";
                 streamReasoning.value = "";
+                reasoningSegment.value = "";
+                streamWriting.value = true;
               }
               hasDeltas = true;
             }
@@ -8257,28 +8408,9 @@ async function send() {
             // viewers of this session (now or later) see the update.
             perSessionToolCalls.set(streamingId, [...toolCalls]);
             toolCalls = perSessionToolCalls.get(streamingId);
-            if (data.tool === "report_intent" && data.args) {
-              try {
-                const parsed =
-                  typeof data.args === "string"
-                    ? JSON.parse(data.args)
-                    : data.args;
-                if (parsed.intent) {
-                  clearInterval(intentAnimTimer);
-                  streamIntent.value = "";
-                  let i = 0;
-                  const txt = parsed.intent;
-                  intentAnimTimer = setInterval(() => {
-                    i++;
-                    streamIntent.value =
-                      i >= txt.length ? txt + "…" : txt.slice(0, i) + "…";
-                    if (i >= txt.length) {
-                      clearInterval(intentAnimTimer);
-                      intentAnimTimer = null;
-                    }
-                  }, 45);
-                }
-              } catch {}
+            if (isActiveView()) {
+              reasoningSegment.value = "";
+              streamWriting.value = false;
             }
             break;
 
@@ -8299,6 +8431,7 @@ async function send() {
             }
             perSessionToolCalls.set(streamingId, [...toolCalls]);
             toolCalls = perSessionToolCalls.get(streamingId);
+            if (isActiveView()) streamWriting.value = false;
             perSessionCoolers.set(
               streamingId,
               (perSessionCoolers.get(streamingId) || []).filter(
@@ -8679,8 +8812,6 @@ async function send() {
   } finally {
     completionProbeCancelled = true;
     if (completionProbeTimer) clearTimeout(completionProbeTimer);
-    clearInterval(intentAnimTimer);
-    intentAnimTimer = null;
     runningSessions.delete(streamingId);
     streamStartedAt.delete(streamingId);
     streamState.probeVersion++;
@@ -8727,8 +8858,7 @@ async function send() {
       streamFailure.value = null;
       activeTools.value = [];
       streamFollowUp.value = null;
-      streamIntent.value = "";
-      streamReasoning.value = "";
+      resetStreamActivity();
       scriptReady.value = null;
       htmlReady.value = null;
       nextTick(() => inputEl.value?.focus());
@@ -10818,14 +10948,18 @@ async function send() {
 .system-notice {
   max-width: 72%;
   margin: 2px 0;
-  padding: 6px 14px;
-  border-radius: 12px;
-  background: #f3f2f1;
-  border: 1px solid #e1dfdd;
-  color: #605e5c;
-  font-size: 12.5px;
+  padding: 8px 16px;
+  border-radius: 16px;
+  background: #f7f7f8;
+  border: 1px solid #e5e5e5;
+  color: #676767;
+  font-size: 13px;
   line-height: 1.45;
   text-align: center;
+}
+.session-notice--activity {
+  width: 100%;
+  min-width: 0;
 }
 .change-review {
   width: 100%;
@@ -10873,34 +11007,22 @@ async function send() {
   cursor: not-allowed;
 }
 .bubble--user {
-  max-width: 80%;
-  border-radius: 8px;
-  padding: 10px 14px;
-  background: #f3f2f1;
-  color: #323130;
-  font-size: 14px;
+  max-width: 82%;
+  border-radius: 20px;
+  padding: 10px 16px;
+  background: #f4f4f4;
+  color: #1f1f1f;
+  font-size: 16px;
   line-height: 1.5;
   word-wrap: break-word;
 }
 .ai-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   max-width: 100%;
   width: 100%;
   min-width: 0;
-}
-.agent-lottie {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-}
-.ai-header {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  min-height: 28px;
 }
 .ai-content {
   min-width: 0;
@@ -10908,45 +11030,10 @@ async function send() {
   overflow-x: auto;
 }
 .message-text {
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 16px;
+  line-height: 1.65;
   word-wrap: break-word;
-  color: #323130;
-}
-.streaming-cursor {
-  display: inline-block;
-  width: 6px;
-  height: 16px;
-  background: #605e5c;
-  border-radius: 1px;
-  margin-left: 2px;
-  vertical-align: text-bottom;
-  animation: cursor-pulse 1s ease-in-out infinite;
-}
-.stream-intent {
-  font-style: italic;
-  color: #605e5c;
-  font-size: 14px;
-  font-weight: 500;
-  white-space: normal;
-  line-height: 1.4;
-  animation: intent-in 0.3s ease-out;
-}
-.stream-elapsed {
-  margin-left: auto;
-  color: #605e5c;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.stream-reasoning-block {
-  margin: 6px 0 2px;
-  padding: 10px 14px;
-  background: linear-gradient(180deg, #fafbfc, #f3f5f7);
-  border: 1px solid #e8eaed;
-  border-radius: 10px;
-  animation: intent-in 0.3s ease-out;
-  max-width: 720px;
+  color: #1f1f1f;
 }
 /* Model-marked clickable prompt suggestions — [label](prompt:...) links. */
 :deep(.prompt-chip) {
@@ -10974,48 +11061,74 @@ async function send() {
 :deep(.prompt-chip:active) {
   transform: translateY(0);
 }
-.reasoning-label {
-  display: flex;
+.reasoning-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #7a7d85;
-  margin-bottom: 6px;
-}
-.reasoning-body {
+  gap: 4px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #676767;
   font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.reasoning-toggle:hover {
+  background: #f4f4f4;
+  color: #1f1f1f;
+}
+.reasoning-toggle:focus-visible {
+  outline: 2px solid #3678e8;
+  outline-offset: 1px;
+}
+.reasoning-toggle svg {
+  transition: transform 0.2s ease;
+}
+.reasoning-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+/* Rolling window under the activity row, aligned with its label; the newest
+   reasoning stays pinned at the bottom. */
+.reasoning-panel {
+  margin: -4px 0 4px 36px;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid #e5e5e5;
+  color: #676767;
+  font-size: 14px;
   line-height: 1.55;
-  color: #8a8d94;
-  font-style: italic;
   word-break: break-word;
-  /* Rolling window: cap ~6 rows, keep the newest text pinned visible. */
-  max-height: 126px;
+  max-height: 168px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
 }
-/* Markdown inside the muted "Thinking" panel. The reasoning stream is rendered
-   through the same (HTML-escaping) renderContent as the main answer, but the
-   main-answer styles are scoped to .message-text and don't reach here, so these
-   compact + muted overrides keep headings/lists/code/tables from blowing up the
-   small rolling-window box. The v-html output is wrapped in .reasoning-md so the
-   flex container above still pins the newest lines to the bottom. */
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-toggle svg {
+    transition: none;
+  }
+}
+/* Markdown inside the thinking panel. The reasoning stream is rendered through
+   the same (HTML-escaping) renderContent as the main answer, but the answer
+   styles are scoped to .message-text, so these compact overrides keep headings,
+   lists, code and tables from blowing up the small rolling window. */
 .reasoning-md :deep(h2),
 .reasoning-md :deep(h3),
 .reasoning-md :deep(h4) {
-  font-size: 13px;
-  font-weight: 700;
-  font-style: normal;
-  margin: 4px 0 2px;
-  color: #6b6e76;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 6px 0 2px;
+  color: #1f1f1f;
 }
 .reasoning-md :deep(strong) {
-  font-weight: 700;
-  color: #6b6e76;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+.reasoning-md :deep(p) {
+  margin: 0 0 6px;
 }
 .reasoning-md :deep(ul) {
   margin: 2px 0;
@@ -11054,60 +11167,6 @@ async function send() {
 .reasoning-md :deep(.prompt-chip) {
   font-size: 12px;
   padding: 3px 9px;
-}
-/* Animated thinking dots — three staggered pulsing orbs. */
-.thinking-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.thinking-dots i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #1f2328;
-  animation: dot-bounce 1.2s ease-in-out infinite;
-}
-.thinking-dots i:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.thinking-dots i:nth-child(3) {
-  animation-delay: 0.3s;
-}
-.thinking-dots--lg i {
-  width: 9px;
-  height: 9px;
-}
-@keyframes dot-bounce {
-  0%,
-  60%,
-  100% {
-    transform: translateY(0) scale(1);
-    opacity: 0.45;
-  }
-  30% {
-    transform: translateY(-5px) scale(1.15);
-    opacity: 1;
-  }
-}
-@keyframes intent-in {
-  from {
-    opacity: 0;
-    transform: translateX(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-@keyframes cursor-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
-  }
 }
 
 /* ── Message content styling ── */
@@ -11379,11 +11438,11 @@ async function send() {
 .input-wrapper {
   display: flex;
   flex-direction: column;
-  border: 1px solid #8a8886;
-  border-radius: 20px;
-  padding: 14px 18px 10px 18px;
+  border: 1px solid #e5e5e5;
+  border-radius: 28px;
+  padding: 14px 18px 10px 20px;
   background: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
   transition:
     border-color 0.15s,
     box-shadow 0.15s;
@@ -11391,11 +11450,11 @@ async function send() {
   min-width: 0;
 }
 .input-wrapper:focus-within {
-  border-color: #605e5c;
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04);
+  border-color: #c9c9c9;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
 }
 .input-wrapper--disabled {
-  background: #f3f2f1;
+  background: #f7f7f8;
   opacity: 0.6;
 }
 .input-field {
@@ -11409,8 +11468,8 @@ async function send() {
   width: 100%;
   background: transparent;
   border: none;
-  color: #323130;
-  font-size: 15px;
+  color: #1f1f1f;
+  font-size: 16px;
   font-family: inherit;
   padding: 0;
   outline: none;
@@ -11422,32 +11481,35 @@ async function send() {
   box-sizing: border-box;
 }
 .input-field::placeholder {
-  color: #a19f9d;
+  color: #73777d;
 }
 .input-bottom-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-top: 8px;
 }
 .input-bottom-left {
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
 }
 .input-action-btn {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 5px;
-  height: 28px;
+  height: 30px;
   padding: 0 10px;
-  border-radius: 14px;
+  border-radius: 15px;
   border: none;
   background: transparent;
-  color: #605e5c;
+  color: #676767;
   cursor: pointer;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
   transition:
@@ -11455,8 +11517,8 @@ async function send() {
     background 0.15s;
 }
 .input-action-btn:hover:not(:disabled) {
-  background: #f3f2f1;
-  color: #0078d4;
+  background: #f4f4f4;
+  color: #1f1f1f;
 }
 .input-action-btn:disabled {
   opacity: 0.35;
@@ -11464,38 +11526,64 @@ async function send() {
 }
 .input-bottom-right {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
+}
+/* Narrow composers keep the actions as icons; the label stays the button's
+   accessible name. */
+@media (max-width: 600px) {
+  .input-action-btn {
+    padding: 0 9px;
+  }
+  .input-action-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+  .input-action-btn span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 .action-btn {
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   border: none;
   cursor: pointer;
-  transition: all 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.action-btn:focus-visible {
+  outline: 2px solid #3678e8;
+  outline-offset: 2px;
 }
 .action-btn--active {
-  background: #0078d4;
+  background: #0d0d0d;
   color: #fff;
 }
 .action-btn--active:hover {
-  background: #106ebe;
+  background: #2b2b2b;
 }
 .action-btn--disabled {
-  background: #f3f2f1;
-  color: #a19f9d;
+  background: #e5e5e5;
+  color: #9e9e9e;
   cursor: default;
 }
 .action-btn--stop {
-  background: #323130;
+  background: #0d0d0d;
   color: #fff;
 }
 .action-btn--stop:hover {
-  background: #484644;
+  background: #2b2b2b;
 }
 
 /* ── Tools sidebar (right) ── */
@@ -12400,7 +12488,7 @@ async function send() {
   cursor: pointer;
 }
 .st-row--running {
-  background: #fff4ce;
+  background: #f4f7fd;
 }
 .st-name {
   flex: 1;
@@ -12408,7 +12496,7 @@ async function send() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #323130;
+  color: #1f1f1f;
   font-weight: 400;
   font-size: 13px;
 }
