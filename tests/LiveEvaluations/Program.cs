@@ -91,7 +91,7 @@ internal static class Program
         var logger = logging.CreateLogger("LiveEvaluation");
         var identity = new PersistentIdentity(app.Services.GetRequiredService<IDataProtectionProvider>(), logging.CreateLogger<PersistentIdentity>());
         var tokens = new SessionTokenStore(options, new EntraClientCredentials(options, logging.CreateLogger<EntraClientCredentials>()), identity, logging.CreateLogger<SessionTokenStore>());
-        var reasoningEffort = Environment.GetEnvironmentVariable("EVAL_REASONING_EFFORT") ?? "xhigh";
+        var reasoningEffort = Environment.GetEnvironmentVariable("EVAL_REASONING_EFFORT") ?? "medium";
         var webSearch = bool.TryParse(Environment.GetEnvironmentVariable("EVAL_WEB_SEARCH"), out var webSearchSetting)
             ? webSearchSetting : AgentSessionFactory.DefaultWebSearch;
         state.AgentProfile = $"{model}, reasoning effort {reasoningEffort}, web search {(webSearch ? "on" : "off")}";

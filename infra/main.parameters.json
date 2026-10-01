@@ -30,7 +30,7 @@
       "value": "${AZURE_OPENAI_SERVICE_TIER=Default}"
     },
     "aoaiReasoningEffort": {
-      "value": "${AZURE_OPENAI_REASONING_EFFORT=high}"
+      "value": "${AZURE_OPENAI_REASONING_EFFORT=medium}"
     },
     "aoaiWebSearch": {
       "value": "${AZURE_OPENAI_WEB_SEARCH=true}"

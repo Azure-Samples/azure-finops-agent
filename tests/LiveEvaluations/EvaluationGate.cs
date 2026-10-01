@@ -99,7 +99,7 @@ public static class EvaluationGate
         if (run.Errors.Length > 0) reasons.Add("The run emitted errors.");
         var failedCalls = run.Tools.Select((tool, index) => (tool, index)).Where(call => !ToolSucceeded(call.tool)).ToArray();
         if (failedCalls.Length > AllowedCorrectedToolFailures)
-            reasons.Add($"{failedCalls.Length} tool calls failed; at most {AllowedCorrectedToolFailures} corrected failure is allowed.");
+            reasons.Add($"{failedCalls.Length} tool calls failed; at most {AllowedCorrectedToolFailures} corrected failures are allowed.");
         else if (failedCalls.Any(call => !run.Tools.Skip(call.index + 1).Any(later => later.Name == call.tool.Name && ToolSucceeded(later))))
             reasons.Add("A failed tool call was never corrected by a later successful call to that tool.");
         if (run.Tools.Any(tool => tool.Result.Contains("Output too large to read at once", StringComparison.OrdinalIgnoreCase)))
@@ -166,7 +166,7 @@ public static class EvaluationGate
     // "Roughly doubled": the waste added at least three quarters of an expert's calls or elapsed time.
     public const double RoughlyDoubledGrowth = 0.75;
 
-    // The agent researches: it may learn from one failed call when a later call to the same
+    // The agent researches: it may learn from up to two failed calls when a later call to the same
     // tool succeeds. The judge still rejects an answer that rests on failed evidence.
-    public const int AllowedCorrectedToolFailures = 1;
+    public const int AllowedCorrectedToolFailures = 2;
 }

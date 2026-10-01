@@ -17,7 +17,7 @@ param appInsightsConnectionString string
 param aoaiEndpoint string
 param aoaiDeploymentName string
 @allowed(['low', 'medium', 'high', 'xhigh'])
-param aoaiReasoningEffort string = 'high'
+param aoaiReasoningEffort string = 'medium'
 param aoaiWebSearch bool = true
 param entraAppId string
 @secure()

@@ -98,6 +98,29 @@ public sealed class SessionQualityGuidanceTests
     }
 
     [Fact]
+    public void NextStepsNeverCostAModelRoundOfTheirOwn()
+    {
+        Assert.Contains("next steps never get a round of their own", Prompt);
+        Assert.Contains("call SuggestFollowUp only in the same response as another tool call that completes the answer", Prompt);
+        Assert.Contains("make any SuggestFollowUp call in the ReportMaturityScore response, and after scoring call no other tool", Prompt);
+        Assert.Contains("no GenerateDataReport unless the user asked for a file", Prompt);
+
+        // The link the prompt teaches must match the chip pattern ChatView.vue renders as a button.
+        var link = System.Text.RegularExpressions.Regex.Match(Prompt, @"\[[^\]]+\]\(prompt:[^)]+\)");
+        Assert.True(link.Success);
+        Assert.Equal("[short label](prompt:complete next instruction)", link.Value);
+
+        var followUp = FollowUpTools.Create().Single();
+        Assert.Contains("never in a response of its own", followUp.Description);
+        Assert.Contains("[label](prompt:instruction)", followUp.Description);
+
+        var score = new ScoreTools(new UserTokens { UserId = 101 }).Create().First();
+        Assert.Equal("ReportMaturityScore", score.Name);
+        Assert.Contains("put any SuggestFollowUp call in this same response, then answer with no further tool call", score.Description);
+        Assert.DoesNotContain("by itself", score.Description);
+    }
+
+    [Fact]
     public void QueryToolsPointAtAuthoritativeApiReferences()
     {
         var azure = new AzureQueryTools(new UserTokens { UserId = 101 }).Create().First();

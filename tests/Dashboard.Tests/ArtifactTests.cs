@@ -75,6 +75,9 @@ public sealed class ArtifactTests
         }
         finally { ArtifactStore.Default.Remove(parts[1], 101); }
     }
+
+    [Theory]
+    [InlineData("csv", "text/csv")]
     [InlineData("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
     [InlineData("html", "text/html")]
     public async Task ReportToolCreatesRealOwnerBoundFiles(string format, string contentType)

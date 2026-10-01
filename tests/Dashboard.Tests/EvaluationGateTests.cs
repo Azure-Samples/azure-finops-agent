@@ -62,11 +62,19 @@ public sealed class EvaluationGateTests
         Assert.True(EvaluationGate.Assess(Scenario, run, Accepted).Accepted);
     }
 
+    [Fact]
+    public void TwoFailedCallsEachCorrectedByALaterSuccessfulCallPass()
+    {
+        ToolResult failed = new("GetCrawlMaturityEvidence", false, "", "Tool execution failed");
+        ToolResult ok = new("GetCrawlMaturityEvidence", true, "{}", null);
+        Assert.True(EvaluationGate.Assess(Scenario, Success with { Tools = [failed, ok, failed, ok] }, Accepted).Accepted);
+    }
+
     [Theory]
-    [InlineData("second-failure")]
+    [InlineData("third-failure")]
     [InlineData("never-corrected")]
     [InlineData("other-tool-succeeded")]
-    public void MoreThanOneOrAnUncorrectedFailedCallFails(string shape)
+    public void MoreThanTwoOrAnUncorrectedFailedCallFails(string shape)
     {
         ToolResult failed = new("GetCrawlMaturityEvidence", false, "", "Tool execution failed");
         ToolResult ok = new("GetCrawlMaturityEvidence", true, "{}", null);
@@ -74,7 +82,7 @@ public sealed class EvaluationGateTests
         {
             Tools = shape switch
             {
-                "second-failure" => [failed, ok, failed, ok],
+                "third-failure" => [failed, ok, failed, ok, failed, ok],
                 "never-corrected" => [ok, failed],
                 _ => [failed, new("SuggestFollowUp", true, "{}", null)],
             }
@@ -115,6 +123,9 @@ public sealed class EvaluationGateTests
         Assert.Contains("The single exception is zero seats", instructions);
         Assert.Contains("was actually requested and is unavailable", instructions);
         Assert.Contains("Reject invented facts", instructions);
+        Assert.Contains("Judge materiality, not polish", instructions);
+        Assert.Contains("Set complete false only when a core requested result or rubric requirement is missing", instructions);
+        Assert.Contains("grounded false only when a material claim the user would act on", instructions);
         Assert.Equal("xhigh", root.GetProperty("reasoning").GetProperty("effort").GetString());
         Assert.True(root.GetProperty("text").GetProperty("format").GetProperty("strict").GetBoolean());
 

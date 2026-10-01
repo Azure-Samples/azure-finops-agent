@@ -95,9 +95,9 @@ param aoaiModelCapacity int = 1000
 @allowed(['Default', 'Priority'])
 param aoaiServiceTier string = 'Default'
 
-@description('Reasoning effort surfaced as `AzureOpenAI__ReasoningEffort`. CI deployments override this with the effort the live evaluation gate actually tested.')
+@description('Reasoning effort surfaced as `AzureOpenAI__ReasoningEffort`. Agent turns are dominated by model time, and on gpt-6.1-sol each round at medium is about three times faster than at xhigh. CI deployments override this with the effort the live evaluation gate actually tested.')
 @allowed(['low', 'medium', 'high', 'xhigh'])
-param aoaiReasoningEffort string = 'high'
+param aoaiReasoningEffort string = 'medium'
 
 @description('Give the agent the model\'s hosted web search tool (`AzureOpenAI__WebSearch`) for recent public information such as announcements and new model or region availability. Search queries go to Bing grounding, which is outside the Azure data boundary; set false to keep every call inside it.')
 param aoaiWebSearch bool = true

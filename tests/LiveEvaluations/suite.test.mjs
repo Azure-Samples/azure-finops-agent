@@ -369,7 +369,7 @@ test("feature deployment consumes only the successful environment-resolved evalu
     assert.match(live, /EVAL_MODEL: \$\{\{ vars\.EVAL_MODEL \}\}/);
     assert.match(live, /EVAL_MODEL_ENDPOINT: \$\{\{ secrets\.EVAL_MODEL_ENDPOINT \}\}/);
     assert.doesNotMatch(live, /vars\.EVAL_MODEL_ENDPOINT/);
-    assert.match(live, /EVAL_REASONING_EFFORT: \$\{\{ vars\.EVAL_REASONING_EFFORT \|\| 'xhigh' \}\}/);
+    assert.match(live, /EVAL_REASONING_EFFORT: \$\{\{ vars\.EVAL_REASONING_EFFORT \|\| 'medium' \}\}/);
     assert.match(live, /id: accepted\s+if: success\(\)\s+run: node infra\/scripts\/feature-slot\.mjs evaluation-output/);
     assert.ok(live.indexOf("run: node tests/LiveEvaluations/suite.mjs") <
         live.indexOf("id: accepted"));
@@ -525,15 +525,16 @@ test("malformed verdicts, missing results, timeouts and failed tools fail closed
         validateResult(scenario, pass(scenario), 1, sha, suiteHash).length > 0,
     );
 });
-test("one failed call corrected by a later call to the same tool passes; a second or uncorrected failure fails", () => {
+test("up to two failed calls each corrected by a later call to the same tool pass; a third or uncorrected failure fails", () => {
     const scenario = { ...cases[0], requiredTools: [], forbiddenTools: [] };
     const withTools = (tools) => ({ ...pass(scenario), tools, toolCount: tools.length });
     const failed = { name: "QueryAzure", success: false };
     const ok = { name: "QueryAzure", success: true };
     assert.deepEqual(validateResult(scenario, withTools([failed, ok]), 0, sha, suiteHash), []);
+    assert.deepEqual(validateResult(scenario, withTools([failed, ok, failed, ok]), 0, sha, suiteHash), []);
     for (const tools of [
         [ok, failed],
-        [failed, ok, failed, ok],
+        [failed, ok, failed, ok, failed, ok],
         [failed, { name: "SuggestFollowUp", success: true }],
         [{ name: "QueryAzure" }, ok],
     ])

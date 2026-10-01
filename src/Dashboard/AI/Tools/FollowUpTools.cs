@@ -10,7 +10,8 @@ public static class FollowUpTools
 
     [Description("""
         Optionally offers 1-3 clickable next actions after a tenant-data, remediation or file-analysis answer. At most one call per turn.
-        Never substitute a follow-up offer for a deliverable the user already requested. For a single simple next question, a prompt link in the answer is enough.
+        Call it only in the same response as another tool call that completes the answer (ReportMaturityScore, RenderChart, GenerateScript or GenerateDataReport), never in a response of its own: that costs a whole model round before the user sees the answer. Otherwise end the answer with [label](prompt:instruction) links, which render as the same buttons.
+        Never substitute a follow-up offer for a deliverable the user already requested.
         Each action names a concrete entity from this turn (resource, resource group, service, amount, region or window) and is a complete instruction with its essential scope; labels are at most 60 characters.
         Pair every label with its own prompt: label describes prompt, label2 describes prompt2, label3 describes prompt3, and a label without its prompt is dropped.
         Skip it for greetings, public pricing, hypothetical estimates and clarifications. Never offer a Cost Management retry before its returned deadline.

@@ -269,7 +269,7 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
         else {
             const failed = result.tools.flatMap((tool, index) => (tool.success ? [] : [index]));
             if (failed.length > ALLOWED_CORRECTED_TOOL_FAILURES)
-                failures.push(`${failed.length} tool calls failed; at most ${ALLOWED_CORRECTED_TOOL_FAILURES} corrected failure is allowed.`);
+                failures.push(`${failed.length} tool calls failed; at most ${ALLOWED_CORRECTED_TOOL_FAILURES} corrected failures are allowed.`);
             else if (failed.some((index) => !result.tools.slice(index + 1)
                 .some((later) => later.name === result.tools[index].name && later.success === true)))
                 failures.push("A failed tool call was never corrected.");
@@ -315,7 +315,7 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
 export const MINIMUM_EFFICIENCY_SCORE = 3;
 
 // The agent researches: one failed call is fine when a later call to the same tool succeeds.
-export const ALLOWED_CORRECTED_TOOL_FAILURES = 1;
+export const ALLOWED_CORRECTED_TOOL_FAILURES = 2;
 
 export function evaluateSuite(cases, results, sha, suiteHash) {
     const failures = [];

@@ -38,7 +38,7 @@ var azureOpenAITenantId = builder.Configuration["AzureOpenAI:TenantId"];
 var foundryProjectEndpoint = AgentSessionFactory.ResolveProjectEndpoint(azureOpenAIEndpoint, builder.Configuration["AzureOpenAI:ProjectName"]);
 // Hosted web search (Bing grounding) is opt-in: it sits outside the Azure data boundary, and QueryAzure already reads public pages.
 var webSearchEnabled = builder.Configuration.GetValue("AzureOpenAI:WebSearch", AgentSessionFactory.DefaultWebSearch);
-var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "xhigh";
+var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "medium";
 var appInsightsCs = builder.Configuration["ApplicationInsights:ConnectionString"];
 // Canonical public hostname (bare, no scheme/www) for the owner deployment, e.g.
 // "azure-finops-agent.com". The app is reachable on its *.azurewebsites.net host
