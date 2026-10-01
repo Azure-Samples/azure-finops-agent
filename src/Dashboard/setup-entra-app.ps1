@@ -51,6 +51,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# az returns non-zero on conditions we handle explicitly below (missing service
+# principal, failed update). Check $LASTEXITCODE instead of letting native command
+# errors throw.
+$PSNativeCommandUseErrorActionPreference = $false
 
 # When -OutputJson is set, route all chatty status output to stderr so stdout is
 # pure JSON the caller can pipe into ConvertFrom-Json.
@@ -125,26 +129,56 @@ Write-Status "  Object ID:         $objectId" 'Gray'
 # ── 4. Add API permissions (all read-only) ──
 Write-Status "`n[4/6] Adding API permissions (read-only)..." 'Yellow'
 
-# Known permission GUIDs (Microsoft-published, stable across all tenants)
+# Every permission below MUST be a DELEGATED permission (an entry in the resource's
+# oauth2PermissionScopes), because they are requested with type = "Scope". Using an
+# appRole GUID here makes admin consent fail atomically for the whole app.
+# The GUIDs are Microsoft-published and stable across tenants, but they are also
+# re-resolved by value at runtime (below) so a wrong constant cannot break consent.
+function Resolve-DelegatedScopeId {
+    param(
+        [Parameter(Mandatory)][string]$ResourceAppId,
+        [Parameter(Mandatory)][string]$ScopeValue,
+        [Parameter(Mandatory)][string]$FallbackId
+    )
+
+    $resolved = az ad sp show --id $ResourceAppId `
+        --query "oauth2PermissionScopes[?value=='$ScopeValue'].id | [0]" -o tsv 2>$null
+
+    $queryExit = $LASTEXITCODE
+    if ($queryExit -eq 0 -and $resolved) {
+        $resolved = ($resolved | Out-String).Trim()
+        if ($resolved -and $resolved -ne 'None') {
+            if ($resolved -ne $FallbackId) {
+                Write-Status "  Resolved $ScopeValue delegated scope id: $resolved" 'Gray'
+            }
+            return $resolved
+        }
+    }
+
+    # Resource service principal not present in this tenant (or no directory read
+    # permission) — fall back to the published GUID.
+    return $FallbackId
+}
+
 # Azure Service Management
 $armAppId = "797f4846-ba00-4fd7-ba43-dac1f8f63013"
-$armUserImpersonation = "41094075-9dad-400e-a0bd-54e686782033"  # user_impersonation
+$armUserImpersonation = Resolve-DelegatedScopeId $armAppId "user_impersonation" "41094075-9dad-400e-a0bd-54e686782033"
 
 # Microsoft Graph
 $graphAppId = "00000003-0000-0000-c000-000000000000"
-$graphUserRead = "e1fe6dd8-ba31-4d61-89e7-88639da4683d"           # User.Read
-$graphOrgReadAll = "498476ce-e0fe-48b0-b801-37ba7e2685c6"         # Organization.Read.All
-$graphReportsReadAll = "02e97553-ed7b-43d0-ab3c-f8bace0d040c"     # Reports.Read.All
-$graphUserReadAll = "a154be20-db9c-4678-8ab7-66f6cc099a59"        # User.Read.All
-$graphGroupReadAll = "5b567255-7703-4780-807c-7be8301ae99b"       # Group.Read.All
+$graphUserRead = Resolve-DelegatedScopeId $graphAppId "User.Read" "e1fe6dd8-ba31-4d61-89e7-88639da4683d"
+$graphOrgReadAll = Resolve-DelegatedScopeId $graphAppId "Organization.Read.All" "4908d5b9-3fb2-4b1e-9336-1888b7937185"
+$graphReportsReadAll = Resolve-DelegatedScopeId $graphAppId "Reports.Read.All" "02e97553-ed7b-43d0-ab3c-f8bace0d040c"
+$graphUserReadAll = Resolve-DelegatedScopeId $graphAppId "User.Read.All" "a154be20-db9c-4678-8ab7-66f6cc099a59"
+$graphGroupReadAll = Resolve-DelegatedScopeId $graphAppId "Group.Read.All" "5f8c59db-677d-491f-a6b8-5f174b11ec1d"
 
 # Log Analytics
 $laAppId = "ca7f3f0b-7d91-482c-8e09-c5d840d0eac5"
-$laDataRead = "e4aa47b9-9a69-4109-82ed-36ec70d85f3f"              # Data.Read
+$laDataRead = Resolve-DelegatedScopeId $laAppId "Data.Read" "e8dac03d-d467-4a7e-9293-9cca7df08b31"
 
 # Azure Storage
 $storageAppId = "e406a681-f3d4-42a8-90b6-c2b029497af1"
-$storageUserImpersonation = "03e0da56-190b-40ad-a80c-ea378c433f7f"  # user_impersonation
+$storageUserImpersonation = Resolve-DelegatedScopeId $storageAppId "user_impersonation" "03e0da56-190b-40ad-a80c-ea378c433f7f"
 
 # Build the required resource access JSON
 $requiredAccess = @(
@@ -182,8 +216,14 @@ $requiredAccess = @(
 $tempFile = [System.IO.Path]::GetTempFileName()
 $requiredAccess | Out-File -FilePath $tempFile -Encoding utf8 -NoNewline
 
-az ad app update --id $objectId --required-resource-accesses "@$tempFile" --output none 2>$null
+az ad app update --id $objectId --required-resource-accesses "@$tempFile" --output none
+$permExit = $LASTEXITCODE
 Remove-Item $tempFile -Force
+
+if ($permExit -ne 0) {
+    Write-Status "  Failed to set API permissions (exit $permExit). Consent will not work." 'Red'
+    exit 1
+}
 
 Write-Status "  Azure ARM:       user_impersonation (delegated)" 'Gray'
 Write-Status "  Microsoft Graph: User.Read, Organization.Read.All, Reports.Read.All," 'Gray'
