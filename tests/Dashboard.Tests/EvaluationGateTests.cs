@@ -251,6 +251,15 @@ public sealed class EvaluationGateTests
         Assert.Equal(2, EvaluationGate.EfficiencyScore(avoidableCalls: 1, avoidableRounds: 1, avoidableSeconds: 5, toolCalls: 2, totalSeconds: 20));
 
     [Theory]
+    [InlineData(1, 1, 1.36, 2, 40, 4)]
+    [InlineData(1, 1, 3.9, 2, 40, 4)]
+    [InlineData(1, 1, 4, 2, 40, 2)]
+    [InlineData(2, 2, 1, 4, 40, 2)]
+    [InlineData(1, 2, 1, 2, 40, 2)]
+    public void OnlyOneNearlyFreeStrayCallIsMinorWasteInAOneCallAnswer(int calls, int rounds, double seconds, int toolCalls, double totalSeconds, int score) =>
+        Assert.Equal(score, EvaluationGate.EfficiencyScore(calls, rounds, seconds, toolCalls, totalSeconds));
+
+    [Theory]
     [InlineData("replay", false)]
     [InlineData("judge", true)]
     public void BoundaryFailuresKeepCompletedExecutionAndNeverPass(string phase, bool transcriptVerified)

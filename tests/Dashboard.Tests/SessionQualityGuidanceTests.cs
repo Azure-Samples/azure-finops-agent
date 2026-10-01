@@ -63,7 +63,8 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("already satisfies any instruction to use the web for current information, prices or citations", withSearch);
         Assert.Contains("a price it returned this turn is already up to date", withSearch);
         Assert.Contains("so an answer built from them needs no web citation", withSearch);
-        Assert.Contains("web_search is never a calculator", withSearch);
+        Assert.Contains("web_search is never a calculator or unit converter (no \"calculator:\" queries)", withSearch);
+        Assert.Contains("Token meters are priced per 1K tokens (unitOfMeasure '1K'), so return per-1M rates (retailPrice * 1000) from that same query", Prompt);
         Assert.Contains("Never search or open third-party price, calculator or comparison sites", withSearch);
         Assert.Contains("never research a caveat the question did not ask about", withSearch);
         Assert.Contains("an answer that cites no web source should have made no search", withSearch);

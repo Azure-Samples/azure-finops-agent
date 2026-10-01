@@ -154,6 +154,9 @@ public static class EvaluationGate
         var waste = Math.Max(avoidableCalls, avoidableRounds);
         if (waste == 0) return 5;
         var addedSeconds = Math.Clamp(avoidableSeconds, 0, Math.Max(totalSeconds, 0));
+        // One stray call that cost almost no time (a hosted web search inside a model response) doubles a
+        // one-call answer's call count without making the user wait, so it is minor waste, not a doubled session.
+        if (waste == 1 && addedSeconds < NegligibleSecondsShare * Math.Max(totalSeconds, 0)) return 4;
         var growth = Math.Max((double)avoidableCalls / Math.Max(toolCalls - avoidableCalls, 1),
             addedSeconds / Math.Max(totalSeconds - addedSeconds, 1));
         if (growth >= 2) return 1;
@@ -165,6 +168,9 @@ public static class EvaluationGate
 
     // "Roughly doubled": the waste added at least three quarters of an expert's calls or elapsed time.
     public const double RoughlyDoubledGrowth = 0.75;
+
+    // A single avoidable call or round that added less than this share of the elapsed time is minor (score 4).
+    public const double NegligibleSecondsShare = 0.1;
 
     // The agent researches: it may learn from up to two failed calls when a later call to the same
     // tool succeeds. The judge still rejects an answer that rests on failed evidence.
