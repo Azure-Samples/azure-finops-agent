@@ -40,6 +40,8 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("policyStates/latest/summarize?api-version=2024-10-01")]
     [InlineData("Microsoft.Advisor/recommendations?api-version=2025-01-01")]
     [InlineData("never compute a score total, maximum, percentage or average")]
+    [InlineData("Sponsored_2016-01-01 (Microsoft Azure Sponsorship)")]
+    [InlineData("the offer is unsupported, not zero spend or ingestion lag")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 

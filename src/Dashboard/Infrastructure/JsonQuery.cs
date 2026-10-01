@@ -142,6 +142,7 @@ internal static partial class JsonQuery
                 if (attempt < MaxRepairs && config == Config && MathOverload().IsMatch(message)) { config = MathConfig; continue; }
                 if (MathOverload().IsMatch(message)) message += ". Numbers are double?; unwrap them for Math with ?? (Math.Max(0, (x.a ?? 0) - (x.b ?? 0)))";
                 if (DuplicateName().IsMatch(message)) message += "; name each projected member once (new { x.kind, propertiesKind = x.properties.kind })";
+                if (IndexedLambda().IsMatch(text)) message += ". " + LinePositions;
                 throw new ArgumentException(absent.Count == 0 ? message : $"{message}. {Absent(absent)}", error);
             }
             // A predicate aggregate over a keyed object (notifications.Count(n => n.Value.enabled == true)) fails while its
@@ -155,8 +156,15 @@ internal static partial class JsonQuery
             {
                 throw new ArgumentException($"{error.Message} Predicates need bool, and JSON booleans are bool? (null when absent): compare them (value.Count(x => x.enabled == true)).", error);
             }
+            catch (InvalidOperationException error) when (PositionMethod().IsMatch(error.Message))
+            {
+                throw new ArgumentException($"{error.Message} {LinePositions}", error);
+            }
         }
     }
+
+    // Searching a long page by position otherwise turns into refetching it to bisect line ranges.
+    private const string LinePositions = "Lists have no IndexOf/FindIndex and lambdas take one parameter (no (x, i) =>): lines.TakeWhile(l => !l.Contains(\"WS2\")).Count() is the first matching line's index, and lines.SkipWhile(l => !l.Contains(\"WS2\")).Take(60) reads the lines from it.";
 
     // A string key read (parameters["effect"]) of an object is a map read; member access cannot take a key.
     private static bool MapIndexed(Node shape, string text) =>
@@ -281,6 +289,13 @@ internal static partial class JsonQuery
 
     [System.Text.RegularExpressions.GeneratedRegex(@"^No generic method '(?:Where|Count|LongCount|Any|All|First|FirstOrDefault|Last|LastOrDefault|Single|SingleOrDefault|SkipWhile|TakeWhile)' on type 'System\.Linq\.Enumerable'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex Predicate();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^No generic method '(?:IndexOf|LastIndexOf|FindIndex|FindLastIndex)' on type 'System\.Linq\.Enumerable'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex PositionMethod();
+
+    // A two-parameter (item, index) lambda, which Dynamic LINQ reads as a member of the item.
+    [System.Text.RegularExpressions.GeneratedRegex(@"\(\s*\w+\s*,\s*\w+\s*\)\s*=>", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex IndexedLambda();
 
     [System.Text.RegularExpressions.GeneratedRegex(@"No applicable (aggregate )?method '(?<method>\w+)' exists in type '(?<type>[^']+)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex NotCollection();

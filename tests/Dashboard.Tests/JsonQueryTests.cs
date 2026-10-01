@@ -51,6 +51,22 @@ public sealed class JsonQueryTests
         Assert.Equal("2", Run("""[{"a":1},{"a":2}]""", "Max(x => x.a)"));
     }
 
+    // An observed page search tried IndexOf and an indexed Select, then refetched the page to bisect Skip/Take ranges.
+    [Theory]
+    [InlineData("lines.IndexOf(\"WS2 plan\")")]
+    [InlineData("lines.FindIndex(l => l.Contains(\"WS2\"))")]
+    [InlineData("lines.Select((l, i) => new { l, i }).Where(x => x.l.Contains(\"WS2\"))")]
+    public void LinePositionSearchesNameTheSingleCallIdiom(string query)
+    {
+        const string page = "intro\n \nWS2 plan\n2 vCPU\n7 GiB\nend\n";
+        var error = Assert.ThrowsAny<ArgumentException>(() => Run(page, query));
+
+        Assert.Contains("lines.TakeWhile(l => !l.Contains(\"WS2\")).Count()", error.Message);
+        Assert.Contains("lines.SkipWhile(l => !l.Contains(\"WS2\")).Take(60)", error.Message);
+        Assert.Equal("""{"at":2,"section":["WS2 plan","2 vCPU","7 GiB"]}""",
+            Run(page, "new { at = lines.TakeWhile(l => !l.Contains(\"WS2\")).Count(), section = lines.SkipWhile(l => !l.Contains(\"WS2\")).Take(3) }"));
+    }
+
     [Theory]
     [InlineData("new { a = 1, b = \"x = y\" }", "new ((1) as a, (\"x = y\") as b)")]
     [InlineData("value.Select(x => new { x.name })", "value.Select(x => new (x.name))")]

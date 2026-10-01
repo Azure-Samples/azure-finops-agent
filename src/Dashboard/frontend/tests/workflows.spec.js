@@ -223,6 +223,31 @@ test("short follow-up renders a real spreadsheet download without HTML preview",
   expect(errors).toEqual([]);
 });
 
+test("an ARM template is labelled as a template rather than a Bash script", async ({
+  page,
+}) => {
+  const { errors } = await arrange(page, [
+    { type: "message", content: "The ARM template is ready." },
+    {
+      type: "script_ready",
+      fileId: artifactId,
+      fileName: "synthetic-template.json",
+      lineCount: 12,
+      language: "arm",
+      description: "Synthetic ARM template",
+      content: '{ "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#", "contentVersion": "1.0.0.0", "resources": [] }',
+    },
+  ]);
+  await send(page, "give me the ARM template file");
+  const meta = page.locator(".script-meta").last();
+  await expect(meta).toHaveText(/12 lines\s*·\s*ARM template/);
+  await expect(page.locator(".script-filename").last()).toHaveText(
+    "synthetic-template.json",
+  );
+  await expect(page.getByText("Bash", { exact: true })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test("complete final message replaces partial deltas after a throttled detail query", async ({
   page,
 }, testInfo) => {

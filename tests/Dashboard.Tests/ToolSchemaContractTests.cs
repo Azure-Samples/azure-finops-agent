@@ -73,6 +73,10 @@ public sealed class ToolSchemaContractTests
             .GetProperty("description").GetString();
         Assert.Contains("KQL goes in --graph-query/-q", content);
         Assert.Contains("never replace failed queries or invalid/missing counts with zero", content);
+        Assert.Contains("never a script that writes it", tool.Description);
+        var language = tool.JsonSchema.GetProperty("properties").GetProperty("language");
+        Assert.Contains("'arm' for an ARM template .json", language.GetProperty("description").GetString());
+        Assert.DoesNotContain("language", tool.JsonSchema.GetProperty("required").EnumerateArray().Select(name => name.GetString()));
     }
 
     [Fact]

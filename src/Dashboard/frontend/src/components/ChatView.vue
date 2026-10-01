@@ -1167,11 +1167,7 @@
                         }}</span>
                         <span class="script-meta"
                           >{{ msg.script.lineCount }} lines &middot;
-                          {{
-                            msg.script.language === "powershell"
-                              ? "PowerShell"
-                              : "Bash"
-                          }}</span
+                          {{ scriptLanguageLabel(msg.script.language) }}</span
                         >
                       </div>
                       <div class="script-header-actions">
@@ -1511,11 +1507,7 @@
                 <span class="script-filename">{{ scriptReady.fileName }}</span>
                 <span class="script-meta"
                   >{{ scriptReady.lineCount }} lines &middot;
-                  {{
-                    scriptReady.language === "powershell"
-                      ? "PowerShell"
-                      : "Bash"
-                  }}</span
+                  {{ scriptLanguageLabel(scriptReady.language) }}</span
                 >
               </div>
               <div class="script-header-actions">
@@ -7578,6 +7570,14 @@ function requestScript() {
 // so the checkmark shows on the exact button that was clicked.
 const copiedScriptId = ref(null);
 let copiedResetTimer = null;
+const SCRIPT_LANGUAGE_LABELS = new Map([
+  ["powershell", "PowerShell"],
+  ["bicep", "Bicep"],
+  ["arm", "ARM template"],
+]);
+function scriptLanguageLabel(language) {
+  return SCRIPT_LANGUAGE_LABELS.get(language) || "Bash";
+}
 function copyScript(script) {
   const content = typeof script === "string" ? script : script?.content || "";
   const id = (typeof script === "object" && script?.fileId) || "inline";

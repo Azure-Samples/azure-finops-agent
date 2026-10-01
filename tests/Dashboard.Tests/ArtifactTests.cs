@@ -17,6 +17,8 @@ public sealed class ArtifactTests
     [Theory]
     [InlineData("bash", ".sh", "application/x-shellscript", "printf '%s\\n' 'Synthetic script'\nexit 73\n")]
     [InlineData("powershell", ".ps1", "application/x-powershell", "Write-Output 'Synthetic script'\nthrow 'Do not execute generated code on the host'\n")]
+    [InlineData("bicep", ".bicep", "text/plain", "param location string = resourceGroup().location\nresource ip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {\n  name: 'synthetic-ip'\n  location: location\n}\n")]
+    [InlineData("arm", ".json", "application/json", "{\n  // Synthetic template\n  \"$schema\": \"https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#\",\n  \"contentVersion\": \"1.0.0.0\",\n  \"resources\": [],\n}\n")]
     public async Task ScriptToolPackagesCompleteCodeWithoutExecutingIt(string language, string extension, string contentType, string scriptContent)
     {
         var tool = new ScriptTools(101).Create().Single();
@@ -29,6 +31,7 @@ public sealed class ArtifactTests
         });
         var marker = Assert.IsType<JsonElement>(result).GetString()!;
         Assert.StartsWith("__SCRIPT_READY__:", marker);
+        Assert.Equal(language, marker.Split(':', 6)[4]);
         var identifier = marker.Split(':')[1];
         try
         {
@@ -42,8 +45,36 @@ public sealed class ArtifactTests
         finally { ArtifactStore.Default.Remove(identifier, 101); }
     }
 
+    // An observed "ARM template file" request was answered with a bash script that writes the JSON.
     [Theory]
-    [InlineData("csv", "text/csv")]
+    [InlineData("{\"resources\":[]}", "$schema, contentVersion and resources")]
+    [InlineData("[{\"type\":\"Microsoft.Network/publicIPAddresses\"}]", "$schema, contentVersion and resources")]
+    [InlineData("{\"$schema\": \"x\", \"contentVersion\": ", "not valid JSON")]
+    public async Task ArmTemplatesMustBeOneDeployableJsonObject(string content, string error)
+    {
+        var tool = new ScriptTools(101).Create().Single();
+        var result = await tool.InvokeAsync(new AIFunctionArguments { ["scriptContent"] = content, ["language"] = "arm" });
+
+        var text = Assert.IsType<JsonElement>(result).GetString()!;
+        Assert.StartsWith("Error: ", text);
+        Assert.Contains(error, text);
+    }
+
+    [Fact]
+    public async Task UnknownScriptLanguagesFallBackToBash()
+    {
+        var tool = new ScriptTools(101).Create().Single();
+        var result = await tool.InvokeAsync(new AIFunctionArguments { ["scriptContent"] = "az account show\n", ["language"] = "AzureCLI" });
+
+        var marker = Assert.IsType<JsonElement>(result).GetString()!;
+        var parts = marker.Split(':', 6);
+        try
+        {
+            Assert.Equal("finops-remediation.sh", parts[2]);
+            Assert.Equal("bash", parts[4]);
+        }
+        finally { ArtifactStore.Default.Remove(parts[1], 101); }
+    }
     [InlineData("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
     [InlineData("html", "text/html")]
     public async Task ReportToolCreatesRealOwnerBoundFiles(string format, string contentType)

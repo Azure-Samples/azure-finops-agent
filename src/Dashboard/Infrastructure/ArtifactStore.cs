@@ -14,7 +14,7 @@ internal sealed class ArtifactStore
     private static readonly HashSet<string> AllowedTypes = new(StringComparer.Ordinal)
     {
         "text/html", "text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/x-powershell", "application/x-shellscript"
+        "application/x-powershell", "application/x-shellscript", "application/json", "text/plain"
     };
     internal static ArtifactStore Default { get; } = new(Path.Combine(
         Environment.GetEnvironmentVariable("AGENT_HOME") ?? Environment.GetEnvironmentVariable("COPILOT_HOME") ?? Path.Combine(Path.GetTempPath(), "azure-finops-agent"), "artifacts"));

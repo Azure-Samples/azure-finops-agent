@@ -10,6 +10,18 @@ namespace AzureFinOps.Dashboard.Auth;
 /// </summary>
 public static class AzureSessionEndpoints
 {
+    /// <summary>One subscription from GET /subscriptions as shown to the UI and cached for the agent's scope context.</summary>
+    internal static object Subscription(JsonElement sub) => new
+    {
+        id = sub.GetProperty("subscriptionId").GetString(),
+        name = sub.GetProperty("displayName").GetString(),
+        state = sub.GetProperty("state").GetString(),
+        tenantId = sub.TryGetProperty("tenantId", out var tid) ? tid.GetString() : null,
+        // The offer type: Cost Management has no data for some offers, such as Sponsored_2016-01-01.
+        quotaId = sub.TryGetProperty("subscriptionPolicies", out var policies) && policies.ValueKind == JsonValueKind.Object
+            && policies.TryGetProperty("quotaId", out var quota) ? quota.GetString() : null
+    };
+
     public static void MapAzureSessionEndpoints(
         this IEndpointRouteBuilder app,
         SessionTokenStore tokenStore,
@@ -88,15 +100,7 @@ public static class AzureSessionEndpoints
                 if (subJson.TryGetProperty("value", out var subs))
                 {
                     foreach (var sub in subs.EnumerateArray())
-                    {
-                        subscriptions.Add(new
-                        {
-                            id = sub.GetProperty("subscriptionId").GetString(),
-                            name = sub.GetProperty("displayName").GetString(),
-                            state = sub.GetProperty("state").GetString(),
-                            tenantId = sub.TryGetProperty("tenantId", out var tid) ? tid.GetString() : null
-                        });
-                    }
+                        subscriptions.Add(Subscription(sub));
                 }
             }
             catch (Exception ex)
