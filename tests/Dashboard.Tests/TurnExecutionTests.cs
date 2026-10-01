@@ -46,6 +46,30 @@ public sealed class TurnExecutionTests
     }
 
     [Fact]
+    public async Task ActiveProbeReportsTheRunningTurnsAgeAndProgress()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        Assert.Equal(new ChatEndpoints.ActiveTurnSnapshot(false), ChatEndpoints.ActiveTurnState(sessionId));
+        Assert.True(TurnExecution.TryBegin(sessionId, 101, null, out var turn));
+        try
+        {
+            turn.RecordTool(success: true);
+            turn.RecordTool(success: false);
+            var state = ChatEndpoints.ActiveTurnState(sessionId);
+            Assert.Equal(new ChatEndpoints.ActiveTurnSnapshot(true, turn.StartedAt, 2, false), state);
+
+            // The browser reads these exact property names after a reload.
+            var json = System.Text.Json.JsonSerializer.SerializeToElement(state, System.Text.Json.JsonSerializerOptions.Web);
+            Assert.True(json.GetProperty("active").GetBoolean());
+            Assert.Equal(turn.StartedAt, json.GetProperty("startedUtc").GetDateTimeOffset());
+            Assert.Equal(2, json.GetProperty("toolsCompleted").GetInt32());
+            Assert.False(json.GetProperty("scheduled").GetBoolean());
+        }
+        finally { turn.ConfirmTerminal(); await turn.FinishAsync(); }
+        Assert.False(ChatEndpoints.ActiveTurnState(sessionId).Active);
+    }
+
+    [Fact]
     public async Task EvidenceIsWhatTheToolReturnedNotTheModelsAccount()
     {
         Assert.True(TurnExecution.TryBegin(Guid.NewGuid().ToString(), 101, null, out var turn));

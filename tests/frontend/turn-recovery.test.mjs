@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeTurnFailure, terminalRecoveryState, userFacingStreamError } from '../../src/Dashboard/frontend/src/turnRecovery.js';
+import { describeServerTurn, describeTurnFailure, formatElapsed, serverTurnFromProbe, terminalRecoveryState, userFacingStreamError } from '../../src/Dashboard/frontend/src/turnRecovery.js';
 
 const failed = {
   startedUtc: '2026-01-01T00:00:00Z',
@@ -57,4 +57,46 @@ test('missing error details remain honest and actionable', () => {
   assert.match(failure.text, /turn has ended/);
   assert.match(failure.hint, /pending changes/);
   assert.doesNotMatch(failure.text, /HTTP 401|still generating|underlying problem/);
+});
+
+test('a reloaded page learns the running turn from the active probe', () => {
+  const turn = serverTurnFromProbe('s1', {
+    active: true, startedUtc: '2026-01-01T00:00:00Z', toolsCompleted: 14, scheduled: false,
+  });
+  assert.deepEqual(turn, {
+    sessionId: 's1', startedMs: Date.parse('2026-01-01T00:00:00Z'), toolsCompleted: 14, scheduled: false,
+  });
+  assert.equal(serverTurnFromProbe('s1', { active: false }), null);
+  assert.equal(serverTurnFromProbe('s1', null), null);
+  assert.equal(serverTurnFromProbe('', { active: true }), null);
+  // An older server that reports only { active } still yields a stoppable turn.
+  assert.deepEqual(serverTurnFromProbe('s1', { active: true }), {
+    sessionId: 's1', startedMs: null, toolsCompleted: 0, scheduled: false,
+  });
+  assert.equal(serverTurnFromProbe('s1', { active: true, toolsCompleted: '3' }).toolsCompleted, 0);
+});
+
+test('a running turn says how long it has run and that Stop works', () => {
+  const startedMs = Date.parse('2026-01-01T00:00:00Z');
+  assert.equal(
+    describeServerTurn({ startedMs, toolsCompleted: 14, scheduled: false }, startedMs + 102_400),
+    'Running for 1m 42s · 14 tool calls finished. Press Stop to cancel it.',
+  );
+  assert.equal(
+    describeServerTurn({ startedMs, toolsCompleted: 1, scheduled: false }, startedMs + 9_000),
+    'Running for 9s · 1 tool call finished. Press Stop to cancel it.',
+  );
+  assert.equal(
+    describeServerTurn({ startedMs: null, toolsCompleted: 0, scheduled: false }, startedMs),
+    'Press Stop to cancel it.',
+  );
+  assert.equal(describeServerTurn({ startedMs, toolsCompleted: 0, scheduled: true }, startedMs + 5_000), 'Running for 5s.');
+  assert.equal(describeServerTurn(null, startedMs), '');
+});
+
+test('elapsed time never goes negative under clock skew', () => {
+  assert.equal(formatElapsed(-5_000), '0s');
+  assert.equal(formatElapsed(59_999), '59s');
+  assert.equal(formatElapsed(60_000), '1m 00s');
+  assert.equal(formatElapsed(Number.NaN), '0s');
 });

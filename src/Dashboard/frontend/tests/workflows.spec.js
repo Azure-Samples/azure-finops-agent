@@ -81,7 +81,11 @@ async function arrange(
       });
     if (path.endsWith("/messages")) return route.fulfill({ json: history });
     if (path.endsWith("/active"))
-      return route.fulfill({ json: { active: false } });
+      return route.fulfill({
+        json: options.active ? options.active() : { active: false },
+      });
+    if (path === "/api/chat/stop" && options.stopTurn)
+      return options.stopTurn(route);
     if (path === "/api/jobs")
       return route.fulfill({ json: { jobs: [], entraRequired: true } });
     if (path.startsWith("/api/download/"))
@@ -186,6 +190,108 @@ test("conversation deletion stays stable until the server confirms it", async ({
   await expect(row).toHaveCount(0);
   await expect(page.getByText("0 saved", { exact: true })).toBeVisible();
   expect(deleteAttempts).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test("a conversation reloaded mid-answer offers Stop and records the stop", async ({
+  page,
+}, testInfo) => {
+  let running = true;
+  let stops = 0;
+  const startedUtc = new Date(Date.now() - 95_000).toISOString();
+  await page.addInitScript((sid) => {
+    sessionStorage.setItem("finops_last_session", sid);
+  }, sessionId);
+  const { errors } = await arrange(
+    page,
+    [],
+    { messages: [{ role: "user", content: "Run a Crawl assessment" }] },
+    {
+      active: () =>
+        running
+          ? { active: true, startedUtc, toolsCompleted: 14, scheduled: false }
+          : { active: false },
+      stopTurn: (route) => {
+        stops++;
+        running = false;
+        return route.fulfill({
+          json: { stopped: true, alreadyCompleted: false, abortPending: false },
+        });
+      },
+    },
+  );
+
+  const stop = page.locator(".action-btn--stop");
+  await expect(stop).toBeVisible();
+  const notice = page.locator(".session-notice");
+  await expect(notice).toContainText("14 tool calls finished");
+  await expect(notice).toContainText("Press Stop to cancel it.");
+  await page.screenshot({
+    path: testInfo.outputPath("reloaded-turn-stop.png"),
+    animations: "disabled",
+  });
+  await stop.click();
+  await expect(
+    page.getByText("You stopped this response before it finished.", {
+      exact: true,
+    }),
+  ).toHaveCount(1);
+  await expect(stop).toHaveCount(0);
+  await expect(page.locator("textarea")).toBeEnabled();
+  await expect(notice).toHaveCount(0);
+  // The recovery poller must not add a second marker on a later tick.
+  await page.waitForTimeout(4500);
+  await expect(
+    page.getByText("You stopped this response before it finished.", {
+      exact: true,
+    }),
+  ).toHaveCount(1);
+  expect(stops).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test("a send that bounces as busy attaches to the running turn", async ({
+  page,
+}) => {
+  let running = true;
+  const { errors } = await arrange(
+    page,
+    [
+      {
+        type: "busy",
+        sessionId,
+        message: "I'm still working on your previous question — one moment.",
+      },
+    ],
+    { messages: [] },
+    {
+      active: () =>
+        running
+          ? {
+              active: true,
+              startedUtc: new Date().toISOString(),
+              toolsCompleted: 2,
+              scheduled: false,
+            }
+          : { active: false },
+      stopTurn: (route) => {
+        running = false;
+        return route.fulfill({ json: { stopped: true } });
+      },
+    },
+  );
+  await page.locator("textarea").fill("What did we spend last month?");
+  await page.locator("textarea").press("Enter");
+  const stop = page.locator(".action-btn--stop");
+  await expect(stop).toBeVisible();
+  await expect(page.locator(".session-notice")).toContainText(
+    "2 tool calls finished",
+  );
+  await expect(page.locator("textarea")).toHaveValue(
+    "What did we spend last month?",
+  );
+  await stop.click();
+  await expect(stop).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 

@@ -50,6 +50,17 @@ public static class ChatEndpoints
     /// the frontend to re-attach after a refresh instead of showing dead air).</summary>
     internal static bool IsTurnActive(string sessionId) => ActiveTurns.ContainsKey(sessionId);
 
+    /// <summary>What the frontend's reattach probe reports. A page reloaded
+    /// mid-turn has no stream, so it shows the running turn's age and finished
+    /// tool calls and offers Stop instead of a silent wait.</summary>
+    internal sealed record ActiveTurnSnapshot(
+        bool Active, DateTimeOffset? StartedUtc = null, int ToolsCompleted = 0, bool Scheduled = false);
+
+    internal static ActiveTurnSnapshot ActiveTurnState(string sessionId) =>
+        ActiveTurns.TryGetValue(sessionId, out var turn)
+            ? new(true, turn.StartedAt, turn.ToolsCompleted, turn.IsScheduled)
+            : new(false);
+
     /// <summary>Claims the one-turn-per-session gate for a non-chat caller (the
     /// background <see cref="Jobs.JobScheduler"/>). Shares the same dictionary as
     /// chat turns so a scheduled run can never race a live chat turn in the same
@@ -391,7 +402,7 @@ public static class ChatEndpoints
                     turnState = null;
                     ActiveTurns.TryGetValue(activeSessionId, out var existingTurn);
                     logger.LogInformation("Rejected concurrent turn for session {SessionId} (running since {Start})", activeSessionId, existingTurn?.StartedAt);
-                    await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "busy", message = "I'm still working on your previous question — one moment. This message wasn't sent; try again when the current answer finishes." })}\n\n");
+                    await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "busy", sessionId = activeSessionId, message = "I'm still working on your previous question — one moment. This message wasn't sent; try again when the current answer finishes." })}\n\n");
                     await ctx.Response.WriteAsync("data: [DONE]\n\n");
                     await ctx.Response.Body.FlushAsync();
                     return;

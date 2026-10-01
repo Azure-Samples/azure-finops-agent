@@ -1291,7 +1291,9 @@
                 :progress="progressView(sessionNotice.progress)"
                 :paused="documentIsHidden"
               />
-              <div v-else class="system-notice">{{ sessionNoticeText }}</div>
+              <div v-else class="system-notice session-notice">
+                {{ sessionNoticeText }}
+              </div>
             </div>
             <div
               v-if="activeConsentActions.length"
@@ -1366,6 +1368,12 @@
                   <span v-if="streamIntent" class="stream-intent">
                     {{ streamIntent }}
                   </span>
+                  <span
+                    v-if="liveTurnElapsed"
+                    class="stream-elapsed"
+                    aria-hidden="true"
+                    >{{ liveTurnElapsed }}</span
+                  >
                 </div>
                 <div class="ai-content">
                   <div
@@ -1867,8 +1875,13 @@
               </div>
               <div class="input-bottom-right">
                 <button
-                  v-if="streaming"
+                  v-if="streaming || serverTurnStoppable"
                   class="action-btn action-btn--stop"
+                  :disabled="
+                    !streaming && stoppingServerTurn === currentSessionId
+                  "
+                  aria-label="Stop generating"
+                  title="Stop generating"
                   @click="stopGeneration"
                 >
                   <svg
@@ -2686,7 +2699,13 @@ import {
   watch,
 } from "vue";
 import { createAssistantMessageStream } from "../assistantMessageStream.js";
-import { describeTurnFailure, terminalRecoveryState } from "../turnRecovery.js";
+import {
+  describeServerTurn,
+  describeTurnFailure,
+  formatElapsed,
+  serverTurnFromProbe,
+  terminalRecoveryState,
+} from "../turnRecovery.js";
 import TurnFailureNotice from "./TurnFailureNotice.vue";
 import RequestProgressCard from "./RequestProgressCard.vue";
 import AssistantAvatar from "./AssistantAvatar.vue";
@@ -3337,6 +3356,7 @@ async function fetchPersistedTail(sid, normPrompt) {
 
 async function fetchTerminalRecoveryState(sid, tail) {
   if (!tail?.exactMatch) return null;
+  const token = serverTurnPollToken;
   try {
     const [activeResponse, outcomesResponse] = await Promise.all([
       fetch(`/api/sessions/${encodeURIComponent(sid)}/active`),
@@ -3354,6 +3374,7 @@ async function fetchTerminalRecoveryState(sid, tail) {
       activeResponse.json(),
       outcomesResponse.json(),
     ]);
+    if (token === serverTurnPollToken) noteServerTurn(sid, active);
     return terminalRecoveryState(
       active.active,
       outcomes.outcomes,
@@ -3380,16 +3401,51 @@ let progressTimer = null;
 function progressView(progress) {
   return describeRequestProgress(progress, progressNow.value);
 }
+// A turn the server is running for the viewed conversation while this tab has
+// no stream for it (page reloaded mid-answer, stream severed, or a send that
+// bounced as busy). Without it the composer offered no Stop and the wait was a
+// static pill, so a long turn read as an app that "doesn't respond".
+const serverTurn = ref(null); // serverTurnFromProbe() shape | null
+const serverTurnStoppable = computed(() => {
+  const turn = serverTurn.value;
+  return (
+    !!turn &&
+    !turn.scheduled &&
+    !streaming.value &&
+    turn.sessionId === currentSessionId.value
+  );
+});
+const serverTurnDetail = computed(() => {
+  const turn = serverTurn.value;
+  if (!turn || turn.sessionId !== currentSessionId.value) return "";
+  return describeServerTurn(turn, progressNow.value);
+});
+// Start times of this tab's live streams, keyed like runningSessions, so the
+// streaming header can show that a long first model round is still alive.
+const streamStartedAt = reactive(new Map());
+const liveTurnElapsed = computed(() => {
+  if (!streaming.value) return "";
+  const started = streamStartedAt.get(currentSessionId.value || "__pending__");
+  if (!started || progressNow.value - started < 3000) return "";
+  return formatElapsed(progressNow.value - started);
+});
 const sessionNoticeText = computed(() => {
   const notice = sessionNotice.value;
-  if (!notice?.progress) return notice?.text || "";
+  if (!notice?.progress) {
+    const detail = ["working", "reconnecting", "busy"].includes(notice?.kind)
+      ? serverTurnDetail.value
+      : "";
+    return detail ? `${notice.text} ${detail}` : notice?.text || "";
+  }
   const view = progressView(notice.progress);
   return `${view.title}. ${view.detail}`;
 });
 watch(
   () =>
     [...perSessionCoolers.values()].some((items) => items.length > 0) ||
-    sessionNotice.value?.progress?.deadline > progressNow.value,
+    sessionNotice.value?.progress?.deadline > progressNow.value ||
+    !!serverTurn.value ||
+    streamStartedAt.size > 0,
   (active) => {
     if (active && !progressTimer) {
       progressNow.value = Date.now();
@@ -3653,6 +3709,12 @@ async function tryRecoverPersistedAnswer(sid, promptText) {
         return false;
       }
       const tail = await fetchPersistedTail(sid, normPrompt);
+      // Stop pressed on the reattached turn while this poller was waiting.
+      if (isTurnStopped(sid, promptText)) {
+        clearReconnectNotice();
+        ensureStoppedMarker(promptText);
+        return false;
+      }
       if (tail && tail.matched && tail.answered) {
         await reloadSessionTranscript(sid);
         recovered = true;
@@ -3684,17 +3746,18 @@ async function tryRecoverPersistedAnswer(sid, promptText) {
       if (terminal) {
         if (!isVisible() || streaming.value) return false;
         clearReconnectNotice();
-        messages.value.push({
-          role: "system",
-          content: terminal.text,
-          terminalStatus: terminal.status,
-          failure: terminal.failure,
-        });
+        if (!transcriptEndsWithNoAnswerMarker())
+          messages.value.push({
+            role: "system",
+            content: terminal.text,
+            terminalStatus: terminal.status,
+            failure: terminal.failure,
+          });
         return false;
       }
       // Still generating — show the (single, deduped) banner while the user is
       // looking. If they've navigated away, stand down (their view is theirs).
-      if (!isVisible()) return false;
+      if (!isVisible() || isTurnStopped(sid, promptText)) return false;
       setReconnectNotice();
       bannerShown = true;
       await new Promise((r) => setTimeout(r, pollMs));
@@ -4721,51 +4784,121 @@ async function reloadSessionTranscript(sessionId) {
 
 // One poller at a time; superseded by any newer session selection.
 let serverTurnPollToken = 0;
+function noteServerTurn(sessionId, probe) {
+  const turn = serverTurnFromProbe(sessionId, probe);
+  if (turn) serverTurn.value = turn;
+  else if (serverTurn.value?.sessionId === sessionId) serverTurn.value = null;
+}
 async function attachToServerTurn(sessionId) {
   const token = ++serverTurnPollToken;
+  if (serverTurn.value && serverTurn.value.sessionId !== sessionId)
+    serverTurn.value = null;
+  const release = () => {
+    if (token !== serverTurnPollToken) return;
+    clearNotice("working");
+    if (serverTurn.value?.sessionId === sessionId) serverTurn.value = null;
+  };
   try {
     const r = await fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/active`,
     );
-    if (!r.ok) return;
-    const { active } = await r.json();
-    if (!active || token !== serverTurnPollToken) return;
+    if (!r.ok) return release();
+    const probe = await r.json();
+    if (token !== serverTurnPollToken) return;
+    noteServerTurn(sessionId, probe);
+    if (!probe.active) return;
     // Job conversations get job wording — "your last question" makes no sense
     // for a background run the user never typed. The transcript strips the
     // "[SCHEDULED JOB RUN…]" prefix, so detect via the owning job instead.
     const isJobRun =
+      probe.scheduled === true ||
       currentJob.value?.sessionId === sessionId ||
       messages.value.some(
         (m) =>
           m.role === "user" &&
           String(m.content || "").startsWith("[SCHEDULED JOB RUN"),
       );
-    setNotice(
-      "working",
-      isJobRun
-        ? "⚙ A scheduled run is in progress — its result will appear here when it finishes."
-        : "⏳ Still working on your last question — the answer will appear here when ready.",
-    );
+    // A bounced send keeps its "this message wasn't sent" notice; the running
+    // turn's elapsed time and Stop hint are appended to whichever is shown.
+    if (sessionNotice.value?.kind !== "busy")
+      setNotice(
+        "working",
+        isJobRun
+          ? "⚙ A scheduled run is in progress — its result will appear here when it finishes."
+          : "⏳ Still working on your last question — the answer will appear here when ready.",
+      );
     while (token === serverTurnPollToken) {
       await new Promise((res) => setTimeout(res, 4000));
+      if (token !== serverTurnPollToken) return;
       const p = await fetch(
         `/api/sessions/${encodeURIComponent(sessionId)}/active`,
       );
       if (!p.ok) break;
-      const { active: still } = await p.json();
-      if (!still) {
-        if (token !== serverTurnPollToken) return;
-        // Turn finished — drop the notice and reload the persisted transcript.
+      const still = await p.json();
+      if (token !== serverTurnPollToken) return;
+      noteServerTurn(sessionId, still);
+      if (!still.active) {
+        // Turn finished — drop the notice and reload the persisted transcript,
+        // unless the user has since opened another conversation.
         clearNotice("working");
+        if (currentSessionId.value && currentSessionId.value !== sessionId)
+          return;
         await reloadSessionTranscript(sessionId);
         return;
       }
     }
-    // Superseded or fetch failed — never leave the pill behind.
-    if (token === serverTurnPollToken) clearNotice("working");
+    // Superseded or fetch failed — never leave the pill or Stop behind.
+    release();
   } catch {
-    if (token === serverTurnPollToken) clearNotice("working");
+    release();
   }
+}
+
+// Stop for a turn this tab is not streaming (see serverTurn). Same endpoint
+// and the same honesty rule as the live Stop: only a server-confirmed stop
+// marks the turn stopped; a turn that finished first shows its real answer.
+const stoppingServerTurn = ref(null);
+async function stopServerTurn(sessionId) {
+  if (stoppingServerTurn.value === sessionId) return;
+  stoppingServerTurn.value = sessionId;
+  const lastUser = [...messages.value].reverse().find((m) => m.role === "user");
+  const prompt = String(lastUser?.content || "");
+  let result = null;
+  try {
+    const r = await fetch("/api/chat/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+      keepalive: true,
+    });
+    result = r.ok ? await r.json() : null;
+  } catch {
+    result = null;
+  } finally {
+    stoppingServerTurn.value = null;
+  }
+  window.__trackAppInsightsEvent?.("chat.serverTurn.stop", {
+    sessionId,
+    stopped: String(result?.stopped === true),
+    alreadyCompleted: String(result?.alreadyCompleted === true),
+  });
+  if (result?.stopped === true || result?.alreadyCompleted === true) {
+    if (result.stopped === true && prompt) markTurnStopped(sessionId, prompt);
+    serverTurnPollToken++;
+    if (serverTurn.value?.sessionId === sessionId) serverTurn.value = null;
+    clearNotice("working", "reconnecting", "busy");
+    if (currentSessionId.value !== sessionId) return;
+    await reloadSessionTranscript(sessionId);
+    if (result.stopped === true && prompt) ensureStoppedMarker(prompt);
+    return;
+  }
+  // Not confirmed: the turn may still be finishing. Keep the pollers running
+  // so the answer or a terminal state still converges; Stop stays available.
+  if (currentSessionId.value === sessionId)
+    setNotice(
+      "working",
+      "⏳ Couldn't confirm the stop yet — the turn may still be finishing.",
+    );
 }
 
 async function deleteSession(sessionId) {
@@ -4785,7 +4918,7 @@ async function deleteSession(sessionId) {
     if (!res.ok && res.status !== 404) {
       sessionDeleteError.value =
         res.status === 409
-          ? "Stop the active conversation before deleting it."
+          ? "This conversation is still answering. Open it and press Stop, or wait for it to finish, then delete it."
           : "Couldn't delete the conversation. Try again.";
       window.__trackAppInsightsEvent?.("sessions.deleteFailed", {
         status: String(res.status),
@@ -5334,6 +5467,11 @@ async function clearMessages() {
   // Abort every client reader first. The server intentionally keeps discarded
   // turns running unless the user pressed the explicit Stop control.
   abortClientStreams("discard");
+  // Supersede any attached server-turn poller: it would otherwise reload the
+  // previous conversation into this fresh view when that turn finishes.
+  serverTurnPollToken++;
+  serverTurn.value = null;
+  clearNotice("working", "reconnecting", "busy");
   messages.value = [];
   streamBuffer.value = "";
   streamFailure.value = null;
@@ -5393,6 +5531,13 @@ function requestServerStop(state) {
 }
 
 function stopGeneration() {
+  // After a reload or a severed/busy stream this tab has no stream for the
+  // turn it is showing; stop that server turn directly. Checked first so the
+  // single-stream fallback below can't stop a background conversation instead.
+  if (serverTurnStoppable.value) {
+    stopServerTurn(serverTurn.value.sessionId);
+    return;
+  }
   // Aborting only the client fetch leaves the turn running server-side AND the
   // one-turn-per-session gate held, so the next prompts bounce back as "busy" and
   // read as empty answers. Tell the server to abort the turn too. keepalive so it
@@ -7649,6 +7794,7 @@ async function send() {
   // entry to drop from runningSessions when we finish.
   let streamingId = startSessionId || "__pending__";
   runningSessions.add(streamingId);
+  streamStartedAt.set(streamingId, Date.now());
   // "Is this turn's answer still what the user is looking at?" Deliberately
   // NOT a currentSessionId match: loadSessions() runs in send()'s finally and
   // nulls currentSessionId for ANONYMOUS users, so a real streamingId stopped
@@ -7934,7 +8080,10 @@ async function send() {
                 }
                 perSessionToolCalls.delete(streamingId);
                 perSessionCharts.delete(streamingId);
+                const startedAt = streamStartedAt.get(streamingId);
+                streamStartedAt.delete(streamingId);
                 streamingId = data.id;
+                streamStartedAt.set(streamingId, startedAt ?? Date.now());
                 activeStreams.delete(priorStreamingId);
                 streamState.sid = data.id;
                 activeStreams.set(streamingId, streamState);
@@ -8038,6 +8187,14 @@ async function send() {
               }
               if (!input.value.trim()) input.value = prompt;
               setNotice("busy", `⏳ ${data.message}`);
+              // Attach to the turn that is still running so this view offers
+              // Stop and shows its progress instead of only "try again".
+              const busySid =
+                typeof data.sessionId === "string" && data.sessionId
+                  ? data.sessionId
+                  : streamingId;
+              if (busySid !== "__pending__" && busySid === currentSessionId.value)
+                attachToServerTurn(busySid);
             }
             break;
 
@@ -8525,6 +8682,7 @@ async function send() {
     clearInterval(intentAnimTimer);
     intentAnimTimer = null;
     runningSessions.delete(streamingId);
+    streamStartedAt.delete(streamingId);
     streamState.probeVersion++;
     for (const [sid, state] of activeStreams) {
       if (state === streamState) activeStreams.delete(sid);
@@ -10773,6 +10931,13 @@ async function send() {
   white-space: normal;
   line-height: 1.4;
   animation: intent-in 0.3s ease-out;
+}
+.stream-elapsed {
+  margin-left: auto;
+  color: #605e5c;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .stream-reasoning-block {
   margin: 6px 0 2px;

@@ -71,7 +71,7 @@ public static class SessionEndpoints
             if (!await agentFactory.UserOwnsSessionAsync(
                 userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
                 return Results.NotFound();
-            return Results.Ok(new { active = AzureFinOps.Dashboard.AI.ChatEndpoints.IsTurnActive(sessionId) });
+            return Results.Ok(AzureFinOps.Dashboard.AI.ChatEndpoints.ActiveTurnState(sessionId));
         });
 
         app.MapGet("/api/sessions/{sessionId}/outcomes", async (HttpContext ctx, string sessionId) =>
@@ -116,7 +116,7 @@ public static class SessionEndpoints
                 return Results.Conflict(new
                 {
                     code = "session_active",
-                    error = "Stop the active conversation before deleting it.",
+                    error = "This conversation is still answering. Open it and press Stop, or wait for it to finish, then delete it.",
                 });
 
             try

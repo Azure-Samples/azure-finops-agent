@@ -161,6 +161,7 @@ The agent is deliberately minimal: tools are thin, host-enforced pass-throughs a
 - Render retry progress from server deadlines and eligibility, with a reactive clock and exact tool-call association. Do not show a frozen original wait, a hardcoded retry limit, HTTP 0 as throttling, or call-success/HTTP-failure as a green success.
 - Escape all model/tool-influenced text before `v-html` transformations.
 - Only the explicit Stop action marks a response as stopped; an arbitrary `AbortError` is recoverable transport failure.
+- A reloaded or busy-refused view of a running turn learns it from `/api/sessions/{id}/active` (`startedUtc`, `toolsCompleted`, `scheduled`). It shows elapsed time and finished tool calls and offers `.action-btn--stop`, which calls `/api/chat/stop`. Only a server-confirmed stop records the turn as stopped, and stale `/active` responses for another session are ignored.
 - Attachment callbacks must update chips by stable `uid`, never by array index. Wait for uploads before sending, delist files whose chips were removed in flight, and revoke blob thumbnail URLs only after Vue unmounts them.
 - Generated HTML previews must stay in a sandboxed iframe without `allow-same-origin`; model-produced deck scripts must never inherit access to application cookies, storage, DOM, or authenticated APIs.
 
