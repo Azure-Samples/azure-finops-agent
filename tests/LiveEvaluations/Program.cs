@@ -45,7 +45,7 @@ internal static class Program
                 typeof(AgentSessionFactory).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion))
             throw new InvalidOperationException("Candidate binaries do not match EVAL_EXPECTED_SHA; rebuild the candidate.");
         var endpoint = Environment.GetEnvironmentVariable("EVAL_MODEL_ENDPOINT") ?? throw new InvalidOperationException("Model endpoint is required.");
-        var model = Environment.GetEnvironmentVariable("EVAL_MODEL") ?? "gpt-6-sol";
+        var model = Environment.GetEnvironmentVariable("EVAL_MODEL") ?? "gpt-6.1-sol";
         var question = Environment.GetEnvironmentVariable("EVAL_QUESTION") ?? throw new InvalidOperationException("Question is required.");
         var maxDurationSeconds = int.TryParse(Environment.GetEnvironmentVariable("EVAL_MAX_DURATION_SECONDS"), out var seconds) ? seconds : 600;
         var maxToolCalls = int.TryParse(Environment.GetEnvironmentVariable("EVAL_MAX_TOOL_CALLS"), out var toolLimit) ? toolLimit : 30;

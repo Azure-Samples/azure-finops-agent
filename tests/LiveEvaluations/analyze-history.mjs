@@ -211,7 +211,7 @@ async function classifyWithModel(rows) {
         signal: AbortSignal.timeout(180000),
         redirect: "error",
         body: JSON.stringify({
-            model: process.env.EVAL_MODEL ?? "gpt-6-sol",
+            model: process.env.EVAL_MODEL ?? "gpt-6.1-sol",
             reasoning: { effort: "low" },
             input: [
                 {

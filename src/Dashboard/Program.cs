@@ -31,7 +31,7 @@ if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
         "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-ACCOUNT.services.ai.azure.com/api/projects/YOUR-PROJECT\" " +
         "(run from src/Dashboard). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
-var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-6-sol";
+var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-6.1-sol";
 // Optional: pin the local credential to the Foundry resource's tenant. Needed
 // when the az CLI's default account lives in a different tenant.
 var azureOpenAITenantId = builder.Configuration["AzureOpenAI:TenantId"];
