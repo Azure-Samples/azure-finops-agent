@@ -81,6 +81,7 @@ internal static partial class JsonQuery
         var text = Projections(expression);
         var numeric = NumericMembers().Matches(text).Select(match => match.Groups["m"].Value).ToHashSet(StringComparer.Ordinal);
         var shape = Infer(root, numeric);
+        if (MapIndexed(shape, text)) Resolve(shape, "it", numeric);
         var culture = CultureInfo.CurrentCulture;
         CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         try
@@ -143,7 +144,37 @@ internal static partial class JsonQuery
                 if (DuplicateName().IsMatch(message)) message += "; name each projected member once (new { x.kind, propertiesKind = x.properties.kind })";
                 throw new ArgumentException(absent.Count == 0 ? message : $"{message}. {Absent(absent)}", error);
             }
+            // A predicate aggregate over a keyed object (notifications.Count(n => n.Value.enabled == true)) fails while its
+            // lambda is bound instead of as a parse error; the object is then a map like any keyed object read as a collection.
+            catch (InvalidOperationException) when (attempt < MaxRepairs && MapIterated(shape, text))
+            {
+                Resolve(shape, "it", numeric);
+            }
+            // A bare JSON boolean (value.Count(x => x.enabled)) is bool?, which a predicate cannot take.
+            catch (InvalidOperationException error) when (Predicate().IsMatch(error.Message))
+            {
+                throw new ArgumentException($"{error.Message} Predicates need bool, and JSON booleans are bool? (null when absent): compare them (value.Count(x => x.enabled == true)).", error);
+            }
         }
+    }
+
+    // A string key read (parameters["effect"]) of an object is a map read; member access cannot take a key.
+    private static bool MapIndexed(Node shape, string text) =>
+        Force(shape, StringIndexed().Matches(text).Select(match => match.Groups["m"].Value).ToHashSet(StringComparer.Ordinal));
+
+    private static bool MapIterated(Node shape, string text) =>
+        Force(shape, Iterated().Matches(text).Select(match => match.Groups["m"].Value).ToHashSet(StringComparer.Ordinal));
+
+    private static bool Force(Node shape, HashSet<string> names)
+    {
+        var changed = false;
+        foreach (var (node, path) in Walk(shape, "it").ToList())
+            if (node.Members is not null && !node.ForceMap && Segment(path) is { } name && names.Contains(name))
+            {
+                node.ForceMap = true;
+                changed = true;
+            }
+        return changed;
     }
 
     private static string? Probe(ParsingConfig config, string text, string chain, int position, ParameterExpression parameter)
@@ -243,6 +274,13 @@ internal static partial class JsonQuery
     // Members the query enumerates with a lambda or a LINQ operator.
     [System.Text.RegularExpressions.GeneratedRegex(@"\b(?<m>\w+)\s*\??\.\s*(?:Select|SelectMany|Where|Any|All|Count|Sum|Average|Min|Max|OrderBy|OrderByDescending|GroupBy|First|FirstOrDefault|Last|LastOrDefault|Take|Skip|Distinct|ToList|ToArray)\s*\(", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex Iterated();
+
+    // Members the query reads with a string key: parameters["effect"].
+    [System.Text.RegularExpressions.GeneratedRegex(@"\b(?<m>\w+)\s*\??\[\s*""", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex StringIndexed();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^No generic method '(?:Where|Count|LongCount|Any|All|First|FirstOrDefault|Last|LastOrDefault|Single|SingleOrDefault|SkipWhile|TakeWhile)' on type 'System\.Linq\.Enumerable'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex Predicate();
 
     [System.Text.RegularExpressions.GeneratedRegex(@"No applicable (aggregate )?method '(?<method>\w+)' exists in type '(?<type>[^']+)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex NotCollection();

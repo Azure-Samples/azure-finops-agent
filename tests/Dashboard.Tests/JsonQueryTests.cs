@@ -299,4 +299,33 @@ public sealed class JsonQueryTests
         const string failure = "HTTP 403 Forbidden\n{\"error\":{\"code\":\"AuthorizationFailed\"}}";
         Assert.Same(failure, AzureQueryTools.Crop(failure, "value.Count()", null, CancellationToken.None));
     }
+
+    // Queries that failed in a gpt-6.1-sol live evaluation of Crawl maturity, against bodies of the logged shapes.
+    [Theory]
+    [InlineData("""{"value":[{"name":"b","properties":{"amount":3750,"notifications":{"actual_budgetAlert_Level1":{"enabled":true,"operator":"GreaterThan","threshold":80,"contactEmails":[],"contactRoles":[],"contactGroups":["/g"],"thresholdType":"Actual"},"forecast_budgetAlert_Level1":{"enabled":false,"operator":"GreaterThan","threshold":100,"contactEmails":[],"contactRoles":[],"contactGroups":[],"thresholdType":"Forecasted"}}}}]}""",
+        "new { total = value.Count(), placeholders = value.Count(x => (x.properties.amount ?? 0) >= 1000000), budgets = value.Select(x => new { x.name, enabledNotifications = x.properties.notifications.Count(n => n.Value.enabled == true), notifications = x.properties.notifications.Select(n => new { name = n.Key, n.Value.enabled, n.Value.operator, n.Value.threshold, n.Value.thresholdType, n.Value.contactGroups }) }) }",
+        """{"total":1,"placeholders":0,"budgets":[{"name":"b","enabledNotifications":1,"notifications":[{"name":"actual_budgetAlert_Level1","enabled":true,"operator":"GreaterThan","threshold":80,"thresholdType":"Actual","contactGroups":["/g"]},{"name":"forecast_budgetAlert_Level1","enabled":false,"operator":"GreaterThan","threshold":100,"thresholdType":"Forecasted","contactGroups":[]}]}]}""")]
+    [InlineData("""{"value":[{"id":"a","properties":{"policyType":"Custom","policyRule":{"then":{"effect":"[parameters('effect')]"}},"parameters":{"effect":{"type":"String","defaultValue":"Audit"}}}},{"id":"b","properties":{"policyType":"Custom","policyRule":{"then":{"effect":"deny"}},"parameters":{"location":{"type":"String"}}}}]}""",
+        "value.Select(x => new { x.id, effect = x.properties.policyRule.then.effect, defaultEffect = x.properties.parameters[\"effect\"].defaultValue })",
+        """[{"id":"a","effect":"[parameters(\u0027effect\u0027)]","defaultEffect":"Audit"},{"id":"b","effect":"deny","defaultEffect":null}]""")]
+    public void KeyedReadsOfObjectsRun(string body, string query, string expected) =>
+        Assert.Equal(expected, Run(body, query));
+
+    [Theory]
+    [InlineData("value.Count(x => x.enabled == true)", "1")]
+    [InlineData("value.Where(x => x.enabled == true).Select(x => x.name)", """["a"]""")]
+    [InlineData("value.Count(x => x.enabled != true)", "2")]
+    public void NullableBooleansFilterWhenCompared(string query, string expected) =>
+        Assert.Equal(expected, Run(Flags, query));
+
+    [Theory]
+    [InlineData("value.Count(x => x.enabled)")]
+    [InlineData("value.Where(x => x.enabled).Select(x => x.name)")]
+    public void BareNullableBooleanPredicatesExplainTheComparison(string query)
+    {
+        var error = Assert.Throws<ArgumentException>(() => Run(Flags, query));
+        Assert.EndsWith("compare them (value.Count(x => x.enabled == true)).", error.Message);
+    }
+
+    private const string Flags = """{"value":[{"name":"a","enabled":true},{"name":"b","enabled":false},{"name":"c"}]}""";
 }

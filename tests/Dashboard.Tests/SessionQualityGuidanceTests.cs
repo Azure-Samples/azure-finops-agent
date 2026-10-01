@@ -36,6 +36,10 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("Disk Mount bills each VM a shared Premium SSD is mounted to")]
     [InlineData("location in~ (every Retail region, copied exactly from its result)")]
     [InlineData("Never intersect region lists from two responses by typing them into a query-only call")]
+    [InlineData("a response returned this turn shows its API's fields")]
+    [InlineData("policyStates/latest/summarize?api-version=2024-10-01")]
+    [InlineData("Microsoft.Advisor/recommendations?api-version=2025-01-01")]
+    [InlineData("never compute a score total, maximum, percentage or average")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
@@ -48,7 +52,10 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("never web-search a question those answer", withSearch);
         Assert.Contains("including Azure OpenAI and other Foundry model token prices", withSearch);
         Assert.Contains("Never web-search to confirm, cross-check or add background to evidence QueryAzure already returned", withSearch);
-        Assert.Contains("Never web-search or open Microsoft documentation, pricing or API URLs (prices.azure.com", withSearch);
+        Assert.Contains("Never web-search or open Microsoft documentation, pricing, API or API specification URLs (prices.azure.com", withSearch);
+        Assert.Contains("github.com, api.github.com and raw.githubusercontent.com including the Azure/azure-rest-api-specs and microsoftgraph/msgraph-metadata repositories", withSearch);
+        Assert.Contains("never web-search an API path, api-version or field name", withSearch);
+        Assert.Contains("needs no web search at all: start it with QueryAzure", withSearch);
         Assert.Contains("These rules take precedence over any general instruction to browse for current information or to cite web results", withSearch);
         Assert.Contains("QueryAzure is itself a live web request tool", withSearch);
         Assert.Contains("already satisfies any instruction to use the web for current information, prices or citations", withSearch);
