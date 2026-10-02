@@ -4,7 +4,11 @@
     :width="size"
     :height="size"
     viewBox="0 0 24 24"
-    fill="currentColor"
+    :fill="iconDef.stroke ? 'none' : 'currentColor'"
+    :stroke="iconDef.stroke ? 'currentColor' : undefined"
+    :stroke-width="iconDef.stroke ? 2 : undefined"
+    :stroke-linecap="iconDef.stroke ? 'round' : undefined"
+    :stroke-linejoin="iconDef.stroke ? 'round' : undefined"
     focusable="false"
     :aria-hidden="title ? undefined : 'true'"
     :role="title ? 'img' : undefined"
@@ -75,6 +79,13 @@ const icons = {
   search: [
     "M9.5 16q-2.725 0-4.613-1.888T3 9.5t1.888-4.613T9.5 3t4.613 1.888T16 9.5q0 1.1-.35 2.075T14.7 13.3l5 5-1.4 1.4-5-5q-.75.6-1.725.95T9.5 16",
   ],
+  squarePen: {
+    stroke: true,
+    paths: [
+      "M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7",
+      "M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z",
+    ],
+  },
   settings: [
     "m9.25 22-.4-3.2q-.325-.125-.613-.3t-.562-.375L4.7 19.375l-2.75-4.75 2.575-1.95Q4.5 12.5 4.5 12t.025-.675L1.95 9.375l2.75-4.75 2.975 1.25q.275-.2.575-.375t.6-.3l.4-3.2h5.5l.4 3.2q.325.125.613.3t.562.375l2.975-1.25 2.75 4.75-2.575 1.95q.025.175.025.675t-.025.675l2.575 1.95-2.75 4.75-2.975-1.25q-.275.2-.575.375t-.6.3l-.4 3.2zm2.75-6.5q1.45 0 2.475-1.025T15.5 12t-1.025-2.475T12 8.5 9.525 9.525 8.5 12t1.025 2.475T12 15.5",
   ],
@@ -96,7 +107,11 @@ const icons = {
   ],
 };
 
-const paths = computed(() => icons[props.name] || icons.error);
+const iconDef = computed(() => {
+  const icon = icons[props.name] || icons.error;
+  return Array.isArray(icon) ? { paths: icon, stroke: false } : icon;
+});
+const paths = computed(() => iconDef.value.paths);
 </script>
 
 <style scoped>

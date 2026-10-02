@@ -947,7 +947,11 @@ test("activity row narrates tools and reasoning, then gives way to the answer", 
     "Costs rose 12%",
   );
   await expect(activity).toHaveCount(0);
-  // The reasoning stays visible above the answer for the whole turn.
+  // Once answer text starts, live reasoning swoops closed to its toggle.
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".reasoning-panel")).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator(".reasoning-panel")).toContainText(
     "Compute grew after the new scale set.",
   );
@@ -987,6 +991,10 @@ test("activity row narrates tools and reasoning, then gives way to the answer", 
   await expect(page.locator(".activity")).toHaveCount(0);
   const reply = page.locator(".message-row--ai .ai-row").last();
   await expect(reply).toContainText("Costs rose 12% because compute grew.");
+  const finalToggle = reply.locator(".thinking .reasoning-toggle");
+  await expect(finalToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(reply.locator(".thinking .reasoning-panel")).toHaveCount(0);
+  await finalToggle.click();
   await expect(reply.locator(".thinking .reasoning-panel")).toContainText(
     "Compute grew after the new scale set.",
   );
@@ -1690,7 +1698,7 @@ test("new conversation does not throw or restore unrelated proposals", async ({
   await expect(
     page.getByText("Synthetic answer.", { exact: true }),
   ).toBeVisible();
-  await page.getByTitle("Clear chat", { exact: true }).click();
+  await page.getByTitle("New chat", { exact: true }).first().click();
   await expect(page.locator("textarea")).toBeEnabled();
   await expect(page.locator(".change-review")).toHaveCount(0);
   expect(removedFiles).toEqual([]);

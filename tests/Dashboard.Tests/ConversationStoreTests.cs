@@ -2,6 +2,7 @@ using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.AI.Runtime;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Auth;
+using AzureFinOps.Dashboard.Infrastructure;
 using AzureFinOps.Dashboard.Observability;
 using Azure.Core;
 using Microsoft.AspNetCore.DataProtection;
@@ -97,6 +98,33 @@ public sealed class ConversationStoreTests : IAsyncLifetime
         Assert.NotNull(invoker);
         Assert.True(invoker.IncludeDetailedErrors);
         Assert.NotNull(invoker.FunctionInvoker);
+    }
+
+    [Fact]
+    public async Task ToolCompletionCarriesEachCallsOwnExecutionTime()
+    {
+        var owner = Guid.NewGuid().ToString();
+        var userId = PersistentIdentity.DeriveUserId(Tenant, owner);
+        var conversation = await _factory.CreateNewAsync(userId, "synthetic", Tenant, owner);
+        var invoker = _factory.Agent.GetService<FunctionInvokingChatClient>()!;
+        var slow = AIFunctionFactory.Create(async () => { await Task.Delay(300); return "slow"; }, "Slow");
+        var fast = AIFunctionFactory.Create(() => "fast", "Fast");
+
+        using (new ToolExecutionContext(conversation.SessionId, userId, CancellationToken.None))
+        {
+            // Parallel calls finish together in the stream; each completion must still report its own run time.
+            await Task.WhenAll(
+                invoker.FunctionInvoker!(new FunctionInvocationContext { Function = slow, Arguments = [], CallContent = new FunctionCallContent("slow-1", "Slow") }, CancellationToken.None).AsTask(),
+                invoker.FunctionInvoker!(new FunctionInvocationContext { Function = fast, Arguments = [], CallContent = new FunctionCallContent("fast-1", "Fast") }, CancellationToken.None).AsTask());
+            await conversation.ToolCompletedAsync("slow-1", true, "slow", null);
+            await conversation.ToolCompletedAsync("fast-1", true, "fast", null);
+        }
+        await conversation.ToolCompletedAsync("outside-1", true, "{}", null);
+
+        var done = (await conversation.GetEventsAsync()).OfType<ToolCompleteEvent>().ToDictionary(item => item.CallId);
+        Assert.True(done["slow-1"].DurationMs >= 250, $"slow call measured {done["slow-1"].DurationMs} ms");
+        Assert.True(done["fast-1"].DurationMs < done["slow-1"].DurationMs);
+        Assert.Null(done["outside-1"].DurationMs);
     }
 
     public async Task DisposeAsync()

@@ -93,13 +93,15 @@ async function logout() {
   --shadow-composer: 0 2px 10px rgba(0, 0, 0, 0.05);
 
   --text-body-size: 17px;
-  --text-body-line: 24px;
-  --text-label-size: 14px;
-  --text-label-line: 20px;
-  --text-caption-size: 12px;
+  --text-body-line: 26px;
+  --text-label-size: 15px;
+  --text-label-line: 22px;
+  --text-caption-size: 13px;
   --text-caption-line: 18px;
-  --text-title-size: 16px;
-  --text-title-line: 24px;
+  --text-title-size: 19px;
+  --text-title-line: 26px;
+  --text-heading-size: 23px;
+  --text-heading-line: 30px;
 
   --motion-fast: 150ms ease-out;
   --motion-enter: 300ms ease-out;

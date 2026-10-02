@@ -222,7 +222,10 @@ public sealed class AgentConversation : IAsyncDisposable
         _startedCalls.TryAdd(callId, 0) ? PublishAsync(new ToolStartEvent(callId, toolName, arguments)) : Task.CompletedTask;
 
     internal Task ToolCompletedAsync(string callId, bool success, string? result, string? error) =>
-        _completedCalls.TryAdd(callId, 0) ? PublishAsync(new ToolCompleteEvent(callId, success, result, error)) : Task.CompletedTask;
+        _completedCalls.TryAdd(callId, 0)
+            ? PublishAsync(new ToolCompleteEvent(callId, success, result, error,
+                ToolExecutionContext.Current?.ToolDurations.TryGetValue(callId, out var ms) == true ? ms : null))
+            : Task.CompletedTask;
 
     // A hosted web_search item starts before the service fills in its action, so the query, opened page
     // or in-page find is known only from the completed item carried by the result.

@@ -1,5 +1,6 @@
 using System.ClientModel;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Azure.AI.Projects;
 using Azure.Core;
 using Azure.Identity;
@@ -57,7 +58,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
 
         ## Answer shape
         - Answer in the language of the latest user message; keep identifiers, SKUs and code unchanged.
-        - Lead with a one or two sentence headline that names the key number and entity, then stay short. No progress narration, no "data sources" section, no generic advice lists.
+        - Lead with a one or two sentence headline that names the key number and entity, then stay short: about 150-250 words plus the one visual unless the user asks for more detail. State each fact once; cut filler and repetition, never a requested metric or a required qualifier. No progress narration, no "data sources" section, no generic advice lists.
         - Use exactly one visual: one chart or one table, never both. Finish the data before rendering; the chart is final. When a chart is requested, call RenderChart; never mention a chart that RenderChart did not return.
         - Name concrete resources, scopes, owners and amounts. Answer every metric the user asked for with its own explicit value (for example both assigned and actively used counts), even when the value is 0 or unknown. When you enumerate returned values (tag keys, SKUs, regions), name every one or state how many you left out. Ask one concise question when required input is genuinely missing.
         - Complete large results belong in GenerateDataReport (CSV, XLSX or HTML) with the row count, not a truncated table. Call PublishFAQ only when the user explicitly requests it.
@@ -71,7 +72,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         - Record a proposal with RecordSavingsAction (status=proposed) only for a remediation you deliver this turn (a script or pending change) or when the user asks to track one; opportunities listed in an answer are not ledger entries. A generated script is not an executed change. Read GetSavingsLedger for savings-history questions. Scheduled reports use Cost Management scheduledActions.
 
         ## Maturity scoring
-        Only when the user asks for a maturity score or FinOps assessment. Evaluate every dimension that ReportMaturityScore defines for the requested level (Crawl, Walk, Run) with scoped evidence, call ReportMaturityScore once, after every evidence call including the records the answer's table will cite (take every amount it cites from an evidence query's result and reuse exactly those figures in the answer; the score card computes the level's overall score from the submitted scores, so never compute a score total, maximum, percentage or average; make any SuggestFollowUp call in the ReportMaturityScore response, and after scoring call no other tool (the answer's table is the deliverable, so no GenerateDataReport unless the user asked for a file) and never recompute a total), then answer: a headline verdict with the biggest number, two to five lines of business context including source freshness, and one table (top evidenced fixes, or the largest Advisor savings opportunities with annual estimate, currency, term and lastUpdated when savings were asked, every cell of a row copied from the same recommendation record). Unknown or not-applicable dimensions score null with a reason, never zero; an empty resource group is not billable waste.
+        Only when the user asks for a maturity score or FinOps assessment. Evaluate every dimension that ReportMaturityScore defines for the requested level (Crawl, Walk, Run) with scoped evidence, call ReportMaturityScore once, after every evidence call including the records the answer's table will cite (take every amount it cites from an evidence query's result and reuse exactly those figures in the answer; the score card computes the level's overall score from the submitted scores, so never compute a score total, maximum, percentage or average; make any SuggestFollowUp call in the ReportMaturityScore response, and after scoring call no other tool (the answer's table is the deliverable, so no GenerateDataReport unless the user asked for a file) and never recompute a total), then answer in about 150 words plus the table: a headline verdict with the biggest number, at most three short lines of business context including source freshness, and one table of at most five rows (top evidenced fixes, or the largest Advisor savings opportunities with annual estimate, currency, term and lastUpdated when savings were asked, every cell of a row copied from the same recommendation record). The score card already shows every dimension's score and evidence, so never restate the dimensions one by one. Unknown or not-applicable dimensions score null with a reason, never zero; an empty resource group is not billable waste.
         """;
 
     /// <summary>Hosted web search default; the app setting and the live evaluation both fall back to it.</summary>
@@ -172,10 +173,16 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         if (Agent.GetService<FunctionInvokingChatClient>() is { } invoker)
         {
             invoker.IncludeDetailedErrors = true;
-            invoker.FunctionInvoker = (context, cancellationToken) =>
+            invoker.FunctionInvoker = async (context, cancellationToken) =>
             {
                 ModelJson.Normalize(context.Function, context.Arguments);
-                return context.Function.InvokeAsync(context.Arguments, cancellationToken);
+                var started = Stopwatch.GetTimestamp();
+                try { return await context.Function.InvokeAsync(context.Arguments, cancellationToken); }
+                finally
+                {
+                    if (context.CallContent?.CallId is { Length: > 0 } callId && ToolExecutionContext.Current is { } execution)
+                        execution.ToolDurations[callId] = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                }
             };
         }
         _titleAgent = project.AsAIAgent(deployment, TitleInstructions, name: "title");

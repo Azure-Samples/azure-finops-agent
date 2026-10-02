@@ -1109,6 +1109,8 @@ public static class ChatEndpoints
             toolName = info.Name;
             durationMs = (long)(DateTimeOffset.UtcNow - info.StartTime).TotalMilliseconds;
         }
+        // The measured execution time, when known, rather than the wait for the whole parallel batch.
+        durationMs = toolDone.DurationMs ?? durationMs;
         var resultText = toolDone.Result;
         var errorText = toolDone.Error;
 

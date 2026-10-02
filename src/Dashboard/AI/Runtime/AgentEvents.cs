@@ -48,7 +48,7 @@ public sealed record UsageEvent(long? InputTokens, long? OutputTokens, string? F
 
 public sealed record ToolStartEvent(string CallId, string ToolName, string? Arguments) : AgentEvent;
 
-public sealed record ToolCompleteEvent(string CallId, bool Success, string? Result, string? Error) : AgentEvent;
+public sealed record ToolCompleteEvent(string CallId, bool Success, string? Result, string? Error, long? DurationMs = null) : AgentEvent;
 
 /// <summary>Agent Framework paused the turn until the user approves or rejects this exact tool call.</summary>
 public sealed record ApprovalRequestEvent(string RequestId, string ToolName, string? Arguments) : AgentEvent;

@@ -163,10 +163,10 @@ p {
 }
 .request-progress-countdown-value {
   color: var(--ink);
-  font-size: 24px;
+  font-size: var(--text-heading-size);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  line-height: 1.2;
+  line-height: var(--text-heading-line);
 }
 time {
   color: var(--ink);
@@ -189,6 +189,7 @@ time {
 .request-progress-resource-note {
   color: var(--text-muted);
   font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
 }
 .request-progress--stopped {
   border-color: rgba(191, 135, 0, 0.25);
