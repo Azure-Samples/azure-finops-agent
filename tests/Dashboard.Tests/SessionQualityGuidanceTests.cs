@@ -64,6 +64,7 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("a price it returned this turn is already up to date", withSearch);
         Assert.Contains("so an answer built from them needs no web citation", withSearch);
         Assert.Contains("web_search is never a calculator or unit converter (no \"calculator:\" queries)", withSearch);
+        Assert.Contains("A question about the current or last billing period uses timeframe BillingMonthToDate or TheLastBillingMonth", Prompt);
         Assert.Contains("unitOfMeasure is '1K' on older token meters and '1M' on newer ones, so return per-1M rates from that same query as retailPrice * (unitOfMeasure == \"1K\" ? 1000 : 1), never with one fixed factor", Prompt);
         Assert.Contains("'Azure OpenAI GPT5', 'Azure OpenAI GPT6'", Prompt);
         Assert.Contains("Std Gl (Global Standard), Std DZ (Data Zone Standard), PP (Priority Processing)", Prompt);
