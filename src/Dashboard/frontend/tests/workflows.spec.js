@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { pricingSections } from "../src/data/sidebarCategories.js";
 
 const sessionId = "synthetic-conversation";
 const artifactId = "11111111111111111111111111111111";
@@ -11,6 +12,10 @@ const change = {
   body: '{"tags":{"Owner":"Synthetic team"}}',
   status: "awaitingApproval",
 };
+const aiPricingPrompt = pricingSections
+  .find((section) => section.key === "ai-pricing")
+  .prompts.find((prompt) => prompt.label === "Latest Foundry models & prices")
+  .prompt;
 
 async function arrange(
   page,
@@ -128,6 +133,90 @@ test("top bar links to the source repository without a personal contact link", a
   expect(errors).toEqual([]);
 });
 
+test("navigation exposes one New chat and signed-out pricing sections", async ({
+  page,
+}, testInfo) => {
+  const { requests, errors } = await arrange(page, [
+    { type: "message", content: "Synthetic pricing answer." },
+  ]);
+  const newChat = page.getByRole("button", { name: "New chat" });
+  await expect(newChat).toHaveCount(1);
+
+  if (testInfo.project.name === "desktop") {
+    await expect(page.locator(".sidebar-new-chat")).toBeVisible();
+    await expect(page.locator(".portal-new-chat")).toHaveCount(0);
+    await page.locator(".portal-burger").click();
+    await expect(newChat).toHaveCount(1);
+    await expect(page.locator(".portal-new-chat")).toBeVisible();
+    await page.locator(".portal-burger").click();
+  } else {
+    await expect(page.locator(".portal-new-chat")).toBeVisible();
+    await page.locator(".portal-burger").click();
+    await expect(newChat).toHaveCount(1);
+    await expect(page.locator(".sidebar-new-chat")).toBeVisible();
+  }
+
+  const aiSection = page.getByRole("button", { name: /AI & LLM pricing/ });
+  await expect(aiSection).toHaveAttribute("aria-expanded", "true");
+  const latestModels = page.getByRole("button", {
+    name: "Latest Foundry models & prices",
+  });
+  await expect(latestModels).toBeVisible();
+
+  const infrastructureSection = page.getByRole("button", {
+    name: /Infrastructure pricing/,
+  });
+  await expect(infrastructureSection).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await infrastructureSection.click();
+  await expect(infrastructureSection).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.getByRole("button", { name: "Compare VM pricing by region" }),
+  ).toBeVisible();
+
+  await latestModels.click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].prompt).toBe(aiPricingPrompt);
+  expect(errors).toEqual([]);
+});
+
+test("execution sidebar is empty-chat hidden and opens for tool activity", async ({
+  page,
+}, testInfo) => {
+  const { errors } = await arrange(page, [
+    {
+      type: "tool_start",
+      tool: "QueryAzure",
+      id: "synthetic-tool",
+      args: "{}",
+    },
+    {
+      type: "tool_done",
+      tool: "QueryAzure",
+      id: "synthetic-tool",
+      success: true,
+      result: "{}",
+    },
+    { type: "message", content: "Synthetic answer." },
+  ]);
+  await expect(page.locator(".tools-sidebar")).toBeHidden();
+  await send(page, "Show my costs");
+  if (testInfo.project.name === "desktop") {
+    await expect(page.locator(".tools-sidebar")).toBeVisible();
+    await expect(page.locator(".tools-sidebar-title")).toHaveText(
+      "Agent execution",
+    );
+  } else {
+    await expect(page.locator(".tools-sidebar")).toBeHidden();
+  }
+  expect(errors).toEqual([]);
+});
+
 test("conversation deletion stays stable until the server confirms it", async ({
   page,
 }, testInfo) => {
@@ -161,11 +250,8 @@ test("conversation deletion stays stable until the server confirms it", async ({
     },
   );
 
-  if (testInfo.project.name === "mobile") {
-    await expect(page.locator(".tools-sidebar")).toBeHidden();
-    expect(errors).toEqual([]);
-    return;
-  }
+  if (testInfo.project.name === "mobile")
+    await page.locator(".portal-burger").click();
 
   const row = page.locator(
     `.session-row[data-session-id="${conversation.id}"]`,

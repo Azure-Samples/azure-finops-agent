@@ -97,6 +97,15 @@ public sealed class JsonQueryTests
         Assert.Equal("Calculation result (no request was sent):\n{\"monthly\":280.32}", AzureQueryTools.Calculate("new { monthly = Math.Round(0.096 * 730 * 4, 2) }", CancellationToken.None));
     }
 
+    // The system prompt's per-1M conversion must work over Foundry token meters that mix 1K and 1M units.
+    [Fact]
+    public void FoundryTokenRatesNormalizePerMillionAcrossUnits()
+    {
+        const string foundry = """{"Items":[{"productName":"Azure OpenAI","meterName":"gpt 4.1 Inp glbl Tokens","retailPrice":0.002,"unitOfMeasure":"1K","effectiveStartDate":"2025-04-01T00:00:00Z"},{"productName":"Azure OpenAI GPT6","meterName":"6-sol ShortCo Inp Std Gl 1M Tokens","retailPrice":4,"unitOfMeasure":"1M","effectiveStartDate":"2026-09-01T00:00:00Z"}],"retrievedAtUtc":"2026-01-01T00:00:00Z","pages":1,"complete":true}""";
+        Assert.Equal("""[{"meterName":"6-sol ShortCo Inp Std Gl 1M Tokens","per1M":4},{"meterName":"gpt 4.1 Inp glbl Tokens","per1M":2}]""",
+            Run(foundry, "Items.OrderByDescending(x => x.effectiveStartDate).Select(x => new { x.meterName, per1M = Math.Round(x.retailPrice * (x.unitOfMeasure == \"1K\" ? 1000 : 1), 4) })"));
+    }
+
     [Fact]
     public void LargeResultsAreTruncatedWithANote()
     {

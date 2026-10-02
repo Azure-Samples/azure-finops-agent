@@ -18,6 +18,7 @@
           <AppIcon name="menu" size="20" />
         </button>
         <button
+          v-if="!sidebarVisible"
           class="portal-new-chat"
           type="button"
           :disabled="clearing"
@@ -26,7 +27,6 @@
           aria-label="New chat"
         >
           <AppIcon name="squarePen" size="19" />
-          <span>New chat</span>
         </button>
         <a
           class="portal-trustline-link"
@@ -322,17 +322,28 @@
             </div>
           </template>
 
-          <!-- Pricing & Estimates — always visible, no login required -->
+          <!-- Pricing — always visible, no login required -->
           <div
+            v-for="section in pricingNavigationSections"
+            :key="section.key"
             class="sidebar-category"
             :class="{ 'sidebar-category--border': azureConnected }"
           >
-            <div
-              class="sidebar-category-label sidebar-category-label--toggle"
-              @click="toggleSection('pricing')"
+            <button
+              class="sidebar-section-toggle sidebar-category-label sidebar-category-label--toggle"
+              type="button"
+              :id="pricingSectionHeaderId(section.key)"
+              :aria-expanded="
+                isPricingSectionExpanded(section.key) ? 'true' : 'false'
+              "
+              :aria-controls="pricingSectionPanelId(section.key)"
+              @click="togglePricingSection(section.key)"
             >
               <div class="sidebar-category-left">
-                <span>{{ pricingCategory.label }}</span>
+                <span>{{ section.label }}</span>
+                <span class="sidebar-category-subtitle">{{
+                  section.subtitle
+                }}</span>
               </div>
               <div class="sidebar-category-right">
                 <AppIcon
@@ -340,19 +351,24 @@
                   size="16"
                   class="collapse-chevron"
                   :class="{
-                    'collapse-chevron--collapsed': collapsedSections.pricing,
+                    'collapse-chevron--collapsed':
+                      !isPricingSectionExpanded(section.key),
                   }"
                 />
               </div>
-            </div>
+            </button>
             <div
+              :id="pricingSectionPanelId(section.key)"
               class="collapse-body"
+              role="region"
+              :aria-labelledby="pricingSectionHeaderId(section.key)"
               :class="{
-                'collapse-body--collapsed': collapsedSections.pricing,
+                'collapse-body--collapsed':
+                  !isPricingSectionExpanded(section.key),
               }"
             >
               <button
-                v-for="q in pricingPromptsForUser"
+                v-for="q in section.prompts"
                 :key="q.label"
                 class="sidebar-question"
                 :disabled="streaming || clearing"
@@ -406,6 +422,304 @@
                   :title="sub.tenantId"
                   >Tenant: {{ tenantNameFor(sub.tenantId) }}</span
                 >
+              </div>
+            </div>
+          </div>
+
+          <!-- Scheduled jobs — Entra-only background prompts -->
+          <div
+            v-if="azureConnected"
+            class="sidebar-category sidebar-category--border sidebar-library-section"
+          >
+            <div class="sidebar-section-heading">
+              <button
+                class="sidebar-section-toggle sidebar-category-label sidebar-category-label--toggle jobs-header-toggle"
+                type="button"
+                :aria-expanded="jobsCollapsed ? 'false' : 'true'"
+                aria-controls="sidebar-scheduled-jobs"
+                @click="toggleJobsPane"
+                @keydown.enter.prevent="toggleJobsPane"
+                @keydown.space.prevent="toggleJobsPane"
+                :title="jobsCollapsed ? 'Expand jobs' : 'Collapse jobs'"
+              >
+                <div class="sidebar-category-left">
+                  <span>Scheduled jobs</span>
+                  <span class="sidebar-category-subtitle">
+                    {{ activeJobsCount }} active<span
+                      v-if="attentionJobsCount"
+                      class="jobs-attention"
+                    >
+                      · {{ attentionJobsCount }} failing</span
+                    >
+                  </span>
+                </div>
+                <AppIcon
+                  name="moreDown"
+                  size="16"
+                  class="collapse-chevron jobs-chevron"
+                  :class="{ 'collapse-chevron--collapsed': jobsCollapsed }"
+                />
+              </button>
+              <button
+                class="sessions-new-btn sidebar-section-action"
+                :disabled="!azureConnected || newJobOpen"
+                @click="openNewJob"
+                :title="
+                  azureConnected
+                    ? 'Schedule a recurring prompt'
+                    : 'Connect Azure to schedule background jobs'
+                "
+              >
+                <AppIcon name="schedule" size="16" />
+                <span>New job</span>
+              </button>
+            </div>
+            <div
+              id="sidebar-scheduled-jobs"
+              class="collapse-body jobs-scroll"
+              :class="{ 'collapse-body--collapsed': jobsCollapsed }"
+              role="region"
+              aria-label="Scheduled jobs"
+            >
+              <div v-if="jobs.length === 0" class="sessions-empty">
+                No jobs yet — run FinOps checks on a schedule.
+                <button class="jobs-empty-cta" @click="openNewJob">
+                  <AppIcon name="schedule" size="16" /> Schedule your first job
+                </button>
+              </div>
+              <div
+                v-for="j in sortedJobs"
+                :key="j.id"
+                :class="[
+                  'session-row',
+                  'job-row',
+                  { 'session-row--current': j.sessionId === currentSessionId },
+                  { 'job-row--paused': !j.enabled },
+                ]"
+                @click="openJob(j)"
+                :title="jobTooltip(j)"
+              >
+                <span
+                  class="tools-sidebar-status-dot"
+                  :class="{
+                    'tools-sidebar-status-dot--live': j.running,
+                    'job-dot--dead':
+                      !j.running &&
+                      (j.lastStatus === 'error' ||
+                        j.lastStatus === 'auth_expired'),
+                    'job-dot--alive':
+                      !j.running &&
+                      j.enabled &&
+                      j.lastStatus !== 'error' &&
+                      j.lastStatus !== 'auth_expired',
+                  }"
+                  :title="
+                    j.running
+                      ? 'Running now'
+                      : j.enabled
+                        ? 'Scheduled — runs ' + formatUntil(j.nextRunUtc)
+                        : 'Paused'
+                  "
+                ></span>
+                <div class="session-row-main">
+                  <span class="session-row-title">{{ j.name }}</span>
+                  <span class="session-row-time">
+                    <template v-if="j._toggleErr">
+                      <span class="job-time--dead">{{ j._toggleErr }}</span>
+                    </template>
+                    <template v-else-if="j.running">
+                      <span class="job-time--running">running now…</span>
+                    </template>
+                    <template v-else-if="!j.enabled">
+                      <template v-if="j.lastStatus === 'expired'">
+                        {{ jobCadenceLabel(j) }} · expired
+                      </template>
+                      <template v-else-if="j.lastStatus === 'error'">
+                        <span class="job-time--dead"
+                          >failed {{ formatAgo(j.lastRunUtc) }}</span
+                        >
+                        · paused
+                      </template>
+                      <template v-else-if="j.lastStatus === 'auth_expired'">
+                        <span class="job-time--dead">reconnect Azure</span> ·
+                        paused
+                      </template>
+                      <template v-else-if="j.lastRunUtc">
+                        {{ jobCadenceLabel(j) }} · paused · ran
+                        {{ formatAgo(j.lastRunUtc) }}
+                      </template>
+                      <template v-else
+                        >{{ jobCadenceLabel(j) }} · paused</template
+                      >
+                    </template>
+                    <template v-else-if="j.lastStatus === 'auth_expired'">
+                      {{ jobCadenceLabel(j) }} ·
+                      <span class="job-time--dead">reconnect Azure</span>
+                    </template>
+                    <template v-else-if="j.lastStatus === 'error'">
+                      <span class="job-time--dead"
+                        >failed {{ formatAgo(j.lastRunUtc) }}</span
+                      >
+                      · next {{ formatUntil(j.nextRunUtc) }}
+                    </template>
+                    <template v-else-if="j.lastRunUtc">
+                      {{ jobCadenceLabel(j) }} · ran
+                      {{ formatAgo(j.lastRunUtc) }} · next
+                      {{ formatUntil(j.nextRunUtc) }}
+                    </template>
+                    <template v-else>
+                      {{ jobCadenceLabel(j) }} · first run
+                      {{ formatUntil(j.nextRunUtc) }}
+                    </template>
+                  </span>
+                </div>
+                <div class="job-actions">
+                  <button
+                    class="job-row-btn"
+                    @click.stop="runJobNow(j)"
+                    :disabled="j.running"
+                    title="Run once now"
+                    aria-label="Run job now"
+                  >
+                    <AppIcon name="playArrow" size="16" />
+                  </button>
+                  <button
+                    class="job-row-btn"
+                    @click.stop="editJob(j)"
+                    title="Edit job"
+                    aria-label="Edit job"
+                  >
+                    <AppIcon name="edit" size="16" />
+                  </button>
+                  <button
+                    class="job-switch"
+                    :class="{ 'job-switch--on': j.enabled }"
+                    role="switch"
+                    :aria-checked="j.enabled ? 'true' : 'false'"
+                    @click.stop="toggleJob(j)"
+                    :title="
+                      j.enabled
+                        ? 'Schedule is on — click to pause'
+                        : 'Schedule is off — click to resume'
+                    "
+                    aria-label="Toggle schedule"
+                  >
+                    <span class="job-switch-knob"></span>
+                  </button>
+                  <button
+                    class="session-row-delete"
+                    @click.stop="deleteJob(j)"
+                    title="Delete this job (its conversation is kept)"
+                    aria-label="Delete job"
+                  >
+                    <AppIcon name="delete" size="16" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Chats history -->
+          <div class="sidebar-category sidebar-category--border sidebar-library-section">
+            <button
+              class="sidebar-section-toggle sidebar-category-label sidebar-category-label--toggle"
+              type="button"
+              :aria-expanded="sessionsCollapsed ? 'false' : 'true'"
+              aria-controls="sidebar-chat-history"
+              @click="togglePane('sessions')"
+            >
+              <div class="sidebar-category-left">
+                <span>Chats</span>
+                <span class="sidebar-category-subtitle"
+                  >{{ chatSessions.length }} saved</span
+                >
+              </div>
+              <AppIcon
+                name="moreDown"
+                size="16"
+                class="collapse-chevron"
+                :class="{ 'collapse-chevron--collapsed': sessionsCollapsed }"
+              />
+            </button>
+            <div
+              id="sidebar-chat-history"
+              class="collapse-body sessions-scroll"
+              :class="{ 'collapse-body--collapsed': sessionsCollapsed }"
+              role="region"
+              aria-label="Chats"
+            >
+              <div
+                v-if="sessionDeleteError"
+                class="sessions-delete-error"
+                role="alert"
+              >
+                {{ sessionDeleteError }}
+              </div>
+              <div v-if="chatSessions.length === 0" class="sessions-empty">
+                {{
+                  azureConnected
+                    ? "No saved conversations yet — chat to create one."
+                    : "Chat freely — connect Azure to keep conversations across visits."
+                }}
+              </div>
+              <div
+                v-for="s in chatSessions"
+                :key="s.id"
+                :class="[
+                  'session-row',
+                  { 'session-row--current': s.id === currentSessionId },
+                  { 'session-row--running': runningSessions.has(s.id) },
+                ]"
+                @click="selectSidebarSession(s.id)"
+                :title="s.summary"
+                :data-session-id="s.id"
+                :aria-busy="deletingSessions.has(s.id)"
+              >
+                <span
+                  class="tools-sidebar-status-dot"
+                  :class="{
+                    'tools-sidebar-status-dot--live': runningSessions.has(s.id),
+                  }"
+                  :aria-label="
+                    runningSessions.has(s.id)
+                      ? 'Conversation is running'
+                      : 'Idle'
+                  "
+                  :title="
+                    runningSessions.has(s.id)
+                      ? 'This conversation is still running'
+                      : ''
+                  "
+                ></span>
+                <div class="session-row-main">
+                  <span class="session-row-title">{{
+                    s.summary || "Untitled conversation"
+                  }}</span>
+                  <span class="session-row-time">{{
+                    formatRelativeTime(s.modified)
+                  }}</span>
+                </div>
+                <button
+                  class="session-row-delete session-row-delete--conversation"
+                  :disabled="
+                    runningSessions.has(s.id) || deletingSessions.has(s.id)
+                  "
+                  @click.stop="deleteSession(s.id)"
+                  :title="
+                    runningSessions.has(s.id)
+                      ? 'Stop this conversation before deleting it'
+                      : 'Delete this conversation'
+                  "
+                  :aria-label="
+                    runningSessions.has(s.id)
+                      ? 'Conversation is running and cannot be deleted'
+                      : deletingSessions.has(s.id)
+                        ? 'Deleting conversation'
+                        : 'Delete conversation'
+                  "
+                >
+                  {{ deletingSessions.has(s.id) ? "Deleting..." : "Delete" }}
+                </button>
               </div>
             </div>
           </div>
@@ -1592,40 +1906,17 @@
         </div>
       </div>
 
-      <!-- Right sidebar: Agent (tool calls) + Sessions (Entra-only) -->
+      <!-- Right sidebar: Agent execution for the current conversation -->
       <aside
         class="tools-sidebar"
         :class="{
-          'tools-sidebar--open':
-            allToolCalls.length > 0 || streaming || azureConnected,
+          'tools-sidebar--open': allToolCalls.length > 0 || streaming,
         }"
       >
-        <!-- ── Top half: Agent ── -->
-        <div
-          class="tools-sidebar-pane tools-sidebar-pane--agent"
-          :class="{ 'tools-sidebar-pane--collapsed': agentCollapsed }"
-        >
+        <div class="tools-sidebar-pane tools-sidebar-pane--agent">
           <div class="tools-sidebar-header">
-            <div
-              class="tools-sidebar-header-text jobs-header-toggle"
-              role="button"
-              tabindex="0"
-              @click="togglePane('agent')"
-              @keydown.enter.prevent="togglePane('agent')"
-              @keydown.space.prevent="togglePane('agent')"
-              :title="
-                agentCollapsed
-                  ? 'Expand Agent execution'
-                  : 'Collapse Agent execution'
-              "
-            >
-              <span class="tools-sidebar-title"
-                ><span
-                  class="jobs-chevron"
-                  :class="{ 'jobs-chevron--collapsed': agentCollapsed }"
-                  ><AppIcon name="moreDown" size="18" /></span
-                >Agent execution</span
-              >
+            <div class="tools-sidebar-header-text">
+              <span class="tools-sidebar-title">Agent execution</span>
               <span class="tools-sidebar-status">
                 <span
                   class="tools-sidebar-status-dot"
@@ -1721,311 +2012,6 @@
                 }}</span>
               </div>
             </template>
-          </div>
-        </div>
-        <!-- ── Bottom half: Conversations (works for anonymous + signed-in) ── -->
-        <div
-          class="tools-sidebar-pane tools-sidebar-pane--sessions"
-          :class="{ 'tools-sidebar-pane--collapsed': sessionsCollapsed }"
-        >
-          <div class="tools-sidebar-header sessions-header">
-            <div
-              class="tools-sidebar-header-text jobs-header-toggle"
-              role="button"
-              tabindex="0"
-              @click="togglePane('sessions')"
-              @keydown.enter.prevent="togglePane('sessions')"
-              @keydown.space.prevent="togglePane('sessions')"
-              :title="
-                sessionsCollapsed
-                  ? 'Expand Conversations'
-                  : 'Collapse Conversations'
-              "
-            >
-              <span class="tools-sidebar-title"
-                ><span
-                  class="jobs-chevron"
-                  :class="{ 'jobs-chevron--collapsed': sessionsCollapsed }"
-                  ><AppIcon name="moreDown" size="18" /></span
-                >Conversations</span
-              >
-              <span class="tools-sidebar-status">
-                <span class="tools-sidebar-status-text"
-                  >{{ chatSessions.length }} saved</span
-                >
-              </span>
-            </div>
-            <button
-              class="sessions-new-btn new-chat-control"
-              :disabled="clearing"
-              @click="startNewChat"
-              title="New chat"
-              aria-label="New chat"
-            >
-              <AppIcon name="squarePen" size="16" />
-              <span>New chat</span>
-            </button>
-          </div>
-          <div class="tools-sidebar-scroll sessions-scroll">
-            <div
-              v-if="sessionDeleteError"
-              class="sessions-delete-error"
-              role="alert"
-            >
-              {{ sessionDeleteError }}
-            </div>
-            <div v-if="chatSessions.length === 0" class="sessions-empty">
-              {{
-                azureConnected
-                  ? "No saved conversations yet — chat to create one."
-                  : "Chat freely — connect Azure to keep conversations across visits."
-              }}
-            </div>
-            <div
-              v-for="s in chatSessions"
-              :key="s.id"
-              :class="[
-                'session-row',
-                { 'session-row--current': s.id === currentSessionId },
-                { 'session-row--running': runningSessions.has(s.id) },
-              ]"
-              @click="selectSession(s.id)"
-              :title="s.summary"
-              :data-session-id="s.id"
-              :aria-busy="deletingSessions.has(s.id)"
-            >
-              <span
-                class="tools-sidebar-status-dot"
-                :class="{
-                  'tools-sidebar-status-dot--live': runningSessions.has(s.id),
-                }"
-                :aria-label="
-                  runningSessions.has(s.id) ? 'Conversation is running' : 'Idle'
-                "
-                :title="
-                  runningSessions.has(s.id)
-                    ? 'This conversation is still running'
-                    : ''
-                "
-              ></span>
-              <div class="session-row-main">
-                <span class="session-row-title">{{
-                  s.summary || "Untitled conversation"
-                }}</span>
-                <span class="session-row-time">{{
-                  formatRelativeTime(s.modified)
-                }}</span>
-              </div>
-              <button
-                class="session-row-delete session-row-delete--conversation"
-                :disabled="
-                  runningSessions.has(s.id) || deletingSessions.has(s.id)
-                "
-                @click.stop="deleteSession(s.id)"
-                :title="
-                  runningSessions.has(s.id)
-                    ? 'Stop this conversation before deleting it'
-                    : 'Delete this conversation'
-                "
-                :aria-label="
-                  runningSessions.has(s.id)
-                    ? 'Conversation is running and cannot be deleted'
-                    : deletingSessions.has(s.id)
-                      ? 'Deleting conversation'
-                      : 'Delete conversation'
-                "
-              >
-                {{ deletingSessions.has(s.id) ? "Deleting..." : "Delete" }}
-              </button>
-            </div>
-          </div>
-        </div>
-        <!-- ── Scheduled jobs: prompt + cadence, runs in the background even
-             when the browser is closed. Entra-only (needs the persisted
-             refresh token). Each job gets its own conversation. ── -->
-        <div
-          class="tools-sidebar-pane tools-sidebar-pane--jobs"
-          :class="{ 'tools-sidebar-pane--collapsed': jobsCollapsed }"
-        >
-          <div class="tools-sidebar-header sessions-header">
-            <div
-              class="tools-sidebar-header-text jobs-header-toggle"
-              role="button"
-              tabindex="0"
-              @click="toggleJobsPane"
-              @keydown.enter.prevent="toggleJobsPane"
-              @keydown.space.prevent="toggleJobsPane"
-              :title="jobsCollapsed ? 'Expand jobs' : 'Collapse jobs'"
-            >
-              <span class="tools-sidebar-title"
-                ><span
-                  class="jobs-chevron"
-                  :class="{ 'jobs-chevron--collapsed': jobsCollapsed }"
-                  ><AppIcon name="moreDown" size="18" /></span
-                >Scheduled jobs</span
-              >
-              <span class="tools-sidebar-status">
-                <span class="tools-sidebar-status-text"
-                  >{{ activeJobsCount }} active</span
-                >
-                <span v-if="attentionJobsCount" class="jobs-attention"
-                  >· {{ attentionJobsCount }} failing</span
-                >
-              </span>
-            </div>
-            <button
-              class="sessions-new-btn"
-              :disabled="!azureConnected || newJobOpen"
-              @click="openNewJob"
-              :title="
-                azureConnected
-                  ? 'Schedule a recurring prompt'
-                  : 'Connect Azure to schedule background jobs'
-              "
-            >
-              + New job
-            </button>
-          </div>
-          <div class="tools-sidebar-scroll jobs-scroll">
-            <div v-if="!azureConnected" class="sessions-empty">
-              Connect Azure to run prompts on a schedule — daily cost reports,
-              capacity hunting, anomaly checks.
-            </div>
-            <div v-else-if="jobs.length === 0" class="sessions-empty">
-              No jobs yet — run FinOps checks on a schedule.
-              <button class="jobs-empty-cta" @click="openNewJob">
-                <AppIcon name="schedule" size="16" /> Schedule your first job
-              </button>
-            </div>
-            <div
-              v-for="j in sortedJobs"
-              :key="j.id"
-              :class="[
-                'session-row',
-                'job-row',
-                { 'session-row--current': j.sessionId === currentSessionId },
-                { 'job-row--paused': !j.enabled },
-              ]"
-              @click="openJob(j)"
-              :title="jobTooltip(j)"
-            >
-              <span
-                class="tools-sidebar-status-dot"
-                :class="{
-                  'tools-sidebar-status-dot--live': j.running,
-                  'job-dot--dead':
-                    !j.running &&
-                    (j.lastStatus === 'error' ||
-                      j.lastStatus === 'auth_expired'),
-                  'job-dot--alive':
-                    !j.running &&
-                    j.enabled &&
-                    j.lastStatus !== 'error' &&
-                    j.lastStatus !== 'auth_expired',
-                }"
-                :title="
-                  j.running
-                    ? 'Running now'
-                    : j.enabled
-                      ? 'Scheduled — runs ' + formatUntil(j.nextRunUtc)
-                      : 'Paused'
-                "
-              ></span>
-              <div class="session-row-main">
-                <span class="session-row-title">{{ j.name }}</span>
-                <span class="session-row-time">
-                  <template v-if="j._toggleErr">
-                    <span class="job-time--dead">{{ j._toggleErr }}</span>
-                  </template>
-                  <template v-else-if="j.running">
-                    <span class="job-time--running">running now…</span>
-                  </template>
-                  <template v-else-if="!j.enabled">
-                    <template v-if="j.lastStatus === 'expired'">
-                      {{ jobCadenceLabel(j) }} · expired
-                    </template>
-                    <template v-else-if="j.lastStatus === 'error'">
-                      <span class="job-time--dead"
-                        >failed {{ formatAgo(j.lastRunUtc) }}</span
-                      >
-                      · paused
-                    </template>
-                    <template v-else-if="j.lastStatus === 'auth_expired'">
-                      <span class="job-time--dead">reconnect Azure</span> ·
-                      paused
-                    </template>
-                    <template v-else-if="j.lastRunUtc">
-                      {{ jobCadenceLabel(j) }} · paused · ran
-                      {{ formatAgo(j.lastRunUtc) }}
-                    </template>
-                    <template v-else
-                      >{{ jobCadenceLabel(j) }} · paused</template
-                    >
-                  </template>
-                  <template v-else-if="j.lastStatus === 'auth_expired'">
-                    {{ jobCadenceLabel(j) }} ·
-                    <span class="job-time--dead">reconnect Azure</span>
-                  </template>
-                  <template v-else-if="j.lastStatus === 'error'">
-                    <span class="job-time--dead"
-                      >failed {{ formatAgo(j.lastRunUtc) }}</span
-                    >
-                    · next {{ formatUntil(j.nextRunUtc) }}
-                  </template>
-                  <template v-else-if="j.lastRunUtc">
-                    {{ jobCadenceLabel(j) }} · ran
-                    {{ formatAgo(j.lastRunUtc) }} · next
-                    {{ formatUntil(j.nextRunUtc) }}
-                  </template>
-                  <template v-else>
-                    {{ jobCadenceLabel(j) }} · first run
-                    {{ formatUntil(j.nextRunUtc) }}
-                  </template>
-                </span>
-              </div>
-              <div class="job-actions">
-                <button
-                  class="job-row-btn"
-                  @click.stop="runJobNow(j)"
-                  :disabled="j.running"
-                  title="Run once now"
-                  aria-label="Run job now"
-                >
-                  <AppIcon name="playArrow" size="16" />
-                </button>
-                <button
-                  class="job-row-btn"
-                  @click.stop="editJob(j)"
-                  title="Edit job"
-                  aria-label="Edit job"
-                >
-                  <AppIcon name="edit" size="16" />
-                </button>
-                <button
-                  class="job-switch"
-                  :class="{ 'job-switch--on': j.enabled }"
-                  role="switch"
-                  :aria-checked="j.enabled ? 'true' : 'false'"
-                  @click.stop="toggleJob(j)"
-                  :title="
-                    j.enabled
-                      ? 'Schedule is on — click to pause'
-                      : 'Schedule is off — click to resume'
-                  "
-                  aria-label="Toggle schedule"
-                >
-                  <span class="job-switch-knob"></span>
-                </button>
-                <button
-                  class="session-row-delete"
-                  @click.stop="deleteJob(j)"
-                  title="Delete this job (its conversation is kept)"
-                  aria-label="Delete job"
-                >
-                  <AppIcon name="delete" size="16" />
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       </aside>
@@ -2337,7 +2323,7 @@ import {
 } from "../requestProgress.js";
 import {
   maturityCategories,
-  pricingCategory,
+  pricingSections,
 } from "../data/sidebarCategories.js";
 hljs.registerLanguage("json", hljsJson);
 
@@ -3508,7 +3494,6 @@ const collapsedSections = reactive({
   crawl: true,
   walk: true,
   run: true,
-  pricing: true,
   playbookRoot: true,
   pb_crawl: true,
   pb_walk: true,
@@ -4232,6 +4217,12 @@ async function selectSession(sessionId) {
   return true;
 }
 
+async function selectSidebarSession(sessionId) {
+  const selected = await selectSession(sessionId);
+  if (selected && compactLayout.value) mobileSidebarOpen.value = false;
+  return selected;
+}
+
 // Fetch the persisted transcript for a session and replay it into the view
 // (messages, tool calls, charts, maturity scores). Unlike selectSession this
 // does NOT guard against the already-current session — the background-tab
@@ -4806,12 +4797,12 @@ async function revokeAllPermissions() {
 // When Azure connects, force Crawl/Walk/Run/Playbook/Pricing to collapsed.
 // This guarantees a clean initial state every time the user reconnects.
 watch(azureConnected, async (connected, wasConnected) => {
+  resetPricingSectionOpen(connected);
   if (!connected) {
     sessions.value = [];
     currentSessionId.value = null;
     return;
   }
-  collapsedSections.pricing = true;
   collapsedSections.crawl = true;
   collapsedSections.walk = true;
   collapsedSections.run = true;
@@ -5611,16 +5602,43 @@ const playbookGroups = computed(() =>
   })),
 );
 
-// Pricing prompts: when user is connected, append the personalised prompts
-// that cross-reference real Azure resources with retail pricing.
-const pricingPromptsForUser = computed(() =>
-  azureConnected.value
-    ? [
-        ...(pricingCategory.connectedPrompts || []),
-        ...(pricingCategory.publicPrompts || pricingCategory.prompts),
-      ]
-    : pricingCategory.publicPrompts || pricingCategory.prompts,
+const pricingSectionOpen = reactive({});
+
+function resetPricingSectionOpen(connected) {
+  for (const section of pricingSections) {
+    pricingSectionOpen[section.key] = connected
+      ? false
+      : section.defaultOpen === true;
+  }
+}
+
+resetPricingSectionOpen(false);
+
+const pricingNavigationSections = computed(() =>
+  pricingSections.map((section) => ({
+    ...section,
+    prompts:
+      azureConnected.value && section.connectedPrompts?.length
+        ? [...section.connectedPrompts, ...section.prompts]
+        : section.prompts,
+  })),
 );
+
+function pricingSectionHeaderId(key) {
+  return `pricing-section-${key}-header`;
+}
+
+function pricingSectionPanelId(key) {
+  return `pricing-section-${key}-panel`;
+}
+
+function isPricingSectionExpanded(key) {
+  return pricingSectionOpen[key] === true;
+}
+
+function togglePricingSection(key) {
+  pricingSectionOpen[key] = !pricingSectionOpen[key];
+}
 
 // ── Maturity scores (set by LLM via ReportMaturityScore tool → SSE) ──
 const maturityScores = reactive({
@@ -8642,7 +8660,8 @@ async function send() {
     color var(--motion-fast);
 }
 .portal-new-chat {
-  padding: 0 12px;
+  width: 36px;
+  padding: 0;
   border-color: rgba(255, 255, 255, 0.22);
   background: rgba(255, 255, 255, 0.14);
   color: #fff;
@@ -8740,9 +8759,9 @@ async function send() {
   gap: 2px;
 }
 .sidebar-category-label {
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  font-weight: 500;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 600;
   color: var(--text-muted);
   margin-bottom: 4px;
   padding: 0 16px;
@@ -8762,6 +8781,28 @@ async function send() {
 }
 .sidebar-category-label--toggle:hover {
   background: var(--sidebar-hover);
+}
+.sidebar-section-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+}
+.sidebar-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 12px;
+}
+.sidebar-section-heading .sidebar-section-toggle {
+  flex: 1;
+  min-width: 0;
+}
+.sidebar-section-action {
+  flex: 0 0 auto;
+  min-height: 32px;
+  white-space: nowrap;
 }
 .collapse-chevron {
   width: 14px;
@@ -8784,8 +8825,8 @@ async function send() {
   max-height: 0;
   opacity: 0;
   transition:
-    max-height 0.25s ease,
-    opacity 0.15s ease;
+    max-height var(--motion-collapse),
+    opacity var(--motion-enter);
 }
 .sidebar-question {
   display: flex;
@@ -11326,6 +11367,7 @@ async function send() {
   border-left: 1px solid var(--sidebar-border);
   background: var(--sidebar-bg);
   overflow: hidden;
+  visibility: hidden;
   transition: width var(--motion-collapse);
   display: flex;
   flex-direction: column;
@@ -11334,6 +11376,7 @@ async function send() {
 }
 .tools-sidebar--open {
   width: 300px;
+  visibility: visible;
 }
 .chat-view--hidden .tools-sidebar {
   transition: none;
@@ -11478,16 +11521,21 @@ async function send() {
   background: var(--sidebar-bg);
 }
 .sessions-new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 10px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: none;
+  border-radius: 8px;
+  background: transparent;
   color: var(--ink);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 500;
+  transition: background var(--motion-fast);
 }
 .sessions-new-btn:hover:not(:disabled) {
   background: var(--sidebar-hover);
-  border-color: var(--sidebar-border);
-  box-shadow: none;
 }
 .sessions-new-btn:disabled {
   opacity: 0.5;
@@ -11495,6 +11543,10 @@ async function send() {
 }
 .sessions-scroll {
   padding: 4px 8px 8px;
+}
+.sidebar .sessions-scroll,
+.sidebar .jobs-scroll {
+  padding: 2px 0 8px;
 }
 .sessions-empty {
   padding: 12px 8px;
@@ -12082,10 +12134,10 @@ async function send() {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: calc(100% - 8px);
+  width: calc(100% - 24px);
   min-height: 44px;
-  margin: 2px 4px;
-  padding: 6px 8px;
+  margin: 1px 12px;
+  padding: 8px 12px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -13251,6 +13303,7 @@ async function send() {
 .chat-view--hidden .message-row,
 .chat-view--hidden .hero-card,
 .chat-view--hidden .session-row,
+.chat-view--hidden .collapse-body,
 .chat-view--hidden .st-row,
 .chat-view--hidden .st-cooler-detail {
   animation-play-state: paused;
@@ -13260,6 +13313,8 @@ async function send() {
   .message-row,
   .hero-card,
   .session-row,
+  .collapse-body,
+  .collapse-chevron,
   .st-row,
   .st-cooler-detail,
   .tools-sidebar,

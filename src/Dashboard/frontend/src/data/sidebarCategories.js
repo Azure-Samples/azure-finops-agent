@@ -1,8 +1,66 @@
 // FinOps maturity sidebar categories — extracted from ChatView.vue for maintainability.
 // Pure static data; no runtime dependencies.
 
-// Public retail-pricing prompts — work without an Azure login.
-const publicPricingPrompts = [
+// AI and LLM pricing prompts — public, answered from the Azure Retail Prices API
+// (Foundry Models) and, for benchmarks, recent published results. Chosen from the
+// questions users ask most: latest model prices, deployment tiers, PTU versus
+// pay-as-you-go, token-based project estimates and model speed. The token pricing
+// prompt is a curated live-evaluation case: its text is its case ID, keep it exact.
+const aiPricingPrompts = [
+  {
+    label: "Latest Foundry models & prices",
+    prompt:
+      "List the newest Foundry models with their Global Standard list price per 1M input, cached input and output tokens, newest first: the latest GPT models plus the newest Grok, DeepSeek, Mistral, Llama and other partner models. One table.",
+  },
+  {
+    label: "Price by deployment type",
+    prompt:
+      "For the newest GPT-6 models, compare the price per 1M input, cached input and output tokens across Global Standard, Data Zone Standard and Priority Processing, for short and long context. One table.",
+  },
+  {
+    label: "Azure OpenAI token pricing",
+    prompt:
+      "Compare Azure OpenAI pricing for GPT-4o vs GPT-4o-mini vs GPT-4.1 per 1M input and output tokens. Use one batched lookup and quote Standard Global, not Batch, Data Zone, Regional, or cached-input minima.",
+  },
+  {
+    label: "Open & partner model prices",
+    prompt:
+      "Compare Foundry list prices for the newest DeepSeek, Grok, Llama, Mistral, Phi, Kimi and Qwen models per 1M input and output tokens, using each model's Global meter, or its Data Zone meter where no Global one is published, cheapest first.",
+  },
+  {
+    label: "Chatbot monthly cost estimate",
+    prompt:
+      "Estimate the monthly cost of a support chatbot with 50,000 conversations per month, each using 3,000 input tokens (half of them cached) and 600 output tokens, on GPT-6 Luna vs GPT-6 Sol at Global Standard list prices. Show the cost per conversation and per month.",
+  },
+  {
+    label: "PTU vs pay-as-you-go",
+    prompt:
+      "Compare the monthly cost of 50 Global provisioned throughput units (PTU) hourly, with a 1-month reservation and with a 1-year reservation, and show how many GPT-6 Sol Global Standard tokens per month (3:1 input to output) cost the same as each option.",
+  },
+  {
+    label: "Cached input & Batch savings",
+    prompt:
+      "How much do cached input and Batch save? For the newest GPT models, compare the Global Standard input and output price per 1M tokens with the cached-input price and with the Batch price where Batch is offered, with the % discount for each.",
+  },
+  {
+    label: "RAG embeddings + AI Search cost",
+    prompt:
+      "Estimate the cost of a RAG index for 1 million documents of 1,000 tokens each: the one-time embedding cost with text-embedding-3-large vs text-embedding-3-small at Global Standard, plus the monthly cost of Azure AI Search Standard S1 with 2 replicas in East US 2.",
+  },
+  {
+    label: "Image, speech & realtime prices",
+    prompt:
+      "List the current Foundry list prices for the newest image generation, speech-to-text, text-to-speech and realtime audio models at Global Standard, in the unit each meter is published in (per image, minute or 1M tokens).",
+  },
+  {
+    label: "Latest model benchmarks",
+    prompt:
+      "What are the latest published benchmarks for the newest Foundry models (the GPT-6 family and the newest Grok, DeepSeek, Llama and Mistral models)? Show quality scores, output speed and latency next to each model's Global Standard price per 1M tokens, with the source and date of every benchmark.",
+  },
+];
+
+// Infrastructure retail-pricing prompts — work without an Azure login.
+const infrastructurePricingPrompts = [
   {
     label: "Compare VM pricing by region",
     prompt:
@@ -63,11 +121,6 @@ const publicPricingPrompts = [
       "I want to estimate the monthly cost of a new deployment. Help me price out the infrastructure — I'll describe the resources I need (VMs, storage, databases, networking) and you calculate the estimated monthly cost using Azure retail pricing.",
   },
   {
-    label: "Azure OpenAI token pricing",
-    prompt:
-      "Compare Azure OpenAI pricing for GPT-4o vs GPT-4o-mini vs GPT-4.1 per 1M input and output tokens. Use one batched lookup and quote Standard Global, not Batch, Data Zone, Regional, or cached-input minima.",
-  },
-  {
     label: "Azure Firewall cost tiers",
     prompt:
       "Compare Azure Firewall Basic vs Standard vs Premium monthly cost including 5 TB data processed.",
@@ -104,6 +157,31 @@ const connectedPricingPrompts = [
   },
 ];
 
+// Every public prompt, for the live-evaluation catalog and callers of .publicPrompts.
+const publicPricingPrompts = [...aiPricingPrompts, ...infrastructurePricingPrompts];
+
+// The navigation shows pricing as two sections. AI pricing opens by default;
+// infrastructure pricing starts collapsed and, once Azure is connected, lists the
+// personalised prompts first.
+export const pricingSections = [
+  {
+    key: "ai-pricing",
+    label: "AI & LLM pricing",
+    subtitle: "Foundry models, tokens, PTU, benchmarks",
+    prompts: aiPricingPrompts,
+    connectedPrompts: [],
+    defaultOpen: true,
+  },
+  {
+    key: "infrastructure-pricing",
+    label: "Infrastructure pricing",
+    subtitle: "VMs, storage, databases, networking",
+    prompts: infrastructurePricingPrompts,
+    connectedPrompts: connectedPricingPrompts,
+    defaultOpen: false,
+  },
+];
+
 export const pricingCategory = {
   key: "pricing",
   label: "Pricing & Estimates",
@@ -112,6 +190,7 @@ export const pricingCategory = {
   requiresAzure: false,
   publicPrompts: publicPricingPrompts,
   connectedPrompts: connectedPricingPrompts,
+  sections: pricingSections,
   // Backwards-compat: callers that read .prompts get the public list.
   prompts: publicPricingPrompts,
 };

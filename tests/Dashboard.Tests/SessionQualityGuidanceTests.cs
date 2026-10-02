@@ -64,7 +64,15 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("a price it returned this turn is already up to date", withSearch);
         Assert.Contains("so an answer built from them needs no web citation", withSearch);
         Assert.Contains("web_search is never a calculator or unit converter (no \"calculator:\" queries)", withSearch);
-        Assert.Contains("Token meters are priced per 1K tokens (unitOfMeasure '1K'), so return per-1M rates (retailPrice * 1000) from that same query", Prompt);
+        Assert.Contains("unitOfMeasure is '1K' on older token meters and '1M' on newer ones, so return per-1M rates from that same query as retailPrice * (unitOfMeasure == \"1K\" ? 1000 : 1), never with one fixed factor", Prompt);
+        Assert.Contains("'Azure OpenAI GPT5', 'Azure OpenAI GPT6'", Prompt);
+        Assert.Contains("Std Gl (Global Standard), Std DZ (Data Zone Standard), PP (Priority Processing)", Prompt);
+        Assert.Contains("whose retailPrice is per PTU for the whole reservationTerm even though unitOfMeasure reads '1/Hour'", Prompt);
+        Assert.Contains("published model benchmarks and leaderboards (quality, speed, latency)", withSearch);
+        Assert.Contains("Only when the user asks for model benchmarks, speed or latency, answer directly with no clarifying question", withSearch);
+        Assert.Contains("A Foundry model price, deployment-type, PTU, caching or cost-estimate question needs no web search", withSearch);
+        Assert.Contains("never search or read documentation to identify models, their availability or deployment types for a pricing question", Prompt);
+        Assert.DoesNotContain("model benchmark", Prompt);
         Assert.Contains("Never search or open third-party price, calculator or comparison sites", withSearch);
         Assert.Contains("never research a caveat the question did not ask about", withSearch);
         Assert.Contains("an answer that cites no web source should have made no search", withSearch);
