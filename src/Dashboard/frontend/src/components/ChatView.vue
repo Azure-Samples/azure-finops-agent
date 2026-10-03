@@ -17,17 +17,6 @@
         >
           <AppIcon name="menu" size="20" />
         </button>
-        <button
-          v-if="!sidebarVisible"
-          class="portal-new-chat"
-          type="button"
-          :disabled="clearing"
-          @click="startNewChat"
-          title="New chat"
-          aria-label="New chat"
-        >
-          <AppIcon name="squarePen" size="19" />
-        </button>
         <a
           class="portal-trustline-link"
           href="https://github.com/Azure-Samples/azure-finops-agent"
@@ -1248,6 +1237,7 @@
             <div
               v-for="(msg, i) in messages"
               :key="i"
+              :data-msg-index="i"
               class="message-row"
               :class="
                 msg.role === 'user'
@@ -1874,6 +1864,23 @@
               </div>
               <div class="input-bottom-right">
                 <button
+                  v-if="canClearChat"
+                  type="button"
+                  class="input-action-btn input-action-btn--clear"
+                  :disabled="
+                    streaming || serverTurnStoppable || clearing || clearingChat
+                  "
+                  :title="
+                    streaming || serverTurnStoppable
+                      ? 'Stop or wait for the answer before clearing the chat'
+                      : 'Clear this conversation and start a new chat'
+                  "
+                  @click="clearChat"
+                >
+                  <AppIcon name="delete" size="16" />
+                  <span>{{ clearingChat ? "Clearing…" : "Clear chat" }}</span>
+                </button>
+                <button
                   v-if="streaming || serverTurnStoppable"
                   class="action-btn action-btn--stop"
                   :disabled="
@@ -1928,7 +1935,60 @@
             <span class="st-count">{{ allToolCalls.length }}</span>
           </div>
           <div class="tools-sidebar-scroll">
-            <template v-for="tc in reversedToolCalls" :key="tc._uid">
+            <section
+              v-for="group in toolGroups"
+              :key="group.key"
+              class="st-group"
+              :class="{
+                'st-group--open': isToolGroupOpen(group),
+                'st-group--running': group.summary.running,
+              }"
+            >
+              <button
+                type="button"
+                class="st-group-head"
+                :aria-expanded="isToolGroupOpen(group) ? 'true' : 'false'"
+                :title="group.question || 'Earlier activity'"
+                @click="toggleToolGroup(group)"
+              >
+                <span class="st-group-q">{{
+                  group.number ? `Q${group.number}` : "…"
+                }}</span>
+                <span class="st-group-text">{{
+                  group.question || "Earlier activity"
+                }}</span>
+                <AppIcon class="st-group-chevron" name="moreDown" size="16" />
+                <span class="st-group-meta">
+                  <span
+                    >{{ group.summary.total }}
+                    {{ group.summary.total === 1 ? "call" : "calls" }}</span
+                  >
+                  <span v-if="group.summary.failed" class="st-group-failed"
+                    >· {{ group.summary.failed }} failed</span
+                  >
+                  <span v-if="group.summary.running" class="st-group-live"
+                    >· running</span
+                  >
+                </span>
+                <span
+                  v-if="group.summary.kinds.length"
+                  class="st-group-kinds"
+                >
+                  <span
+                    v-for="kind in group.summary.kinds.slice(0, 4)"
+                    :key="kind.label"
+                    class="st-kind"
+                    >{{ kind.label }} <b>{{ kind.count }}</b></span
+                  >
+                  <span
+                    v-if="group.summary.kinds.length > 4"
+                    class="st-kind"
+                    >+{{ group.summary.kinds.length - 4 }}</span
+                  >
+                </span>
+              </button>
+              <div v-show="isToolGroupOpen(group)" class="st-group-body">
+            <template v-for="tc in group.calls" :key="tc._uid">
               <!-- Ghost cooling-down row: animated, expand-to-detail, ephemeral -->
               <div
                 v-if="tc._isCooler"
@@ -2012,6 +2072,8 @@
                 }}</span>
               </div>
             </template>
+              </div>
+            </section>
           </div>
         </div>
       </aside>
@@ -4196,6 +4258,47 @@ async function startNewChat() {
   return created;
 }
 
+// Clear chat removes the conversation the user is looking at (server-confirmed,
+// like deleting it from Chats) and opens a fresh one. It appears once there is
+// a question and a response to clear.
+const clearingChat = ref(false);
+const canClearChat = computed(
+  () =>
+    !currentJob.value &&
+    messages.value.some((m) => m.role === "user") &&
+    messages.value.some((m) => m.role !== "user"),
+);
+
+async function clearChat() {
+  if (
+    !canClearChat.value ||
+    streaming.value ||
+    serverTurnStoppable.value ||
+    clearing.value ||
+    clearingChat.value
+  )
+    return;
+  clearingChat.value = true;
+  try {
+    const sessionId = currentSessionId.value;
+    if (sessionId) {
+      await deleteSession(sessionId);
+      if (currentSessionId.value === sessionId) {
+        setNotice(
+          "error",
+          sessionDeleteError.value ||
+            "Couldn't clear the conversation. Try again.",
+        );
+        return;
+      }
+    }
+    await startNewChat();
+    inputEl.value?.focus();
+  } finally {
+    clearingChat.value = false;
+  }
+}
+
 async function selectSession(sessionId) {
   if (!sessionId || sessionId === currentSessionId.value) return true;
   viewEpoch++;
@@ -4287,7 +4390,7 @@ async function reloadSessionTranscript(sessionId) {
             error: tc.error || null,
             success: toolResultSucceeded(tc.success, tc.result),
             intent: tc.intent || "",
-            durationMs: null,
+            durationMs: Number.isFinite(tc.durationMs) ? tc.durationMs : null,
             done: true,
             expanded: false,
           })),
@@ -5199,7 +5302,116 @@ function stopGeneration() {
   requestServerStop(state);
 }
 
-const reversedToolCalls = computed(() => [...allToolCalls.value].reverse());
+// Execution sidebar: one group per question, newest first, each summarised by
+// call count, failures and kinds of calls. Calls keep their order inside a
+// group; a live call with the id of a restored one replaces it in place.
+const toolGroups = computed(() => {
+  const groups = [];
+  const located = new Map();
+  let group = null;
+  let questions = 0;
+  const ensureGroup = () => {
+    if (!group) {
+      group = { key: "q-start", messageIndex: null, number: 0, question: "", calls: [] };
+      groups.push(group);
+    }
+    return group;
+  };
+  const add = (tc, prefix) => {
+    if (tc.id != null && located.has(tc.id)) {
+      const at = located.get(tc.id);
+      at.group.calls[at.index] = { ...tc, _uid: `${prefix}-${tc.id}` };
+      return;
+    }
+    const target = ensureGroup();
+    if (tc.id != null) located.set(tc.id, { group: target, index: target.calls.length });
+    target.calls.push({
+      ...tc,
+      _uid: tc.id != null ? `${prefix}-${tc.id}` : `${prefix}-${target.key}-${target.calls.length}`,
+    });
+  };
+  messages.value.forEach((msg, index) => {
+    if (msg.role === "user") {
+      group = { key: `q-${index}`, messageIndex: index, number: ++questions, question: msg.content || "", calls: [] };
+      groups.push(group);
+    } else {
+      for (const tc of msg.toolCalls || []) add(tc, "msg");
+    }
+  });
+  for (const tc of streamToolCalls.value) add(tc, "stream");
+  // Cooldown ghosts are ephemeral; keep the original reference so toggling
+  // tc.expanded in the template mutates the reactive source.
+  for (const cooler of streamCoolers.value) {
+    cooler._uid = cooler._uid || `cool-${crypto.randomUUID()}`;
+    ensureGroup().calls.push(cooler);
+  }
+  return groups
+    .filter((g) => g.calls.length > 0)
+    .map((g) => ({ ...g, summary: summarizeToolGroup(g.calls) }))
+    .reverse();
+});
+
+function summarizeToolGroup(calls) {
+  const real = calls.filter((tc) => !tc._isCooler);
+  const counts = new Map();
+  for (const tc of real) {
+    const kind = toolKind(tc);
+    counts.set(kind, (counts.get(kind) || 0) + 1);
+  }
+  return {
+    total: real.length,
+    failed: real.filter((tc) => tc.done && !(tc.success && !isThrottledTool(tc))).length,
+    running: real.some((tc) => !tc.done) || real.length < calls.length,
+    kinds: [...counts]
+      .sort((a, b) => b[1] - a[1])
+      .map(([label, count]) => ({ label, count })),
+  };
+}
+
+// The source a call reached, for a group's summary: Pricing, Web search, Cost Management…
+function toolKind(tc) {
+  if (tc.tool === "web_search") return "Web search";
+  if (tc.tool === "QueryAzure") {
+    let args = tc.args;
+    if (args && typeof args === "string") {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        args = null;
+      }
+    }
+    const urls = String(args?.url || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!urls.length && args?.query) return "Calculation";
+    const source = _query_label({ ...args, url: urls[0] || args?.url || "" }).split(" · ")[0];
+    return source === "Web" ? "Web page" : source.startsWith("Batch") ? "Batch" : source;
+  }
+  return friendlyToolLabel(tc).split(" · ")[0];
+}
+
+// The newest question's calls are open; a user's choice for any group sticks
+// until they switch conversations.
+const toolGroupOpen = reactive(new Map());
+watch(currentSessionId, () => toolGroupOpen.clear());
+function isToolGroupOpen(group) {
+  return toolGroupOpen.get(group.key) ?? group.key === toolGroups.value[0]?.key;
+}
+function toggleToolGroup(group) {
+  const open = !isToolGroupOpen(group);
+  toolGroupOpen.set(group.key, open);
+  if (open && group.messageIndex != null) scrollToMessage(group.messageIndex);
+}
+function scrollToMessage(index) {
+  const row = messagesEl.value?.querySelector(`[data-msg-index="${index}"]`);
+  if (!row) return;
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  row.scrollIntoView({
+    block: "start",
+    behavior: reduce || document.hidden ? "auto" : "smooth",
+  });
+}
 
 // Live status line under the "Agent" header — shows what the agent is doing right now.
 const agentStatus = computed(() => {
@@ -5297,6 +5509,8 @@ function activityPhrase(tc) {
       else phrase = `Querying ${ACTIVITY_SOURCES[source] || source}`;
       return urls.length > 1 ? `${phrase} (${urls.length} requests)` : phrase;
     }
+    case "web_search":
+      return "Searching the web";
     case "QueryUploadedFile":
       return "Reading your file";
     case "GenerateScript":
@@ -5528,6 +5742,10 @@ function friendlyToolLabel(tc) {
     }
   }
   if (tool === "QueryAzure") return _query_label(args);
+  if (tool === "web_search") {
+    const query = Array.isArray(args?.queries) ? args.queries[0] : "";
+    return query ? `Web search · ${query}` : "Web search";
+  }
   if (tool === "GenerateHtmlPresentation") {
     let n = 0;
     try {
@@ -8639,7 +8857,6 @@ async function send() {
   background: rgba(255, 255, 255, 0.15);
   color: #fff;
 }
-.portal-new-chat,
 .sidebar-new-chat,
 .new-chat-control {
   display: inline-flex;
@@ -8659,17 +8876,6 @@ async function send() {
     border-color var(--motion-fast),
     color var(--motion-fast);
 }
-.portal-new-chat {
-  width: 36px;
-  padding: 0;
-  border-color: rgba(255, 255, 255, 0.22);
-  background: rgba(255, 255, 255, 0.14);
-  color: #fff;
-}
-.portal-new-chat:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.22);
-  border-color: rgba(255, 255, 255, 0.34);
-}
 .sidebar-new-chat {
   width: calc(100% - 24px);
   margin: 6px 12px 10px;
@@ -8683,7 +8889,6 @@ async function send() {
   background: var(--sidebar-hover);
   border-color: var(--sidebar-border);
 }
-.portal-new-chat:disabled,
 .sidebar-new-chat:disabled,
 .new-chat-control:disabled {
   opacity: 0.55;
@@ -10884,15 +11089,28 @@ async function send() {
   background: none;
   padding: 0;
 }
+/* Tables fit the column where they can: headers wrap, figures and identifiers
+   stay whole. A wider table keeps its first column pinned while it scrolls, and
+   edge shadows (local backgrounds over scroll shadows) show there is more. */
 .message-text :deep(.wt-wrap) {
   margin: 12px 0 16px;
   border-radius: 12px;
-  background: #ffffff;
   border: 1px solid var(--border);
   overflow-x: auto;
+  background:
+    linear-gradient(to right, #fff 30%, rgba(255, 255, 255, 0)) left center /
+      32px 100% no-repeat local,
+    linear-gradient(to left, #fff 30%, rgba(255, 255, 255, 0)) right center /
+      32px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.14), transparent)
+      left center / 12px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.14), transparent)
+      right center / 12px 100% no-repeat scroll,
+    #fff;
 }
 .message-text :deep(.wow-table) {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
   font-size: var(--text-label-size);
   line-height: var(--text-label-line);
@@ -10908,7 +11126,8 @@ async function send() {
   line-height: var(--text-label-line);
   border-bottom: 1px solid var(--border);
   background: #f7f7f8;
-  white-space: nowrap;
+  min-width: 4.5rem;
+  vertical-align: bottom;
 }
 .message-text :deep(.wow-table td) {
   padding: 10px 14px;
@@ -10917,20 +11136,42 @@ async function send() {
   color: var(--ink);
   vertical-align: top;
 }
+.message-text :deep(.wow-table th:first-child),
+.message-text :deep(.wow-table td:first-child) {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 7rem;
+  max-width: 16rem;
+}
+.message-text :deep(.wow-table td:first-child) {
+  background: #fff;
+  font-weight: 600;
+}
+.message-text :deep(.wow-table code.wt-id) {
+  white-space: nowrap;
+}
+.message-text :deep(.wow-table td a),
+.message-text :deep(.wow-table td code:not(.wt-id)) {
+  overflow-wrap: anywhere;
+}
 .message-text :deep(.wow-table tbody tr:last-child td) {
   border-bottom: none;
 }
-.message-text :deep(.wow-table tbody tr) {
+.message-text :deep(.wow-table tbody tr td) {
   transition: background 0.18s ease;
 }
-.message-text :deep(.wow-table tbody tr:hover) {
-  background: rgba(0, 120, 212, 0.05);
+.message-text :deep(.wow-table tbody tr:hover td) {
+  background: #f2f8fd;
 }
 .message-text :deep(.wow-table .wt-num) {
   text-align: right;
   font-family: inherit;
   font-variant-numeric: tabular-nums;
   color: #1f2328;
+}
+.message-text :deep(.wow-table td.wt-num) {
+  white-space: nowrap;
 }
 .message-text :deep(.wow-table .wt-up) {
   color: #107c10;
@@ -11298,6 +11539,10 @@ async function send() {
   display: flex;
   flex-shrink: 0;
   align-items: center;
+  gap: 8px;
+}
+.input-action-btn--clear:hover:not(:disabled) {
+  color: #b42318;
 }
 /* Narrow composers keep the actions as icons; the label stays the button's
    accessible name. */
@@ -12324,6 +12569,102 @@ async function send() {
   font-variant-numeric: tabular-nums;
 }
 
+/* ── Execution groups: one per question ── */
+.st-group {
+  margin: 0 0 6px;
+  border: 1px solid var(--sidebar-border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.st-group--open {
+  border-color: rgba(54, 120, 232, 0.28);
+}
+.st-group-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 4px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.st-group-head:hover {
+  background: var(--sidebar-hover);
+}
+.st-group-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.st-group-q {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(54, 120, 232, 0.12);
+  color: #1f5fbf;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.st-group-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.st-group-chevron {
+  color: var(--text-muted);
+  transform: rotate(-90deg);
+  transition: transform var(--motion-fast);
+}
+.st-group--open .st-group-chevron {
+  transform: none;
+}
+.st-group-meta,
+.st-group-kinds {
+  grid-column: 2 / 4;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+.st-group-meta {
+  display: flex;
+  gap: 4px;
+}
+.st-group-failed {
+  color: var(--danger);
+  font-weight: 600;
+}
+.st-group-live {
+  color: var(--accent);
+  font-weight: 600;
+}
+.st-group-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.st-kind {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--sidebar-hover);
+  white-space: nowrap;
+}
+.st-kind b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.st-group-body {
+  padding: 0 4px 4px;
+  border-top: 1px solid var(--sidebar-border);
+}
+
 /* ── Cooling-down ghost row (ephemeral, 429/5xx) ── */
 /* Same row chrome as .st-row (size, padding, font weight 400, height);
    only the background + text colour differ so the user can spot retries.
@@ -13178,13 +13519,6 @@ async function send() {
 
 /* ── Responsive ── */
 @media (max-width: 900px) {
-  .portal-new-chat span {
-    display: none;
-  }
-  .portal-new-chat {
-    width: 36px;
-    padding: 0;
-  }
   .sidebar {
     position: fixed;
     top: var(--portal-header-height);

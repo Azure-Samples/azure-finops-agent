@@ -160,11 +160,13 @@ function renderTable(lines, start, out) {
   return i;
 }
 
+const PLACEHOLDER = /^(?:[-–—]|n\/?a|tbd|unknown|none|not (?:published|available|reported|verified)|no (?:data|result|price))[.¹²³⁴⁵⁶⁷⁸⁹]*$/i;
+
 /** Builds the data table: numeric columns align right in tabular figures, status words become pills and bare deltas get arrows. */
 export function buildTable(header, rows, align = []) {
   const numeric = header.map((_, c) => {
-    const values = rows.map((row) => row[c] ?? "").filter((cell) => cell.trim());
-    return values.length > 0 && values.filter((cell) => parseNumeric(cell) !== null).length / values.length >= 0.6;
+    const values = rows.map((row) => (row[c] ?? "").trim()).filter((cell) => cell && !PLACEHOLDER.test(cell));
+    return values.length > 0 && values.filter(isNumericCell).length / values.length >= 0.6;
   });
   const cellClass = (c) => {
     const names = [numeric[c] ? "wt-num" : "", align[c] || ""].filter(Boolean).join(" ");
@@ -175,6 +177,33 @@ export function buildTable(header, rows, align = []) {
     .map((row) => `<tr>${header.map((_, c) => `<td${cellClass(c)}>${renderCell(row[c] ?? "")}</td>`).join("")}</tr>`)
     .join("");
   return `<div class="wt-wrap"><table class="wow-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+const NUMBER_TOKEN = /^[$€£¥]?[-−+]?\d[\d,]*(?:\.\d+)?(?:[-–—:]\d[\d,.]*)*(?:%|×|x|[kKMB]|[a-zA-Zµ]{1,4})?$/;
+const SEPARATOR_TOKEN = /^(?:USD|EUR|GBP|JPY|INR|AUD|CAD|CHF|CNY|SEK|NOK|DKK|NZD|SGD|HKD|BRL|KRW|ZAR|MXN|PLN|[$€£¥]|[-–—=×~≈])$/;
+
+/**
+ * True when a cell reads as a figure (USD 1,200, 3.2s, 10 / 1 / 50, 2 vCPU):
+ * it starts with a number or currency and carries at most two unit words.
+ * Labels that merely contain a digit (GPT-6 Astra, 6-astra, Standard_D4s_v5) are text.
+ */
+export function isNumericCell(cell) {
+  const text = String(cell ?? "")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/[\u00B9\u00B2\u00B3\u2070-\u209F]+|\[\d+\]/g, "")
+    .replace(/^[~≈<>≤≥±▲▼↑↓+\-−\s]+/, "")
+    .trim();
+  const tokens = text.split(/[\s/]+/).filter(Boolean);
+  if (!tokens.length || !(NUMBER_TOKEN.test(tokens[0]) || SEPARATOR_TOKEN.test(tokens[0]))) return false;
+  let numbers = 0;
+  let words = 0;
+  for (const token of tokens) {
+    if (NUMBER_TOKEN.test(token)) numbers++;
+    else if (SEPARATOR_TOKEN.test(token)) continue;
+    else if (/^[A-Za-zµ°%]{1,10}[.,;:]?$/.test(token)) words++;
+    else return false;
+  }
+  return numbers > 0 && words <= 2;
 }
 
 export function parseNumeric(cell) {
@@ -207,7 +236,8 @@ function renderCell(raw) {
   if (up) return `<span class="wt-up">▲ ${up[1]}</span>`;
   const down = trimmed.match(/^(?:▼|↓)\s*([\d.,]+\s*%?)$/);
   if (down) return `<span class="wt-down">▼ ${down[1]}</span>`;
-  return renderInline(raw);
+  // Short identifiers (6-astra, Standard_D4s_v5) never break at a hyphen; long ones such as resource IDs may wrap.
+  return renderInline(raw).replace(/<code>([^<]{1,40})<\/code>/g, '<code class="wt-id">$1</code>');
 }
 
 function renderList(lines, start, out) {

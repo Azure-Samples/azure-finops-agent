@@ -63,7 +63,24 @@ public sealed class TranscriptProjectionTests
         Assert.Equal(2, tools.GetArrayLength());
         Assert.True(tools[0].GetProperty("success").GetBoolean());
         Assert.Equal(JsonValueKind.Null, tools[1].GetProperty("success").ValueKind);
+        Assert.Equal(JsonValueKind.Null, tools[1].GetProperty("durationMs").ValueKind);
         Assert.Equal(1, reply.GetProperty("charts").GetArrayLength());
+    }
+
+    [Fact]
+    public void ToolsReplayWithTheirDurations()
+    {
+        var started = DateTimeOffset.Parse("2026-10-03T06:00:00Z");
+        var question = new UserMessageEvent("Synthetic pricing question");
+        var measuredStart = new ToolStartEvent("call-1", "QueryAzure", "{}") { Timestamp = started };
+        var measured = new ToolCompleteEvent("call-1", true, "{}", null, 1234) { Timestamp = started.AddSeconds(9) };
+        var searchStart = new ToolStartEvent("call-2", "web_search", null) { Timestamp = started };
+        var search = new ToolCompleteEvent("call-2", true, "{}", null) { Timestamp = started.AddMilliseconds(2600) };
+        var answer = new AssistantMessageEvent("answer", "Synthetic answer");
+        using var result = Project(question, measuredStart, searchStart, measured, search, answer);
+        var tools = result.RootElement[1].GetProperty("toolCalls");
+        Assert.Equal(1234, tools[0].GetProperty("durationMs").GetInt64());
+        Assert.Equal(2600, tools[1].GetProperty("durationMs").GetInt64());
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { renderMarkdown } from '../../src/Dashboard/frontend/src/markdown.js';
+import { isNumericCell, renderMarkdown } from '../../src/Dashboard/frontend/src/markdown.js';
 
 test('bold works without surrounding spaces and identifiers stay byte-for-byte', () => {
   assert.equal(renderMarkdown('**Total:**USD 12.34'), '<p><strong>Total:</strong>USD 12.34</p>');
@@ -44,8 +44,34 @@ test('tables align numbers, keep inline formatting and prompt chips', () => {
   assert.match(html, /<td><strong>VMs<\/strong><\/td>/);
   assert.match(html, /<td class="wt-num wt-r">USD 1,200<\/td>/);
   assert.match(html, /<span class="wt-tag wt-tag-g">OK<\/span>/);
-  assert.match(html, /<code>Disks<\/code>/);
+  assert.match(html, /<code class="wt-id">Disks<\/code>/);
   assert.match(html, /<button type="button" class="prompt-chip" data-prompt="Why disks\?">Ask<\/button>/);
+});
+
+test('labels that contain digits stay text while figures align right', () => {
+  const html = renderMarkdown(
+    [
+      '| Model | Quality | Latency | Global USD/1M in / cached / out |',
+      '|---|--:|--:|---|',
+      '| GPT-6 Astra | 53 | 341.88s | 10 / 1 / 50 |',
+      '| `6-luna` | 38 | 128.78s | 0.1 / 0.01 / 0.5 |',
+      '| Grok 4.6 | — | N/A | 2 / 0.5 / 10 |',
+      '| DeepSeek V4 Pro | 36 | 1.75s | USD 1.2 |',
+    ].join('\n'),
+  );
+  assert.match(html, /<th>Model<\/th>/);
+  assert.match(html, /<td>GPT-6 Astra<\/td>/);
+  assert.match(html, /<td><code class="wt-id">6-luna<\/code><\/td>/);
+  assert.match(html, /<th class="wt-num wt-r">Quality<\/th>/);
+  assert.match(html, /<td class="wt-num wt-r">341.88s<\/td>/);
+  assert.match(html, /<td class="wt-num">10 \/ 1 \/ 50<\/td>/);
+});
+
+test('numeric cells need a leading figure and few unit words', () => {
+  for (const cell of ['USD 1,200', '$300', '3.2s', '10 / 1 / 50', '▲ 12%', '-5%', '2 vCPU / 8 GiB', '15k', '1.2M', '2026-09-01', '**52**', '46²'])
+    assert.equal(isNumericCell(cell), true, cell);
+  for (const cell of ['GPT-6 Astra', '6-astra', '4o-mini', 'Standard_D4s_v5', 'Short: 10 / 1 / 50', 'Not verified²', 'GPT 6', 'OK', '', 'USD'])
+    assert.equal(isNumericCell(cell), false, cell);
 });
 
 test('code blocks and spans are literal', () => {

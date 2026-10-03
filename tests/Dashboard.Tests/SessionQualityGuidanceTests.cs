@@ -15,6 +15,8 @@ public sealed class SessionQualityGuidanceTests
     [Theory]
     [InlineData("language of the latest user message")]
     [InlineData("exactly one visual")]
+    [InlineData("never put definitions, method notes or caveats between the headline and the visual")]
+    [InlineData("one row per compared item, named in the first column")]
     [InlineData("unknown, never zero")]
     [InlineData("look it up instead of guessing")]
     [InlineData("never resend a failing request unchanged")]
@@ -71,6 +73,8 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("whose retailPrice is per PTU for the whole reservationTerm even though unitOfMeasure reads '1/Hour'", Prompt);
         Assert.Contains("published model benchmarks and leaderboards (quality, speed, latency)", withSearch);
         Assert.Contains("Only when the user asks for model benchmarks, speed or latency, answer directly with no clarifying question", withSearch);
+        Assert.Contains("one row per newest priced model of each requested family", withSearch);
+        Assert.Contains("name newer benchmarked versions that have no Foundry price in one sentence below the table instead of adding rows", withSearch);
         Assert.Contains("A Foundry model price, deployment-type, PTU, caching or cost-estimate question needs no web search", withSearch);
         Assert.Contains("never search or read documentation to identify models, their availability or deployment types for a pricing question", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);

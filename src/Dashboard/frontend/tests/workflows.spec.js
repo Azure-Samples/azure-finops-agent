@@ -140,17 +140,17 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
     { type: "message", content: "Synthetic pricing answer." },
   ]);
   const newChat = page.getByRole("button", { name: "New chat" });
-  await expect(newChat).toHaveCount(1);
+  await expect(page.locator(".portal-new-chat")).toHaveCount(0);
 
   if (testInfo.project.name === "desktop") {
+    await expect(newChat).toHaveCount(1);
     await expect(page.locator(".sidebar-new-chat")).toBeVisible();
-    await expect(page.locator(".portal-new-chat")).toHaveCount(0);
+    await page.locator(".portal-burger").click();
+    await expect(newChat).toHaveCount(0);
     await page.locator(".portal-burger").click();
     await expect(newChat).toHaveCount(1);
-    await expect(page.locator(".portal-new-chat")).toBeVisible();
-    await page.locator(".portal-burger").click();
   } else {
-    await expect(page.locator(".portal-new-chat")).toBeVisible();
+    await expect(newChat).toHaveCount(0);
     await page.locator(".portal-burger").click();
     await expect(newChat).toHaveCount(1);
     await expect(page.locator(".sidebar-new-chat")).toBeVisible();
@@ -276,6 +276,181 @@ test("conversation deletion stays stable until the server confirms it", async ({
   await expect(row).toHaveCount(0);
   await expect(page.getByText("0 saved", { exact: true })).toBeVisible();
   expect(deleteAttempts).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test("clear chat appears after an answer and starts fresh only after the server confirms", async ({
+  page,
+}, testInfo) => {
+  let deletes = 0;
+  const { errors } = await arrange(
+    page,
+    [{ type: "message", content: "Synthetic answer to clear." }],
+    { messages: [] },
+    {
+      deleteSession: (route) => {
+        deletes++;
+        return deletes === 1
+          ? route.fulfill({
+              status: 409,
+              json: { code: "session_active", error: "synthetic" },
+            })
+          : route.fulfill({ status: 204 });
+      },
+    },
+  );
+  const clear = page.getByRole("button", { name: "Clear chat" });
+  await expect(clear).toHaveCount(0);
+
+  await send(page, "Synthetic question");
+  await expect(page.getByText("Synthetic answer to clear.")).toBeVisible();
+  await expect(clear).toBeVisible();
+  await expect(clear).toBeEnabled();
+
+  await clear.click();
+  await expect(page.locator(".session-notice")).toContainText(
+    "This conversation is still answering",
+  );
+  await expect(page.getByText("Synthetic answer to clear.")).toBeVisible();
+
+  await clear.click();
+  await expect(page.getByText("Synthetic answer to clear.")).toHaveCount(0);
+  await expect(page.locator(".bubble--user")).toHaveCount(0);
+  await expect(page.locator(".hero-title")).toBeVisible();
+  await expect(clear).toHaveCount(0);
+  await expect(page.locator("textarea")).toBeEnabled();
+  await page.screenshot({
+    path: testInfo.outputPath("clear-chat-fresh.png"),
+    animations: "disabled",
+  });
+  expect(deletes).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test("execution sidebar groups calls under each question with a summary", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop",
+    "The execution sidebar is hidden on compact layouts.",
+  );
+  const prices = JSON.stringify({
+    url: "https://prices.azure.com/api/retail/prices?$filter=serviceName eq 'Foundry Models'",
+  });
+  await page.addInitScript((sid) => {
+    sessionStorage.setItem("finops_last_session", sid);
+  }, sessionId);
+  const { errors } = await arrange(page, [], {
+    messages: [
+      { role: "user", content: "Compare the newest GPT-6 prices" },
+      {
+        role: "assistant",
+        content: "| Model | Input USD/1M |\n|---|--:|\n| 6-sol | 2 |",
+        toolCalls: [
+          { id: "price-1", name: "QueryAzure", args: prices, result: "HTTP 200\n{}", success: true, durationMs: 66100 },
+        ],
+      },
+      { role: "user", content: "Show the latest published benchmarks" },
+      {
+        role: "assistant",
+        content: "Synthetic benchmark answer.",
+        toolCalls: [
+          { id: "search-1", name: "web_search", args: JSON.stringify({ queries: ["GPT-6 benchmarks"] }), result: "{}", success: true, durationMs: 1300 },
+          { id: "page-1", name: "QueryAzure", args: JSON.stringify({ url: "https://leaderboard.example.test/models" }), result: "HTTP 404\nNot found", success: false, durationMs: 197 },
+          { id: "price-2", name: "QueryAzure", args: prices, result: "HTTP 200\n{}", success: true, durationMs: 95 },
+        ],
+      },
+    ],
+  });
+
+  const groups = page.locator(".st-group");
+  await expect(groups).toHaveCount(2);
+  const latest = groups.nth(0);
+  await expect(latest.locator(".st-group-q")).toHaveText("Q2");
+  await expect(latest.locator(".st-group-text")).toHaveText(
+    "Show the latest published benchmarks",
+  );
+  await expect(latest.locator(".st-group-head")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(latest.locator(".st-group-meta")).toContainText("3 calls");
+  await expect(latest.locator(".st-group-meta")).toContainText("1 failed");
+  await expect(latest.locator(".st-kind")).toHaveText([
+    "Web search 1",
+    "Web page 1",
+    "Pricing 1",
+  ]);
+  await expect(latest.locator(".st-row")).toHaveCount(3);
+  await expect(latest.locator(".st-row").first()).toContainText(
+    "Web search · GPT-6 benchmarks",
+  );
+  await expect(latest.locator(".st-row").first()).toContainText("1.3s");
+
+  const earlier = groups.nth(1);
+  await expect(earlier.locator(".st-group-q")).toHaveText("Q1");
+  await expect(earlier.locator(".st-group-head")).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(earlier.locator(".st-row")).toBeHidden();
+  await earlier.locator(".st-group-head").click();
+  await expect(earlier.locator(".st-group-head")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(earlier.locator(".st-row")).toContainText("66.1s");
+  await expect(page.locator('[data-msg-index="0"]')).toBeInViewport();
+  await page.screenshot({
+    path: testInfo.outputPath("execution-groups.png"),
+    animations: "disabled",
+  });
+  expect(errors).toEqual([]);
+});
+
+test("answer tables keep labels left, figures right and every column reachable", async ({
+  page,
+}, testInfo) => {
+  const table = [
+    "Benchmarks retrieved for the newest priced Foundry models.",
+    "",
+    "| Model | Quality (index) | Output speed tok/s | Latency s | Global Standard USD/1M input / cached / output |",
+    "|---|--:|--:|--:|---|",
+    "| GPT-6 Astra | 53 | 54 | 341.88 | 10 / 1 / 50 |",
+    "| `6-luna` | 38 | 131 | 128.78 | 0.1 / 0.01 / 0.5 |",
+    "| Grok 4.6 | unknown | unknown | unknown | 2 / 0.5 / 10 |",
+    "| DeepSeek V4 Pro | 36 | 107 | 1.75 | 1.74 / 0.14 / 3.48 |",
+  ].join("\n");
+  const { errors } = await arrange(page, [{ type: "message", content: table }]);
+  await send(page, "Show the latest benchmarks");
+  const wrap = page.locator(".message-text .wt-wrap");
+  await expect(wrap).toBeVisible();
+
+  const firstCell = wrap.locator("tbody tr").first().locator("td").first();
+  await expect(firstCell).toHaveText("GPT-6 Astra");
+  await expect(firstCell).not.toHaveCSS("text-align", "right");
+  await expect(firstCell).toHaveCSS("position", "sticky");
+  await expect(
+    wrap.locator("tbody tr").first().locator("td").nth(1),
+  ).toHaveCSS("text-align", "right");
+  const identifier = wrap.locator("code.wt-id", { hasText: "6-luna" });
+  const box = await identifier.boundingBox();
+  expect(box.height).toBeLessThan(30);
+
+  const lastHeader = wrap.locator("th").last();
+  await lastHeader.scrollIntoViewIfNeeded();
+  await expect(lastHeader).toBeInViewport();
+  if (testInfo.project.name === "desktop") {
+    const fits = await wrap.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+    expect(fits).toBeTruthy();
+  }
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+  ).toBeTruthy();
+  await page.screenshot({
+    path: testInfo.outputPath("answer-table.png"),
+    animations: "disabled",
+  });
   expect(errors).toEqual([]);
 });
 
@@ -1784,7 +1959,9 @@ test("new conversation does not throw or restore unrelated proposals", async ({
   await expect(
     page.getByText("Synthetic answer.", { exact: true }),
   ).toBeVisible();
-  await page.getByTitle("New chat", { exact: true }).first().click();
+  const newChat = page.locator(".sidebar-new-chat");
+  if (!(await newChat.isVisible())) await page.locator(".portal-burger").click();
+  await newChat.click();
   await expect(page.locator("textarea")).toBeEnabled();
   await expect(page.locator(".change-review")).toHaveCount(0);
   expect(removedFiles).toEqual([]);

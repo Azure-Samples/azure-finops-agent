@@ -183,12 +183,12 @@ public static class SessionEndpoints
     internal static IReadOnlyList<object> BuildTranscript(IReadOnlyList<AgentEvent> events, long userId)
     {
         // First pass: index tool results by call id so each started tool
-        // gets its result / success / error.
-        var resultsById = new Dictionary<string, (string? Result, bool Success, string? Error)>();
+        // gets its result / success / error / duration.
+        var resultsById = new Dictionary<string, ToolCompleteEvent>();
         foreach (var evt in events)
         {
             if (evt is ToolCompleteEvent done && !string.IsNullOrEmpty(done.CallId))
-                resultsById[done.CallId] = (done.Result, done.Success, done.Error);
+                resultsById[done.CallId] = done;
         }
 
         var messages = new List<object>();
@@ -256,14 +256,15 @@ public static class SessionEndpoints
                     args = r.Arguments ?? "",
                     id = r.CallId,
                     intent = (string?)null,
-                    result = ex.Result,
-                    success = resultsById.ContainsKey(r.CallId) ? ex.Success : (bool?)null,
-                    error = ex.Error,
+                    result = ex?.Result,
+                    success = ex?.Success,
+                    error = ex?.Error,
+                    durationMs = ex is null ? (long?)null : ex.DurationMs ?? Math.Max(0, (long)(ex.Timestamp - r.Timestamp).TotalMilliseconds),
                 });
 
                 // Mirror ChatEndpoints.HandleToolDoneAsync side-channel parsing
                 // so charts/scripts/decks survive a session resume.
-                if (ex.Success && ex.Result is { } rt)
+                if (ex is { Success: true, Result: { } rt })
                 {
                     if (r.ToolName == "RenderChart" || r.ToolName == "RenderAdvancedChart")
                     {
