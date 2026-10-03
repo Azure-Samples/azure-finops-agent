@@ -43,6 +43,17 @@ public sealed class JsonQueryTests
     }
 
     [Fact]
+    public void ComparingANegatedStringTestWithFalseKeepsTheMatchesAsTheDescriptionWarns()
+    {
+        const string meters = """{"Items":[{"meterName":"gpt-4o-0806-Inp-glbl Tokens"},{"meterName":"gpt-4o-mini-0718-Inp-glbl Tokens"}]}""";
+        Assert.Equal("""["gpt-4o-mini-0718-Inp-glbl Tokens"]""",
+            Run(meters, "Items.Where(x => !x.meterName.Contains(\"mini\") == false).Select(x => x.meterName)"));
+        Assert.Equal("""["gpt-4o-0806-Inp-glbl Tokens"]""",
+            Run(meters, "Items.Where(x => !x.meterName.Contains(\"mini\")).Select(x => x.meterName)"));
+        Assert.Contains("!x.meterName.Contains(\"mini\") == false keeps the mini rows", AzureQueryTools.ToolDescription);
+    }
+
+    [Fact]
     public void ColumnRowTablesAndTextBecomeQueryableRows()
     {
         const string cost = """{"properties":{"columns":[{"name":"PreTaxCost","type":"Number"},{"name":"ResourceGroup","type":"String"}],"rows":[[1.5,"a"],[2.5,"b"]]}}""";
