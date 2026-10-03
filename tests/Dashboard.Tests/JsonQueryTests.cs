@@ -43,14 +43,28 @@ public sealed class JsonQueryTests
     }
 
     [Fact]
-    public void ComparingANegatedStringTestWithFalseKeepsTheMatchesAsTheDescriptionWarns()
+    public void ANegatedTestComparedWithFalseIsRejectedWithBothIntendedForms()
     {
         const string meters = """{"Items":[{"meterName":"gpt-4o-0806-Inp-glbl Tokens"},{"meterName":"gpt-4o-mini-0718-Inp-glbl Tokens"}]}""";
-        Assert.Equal("""["gpt-4o-mini-0718-Inp-glbl Tokens"]""",
-            Run(meters, "Items.Where(x => !x.meterName.Contains(\"mini\") == false).Select(x => x.meterName)"));
+        var trap = "Items.Where(x => x.meterName.Contains(\"gpt-4o\") && !x.meterName.ToLower().Contains(\"mini\") == false).Select(x => x.meterName)";
+        var error = Assert.Throws<ArgumentException>(() => Run(meters, trap));
+        Assert.Contains("cancels the ! and keeps only the rows where x.meterName.ToLower().Contains(\"mini\") is true", error.Message);
+        Assert.Contains("!x.meterName.ToLower().Contains(\"mini\") to drop them", error.Message);
+        Assert.NotNull(JsonQuery.CancelledNegation("value.Where(x => !(x.name.StartsWith(\"a\")) == false)"));
+        Assert.NotNull(JsonQuery.CancelledNegation("value.Where(x => !x.tags.ContainsKey(\"env\") != true)"));
+
+        foreach (var allowed in new[]
+        {
+            "Items.Where(x => !x.meterName.Contains(\"mini\")).Select(x => x.meterName)",
+            "Items.Where(x => !x.meterName.Contains(\"mini\") == true)",
+            "value.Where(x => !x.enabled == true)",
+            "value.Where(x => x.enabled == false && x.name != \"a\")",
+            "value.Where(x => x.name.Contains(\"a\") != false)",
+        })
+            Assert.Null(JsonQuery.CancelledNegation(allowed));
         Assert.Equal("""["gpt-4o-0806-Inp-glbl Tokens"]""",
             Run(meters, "Items.Where(x => !x.meterName.Contains(\"mini\")).Select(x => x.meterName)"));
-        Assert.Contains("!x.meterName.Contains(\"mini\") == false keeps the mini rows", AzureQueryTools.ToolDescription);
+        Assert.Contains("a negated test compared with false cancels the ! and keeps exactly the rows it meant to drop, so the host rejects it before sending", AzureQueryTools.ToolDescription);
     }
 
     [Fact]

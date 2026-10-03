@@ -78,6 +78,7 @@ internal static partial class JsonQuery
     internal static (string Json, string? Note) Evaluate(JsonNode root, string expression, int maxCharacters, CancellationToken cancellationToken)
     {
         if (expression.Length > MaxExpressionLength) throw new ArgumentException($"query is longer than {MaxExpressionLength} characters.");
+        if (CancelledNegation(expression) is { } cancelled) throw new ArgumentException(cancelled);
         var text = Projections(expression);
         var numeric = NumericMembers().Matches(text).Select(match => match.Groups["m"].Value).ToHashSet(StringComparer.Ordinal);
         var shape = Infer(root, numeric);
@@ -268,6 +269,25 @@ internal static partial class JsonQuery
     private static string? Segment(string path) => path.EndsWith(']') ? null : path[(path.LastIndexOf('.') + 1)..];
 
     private static readonly HashSet<string> CollectionMethods = [.. typeof(Enumerable).GetMethods().Select(method => method.Name)];
+
+    /// <summary>
+    /// A negated bool test compared with false (or != true), such as !x.name.Contains("mini") == false, cancels its own
+    /// negation and keeps exactly the rows the ! meant to drop. It is never what a query means, so it is rejected
+    /// before any request with the two intended forms.
+    /// </summary>
+    internal static string? CancelledNegation(string expression)
+    {
+        var match = CancelledNegationPattern().Match(expression);
+        if (!match.Success) return null;
+        var test = match.Groups["test"].Value.Trim();
+        if (test.StartsWith('(') && test.EndsWith(')')) test = test[1..^1].Trim();
+        return $"query compares a negated test with {match.Groups["literal"].Value} ({match.Value.Trim()}), which cancels the ! and keeps only the rows where {test} is true. " +
+            $"Write {test} to keep those rows or !{test} to drop them, or remove the clause if it should not filter.";
+    }
+
+    // ! followed by a call chain ending in a method call (or a parenthesized test), then == false or != true.
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<![\w.)\]!=<>])!\s*(?<test>\((?:[^()]|\([^()]*\))*\)|[A-Za-z_]\w*(?:\s*\??\.\s*\w+)*\s*\((?:[^()]|\([^()]*\))*\)(?:\s*\??\.\s*\w+\s*\((?:[^()]|\([^()]*\))*\))*)\s*(?:==\s*(?<literal>false)|!=\s*(?<literal>true))\b", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex CancelledNegationPattern();
 
     [System.Text.RegularExpressions.GeneratedRegex(@"No property or field '(?<member>\w+)' exists in type '(?<type>[^']+)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex MissingMember();

@@ -105,6 +105,18 @@ public sealed class QueryAzureRoutingTests
         Assert.StartsWith("Error: the calculation failed: ", await InvokeAsync(new AIFunctionArguments { ["query"] = "Environment.MachineName" }));
     }
 
+    [Fact]
+    public async Task ANegatedTestComparedWithFalseIsRejectedBeforeAnyRequest()
+    {
+        var result = await InvokeAsync(new AIFunctionArguments
+        {
+            ["url"] = "https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=productName eq 'Azure OpenAI'\nhttps://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=productName eq 'Azure OpenAI GPT6'",
+            ["query"] = "Items.Where(x => x.meterName.Contains(\"glbl\") && !x.meterName.ToLower().Contains(\"mini\") == false)",
+        });
+        Assert.StartsWith("HTTP 400 BadRequest\nquery compares a negated test with false", result);
+        Assert.EndsWith("No request was sent.", result);
+    }
+
     [Theory]
     [InlineData("GET", "/subscriptions/s/resourceGroups/rg?api-version=2021-04-01", "PUT or PATCH")]
     [InlineData("POST", "/subscriptions/s/resourceGroups/rg?api-version=2021-04-01", "PUT or PATCH")]
