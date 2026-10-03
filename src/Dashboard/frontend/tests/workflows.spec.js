@@ -158,10 +158,34 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
 
   const aiSection = page.getByRole("button", { name: /AI & LLM pricing/ });
   await expect(aiSection).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.locator("#pricing-section-ai-pricing-panel .sidebar-question"),
+  ).toHaveText([
+    "Latest Foundry models & prices",
+    "Latest model benchmarks",
+    "Azure OpenAI token pricing",
+    "PTU vs pay-as-you-go",
+    "Chatbot monthly cost estimate",
+  ]);
   const latestModels = page.getByRole("button", {
     name: "Latest Foundry models & prices",
   });
   await expect(latestModels).toBeVisible();
+
+  const governanceSection = page.getByRole("button", {
+    name: /AI agents: governance & cost/,
+  });
+  await expect(governanceSection).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.locator("#pricing-section-ai-agent-governance-panel .sidebar-question"),
+  ).toHaveCount(6);
+  await expect(
+    page.getByRole("button", { name: "Cap Foundry agent costs" }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("navigation-prompt-library.png"),
+    animations: "disabled",
+  });
 
   const infrastructureSection = page.getByRole("button", {
     name: /Infrastructure pricing/,

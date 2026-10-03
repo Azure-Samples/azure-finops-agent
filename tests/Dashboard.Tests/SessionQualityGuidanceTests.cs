@@ -86,6 +86,7 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("never research a caveat the question did not ask about", withSearch);
         Assert.Contains("an answer that cites no web source should have made no search", withSearch);
         Assert.Contains("source URL", withSearch);
+        Assert.Contains("because citation markers are removed before the user sees the answer", withSearch);
         Assert.Equal(Prompt, AgentSessionFactory.Instructions(webSearch: false));
     }
 
