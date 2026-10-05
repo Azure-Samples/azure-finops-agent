@@ -131,6 +131,15 @@ public sealed class JsonQueryTests
             Run(foundry, "Items.OrderByDescending(x => x.effectiveStartDate).Select(x => new { x.meterName, per1M = Math.Round(x.retailPrice * (x.unitOfMeasure == \"1K\" ? 1000 : 1), 4) })"));
     }
 
+    // Deployment-type spellings differ in case between releases of one family; the prompt teaches a ToLower match.
+    [Fact]
+    public void MeterSpellingsMatchCaseInsensitively()
+    {
+        const string grok = """{"Items":[{"meterName":"Grok 4.2 Inp glbl Tokens","effectiveStartDate":"2026-05-01T00:00:00Z"},{"meterName":"4.6 Inp Glbl Tokens","effectiveStartDate":"2026-09-01T00:00:00Z"},{"meterName":"4.6 Inp DZ Tokens","effectiveStartDate":"2026-09-01T00:00:00Z"}]}""";
+        Assert.Equal("""["4.6 Inp Glbl Tokens","Grok 4.2 Inp glbl Tokens"]""",
+            Run(grok, "Items.Where(x => x.meterName.ToLower().Contains(\"glbl\")).OrderByDescending(x => x.effectiveStartDate).Select(x => x.meterName)"));
+    }
+
     [Fact]
     public void LargeResultsAreTruncatedWithANote()
     {

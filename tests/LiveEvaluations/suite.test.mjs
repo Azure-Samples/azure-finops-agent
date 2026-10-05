@@ -402,7 +402,7 @@ test("live gate selects exactly 20 stable representative questions without chang
         "522cb8a56daeae81", "f756478143fce63c", "81374a24e31aa410",
         "eac3ecb5ceb83c4b", "84206ed740e28de4", "979163d9aeedc2b8",
         "e4e6c2296f2dfc97", "095d1c30190c1015", "f9b2c97a215d8923",
-        "160eca54c580c4f8", "126bedbbf645cbd1", "f75b5b6527c41d5c",
+        "160eca54c580c4f8", "f84890a72a9009f3", "f75b5b6527c41d5c",
         "062a296be5be951f", "3c99447cf28f786c",
     ]);
     assert.notDeepEqual(cases, catalog.slice(0, 20));

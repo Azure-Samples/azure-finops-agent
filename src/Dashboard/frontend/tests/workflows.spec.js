@@ -14,7 +14,7 @@ const change = {
 };
 const aiPricingPrompt = pricingSections
   .find((section) => section.key === "ai-pricing")
-  .prompts.find((prompt) => prompt.label === "Latest Foundry models & prices")
+  .prompts.find((prompt) => prompt.label === "Charge AI costs to teams")
   .prompt;
 
 async function arrange(
@@ -161,27 +161,28 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
   await expect(
     page.locator("#pricing-section-ai-pricing-panel .sidebar-question"),
   ).toHaveText([
-    "Latest Foundry models & prices",
-    "Latest model benchmarks",
-    "Azure OpenAI token pricing",
-    "PTU vs pay-as-you-go",
-    "Chatbot monthly cost estimate",
+    "Charge AI costs to teams",
+    "AI budgets & spending caps",
+    "Budget & justify AI spend",
+    "AI model prices per 1M tokens",
   ]);
-  const latestModels = page.getByRole("button", {
-    name: "Latest Foundry models & prices",
+  const chargeback = page.getByRole("button", {
+    name: "Charge AI costs to teams",
   });
-  await expect(latestModels).toBeVisible();
+  await expect(chargeback).toBeVisible();
 
   const governanceSection = page.getByRole("button", {
-    name: /AI agents: governance & cost/,
+    name: /AI governance & security/,
   });
   await expect(governanceSection).toHaveAttribute("aria-expanded", "true");
   await expect(
-    page.locator("#pricing-section-ai-agent-governance-panel .sidebar-question"),
-  ).toHaveCount(6);
-  await expect(
-    page.getByRole("button", { name: "Cap Foundry agent costs" }),
-  ).toBeVisible();
+    page.locator("#pricing-section-ai-governance-panel .sidebar-question"),
+  ).toHaveText([
+    "Which tool governs AI agents?",
+    "Inventory every agent & owner",
+    "Agent accountability & audit",
+    "Keep AI agents secure",
+  ]);
   await page.screenshot({
     path: testInfo.outputPath("navigation-prompt-library.png"),
     animations: "disabled",
@@ -200,10 +201,13 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
     "true",
   );
   await expect(
-    page.getByRole("button", { name: "Compare VM pricing by region" }),
+    page.locator("#pricing-section-infrastructure-pricing-panel .sidebar-question"),
+  ).toHaveCount(4);
+  await expect(
+    page.getByRole("button", { name: "VM prices by region" }),
   ).toBeVisible();
 
-  await latestModels.click();
+  await chargeback.click();
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0].prompt).toBe(aiPricingPrompt);
   expect(errors).toEqual([]);

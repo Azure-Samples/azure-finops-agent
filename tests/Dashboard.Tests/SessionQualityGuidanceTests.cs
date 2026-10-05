@@ -72,7 +72,9 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("web_search is never a calculator or unit converter (no \"calculator:\" queries)", withSearch);
         Assert.Contains("A question about the current or last billing period uses timeframe BillingMonthToDate or TheLastBillingMonth", Prompt);
         Assert.Contains("unitOfMeasure is '1K' on older token meters and '1M' on newer ones, so return per-1M rates from that same query as retailPrice * (unitOfMeasure == \"1K\" ? 1000 : 1), never with one fixed factor", Prompt);
-        Assert.Contains("'Azure OpenAI GPT5', 'Azure OpenAI GPT6'", Prompt);
+        Assert.Contains("'Azure OpenAI GPT' followed by the generation number for each newer GPT generation", Prompt);
+        Assert.Contains("x.meterName.ToLower().Contains(\"glbl\") in query and contains(tolower(meterName),'glbl') in $filter", Prompt);
+        Assert.DoesNotContain("contains(meterName,", Prompt);
         Assert.Contains("Std Gl (Global Standard), Std DZ (Data Zone Standard), PP (Priority Processing)", Prompt);
         Assert.Contains("whose retailPrice is per PTU for the whole reservationTerm even though unitOfMeasure reads '1/Hour'", Prompt);
         Assert.Contains("published model benchmarks and leaderboards (quality, speed, latency)", withSearch);
@@ -137,6 +139,31 @@ public sealed class SessionQualityGuidanceTests
         Assert.Equal("ReportMaturityScore", score.Name);
         Assert.Contains("put any SuggestFollowUp call in this same response, then answer with no further tool call", score.Description);
         Assert.DoesNotContain("by itself", score.Description);
+    }
+
+    [Fact]
+    public void GuidanceNamesModelFamiliesNeverAVersion()
+    {
+        // A hardcoded version ages and steers the agent away from the newest models in the price list.
+        var azure = new AzureQueryTools(new UserTokens { UserId = 101 }).Create().First();
+        foreach (var text in new[] { AgentSessionFactory.Instructions(webSearch: true), azure.Description })
+            Assert.DoesNotMatch(
+                @"(?i)\bgpt[- ]?\d|\b\d+(\.\d+)?-(sol|luna|astra|terra)\b|\b4o\b|\bgrok[- ]\d|\bdeepseek[- ]v?\d|\bllama[- ]\d|\bmistral[- ]\w+[- ]\d",
+                text);
+    }
+
+    [Fact]
+    public void AnswersStayShortPlainAndReadable()
+    {
+        Assert.Contains("Write for someone new to Azure", Prompt);
+        Assert.Contains("about 50-100 words outside the visual", Prompt);
+        Assert.Contains("never two sentences", Prompt);
+        Assert.Contains("never reword a search or read more pages for detail the short answer will not show", Prompt);
+        Assert.Contains("at most six rows and four columns unless the question asks for more items or metrics", Prompt);
+        Assert.Contains("never pairs such as 2 / 4 or short / long", Prompt);
+        Assert.Contains("never 2,762.5M or fractional tokens", Prompt);
+        Assert.Contains("offer it as a follow-up link instead", Prompt);
+        Assert.DoesNotContain("a / b / c", Prompt);
     }
 
     [Fact]

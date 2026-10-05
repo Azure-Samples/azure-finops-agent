@@ -1,111 +1,88 @@
 // FinOps maturity sidebar categories — extracted from ChatView.vue for maintainability.
 // Pure static data; no runtime dependencies.
 
-// AI and LLM pricing prompts — public, answered from the Azure Retail Prices API
-// (Foundry Models) and, for benchmarks, recent published results. Kept to the
-// questions users ask most (in 100 audited conversations: per-1M token prices,
-// the newest models' list prices, PTU monthly cost, token-based project estimates
-// and model speed), with benchmarks second. The token pricing prompt is a curated
-// live-evaluation case: its text is its case ID, keep it exact.
+// The signed-out prompt library: at most four questions per section, most asked
+// first. Prompts name model brands and product families only, never a model
+// version, so the agent always looks up the newest models instead of a version
+// that ages. A prompt that is a curated live-evaluation case is identified by a
+// hash of its text: changing that text changes the gate (CURATED_CASE_IDS).
+
+// AI and LLM pricing prompts — public. Ranked by what customers ask most about AI
+// spend: chargeback, budgets and caps, budgeting across seats, tokens and credits,
+// then the newest models' token prices. The token price prompt is a curated
+// live-evaluation case answered from the Azure Retail Prices API.
 const aiPricingPrompts = [
   {
-    label: "Latest Foundry models & prices",
+    label: "Charge AI costs to teams",
     prompt:
-      "List the newest Foundry models with their Global Standard list price per 1M input, cached input and output tokens, newest first: the latest GPT models plus the newest Grok, DeepSeek, Mistral, Llama and other partner models. One table.",
+      "Who is spending what on AI? How do we charge Azure OpenAI and Foundry costs back to teams, apps and cost centres, when API Management gives us token counts but not cost?",
   },
   {
-    label: "Latest model benchmarks",
+    label: "AI budgets & spending caps",
     prompt:
-      "What are the latest published benchmarks for the newest Foundry models (the GPT-6 family and the newest Grok, DeepSeek, Llama and Mistral models)? Show quality scores, output speed and latency next to each model's Global Standard price per 1M tokens, with the source and date of every benchmark.",
+      "Can we set AI budgets and spending caps per user, per app and for the whole company on Azure, and what happens when a cap is hit?",
   },
   {
-    label: "Azure OpenAI token pricing",
+    label: "Budget & justify AI spend",
     prompt:
-      "Compare Azure OpenAI pricing for GPT-4o vs GPT-4o-mini vs GPT-4.1 per 1M input and output tokens. Use one batched lookup and quote Standard Global, not Batch, Data Zone, Regional, or cached-input minima.",
+      "How do we budget for and justify AI spend when it is priced in seats, tokens and credits (Microsoft 365 Copilot, Copilot Studio, Azure OpenAI and Foundry)?",
   },
   {
-    label: "PTU vs pay-as-you-go",
+    label: "AI model prices per 1M tokens",
     prompt:
-      "Compare the monthly cost of 50 Global provisioned throughput units (PTU) hourly, with a 1-month reservation and with a 1-year reservation, and show how many GPT-6 Sol Global Standard tokens per month (3:1 input to output) cost the same as each option.",
-  },
-  {
-    label: "Chatbot monthly cost estimate",
-    prompt:
-      "Estimate the monthly cost of a support chatbot with 50,000 conversations per month, each using 3,000 input tokens (half of them cached) and 600 output tokens, on GPT-6 Luna vs GPT-6 Sol at Global Standard list prices. Show the cost per conversation and per month.",
+      "What do the newest AI models on Azure cost? Show the newest GPT, Grok, DeepSeek, Llama and Mistral models with their Global Standard price per 1M input and output tokens.",
   },
 ];
 
-// AI agent governance and cost-control prompts — public, answered briefly from
-// current Microsoft Learn pages and, for recent changes, a web search. They cover
-// the concerns customers raise most about agents today: runaway cost, governance
-// and identity, cost attribution, security guardrails, data residency and what
-// changed recently.
-const aiAgentGovernancePrompts = [
+// AI governance and security prompts — public, answered briefly from current
+// Microsoft Learn pages and, for recent products, a web search. Ranked by what
+// customers ask most: which tool is the org-wide control, one inventory of every
+// agent with an owner, accountability an auditor accepts, then security.
+const aiGovernancePrompts = [
   {
-    label: "Cap Foundry agent costs",
+    label: "Which tool governs AI agents?",
     prompt:
-      "How do I control and cap the cost of Foundry agents? Give the five most effective levers available today (for example budgets and alerts, token quotas and rate limits, model choice, prompt caching and provisioned throughput) in one short table (lever, what to do, source link), one short sentence per cell.",
+      "Which Microsoft tool should be our org-wide control for AI agents: Foundry Control Plane, Agent 365 or API Center? Explain simply what each one does and when to use it.",
   },
   {
-    label: "Govern AI agents",
+    label: "Inventory every agent & owner",
     prompt:
-      "What is Microsoft's latest guidance for governing AI agents built in Microsoft Foundry: agent identity, access, approved tools and data, inventory and audit? Give the five most important controls in one short table (control, what to do, source link), one short sentence per cell.",
+      "Can we get one inventory of every AI agent across clouds, each with a named owner, and catch shadow agents nobody approved? Explain how with Microsoft's tools.",
   },
   {
-    label: "Charge back AI & agent spend",
+    label: "Agent accountability & audit",
     prompt:
-      "How do I see which teams, apps and agents drive my Azure OpenAI and Foundry spend, and charge it back? Give today's recommended approach (for example separate projects or deployments, tags, cost allocation and token usage metrics) in one short table of at most five rows (step, how, source link), one short sentence per cell.",
+      "Who is accountable for what an AI agent does, and how can we prove it to an auditor? Explain the owner, identity and audit log setup Microsoft recommends.",
   },
   {
-    label: "Agent security guardrails",
+    label: "Keep AI agents secure",
     prompt:
-      "Which guardrails should Foundry agents have against prompt injection, data leakage and unsafe tool use? List the five most important controls Microsoft recommends today (for example content filters, Prompt Shields, tool approval and network isolation) in one short table (control, what to do, source link), one short sentence per cell.",
-  },
-  {
-    label: "Keep AI data in the EU",
-    prompt:
-      "Where do Foundry agents process and store my data, and how do I keep it in the EU or another geography? Compare Global, Data Zone and Regional deployments and the agent's own storage in one short table (option, where data is processed or stored, trade-off including price, source link), one short sentence per cell.",
-  },
-  {
-    label: "What's new for AI agents",
-    prompt:
-      "What changed in the last 3 months for governing AI agents and controlling their cost on Azure (Foundry, Entra Agent ID, API Management AI gateway, Defender for AI, pricing)? Use at most two web searches and open at most two pages, then list up to five dated announcements in one short table: date, change, why it matters, source link.",
+      "How do we protect our AI agents from prompt injection, data leaks and unsafe actions? Name the most important protections Microsoft recommends.",
   },
 ];
 
-// Infrastructure retail-pricing prompts — work without an Azure login. The VM
-// region, storage, database and 3-tier prompts are curated live-evaluation cases:
-// keep their text exact.
+// Infrastructure retail-pricing prompts — work without an Azure login. All four
+// are curated live-evaluation cases: keep their text exact.
 const infrastructurePricingPrompts = [
   {
-    label: "Compare VM pricing by region",
+    label: "VM prices by region",
     prompt:
       "Compare the monthly cost of a D4s_v5 VM across the 10 cheapest Azure regions. Show a bar chart.",
-  },
-  {
-    label: "Reserved vs pay-as-you-go",
-    prompt:
-      "Compare pay-as-you-go vs 1-year vs 3-year reserved pricing for a D4s_v5 VM in East US.",
-  },
-  {
-    label: "Spot vs on-demand savings",
-    prompt:
-      "Compare spot vs on-demand pricing for D4s_v5, D8s_v5, and NC24ads_A100_v4 in East US. Show the discount % for each.",
-  },
-  {
-    label: "Storage tier comparison",
-    prompt:
-      "Compare Azure Blob Storage costs for 10 TB across Hot, Cool, Cold, and Archive tiers in East US.",
-  },
-  {
-    label: "Database pricing comparison",
-    prompt:
-      "Compare monthly cost of Azure SQL 8-vCore vs Cosmos DB 10K RU/s vs PostgreSQL Flexible 8-vCore with 500 GB storage.",
   },
   {
     label: "3-tier app cost estimate",
     prompt:
       "Estimate monthly cost for a 3-tier app in East US: 2x D4s_v5 VMs, Azure SQL 4-vCore 500 GB, 1 TB Premium SSD, Standard LB.",
+  },
+  {
+    label: "Storage tier prices",
+    prompt:
+      "Compare Azure Blob Storage costs for 10 TB across Hot, Cool, Cold, and Archive tiers in East US.",
+  },
+  {
+    label: "Database prices compared",
+    prompt:
+      "Compare monthly cost of Azure SQL 8-vCore vs Cosmos DB 10K RU/s vs PostgreSQL Flexible 8-vCore with 500 GB storage.",
   },
 ];
 
@@ -142,35 +119,35 @@ const connectedPricingPrompts = [
 // Every public prompt, for the live-evaluation catalog and callers of .publicPrompts.
 const publicPricingPrompts = [
   ...aiPricingPrompts,
-  ...aiAgentGovernancePrompts,
+  ...aiGovernancePrompts,
   ...infrastructurePricingPrompts,
 ];
 
 // The navigation shows the public prompt library as three sections. Signed out,
-// AI pricing and AI agent governance open by default; infrastructure pricing
-// starts collapsed and, once Azure is connected, lists the personalised prompts
-// first.
+// AI & LLM pricing and AI governance & security open by default; infrastructure
+// pricing starts collapsed and, once Azure is connected, lists the personalised
+// prompts first.
 export const pricingSections = [
   {
     key: "ai-pricing",
     label: "AI & LLM pricing",
-    subtitle: "Foundry models, tokens, PTU, benchmarks",
+    subtitle: "Chargeback, budgets, token prices",
     prompts: aiPricingPrompts,
     connectedPrompts: [],
     defaultOpen: true,
   },
   {
-    key: "ai-agent-governance",
-    label: "AI agents: governance & cost",
-    subtitle: "Latest guidance, answered briefly",
-    prompts: aiAgentGovernancePrompts,
+    key: "ai-governance",
+    label: "AI governance & security",
+    subtitle: "Control, inventory, audit, security",
+    prompts: aiGovernancePrompts,
     connectedPrompts: [],
     defaultOpen: true,
   },
   {
     key: "infrastructure-pricing",
     label: "Infrastructure pricing",
-    subtitle: "VMs, storage, databases, networking",
+    subtitle: "VMs, apps, storage, databases",
     prompts: infrastructurePricingPrompts,
     connectedPrompts: connectedPricingPrompts,
     defaultOpen: false,

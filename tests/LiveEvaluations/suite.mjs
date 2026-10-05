@@ -54,7 +54,7 @@ const CURATED_CASE_IDS = Object.freeze([
     "095d1c30190c1015", // Storage tier comparison
     "f9b2c97a215d8923", // Cross-service pricing comparison
     "160eca54c580c4f8", // Non-token workload estimate
-    "126bedbbf645cbd1", // Batched token pricing per million tokens
+    "f84890a72a9009f3", // Newest models' token prices per million tokens
     "f75b5b6527c41d5c", // Waste evidence and a reviewable script
     "062a296be5be951f", // H200 Spot incident
     "3c99447cf28f786c", // English deterministic query calculation incident
@@ -76,7 +76,7 @@ const PARALLEL_LANES = Object.freeze({
         "095d1c30190c1015",
         "f9b2c97a215d8923",
         "160eca54c580c4f8",
-        "126bedbbf645cbd1",
+        "f84890a72a9009f3",
         "3c99447cf28f786c",
     ]),
 });
