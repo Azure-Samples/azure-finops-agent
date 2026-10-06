@@ -1,88 +1,91 @@
 // FinOps maturity sidebar categories — extracted from ChatView.vue for maintainability.
 // Pure static data; no runtime dependencies.
 
-// The signed-out prompt library: at most four questions per section, most asked
-// first. Prompts name model brands and product families only, never a model
-// version, so the agent always looks up the newest models instead of a version
-// that ages. A prompt that is a curated live-evaluation case is identified by a
-// hash of its text: changing that text changes the gate (CURATED_CASE_IDS).
+// The signed-out prompt library: at most four questions per section, most
+// important first. Each button shows a short question a customer would ask
+// support (label); the prompt it sends is the precise, slightly technical request
+// the agent answers. Prompts never name a model version, so the agent always looks
+// up the newest models. A prompt that is a curated live-evaluation case is
+// identified by a hash of its text: changing that text changes the gate
+// (CURATED_CASE_IDS).
 
-// AI and LLM pricing prompts — public. Ranked by what customers ask most about AI
-// spend: chargeback, budgets and caps, budgeting across seats, tokens and credits,
-// then the newest models' token prices. The token price prompt is a curated
-// live-evaluation case answered from the Azure Retail Prices API.
-const aiPricingPrompts = [
+// AI governance and security prompts — public, answered briefly from current
+// Microsoft Learn pages. Ranked by what customers raise most: knowing every agent
+// and its owner, auditing what agents do, choosing the control plane, and
+// allowing only approved models and agents.
+const aiGovernancePrompts = [
   {
-    label: "Charge AI costs to teams",
+    label: "How do I find all our AI agents?",
     prompt:
-      "Who is spending what on AI? How do we charge Azure OpenAI and Foundry costs back to teams, apps and cost centres, when API Management gives us token counts but not cost?",
+      "How do I build one inventory of every AI agent in my organization (Foundry, Copilot Studio and agents on other clouds) with a named owner for each, and find unapproved (shadow) agents? Show the steps in one table: step, Microsoft tool, what to do.",
   },
   {
-    label: "AI budgets & spending caps",
+    label: "How do we audit what agents do?",
     prompt:
-      "Can we set AI budgets and spending caps per user, per app and for the whole company on Azure, and what happens when a cap is hit?",
+      "How do I trace every action an AI agent takes back to its agent identity and an accountable owner? Cover Microsoft Entra Agent ID, Entra sign-in and audit logs, Microsoft Purview audit and Foundry tracing. Show one table: what to set up, where, what it proves to an auditor.",
   },
   {
-    label: "Budget & justify AI spend",
+    label: "Agent 365, Foundry or API Center?",
     prompt:
-      "How do we budget for and justify AI spend when it is priced in seats, tokens and credits (Microsoft 365 Copilot, Copilot Studio, Azure OpenAI and Foundry)?",
+      "Compare Agent 365, Foundry Control Plane and Azure API Center for governing AI agents across the organization. Show one table: product, what it controls, who uses it, when to choose it. Then recommend which one to use as the org-wide control plane.",
   },
   {
-    label: "AI model prices per 1M tokens",
+    label: "Can we allow only approved models?",
     prompt:
-      "What do the newest AI models on Azure cost? Show the newest GPT, Grok, DeepSeek, Llama and Mistral models with their Global Standard price per 1M input and output tokens.",
+      "How do I allow only approved AI models in Foundry (for example with Azure Policy) and require approval before a new agent goes live? Show the steps in one table: control, how to set it up, what it blocks.",
   },
 ];
 
-// AI governance and security prompts — public, answered briefly from current
-// Microsoft Learn pages and, for recent products, a web search. Ranked by what
-// customers ask most: which tool is the org-wide control, one inventory of every
-// agent with an owner, accountability an auditor accepts, then security.
-const aiGovernancePrompts = [
+// AI and LLM pricing prompts — public, answered briefly from current Microsoft
+// Learn and GitHub Docs pages. Ranked by what customers raise most: planning and
+// justifying a budget across seats, credits and tokens, seeing who spends what,
+// capping spend, and reconciling costs with the invoice. No prompt names a model
+// service or version, so answers cover every model.
+const aiPricingPrompts = [
   {
-    label: "Which tool governs AI agents?",
+    label: "How do we budget and justify AI?",
     prompt:
-      "Which Microsoft tool should be our org-wide control for AI agents: Foundry Control Plane, Agent 365 or API Center? Explain simply what each one does and when to use it.",
+      "How do I plan and justify a monthly AI budget when Microsoft 365 Copilot is billed per user, GitHub Copilot per user plus premium requests, Copilot Studio per credit and Foundry models per token? Show one table: product, how it is billed, what drives the cost, how to forecast it.",
   },
   {
-    label: "Inventory every agent & owner",
+    label: "Who is spending what on AI?",
     prompt:
-      "Can we get one inventory of every AI agent across clouds, each with a named owner, and catch shadow agents nobody approved? Explain how with Microsoft's tools.",
+      "How do I see AI spend per team, app and cost centre, and charge it back when several teams share one model deployment? Cover Azure Cost Management (tags, cost allocation rules, Foundry projects) and API Management token metrics. Show the steps in one table: step, tool, what it gives you.",
   },
   {
-    label: "Agent accountability & audit",
+    label: "Can we cap AI spending?",
     prompt:
-      "Who is accountable for what an AI agent does, and how can we prove it to an auditor? Explain the owner, identity and audit log setup Microsoft recommends.",
+      "How do I set AI budgets and spending limits per user, app and company? Cover Azure budgets and alerts, model deployment token quotas, API Management token limits and GitHub Copilot premium request budgets. Show one table: control, scope, what happens when the limit is reached.",
   },
   {
-    label: "Keep AI agents secure",
+    label: "Why don't costs match my invoice?",
     prompt:
-      "How do we protect our AI agents from prompt injection, data leaks and unsafe actions? Name the most important protections Microsoft recommends.",
+      "Why do my AI costs in Azure Cost Management differ from my Azure invoice, and how do I reconcile them? Cover actual vs amortized cost, billing period vs calendar month, credits, taxes, currency and data delay. Show one table: cause, how to check it.",
   },
 ];
 
 // Infrastructure retail-pricing prompts — work without an Azure login. All four
-// are curated live-evaluation cases: keep their text exact.
+// are curated live-evaluation cases identified by their text (CURATED_CASE_IDS).
 const infrastructurePricingPrompts = [
   {
-    label: "VM prices by region",
-    prompt:
-      "Compare the monthly cost of a D4s_v5 VM across the 10 cheapest Azure regions. Show a bar chart.",
-  },
-  {
-    label: "3-tier app cost estimate",
+    label: "What will my 3-tier app cost?",
     prompt:
       "Estimate monthly cost for a 3-tier app in East US: 2x D4s_v5 VMs, Azure SQL 4-vCore 500 GB, 1 TB Premium SSD, Standard LB.",
   },
   {
-    label: "Storage tier prices",
+    label: "Which region is cheapest for a VM?",
     prompt:
-      "Compare Azure Blob Storage costs for 10 TB across Hot, Cool, Cold, and Archive tiers in East US.",
+      "Compare the monthly cost of a D4s_v5 VM across the 10 cheapest Azure regions. Show a bar chart.",
   },
   {
-    label: "Database prices compared",
+    label: "Which database is cheapest?",
     prompt:
-      "Compare monthly cost of Azure SQL 8-vCore vs Cosmos DB 10K RU/s vs PostgreSQL Flexible 8-vCore with 500 GB storage.",
+      "Compare monthly cost of Azure SQL 8-vCore vs Cosmos DB 10K RU/s vs PostgreSQL Flexible 8-vCore with 500 GB storage in East US.",
+  },
+  {
+    label: "Which storage tier is cheapest?",
+    prompt:
+      "Compare Azure Blob Storage costs for 10 TB across Hot, Cool, Cold, and Archive tiers in East US.",
   },
 ];
 
@@ -118,36 +121,36 @@ const connectedPricingPrompts = [
 
 // Every public prompt, for the live-evaluation catalog and callers of .publicPrompts.
 const publicPricingPrompts = [
-  ...aiPricingPrompts,
   ...aiGovernancePrompts,
+  ...aiPricingPrompts,
   ...infrastructurePricingPrompts,
 ];
 
-// The navigation shows the public prompt library as three sections. Signed out,
-// AI & LLM pricing and AI governance & security open by default; infrastructure
-// pricing starts collapsed and, once Azure is connected, lists the personalised
-// prompts first.
+// The navigation shows the public prompt library as three sections, most
+// important first. Signed out, AI governance & security and AI & LLM pricing open
+// by default; infrastructure pricing starts collapsed and, once Azure is
+// connected, lists the personalised prompts first.
 export const pricingSections = [
   {
-    key: "ai-pricing",
-    label: "AI & LLM pricing",
-    subtitle: "Chargeback, budgets, token prices",
-    prompts: aiPricingPrompts,
+    key: "ai-governance",
+    label: "AI governance & security",
+    subtitle: "Inventory, audit, control, approved models",
+    prompts: aiGovernancePrompts,
     connectedPrompts: [],
     defaultOpen: true,
   },
   {
-    key: "ai-governance",
-    label: "AI governance & security",
-    subtitle: "Control, inventory, audit, security",
-    prompts: aiGovernancePrompts,
+    key: "ai-pricing",
+    label: "AI & LLM pricing",
+    subtitle: "Budgets, chargeback, caps, invoices",
+    prompts: aiPricingPrompts,
     connectedPrompts: [],
     defaultOpen: true,
   },
   {
     key: "infrastructure-pricing",
     label: "Infrastructure pricing",
-    subtitle: "VMs, apps, storage, databases",
+    subtitle: "Apps, VMs, databases, storage",
     prompts: infrastructurePricingPrompts,
     connectedPrompts: connectedPricingPrompts,
     defaultOpen: false,

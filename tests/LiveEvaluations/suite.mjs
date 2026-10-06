@@ -52,7 +52,7 @@ const CURATED_CASE_IDS = Object.freeze([
     "979163d9aeedc2b8", // Chargeback data report
     "e4e6c2296f2dfc97", // Regional VM price comparison
     "095d1c30190c1015", // Storage tier comparison
-    "f9b2c97a215d8923", // Cross-service pricing comparison
+    "ab693d258eaed365", // Cross-service database pricing comparison
     "160eca54c580c4f8", // Non-token workload estimate
     "f84890a72a9009f3", // Newest models' token prices per million tokens
     "f75b5b6527c41d5c", // Waste evidence and a reviewable script
@@ -74,7 +74,7 @@ const PARALLEL_LANES = Object.freeze({
     public: Object.freeze([
         "e4e6c2296f2dfc97",
         "095d1c30190c1015",
-        "f9b2c97a215d8923",
+        "ab693d258eaed365",
         "160eca54c580c4f8",
         "f84890a72a9009f3",
         "3c99447cf28f786c",
@@ -199,6 +199,13 @@ export function buildCatalog() {
         "English calculation result",
         "incident:language",
         ["QueryAzure"],
+    );
+    // A former sidebar prompt kept as an evaluation-only case, so the gate still covers
+    // Foundry token prices across model families.
+    add(
+        "What do the newest AI models on Azure cost? Show the newest GPT, Grok, DeepSeek, Llama and Mistral models with their Global Standard price per 1M input and output tokens.",
+        "Newest models' token prices",
+        "evaluation:pricing",
     );
     return [...cases.values()];
 }

@@ -12,10 +12,7 @@ const change = {
   body: '{"tags":{"Owner":"Synthetic team"}}',
   status: "awaitingApproval",
 };
-const aiPricingPrompt = pricingSections
-  .find((section) => section.key === "ai-pricing")
-  .prompts.find((prompt) => prompt.label === "Charge AI costs to teams")
-  .prompt;
+const firstQuestion = pricingSections[0].prompts[0];
 
 async function arrange(
   page,
@@ -156,20 +153,15 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
     await expect(page.locator(".sidebar-new-chat")).toBeVisible();
   }
 
-  const aiSection = page.getByRole("button", { name: /AI & LLM pricing/ });
-  await expect(aiSection).toHaveAttribute("aria-expanded", "true");
-  await expect(
-    page.locator("#pricing-section-ai-pricing-panel .sidebar-question"),
-  ).toHaveText([
-    "Charge AI costs to teams",
-    "AI budgets & spending caps",
-    "Budget & justify AI spend",
-    "AI model prices per 1M tokens",
+  expect(
+    await page
+      .locator('[id^="pricing-section-"][id$="-header"]')
+      .evaluateAll((headers) => headers.map((header) => header.id)),
+  ).toEqual([
+    "pricing-section-ai-governance-header",
+    "pricing-section-ai-pricing-header",
+    "pricing-section-infrastructure-pricing-header",
   ]);
-  const chargeback = page.getByRole("button", {
-    name: "Charge AI costs to teams",
-  });
-  await expect(chargeback).toBeVisible();
 
   const governanceSection = page.getByRole("button", {
     name: /AI governance & security/,
@@ -178,10 +170,25 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
   await expect(
     page.locator("#pricing-section-ai-governance-panel .sidebar-question"),
   ).toHaveText([
-    "Which tool governs AI agents?",
-    "Inventory every agent & owner",
-    "Agent accountability & audit",
-    "Keep AI agents secure",
+    "How do I find all our AI agents?",
+    "How do we audit what agents do?",
+    "Agent 365, Foundry or API Center?",
+    "Can we allow only approved models?",
+  ]);
+  const findAgents = page.getByRole("button", {
+    name: "How do I find all our AI agents?",
+  });
+  await expect(findAgents).toBeVisible();
+
+  const aiSection = page.getByRole("button", { name: /AI & LLM pricing/ });
+  await expect(aiSection).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.locator("#pricing-section-ai-pricing-panel .sidebar-question"),
+  ).toHaveText([
+    "How do we budget and justify AI?",
+    "Who is spending what on AI?",
+    "Can we cap AI spending?",
+    "Why don't costs match my invoice?",
   ]);
   await page.screenshot({
     path: testInfo.outputPath("navigation-prompt-library.png"),
@@ -202,14 +209,17 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
   );
   await expect(
     page.locator("#pricing-section-infrastructure-pricing-panel .sidebar-question"),
-  ).toHaveCount(4);
-  await expect(
-    page.getByRole("button", { name: "VM prices by region" }),
-  ).toBeVisible();
+  ).toHaveText([
+    "What will my 3-tier app cost?",
+    "Which region is cheapest for a VM?",
+    "Which database is cheapest?",
+    "Which storage tier is cheapest?",
+  ]);
 
-  await chargeback.click();
+  await findAgents.click();
   await expect.poll(() => requests.length).toBe(1);
-  expect(requests[0].prompt).toBe(aiPricingPrompt);
+  expect(firstQuestion.label).toBe("How do I find all our AI agents?");
+  expect(requests[0].prompt).toBe(firstQuestion.prompt);
   expect(errors).toEqual([]);
 });
 

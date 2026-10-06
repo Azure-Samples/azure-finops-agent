@@ -377,7 +377,7 @@ test("feature deployment consumes only the successful environment-resolved evalu
     assert.doesNotMatch(feature, /EVAL_MODEL_ENDPOINT/);
 });
 
-test("full catalog retains every frontend template and both concrete incident cases", () => {
+test("full catalog retains every frontend template, both concrete incident cases and the evaluation-only pricing case", () => {
     const questions = new Set([
         ...maturityCategories.flatMap((category) =>
             (category.prompts ?? []).map((prompt) => prompt.prompt)),
@@ -386,6 +386,7 @@ test("full catalog retains every frontend template and both concrete incident ca
         ...JOB_TEMPLATES.map((template) => template.prompt),
         "in which regions can I get h200 on spot quota?",
         "Calculate the monthly total for 2 units at USD 3 per unit with zero discount and tax, using a QueryAzure query rather than mental arithmetic. Report the total in English. Do not look up prices.",
+        "What do the newest AI models on Azure cost? Show the newest GPT, Grok, DeepSeek, Llama and Mistral models with their Global Standard price per 1M input and output tokens.",
     ].map((question) => question.trim()));
     assert.deepEqual(new Set(catalog.map((item) => item.question)), questions);
     assert.equal(catalog.length, questions.size);
@@ -401,7 +402,7 @@ test("live gate selects exactly 20 stable representative questions without chang
         "89c66e0ad009d9e5", "75282dc082630fdd", "d7c2e62701ecfd11",
         "522cb8a56daeae81", "f756478143fce63c", "81374a24e31aa410",
         "eac3ecb5ceb83c4b", "84206ed740e28de4", "979163d9aeedc2b8",
-        "e4e6c2296f2dfc97", "095d1c30190c1015", "f9b2c97a215d8923",
+        "e4e6c2296f2dfc97", "095d1c30190c1015", "ab693d258eaed365",
         "160eca54c580c4f8", "f84890a72a9009f3", "f75b5b6527c41d5c",
         "062a296be5be951f", "3c99447cf28f786c",
     ]);
@@ -1040,7 +1041,8 @@ test("only cases that never need Cost Management leave its paced lane", () => {
         "Chargeback report", "Idle resource sweep",
     ]);
     assert.ok(lanes.public.every((scenario) =>
-        scenario.origins.every((origin) => origin === "pricing:public" || origin === "incident:language")));
+        scenario.origins.every((origin) =>
+            ["pricing:public", "evaluation:pricing", "incident:language"].includes(origin))));
     assert.equal(evaluationLane({ id: "an-unclassified-future-case" }), COST_MANAGEMENT_LANE);
     assert.equal(evaluationLane(undefined), COST_MANAGEMENT_LANE);
 });
