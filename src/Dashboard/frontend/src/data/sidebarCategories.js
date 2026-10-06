@@ -45,7 +45,7 @@ const aiPricingPrompts = [
   {
     label: "How do we budget and justify AI?",
     prompt:
-      "How do I plan and justify a monthly AI budget when Microsoft 365 Copilot is billed per user, GitHub Copilot per user plus premium requests, Copilot Studio per credit and Foundry models per token? Show one table: product, how it is billed, what drives the cost, how to forecast it.",
+      "How do I plan and justify a monthly AI budget when Microsoft 365 Copilot is billed per user, GitHub Copilot per seat plus AI credits, Copilot Studio per credit and Foundry models per token? Show one table: product, how it is billed, what drives the cost, how to forecast it.",
   },
   {
     label: "Who is spending what on AI?",
@@ -55,7 +55,7 @@ const aiPricingPrompts = [
   {
     label: "Can we cap AI spending?",
     prompt:
-      "How do I set AI budgets and spending limits per user, app and company? Cover Azure budgets and alerts, model deployment token quotas, API Management token limits and GitHub Copilot premium request budgets. Show one table: control, scope, what happens when the limit is reached.",
+      "How do I set AI budgets and spending limits per user, app and company? Cover Azure budgets and alerts, model deployment token quotas, API Management token limits and GitHub Copilot AI credit budgets. Show one table: control, scope, what happens when the limit is reached.",
   },
   {
     label: "Why don't costs match my invoice?",
@@ -134,7 +134,6 @@ export const pricingSections = [
   {
     key: "ai-governance",
     label: "AI governance & security",
-    subtitle: "Inventory, audit, control, approved models",
     prompts: aiGovernancePrompts,
     connectedPrompts: [],
     defaultOpen: true,
@@ -142,7 +141,6 @@ export const pricingSections = [
   {
     key: "ai-pricing",
     label: "AI & LLM pricing",
-    subtitle: "Budgets, chargeback, caps, invoices",
     prompts: aiPricingPrompts,
     connectedPrompts: [],
     defaultOpen: true,
@@ -150,7 +148,6 @@ export const pricingSections = [
   {
     key: "infrastructure-pricing",
     label: "Infrastructure pricing",
-    subtitle: "Apps, VMs, databases, storage",
     prompts: infrastructurePricingPrompts,
     connectedPrompts: connectedPricingPrompts,
     defaultOpen: false,

@@ -162,6 +162,14 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
     "pricing-section-ai-pricing-header",
     "pricing-section-infrastructure-pricing-header",
   ]);
+  // Signed out, the menu is headings and questions only: no second lines, no
+  // empty chat history and no tenant hint.
+  await expect(page.locator(".sidebar .sidebar-category-subtitle")).toHaveCount(0);
+  await expect(page.locator("#sidebar-chat-history")).toHaveCount(0);
+  await expect(page.locator(".tenant-input")).toHaveAttribute(
+    "placeholder",
+    "Tenant ID (optional)",
+  );
 
   const governanceSection = page.getByRole("button", {
     name: /AI governance & security/,
@@ -220,6 +228,30 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
   await expect.poll(() => requests.length).toBe(1);
   expect(firstQuestion.label).toBe("How do I find all our AI agents?");
   expect(requests[0].prompt).toBe(firstQuestion.prompt);
+  expect(errors).toEqual([]);
+});
+
+test("signed in, scheduled jobs sit right below New chat with no empty-state text", async ({
+  page,
+}, testInfo) => {
+  const { errors } = await arrange(page, [], { messages: [] }, {
+    azureConnected: true,
+  });
+  if (testInfo.project.name === "mobile")
+    await page.locator(".portal-burger").click();
+
+  const newJob = page.getByRole("button", { name: "New job" });
+  await expect(newJob).toBeVisible();
+  await expect(page.locator(".jobs-header-label")).toHaveText("Scheduled jobs");
+  await expect(page.locator("#sidebar-scheduled-jobs")).toHaveCount(0);
+  await expect(page.getByText("No jobs yet", { exact: false })).toHaveCount(0);
+
+  const top = async (locator) => (await locator.boundingBox()).y;
+  const newChatTop = await top(page.locator(".sidebar-new-chat"));
+  const jobsTop = await top(newJob);
+  const firstScoreTop = await top(page.locator(".maturity-card").first());
+  expect(jobsTop).toBeGreaterThan(newChatTop);
+  expect(jobsTop).toBeLessThan(firstScoreTop);
   expect(errors).toEqual([]);
 });
 
@@ -312,7 +344,7 @@ test("conversation deletion stays stable until the server confirms it", async ({
   });
   await row.getByRole("button", { name: "Delete conversation" }).click();
   await expect(row).toHaveCount(0);
-  await expect(page.getByText("0 saved", { exact: true })).toBeVisible();
+  await expect(page.locator("#sidebar-chat-history")).toHaveCount(0);
   expect(deleteAttempts).toBe(2);
   expect(errors).toEqual([]);
 });

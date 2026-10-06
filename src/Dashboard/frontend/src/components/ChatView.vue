@@ -116,312 +116,15 @@
             <AppIcon name="squarePen" size="19" />
             <span>New chat</span>
           </button>
-          <!-- Maturity score cards (Crawl / Walk / Run) — whole card is clickable -->
-          <template v-if="azureConnected">
-            <div
-              v-for="cat in scoreCategories"
-              :key="'score-' + cat.key"
-              class="maturity-card"
-              :class="{
-                'maturity-card--scored': maturityScores[cat.key],
-                'maturity-card--disabled': streaming,
-              }"
-              role="button"
-              tabindex="0"
-              :title="cat.scorePrompt"
-              @click="!streaming && sendQuestion(cat.scorePrompt)"
-              @keydown.enter="!streaming && sendQuestion(cat.scorePrompt)"
-            >
-              <div class="maturity-card-header">
-                <div class="maturity-card-title">
-                  <span class="maturity-card-label">{{ cat.label }}</span>
-                  <span v-if="cat.subtitle" class="maturity-card-subtitle">{{
-                    cat.subtitle
-                  }}</span>
-                </div>
-                <span v-if="maturityScores[cat.key]" class="maturity-card-cta">
-                  Re-score
-                </span>
-              </div>
-              <div class="maturity-card-body">
-                <span
-                  class="maturity-card-stars"
-                  :style="{
-                    color: maturityScores[cat.key]
-                      ? starColor(maturityOverall(cat.key))
-                      : '#c8c6c4',
-                  }"
-                  :aria-label="
-                    maturityScores[cat.key]
-                      ? `${Math.max(0, Math.min(5, Math.round(maturityOverall(cat.key) || 0)))} out of 5`
-                      : 'Not scored'
-                  "
-                >
-                  <AppIcon
-                    v-for="(star, starIndex) in maturityStarIcons(
-                      maturityScores[cat.key]
-                        ? maturityOverall(cat.key)
-                        : undefined,
-                    )"
-                    :key="`${cat.key}-${starIndex}`"
-                    :name="star"
-                    size="18"
-                  />
-                </span>
-                <AppIcon
-                  v-if="maturityScores[cat.key]"
-                  name="moreDown"
-                  size="16"
-                  class="collapse-chevron maturity-card-chevron"
-                  :class="{
-                    'collapse-chevron--collapsed':
-                      collapsedSections['cm_' + cat.key],
-                  }"
-                  role="button"
-                  tabindex="0"
-                  :aria-label="
-                    collapsedSections['cm_' + cat.key] ? 'Expand' : 'Collapse'
-                  "
-                  @click.stop="toggleSection('cm_' + cat.key)"
-                  @keydown.enter.stop="toggleSection('cm_' + cat.key)"
-                />
-              </div>
-              <!-- Per-dimension breakdown (only after scoring) -->
-              <div
-                v-if="maturityScores[cat.key]"
-                class="collapse-body"
-                :class="{
-                  'collapse-body--collapsed':
-                    collapsedSections['cm_' + cat.key],
-                }"
-              >
-                <div class="assessment-summary">
-                  <div
-                    v-for="sc in maturityScores[cat.key]"
-                    :key="sc.id"
-                    class="assessment-row"
-                  >
-                    <div class="assessment-label">{{ sc.label }}</div>
-                    <div
-                      class="assessment-stars"
-                      :style="{ color: starColor(sc.score) }"
-                    >
-                      <span v-if="sc.status === 'notApplicable'">N/A</span>
-                      <span v-else-if="sc.status === 'unknown'">Unknown</span>
-                      <span v-else class="assessment-star-icons">
-                        <AppIcon
-                          v-for="(star, starIndex) in maturityStarIcons(sc.score)"
-                          :key="`${sc.id}-${starIndex}`"
-                          :name="star"
-                          size="16"
-                        />
-                      </span>
-                    </div>
-                    <button
-                      class="assessment-detail-text"
-                      type="button"
-                      :aria-expanded="
-                        expandedMaturityDetails.has(
-                          maturityDetailKey(cat.key, sc.id),
-                        )
-                          ? 'true'
-                          : 'false'
-                      "
-                      @click.stop="toggleMaturityDetail(cat.key, sc.id)"
-                      @keydown.enter.stop
-                      @keydown.space.stop
-                    >
-                      <span>{{ sc.detail }}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Playbook parent — collapses all detailed prompts under one node -->
-            <div class="sidebar-category sidebar-category--border">
-              <div
-                class="sidebar-category-label sidebar-category-label--toggle"
-                @click="toggleSection('playbookRoot')"
-              >
-                <div class="sidebar-category-left">
-                  <span>All prompts</span>
-                  <span class="sidebar-category-subtitle"
-                    >Browse by maturity level</span
-                  >
-                </div>
-                <div class="sidebar-category-right">
-                  <AppIcon
-                    name="moreDown"
-                    size="16"
-                    class="collapse-chevron"
-                    :class="{
-                      'collapse-chevron--collapsed':
-                        collapsedSections.playbookRoot,
-                    }"
-                  />
-                </div>
-              </div>
-              <div
-                class="collapse-body"
-                :class="{
-                  'collapse-body--collapsed': collapsedSections.playbookRoot,
-                }"
-              >
-                <div
-                  v-for="grp in playbookGroups"
-                  :key="grp.key"
-                  class="sidebar-subgroup"
-                >
-                  <div
-                    class="sidebar-subgroup-label sidebar-category-label--toggle"
-                    @click="toggleSection('pb_' + grp.key)"
-                  >
-                    <span>{{ grp.label }}</span>
-                    <AppIcon
-                      name="moreDown"
-                      size="16"
-                      class="collapse-chevron"
-                      :class="{
-                        'collapse-chevron--collapsed':
-                          collapsedSections['pb_' + grp.key],
-                      }"
-                    />
-                  </div>
-                  <div
-                    class="collapse-body"
-                    :class="{
-                      'collapse-body--collapsed':
-                        collapsedSections['pb_' + grp.key],
-                    }"
-                  >
-                    <button
-                      v-for="q in grp.prompts"
-                      :key="q.label"
-                      class="sidebar-question"
-                      :disabled="streaming || clearing"
-                      :title="q.prompt"
-                      @click="sendQuestion(q.prompt)"
-                    >
-                      <span>{{ q.label }}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-
-          <!-- Pricing — always visible, no login required -->
-          <div
-            v-for="section in pricingNavigationSections"
-            :key="section.key"
-            class="sidebar-category"
-            :class="{ 'sidebar-category--border': azureConnected }"
-          >
-            <button
-              class="sidebar-section-toggle sidebar-category-label sidebar-category-label--toggle"
-              type="button"
-              :id="pricingSectionHeaderId(section.key)"
-              :aria-expanded="
-                isPricingSectionExpanded(section.key) ? 'true' : 'false'
-              "
-              :aria-controls="pricingSectionPanelId(section.key)"
-              @click="togglePricingSection(section.key)"
-            >
-              <div class="sidebar-category-left">
-                <span>{{ section.label }}</span>
-                <span class="sidebar-category-subtitle">{{
-                  section.subtitle
-                }}</span>
-              </div>
-              <div class="sidebar-category-right">
-                <AppIcon
-                  name="moreDown"
-                  size="16"
-                  class="collapse-chevron"
-                  :class="{
-                    'collapse-chevron--collapsed':
-                      !isPricingSectionExpanded(section.key),
-                  }"
-                />
-              </div>
-            </button>
-            <div
-              :id="pricingSectionPanelId(section.key)"
-              class="collapse-body"
-              role="region"
-              :aria-labelledby="pricingSectionHeaderId(section.key)"
-              :class="{
-                'collapse-body--collapsed':
-                  !isPricingSectionExpanded(section.key),
-              }"
-            >
-              <button
-                v-for="q in section.prompts"
-                :key="q.label"
-                class="sidebar-question"
-                :disabled="streaming || clearing"
-                :title="q.prompt"
-                @click="sendQuestion(q.prompt)"
-              >
-                <span>{{ q.label }}</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Subscriptions (after Azure login) -->
-          <div
-            v-if="azureConnected && azureSubscriptions.length"
-            class="sidebar-category sidebar-category--border"
-          >
-            <div
-              class="sidebar-category-label sidebar-category-label--toggle"
-              @click="toggleSection('subs')"
-            >
-              <span>Subscriptions ({{ azureSubscriptions.length }})</span>
-              <AppIcon
-                name="moreDown"
-                size="16"
-                class="collapse-chevron"
-                :class="{
-                  'collapse-chevron--collapsed': collapsedSections.subs,
-                }"
-              />
-            </div>
-            <div
-              class="collapse-body"
-              :class="{ 'collapse-body--collapsed': collapsedSections.subs }"
-            >
-              <div
-                v-for="sub in azureSubscriptions"
-                :key="sub.id"
-                class="sidebar-sub"
-                :title="
-                  sub.name +
-                  '\n' +
-                  sub.id +
-                  (sub.tenantId ? '\nTenant: ' + sub.tenantId : '')
-                "
-              >
-                <span class="sidebar-sub-name">{{ sub.name }}</span>
-                <span class="sidebar-sub-id" :title="sub.id">{{ sub.id }}</span>
-                <span
-                  v-if="tenantNameFor(sub.tenantId)"
-                  class="sidebar-sub-tenant"
-                  :title="sub.tenantId"
-                  >Tenant: {{ tenantNameFor(sub.tenantId) }}</span
-                >
-              </div>
-            </div>
-          </div>
-
-          <!-- Scheduled jobs — Entra-only background prompts -->
+          <!-- Scheduled jobs — Entra-only background prompts. First below New
+               chat so the capability is visible without scrolling. -->
           <div
             v-if="azureConnected"
             class="sidebar-category sidebar-category--border sidebar-library-section"
           >
             <div class="sidebar-section-heading">
               <button
+                v-if="jobs.length"
                 class="sidebar-section-toggle sidebar-category-label sidebar-category-label--toggle jobs-header-toggle"
                 type="button"
                 :aria-expanded="jobsCollapsed ? 'false' : 'true'"
@@ -449,6 +152,9 @@
                   :class="{ 'collapse-chevron--collapsed': jobsCollapsed }"
                 />
               </button>
+              <span v-else class="sidebar-category-label jobs-header-label"
+                >Scheduled jobs</span
+              >
               <button
                 class="sessions-new-btn sidebar-section-action"
                 :disabled="!azureConnected || newJobOpen"
@@ -464,18 +170,13 @@
               </button>
             </div>
             <div
+              v-if="jobs.length"
               id="sidebar-scheduled-jobs"
               class="collapse-body jobs-scroll"
               :class="{ 'collapse-body--collapsed': jobsCollapsed }"
               role="region"
               aria-label="Scheduled jobs"
             >
-              <div v-if="jobs.length === 0" class="sessions-empty">
-                No jobs yet — run FinOps checks on a schedule.
-                <button class="jobs-empty-cta" @click="openNewJob">
-                  <AppIcon name="schedule" size="16" /> Schedule your first job
-                </button>
-              </div>
               <div
                 v-for="j in sortedJobs"
                 :key="j.id"
@@ -608,8 +309,304 @@
             </div>
           </div>
 
-          <!-- Chats history -->
-          <div class="sidebar-category sidebar-category--border sidebar-library-section">
+          <!-- Maturity score cards (Crawl / Walk / Run) — whole card is clickable -->
+          <template v-if="azureConnected">
+            <div
+              v-for="cat in scoreCategories"
+              :key="'score-' + cat.key"
+              class="maturity-card"
+              :class="{
+                'maturity-card--scored': maturityScores[cat.key],
+                'maturity-card--disabled': streaming,
+              }"
+              role="button"
+              tabindex="0"
+              :title="cat.scorePrompt"
+              @click="!streaming && sendQuestion(cat.scorePrompt)"
+              @keydown.enter="!streaming && sendQuestion(cat.scorePrompt)"
+            >
+              <div class="maturity-card-header">
+                <div class="maturity-card-title">
+                  <span class="maturity-card-label">{{ cat.label }}</span>
+                  <span v-if="cat.subtitle" class="maturity-card-subtitle">{{
+                    cat.subtitle
+                  }}</span>
+                </div>
+                <span v-if="maturityScores[cat.key]" class="maturity-card-cta">
+                  Re-score
+                </span>
+              </div>
+              <div class="maturity-card-body">
+                <span
+                  class="maturity-card-stars"
+                  :style="{
+                    color: maturityScores[cat.key]
+                      ? starColor(maturityOverall(cat.key))
+                      : '#c8c6c4',
+                  }"
+                  :aria-label="
+                    maturityScores[cat.key]
+                      ? `${Math.max(0, Math.min(5, Math.round(maturityOverall(cat.key) || 0)))} out of 5`
+                      : 'Not scored'
+                  "
+                >
+                  <AppIcon
+                    v-for="(star, starIndex) in maturityStarIcons(
+                      maturityScores[cat.key]
+                        ? maturityOverall(cat.key)
+                        : undefined,
+                    )"
+                    :key="`${cat.key}-${starIndex}`"
+                    :name="star"
+                    size="18"
+                  />
+                </span>
+                <AppIcon
+                  v-if="maturityScores[cat.key]"
+                  name="moreDown"
+                  size="16"
+                  class="collapse-chevron maturity-card-chevron"
+                  :class="{
+                    'collapse-chevron--collapsed':
+                      collapsedSections['cm_' + cat.key],
+                  }"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="
+                    collapsedSections['cm_' + cat.key] ? 'Expand' : 'Collapse'
+                  "
+                  @click.stop="toggleSection('cm_' + cat.key)"
+                  @keydown.enter.stop="toggleSection('cm_' + cat.key)"
+                />
+              </div>
+              <!-- Per-dimension breakdown (only after scoring) -->
+              <div
+                v-if="maturityScores[cat.key]"
+                class="collapse-body"
+                :class="{
+                  'collapse-body--collapsed':
+                    collapsedSections['cm_' + cat.key],
+                }"
+              >
+                <div class="assessment-summary">
+                  <div
+                    v-for="sc in maturityScores[cat.key]"
+                    :key="sc.id"
+                    class="assessment-row"
+                  >
+                    <div class="assessment-label">{{ sc.label }}</div>
+                    <div
+                      class="assessment-stars"
+                      :style="{ color: starColor(sc.score) }"
+                    >
+                      <span v-if="sc.status === 'notApplicable'">N/A</span>
+                      <span v-else-if="sc.status === 'unknown'">Unknown</span>
+                      <span v-else class="assessment-star-icons">
+                        <AppIcon
+                          v-for="(star, starIndex) in maturityStarIcons(sc.score)"
+                          :key="`${sc.id}-${starIndex}`"
+                          :name="star"
+                          size="16"
+                        />
+                      </span>
+                    </div>
+                    <button
+                      class="assessment-detail-text"
+                      type="button"
+                      :aria-expanded="
+                        expandedMaturityDetails.has(
+                          maturityDetailKey(cat.key, sc.id),
+                        )
+                          ? 'true'
+                          : 'false'
+                      "
+                      @click.stop="toggleMaturityDetail(cat.key, sc.id)"
+                      @keydown.enter.stop
+                      @keydown.space.stop
+                    >
+                      <span>{{ sc.detail }}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Playbook parent — collapses all detailed prompts under one node -->
+            <div class="sidebar-category sidebar-category--border">
+              <div
+                class="sidebar-category-label sidebar-category-label--toggle"
+                @click="toggleSection('playbookRoot')"
+              >
+                <div class="sidebar-category-left">
+                  <span>All prompts</span>
+                </div>
+                <div class="sidebar-category-right">
+                  <AppIcon
+                    name="moreDown"
+                    size="16"
+                    class="collapse-chevron"
+                    :class="{
+                      'collapse-chevron--collapsed':
+                        collapsedSections.playbookRoot,
+                    }"
+                  />
+                </div>
+              </div>
+              <div
+                class="collapse-body"
+                :class="{
+                  'collapse-body--collapsed': collapsedSections.playbookRoot,
+                }"
+              >
+                <div
+                  v-for="grp in playbookGroups"
+                  :key="grp.key"
+                  class="sidebar-subgroup"
+                >
+                  <div
+                    class="sidebar-subgroup-label sidebar-category-label--toggle"
+                    @click="toggleSection('pb_' + grp.key)"
+                  >
+                    <span>{{ grp.label }}</span>
+                    <AppIcon
+                      name="moreDown"
+                      size="16"
+                      class="collapse-chevron"
+                      :class="{
+                        'collapse-chevron--collapsed':
+                          collapsedSections['pb_' + grp.key],
+                      }"
+                    />
+                  </div>
+                  <div
+                    class="collapse-body"
+                    :class="{
+                      'collapse-body--collapsed':
+                        collapsedSections['pb_' + grp.key],
+                    }"
+                  >
+                    <button
+                      v-for="q in grp.prompts"
+                      :key="q.label"
+                      class="sidebar-question"
+                      :disabled="streaming || clearing"
+                      :title="q.prompt"
+                      @click="sendQuestion(q.prompt)"
+                    >
+                      <span>{{ q.label }}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- Pricing — always visible, no login required -->
+          <div
+            v-for="section in pricingNavigationSections"
+            :key="section.key"
+            class="sidebar-category"
+            :class="{ 'sidebar-category--border': azureConnected }"
+          >
+            <button
+              class="sidebar-section-toggle sidebar-category-label sidebar-category-label--toggle"
+              type="button"
+              :id="pricingSectionHeaderId(section.key)"
+              :aria-expanded="
+                isPricingSectionExpanded(section.key) ? 'true' : 'false'
+              "
+              :aria-controls="pricingSectionPanelId(section.key)"
+              @click="togglePricingSection(section.key)"
+            >
+              <div class="sidebar-category-left">
+                <span>{{ section.label }}</span>
+              </div>
+              <div class="sidebar-category-right">
+                <AppIcon
+                  name="moreDown"
+                  size="16"
+                  class="collapse-chevron"
+                  :class="{
+                    'collapse-chevron--collapsed':
+                      !isPricingSectionExpanded(section.key),
+                  }"
+                />
+              </div>
+            </button>
+            <div
+              :id="pricingSectionPanelId(section.key)"
+              class="collapse-body"
+              role="region"
+              :aria-labelledby="pricingSectionHeaderId(section.key)"
+              :class="{
+                'collapse-body--collapsed':
+                  !isPricingSectionExpanded(section.key),
+              }"
+            >
+              <button
+                v-for="q in section.prompts"
+                :key="q.label"
+                class="sidebar-question"
+                :disabled="streaming || clearing"
+                :title="q.prompt"
+                @click="sendQuestion(q.prompt)"
+              >
+                <span>{{ q.label }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Subscriptions (after Azure login) -->
+          <div
+            v-if="azureConnected && azureSubscriptions.length"
+            class="sidebar-category sidebar-category--border"
+          >
+            <div
+              class="sidebar-category-label sidebar-category-label--toggle"
+              @click="toggleSection('subs')"
+            >
+              <span>Subscriptions ({{ azureSubscriptions.length }})</span>
+              <AppIcon
+                name="moreDown"
+                size="16"
+                class="collapse-chevron"
+                :class="{
+                  'collapse-chevron--collapsed': collapsedSections.subs,
+                }"
+              />
+            </div>
+            <div
+              class="collapse-body"
+              :class="{ 'collapse-body--collapsed': collapsedSections.subs }"
+            >
+              <div
+                v-for="sub in azureSubscriptions"
+                :key="sub.id"
+                class="sidebar-sub"
+                :title="
+                  sub.name +
+                  '\n' +
+                  sub.id +
+                  (sub.tenantId ? '\nTenant: ' + sub.tenantId : '')
+                "
+              >
+                <span class="sidebar-sub-name">{{ sub.name }}</span>
+                <span class="sidebar-sub-id" :title="sub.id">{{ sub.id }}</span>
+                <span
+                  v-if="tenantNameFor(sub.tenantId)"
+                  class="sidebar-sub-tenant"
+                  :title="sub.tenantId"
+                  >Tenant: {{ tenantNameFor(sub.tenantId) }}</span
+                >
+              </div>
+            </div>
+          </div>
+
+          <!-- Chats history — shown once there is a conversation -->
+          <div
+            v-if="chatSessions.length || sessionDeleteError"
+            class="sidebar-category sidebar-category--border sidebar-library-section"
+          >
             <button
               class="sidebar-section-toggle sidebar-category-label sidebar-category-label--toggle"
               type="button"
@@ -619,9 +616,6 @@
             >
               <div class="sidebar-category-left">
                 <span>Chats</span>
-                <span class="sidebar-category-subtitle"
-                  >{{ chatSessions.length }} saved</span
-                >
               </div>
               <AppIcon
                 name="moreDown"
@@ -643,13 +637,6 @@
                 role="alert"
               >
                 {{ sessionDeleteError }}
-              </div>
-              <div v-if="chatSessions.length === 0" class="sessions-empty">
-                {{
-                  azureConnected
-                    ? "No saved conversations yet — chat to create one."
-                    : "Chat freely — connect Azure to keep conversations across visits."
-                }}
               </div>
               <div
                 v-for="s in chatSessions"
@@ -754,12 +741,9 @@
                   'tenant-input--highlight':
                     tenantError && !savedTenants.length,
                 }"
-                placeholder="Tenant ID…"
+                placeholder="Tenant ID (optional)"
+                aria-label="Tenant ID (optional). Leave empty to use your home tenant."
               />
-              <span v-if="!savedTenants.length" class="tenant-hint"
-                >Leave empty to use your home tenant, or specify a different
-                one</span
-              >
             </div>
             <button
               class="azure-connect-btn"
@@ -9421,13 +9405,6 @@ async function send() {
   background: #fff;
   box-shadow: 0 0 0 1px #0078d4;
 }
-.tenant-hint {
-  display: block;
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  color: #605e5c;
-  margin-top: 3px;
-}
 .es-tenant-input-row {
   width: 100%;
   max-width: 360px;
@@ -11793,14 +11770,6 @@ async function send() {
 .sidebar .jobs-scroll {
   padding: 2px 0 8px;
 }
-.sessions-empty {
-  padding: 12px 8px;
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  color: var(--text-muted);
-  font-style: italic;
-  text-align: center;
-}
 /* ── Scheduled jobs pane ── */
 .tools-sidebar-pane--jobs {
   /* Sized by content up to 42% of the sidebar, but allowed to SHRINK when
@@ -11813,9 +11782,17 @@ async function send() {
 }
 .jobs-scroll {
   overflow-y: auto;
-  /* The jobs pane is the bottom-most pane — give the last row breathing room
-     so it isn't cramped against the sidebar's bottom edge. */
-  padding-bottom: 16px;
+}
+/* The jobs list sits at the top of the menu: past about four rows it scrolls
+   instead of pushing the prompts down. */
+.jobs-scroll:not(.collapse-body--collapsed) {
+  max-height: 236px;
+}
+.jobs-header-label {
+  flex: 1;
+  min-width: 0;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 .jobs-header-toggle {
   cursor: pointer;
@@ -11848,29 +11825,6 @@ async function send() {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: 6px;
-}
-.jobs-empty-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 10px auto 2px;
-  font: inherit;
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  font-weight: 600;
-  padding: 7px 16px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--accent);
-  cursor: pointer;
-  transition:
-    background 0.12s ease,
-    color 0.12s ease;
-}
-.jobs-empty-cta:hover {
-  background: var(--accent);
-  color: var(--surface);
 }
 /* Template picker — compact 2-col grid of prefill chips inside the form. */
 .job-tpl-label {
