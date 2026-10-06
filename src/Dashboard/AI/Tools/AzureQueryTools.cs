@@ -476,6 +476,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         JsonArray items = [];
         var next = BuildRetailUrl(query, filter, currency);
         var pages = 0;
+        var unfollowed = false;
         for (; next is not null && pages < maxPages; pages++)
         {
             var (status, reason, body) = await FetchRetailPageAsync(next, activity, cancellationToken);
@@ -488,22 +489,40 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
                     pageItems.Remove(item);
                     items.Add(item);
                 }
-            next = root?["NextPageLink"] is JsonValue link && link.TryGetValue<string>(out var value)
-                && value.StartsWith(RetailBase, StringComparison.OrdinalIgnoreCase) ? value : null;
+            (next, unfollowed) = RetailNextPage(root);
         }
         activity?.SetTag("pricing.pages", pages);
         activity?.SetTag("pricing.rows", items.Count);
-        return "HTTP 200 OK\n" + (timestamp ? ResponseShaper.TimestampLine() : "") + new JsonObject
+        var result = new JsonObject
         {
             ["source"] = "Azure Retail Prices API",
             ["retrievedAtUtc"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             ["filter"] = filter,
             ["currencyCode"] = currency,
             ["pages"] = pages,
-            ["complete"] = next is null,
+            ["complete"] = next is null && !unfollowed,
             ["count"] = items.Count,
-            ["Items"] = items,
-        }.ToJsonString();
+        };
+        if (unfollowed)
+            result["pageFailure"] = "The next page link was not a prices.azure.com retail prices URL and was not followed; coverage is partial.";
+        result["Items"] = items;
+        return "HTTP 200 OK\n" + (timestamp ? ResponseShaper.TimestampLine() : "") + result.ToJsonString();
+    }
+
+    /// <summary>
+    /// The next page to read, or null when the response has none. The service writes its own origin with an
+    /// explicit default port (https://prices.azure.com:443/...), so the link is compared as a URI, never as text;
+    /// a present link that is not the pinned endpoint is reported as unfollowed so coverage is never overstated.
+    /// </summary>
+    internal static (string? Next, bool Unfollowed) RetailNextPage(JsonNode? root)
+    {
+        if (root?["NextPageLink"] is not JsonValue value || !value.TryGetValue<string>(out var text) || string.IsNullOrWhiteSpace(text))
+            return (null, false);
+        return Uri.TryCreate(text, UriKind.Absolute, out var link) && link.Scheme == Uri.UriSchemeHttps && link.IsDefaultPort
+            && link.UserInfo.Length == 0 && link.IdnHost.Equals("prices.azure.com", StringComparison.OrdinalIgnoreCase)
+            && link.AbsolutePath.TrimEnd('/').Equals("/api/retail/prices", StringComparison.OrdinalIgnoreCase)
+                ? (link.AbsoluteUri, false)
+                : (null, true);
     }
 
     // Rebuilds the pinned origin with the model's own filter and options; the host owns paging ($top/$skip).

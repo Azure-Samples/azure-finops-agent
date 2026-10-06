@@ -74,6 +74,10 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("unitOfMeasure is '1K' on older token meters and '1M' on newer ones, so return per-1M rates from that same query as retailPrice * (unitOfMeasure == \"1K\" ? 1000 : 1), never with one fixed factor", Prompt);
         Assert.Contains("'Azure OpenAI GPT' followed by the generation number for each newer GPT generation", Prompt);
         Assert.Contains("x.meterName.ToLower().Contains(\"glbl\") in query and contains(tolower(meterName),'glbl') in $filter", Prompt);
+        Assert.Contains("effectiveStartDate is when a price took effect, not when the model was released", Prompt);
+        Assert.Contains("pick each family's newest model by the version in its meter or SKU names", Prompt);
+        Assert.DoesNotContain("newest release by effectiveStartDate", Prompt);
+        Assert.DoesNotContain("equals that family's latest date", Prompt);
         Assert.DoesNotContain("contains(meterName,", Prompt);
         Assert.Contains("Std Gl (Global Standard), Std DZ (Data Zone Standard), PP (Priority Processing)", Prompt);
         Assert.Contains("whose retailPrice is per PTU for the whole reservationTerm even though unitOfMeasure reads '1/Hour'", Prompt);
