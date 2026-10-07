@@ -94,6 +94,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Read `az graph query` output correctly in generated scripts. The CLI returns `count`, `data`, `skip_token` and `total_records` in snake_case, but a cleanup script read the REST API's `totalRecords` and would have exited before reviewing anything; the live gate caught it. `GenerateScript` now states the CLI shape.
+- Keep model-price answers to the models the price list returned. A newest-models answer added "newer announced" versions from release trackers that no returned evidence supported, which failed the live gate in this and two earlier runs.
 - Count a query's rows, never the response's fields. `it.Count()` on a Graph usage report returned 5, the number of its top-level fields, as if they were rows; iterating a response root that holds lists now fails with a message naming the list to count (`rows.Count()`). Query parse errors now show the character position and the text around it, and a member read on a map names the key read to use.
 - Name the sheet, row or limit to fix when `GenerateDataReport` rejects a payload, instead of "Invalid report data, row coverage, or format". An agent had fallen back to scripts after that message.
 - Show a plain busy notice when the model's rate limit fails a turn, instead of the provider text naming the deployment and region and asking an anonymous user to request quota. The SDK's own HTTP retry handles 429s before that.

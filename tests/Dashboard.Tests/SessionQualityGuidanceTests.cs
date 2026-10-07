@@ -107,7 +107,10 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("one row per newest priced model of each requested family", withSearch);
         Assert.Contains("name newer benchmarked versions that have no Foundry price in one sentence below the table instead of adding rows", withSearch);
         Assert.Contains("A Foundry model price, deployment-type, PTU, caching or cost-estimate question needs no web search", withSearch);
-        Assert.Contains("never search or read documentation to identify or name models, their availability or deployment types for a pricing question", Prompt);
+        Assert.Contains("never search the web or documentation to identify or name models, their availability or deployment types for a pricing question", Prompt);
+        // A price answer once added "newer announced" models from release trackers that no returned evidence supported.
+        Assert.Contains("a pricing answer names only models the price list returned, never a newer or announced version from search results or memory", Prompt);
+        Assert.Contains("the Retail Prices API lists every priced model and deployment type, and the answer names only the models it returned", withSearch);
         Assert.Contains("so an abbreviation stays an abbreviation and is said to be one", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);
         Assert.Contains("Never search or open third-party price, calculator or comparison sites", withSearch);
