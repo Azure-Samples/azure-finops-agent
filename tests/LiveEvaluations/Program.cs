@@ -96,7 +96,8 @@ internal static class Program
             ? webSearchSetting : AgentSessionFactory.DefaultWebSearch;
         state.AgentProfile = $"{model}, reasoning effort {reasoningEffort}, web search {(webSearch ? "on" : "off")}";
         await using var factory = AgentSessionFactory.Create(credential, telemetry, identity,
-            AgentSessionFactory.ResolveProjectEndpoint(endpoint, null), model, reasoningEffort, logging, tenant, webSearch);
+            AgentSessionFactory.ResolveProjectEndpoint(endpoint, null), model, reasoningEffort, logging, tenant, webSearch,
+            microsoftLearn: true);
         app.UseSession();
         app.Use(async (context, next) =>
         {
@@ -122,6 +123,10 @@ internal static class Program
         app.MapChatEndpoints(factory, tokens, telemetry, logger);
         app.MapSessionEndpoints(factory, telemetry, new JobStore(logger), logger);
         await app.StartAsync();
+        // Production connects to Microsoft Learn at startup, long before a user's first turn; give this fresh
+        // process the same warm connection so a slow handshake cannot hide the documentation tools from the case.
+        state.Phase = "learn";
+        await factory.DocumentationToolsAsync(CancellationToken.None, TimeSpan.FromSeconds(20));
         using var client = app.GetTestClient();
         client.Timeout = TimeSpan.FromSeconds(maxDurationSeconds);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(maxDurationSeconds));

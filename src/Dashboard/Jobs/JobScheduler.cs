@@ -178,6 +178,13 @@ public sealed class JobScheduler : BackgroundService
             tokens.RefreshLock.Release();
         }
 
+        // The same connection block a chat turn starts with: the APIs these tokens reach, the subscriptions with their
+        // offer quotaId (an unsupported offer, not a reporting delay, explains empty cost data) and today's date.
+        var (subscriptions, managementGroups) = await AzureSessionEndpoints.DiscoverScopesAsync(_httpFactory.CreateClient(), tokens.AzureToken!, _logger, ct);
+        var connectionContext = ChatEndpoints.ConnectionContext(ChatEndpoints.ConnectedApis(tokens),
+            subscriptions.Count + managementGroups.Count > 0 ? AzureSessionEndpoints.ScopeContext(subscriptions, managementGroups) : null,
+            job.EntraTenantId, DateTime.UtcNow);
+
         // Keep the janitor from evicting this user's state mid-run.
         UserStateJanitor.LastSeenUtc[job.UserId] = DateTimeOffset.UtcNow;
 
@@ -236,7 +243,7 @@ public sealed class JobScheduler : BackgroundService
         try
         {
             turn.IsScheduled = true;
-            var outcome = await RunTurnAsync(job, session, turn, ct);
+            var outcome = await RunTurnAsync(job, session, turn, connectionContext, ct);
             turn.JobOutcome = outcome;
             // A deploy, restart or scale-in cancels the host token mid-run. That is
             // the platform interrupting us, not the job failing — counting it would
@@ -279,7 +286,7 @@ public sealed class JobScheduler : BackgroundService
 
     /// <summary>Sends the job prompt into the session and waits for the turn to
     /// go idle or fail, with a hard timeout. Returns (success, answer-summary).</summary>
-    private async Task<JobRunOutcome> RunTurnAsync(ScheduledJob job, AgentConversation session, TurnExecution turn, CancellationToken ct)
+    private async Task<JobRunOutcome> RunTurnAsync(ScheduledJob job, AgentConversation session, TurnExecution turn, string connectionContext, CancellationToken ct)
     {
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var buf = new System.Text.StringBuilder();
@@ -309,12 +316,15 @@ public sealed class JobScheduler : BackgroundService
             10080 => "weekly",
             _ => $"every {job.IntervalMinutes} min",
         };
-        var prompt =
+        // The connection block is sent once per model context, as in chat.
+        if (session.StartsFreshContext) ChatEndpoints.ClearSessionContext(session.SessionId);
+        var context = ChatEndpoints.NewConnectionContext(session.SessionId, connectionContext);
+        var prompt = (context is null ? "" : context + "\n") +
             $"[SCHEDULED JOB RUN — '{job.Name}' — run #{job.RunCount + 1}, cadence {cadence}, {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm} UTC. " +
             "This is an automated background run; no human is watching live. Produce a complete, CONCISE answer — lead with what changed since the last run if prior runs exist in this conversation. " +
             "Read fresh evidence for the entire declared scope. Prior runs are context, never proof nothing changed. " +
             "After source tools finish call ReportJobOutcome with status, summary, exact evidence tool names, source dataAsOfUtc when known, and any retry deadline. " +
-            "Use blocked or partial when access, throttling, stale data, or incomplete coverage prevents success. Use goal_achieved only when verified; the scheduler will pause automatically. " +
+            "Use blocked or partial when access, throttling, stale data, or incomplete coverage prevents success. Use action_required when the blocker will not clear by waiting (a subscription offer Cost Management does not support, a missing role or consent, a deleted scope): the scheduler then pauses the job until the user fixes it. Use goal_achieved only when verified; the scheduler will pause automatically. " +
             $"Latest bounded result: {job.LastSummary ?? "none"}.]\n" +
             job.Prompt;
 

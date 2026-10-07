@@ -27,6 +27,7 @@ import {
     evaluateSuite,
     evaluationLane,
     executeCase,
+    LIVE_SUITE_SIZE,
     MINIMUM_EFFICIENCY_SCORE,
     preparePrivateDiagnostics,
     publishableResult,
@@ -387,6 +388,10 @@ test("full catalog retains every frontend template, both concrete incident cases
         "in which regions can I get h200 on spot quota?",
         "Calculate the monthly total for 2 units at USD 3 per unit with zero discount and tax, using a QueryAzure query rather than mental arithmetic. Report the total in English. Do not look up prices.",
         "What do the newest AI models on Azure cost? Show the newest GPT, Grok, DeepSeek, Llama and Mistral models with their Global Standard price per 1M input and output tokens.",
+        "Is purge protection on by default for a new Azure Key Vault, and can I turn it off later?",
+        "Write an Azure CLI script that creates a storage account exactly like our existing dev account: name stfinopsdev01, resource group rg-finops-dev, region swedencentral, Standard_LRS redundancy, StorageV2, and public network access enabled.",
+        "Do my key vaults have purge protection enabled?",
+        "Which of our Intune-managed devices are non-compliant?",
     ].map((question) => question.trim()));
     assert.deepEqual(new Set(catalog.map((item) => item.question)), questions);
     assert.equal(catalog.length, questions.size);
@@ -395,8 +400,9 @@ test("full catalog retains every frontend template, both concrete incident cases
     assert.ok(catalog.some((item) => item.origins.includes("job-template:chat")));
 });
 
-test("live gate selects exactly 20 stable representative questions without changing case contracts", () => {
-    assert.equal(cases.length, 20);
+test("live gate selects every stable representative question without changing case contracts", () => {
+    assert.equal(LIVE_SUITE_SIZE, 24);
+    assert.equal(cases.length, LIVE_SUITE_SIZE);
     assert.deepEqual(cases.map((item) => item.id), [
         "fa300ef5396c951b", "967d9300e17ef22a", "c0172debe25f1c20",
         "89c66e0ad009d9e5", "75282dc082630fdd", "d7c2e62701ecfd11",
@@ -404,12 +410,13 @@ test("live gate selects exactly 20 stable representative questions without chang
         "eac3ecb5ceb83c4b", "84206ed740e28de4", "979163d9aeedc2b8",
         "e4e6c2296f2dfc97", "095d1c30190c1015", "ab693d258eaed365",
         "160eca54c580c4f8", "f84890a72a9009f3", "f75b5b6527c41d5c",
-        "062a296be5be951f", "3c99447cf28f786c",
+        "062a296be5be951f", "3c99447cf28f786c", "f4fd66c2942dcaa7",
+        "2fb769993820fdf2", "45ffa45e5346e49d", "c7b0c5917d8b1e09",
     ]);
-    assert.notDeepEqual(cases, catalog.slice(0, 20));
+    assert.notDeepEqual(cases, catalog.slice(0, LIVE_SUITE_SIZE));
     assert.equal(
         new Set(cases.map((item) => item.question)).size,
-        20,
+        LIVE_SUITE_SIZE,
     );
     for (const scenario of cases)
         assert.equal(scenario, catalog.find((item) => item.id === scenario.id));
@@ -417,8 +424,19 @@ test("live gate selects exactly 20 stable representative questions without chang
     assert.ok(cases.some((item) => item.origins.includes("incident:language")));
     assert.deepEqual(cases[0].requiredTools, ["ReportMaturityScore"]);
     assert.deepEqual(cases[0].forbiddenTools, []);
-    assert.deepEqual(cases.at(-2).requiredTools, ["QueryAzure"]);
-    assert.deepEqual(cases.at(-1).requiredTools, ["QueryAzure"]);
+    assert.deepEqual(cases[18].requiredTools, ["QueryAzure"]);
+    assert.deepEqual(cases[19].requiredTools, ["QueryAzure"]);
+    // The session-audit regressions pin each fixed behavior in their rubric.
+    assert.deepEqual(cases.slice(20).map((item) => item.origins[0]), [
+        "incident:learn-docs", "incident:stated-goal", "incident:absent-setting", "incident:access-limit",
+    ]);
+    assert.deepEqual(cases.slice(20).map((item) => item.requiredTools), [
+        ["microsoft_docs_search"], ["GenerateScript"], ["QueryAzure"], [],
+    ]);
+    for (const scenario of cases.slice(20))
+        assert.ok(scenario.rubric.startsWith(cases[1].rubric + " Case expectation: "));
+    for (const scenario of cases.slice(0, 20))
+        assert.equal(scenario.rubric, cases[1].rubric);
 });
 
 test("curated selection fails if a pinned catalog case is missing, duplicated or has a duplicate question", () => {
@@ -433,25 +451,25 @@ test("curated selection fails if a pinned catalog case is missing, duplicated or
     assert.throws(
         () => buildSuite(catalog.map((item) =>
             item.id === cases[1].id ? { ...item, question: cases[0].question } : item)),
-        /exactly 20 distinct, nonempty questions/,
+        new RegExp(`exactly ${LIVE_SUITE_SIZE} distinct, nonempty questions`),
     );
 });
 
-test("19 passing cases, arbitrary 20-case replacements and oversized plans cannot pass the live gate", () => {
+test("a missing case, arbitrary replacements and oversized plans cannot pass the live gate", () => {
     const other = catalog.find((item) => !cases.some((selected) => selected.id === item.id));
     for (const planned of [
-        cases.slice(0, 19),
+        cases.slice(0, LIVE_SUITE_SIZE - 1),
         [other, ...cases.slice(1)],
         [...cases, other],
         catalog,
-        [cases[0], ...cases.slice(0, 19)],
+        [cases[0], ...cases.slice(0, LIVE_SUITE_SIZE - 1)],
     ]) {
         const results = planned.map((scenario) => ({
             id: scenario.id, exitCode: 0, result: pass(scenario), failures: [],
         }));
         const verdict = evaluateSuite(planned, results, sha, suiteHash);
         assert.equal(verdict.accepted, false);
-        assert.equal(verdict.required, 20);
+        assert.equal(verdict.required, LIVE_SUITE_SIZE);
         assert.equal(verdict.selection, "curated-representative");
     }
 });
@@ -474,14 +492,14 @@ test("a passing case count cannot bypass original rubrics, tool rules or time bu
     }
 });
 
-test("local diagnostic subsets remain failed twenty-case live gates in their summaries", () => {
-    const planned = cases.slice(0, 19);
-    const results = rows().slice(0, 19);
+test("local diagnostic subsets remain failed full-suite live gates in their summaries", () => {
+    const planned = cases.slice(0, LIVE_SUITE_SIZE - 1);
+    const results = rows().slice(0, LIVE_SUITE_SIZE - 1);
     const verdict = evaluateSuite(planned, results, sha, suiteHash);
     assert.equal(verdict.accepted, false);
     assert.match(
         renderSummary(planned, results, verdict, sha),
-        /\*\*FAIL\*\* · 19\/20 accepted/,
+        new RegExp(`\\*\\*FAIL\\*\\* · ${LIVE_SUITE_SIZE - 1}/${LIVE_SUITE_SIZE} accepted`),
     );
 });
 
@@ -605,7 +623,7 @@ test("summary escapes model HTML and shows question, count and verdict", () => {
     );
     assert.ok(markdown.includes("&lt;script&gt;"));
     assert.ok(!markdown.includes("<script>"));
-    assert.match(markdown, /Curated representative live suite: exactly 20 question types/);
+    assert.match(markdown, new RegExp(`Curated representative live suite: exactly ${LIVE_SUITE_SIZE} question types`));
     assert.match(markdown, /not a verified usage-frequency ranking/);
 });
 
@@ -889,7 +907,7 @@ test("fail-fast stops after the first failed case and never accepts the partial 
                 0,
                 { failFast: true },
             ),
-            (error) => error.message.includes("Fail-fast") && error.message.includes("17 cases were not run"),
+            (error) => error.message.includes("Fail-fast") && error.message.includes(`${LIVE_SUITE_SIZE - 3} cases were not run`),
         );
         assert.equal(executed, 3);
         const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
@@ -933,7 +951,7 @@ test("independent lanes overlap while each lane stays ordered and reports stay w
         const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
         assert.deepEqual(report.results.map((row) => row.id), cases.map((scenario) => scenario.id));
         assert.equal(report.verdict.accepted, true);
-        assert.match(await readFile(join(directory, "summary.md"), "utf8"), /20\/20 accepted/);
+        assert.match(await readFile(join(directory, "summary.md"), "utf8"), new RegExp(`${LIVE_SUITE_SIZE}/${LIVE_SUITE_SIZE} accepted`));
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
@@ -1042,7 +1060,7 @@ test("only cases that never need Cost Management leave its paced lane", () => {
     ]);
     assert.ok(lanes.public.every((scenario) =>
         scenario.origins.every((origin) =>
-            ["pricing:public", "evaluation:pricing", "incident:language"].includes(origin))));
+            ["pricing:public", "evaluation:pricing", "incident:language", "incident:learn-docs", "incident:stated-goal"].includes(origin))));
     assert.equal(evaluationLane({ id: "an-unclassified-future-case" }), COST_MANAGEMENT_LANE);
     assert.equal(evaluationLane(undefined), COST_MANAGEMENT_LANE);
 });
@@ -1125,18 +1143,18 @@ test("suite execution writes all results but rejects one failed answer", async (
             },
             async () => {},
         );
-        assert.equal(executed, 20);
+        assert.equal(executed, LIVE_SUITE_SIZE);
         assert.equal(verdict.accepted, false);
         const report = JSON.parse(
             await readFile(join(directory, "results.json"), "utf8"),
         );
-        assert.equal(report.results.length, 20);
-        assert.equal(report.verdict.required, 20);
+        assert.equal(report.results.length, LIVE_SUITE_SIZE);
+        assert.equal(report.verdict.required, LIVE_SUITE_SIZE);
         assert.equal(report.verdict.selection, "curated-representative");
         assert.equal(report.verdict.accepted, false);
         assert.match(
             await readFile(join(directory, "summary.md"), "utf8"),
-            /19\/20 accepted/,
+            new RegExp(`${LIVE_SUITE_SIZE - 1}/${LIVE_SUITE_SIZE} accepted`),
         );
     } finally {
         await rm(directory, { recursive: true, force: true });
@@ -1278,7 +1296,7 @@ test("internal-test runs publish verdicts but withhold answers and judge rationa
         assert.equal(verdict.accepted, true);
         const published = await readPublished(directory);
         assert.doesNotMatch(published, /tenant-.*-must-not-publish/);
-        assert.match(published, /20\/20 accepted/);
+        assert.match(published, new RegExp(`${LIVE_SUITE_SIZE}/${LIVE_SUITE_SIZE} accepted`));
         assert.match(published, /Answers and judge rationale are withheld/);
         assert.ok(!(await readdir(directory)).some((name) => name.endsWith(".tmp")));
         await assert.rejects(stat(captureDirectory), { code: "ENOENT" });
@@ -1408,7 +1426,7 @@ test("local diagnostics retain redacted failed-case rationale without changing p
             fixture.options,
         );
         assert.equal(verdict.accepted, false);
-        assert.equal(verdict.completed, 20);
+        assert.equal(verdict.completed, LIVE_SUITE_SIZE);
         const retained = JSON.parse(await readFile(
             join(captureDirectory, `${cases[0].id}.json`), "utf8",
         ));
@@ -1417,7 +1435,7 @@ test("local diagnostics retain redacted failed-case rationale without changing p
         const snapshot = JSON.parse(await readFile(
             join(captureDirectory, "diagnostics.json"), "utf8",
         ));
-        assert.equal(snapshot.completed, 20);
+        assert.equal(snapshot.completed, LIVE_SUITE_SIZE);
         assert.equal(snapshot.results.length, 1);
         assert.equal(snapshot.results[0].result.answer, "tenant-answer-must-not-publish");
         assert.equal(snapshot.results[0].result.failedToolDetails[0].arguments,
@@ -1427,7 +1445,7 @@ test("local diagnostics retain redacted failed-case rationale without changing p
         const published = await readPublished(fixture.output);
         assert.doesNotMatch(published, /tenant-.*-must-not-publish/);
         assert.ok(!published.includes(captureDirectory));
-        assert.match(published, /19\/20 accepted/);
+        assert.match(published, new RegExp(`${LIVE_SUITE_SIZE - 1}/${LIVE_SUITE_SIZE} accepted`));
         assert.equal(await readFile(preserved, "utf8"), "preserve existing diagnostics");
         assert.equal((await stat(captureDirectory)).isDirectory(), true);
         if (process.platform !== "win32") {
@@ -1518,7 +1536,7 @@ test("executor exceptions retain their already-written private result without ex
     }
 });
 
-test("retention write failures visibly fail the gate even when all twenty case verdicts passed", async () => {
+test("retention write failures visibly fail the gate even when every case verdict passed", async () => {
     const fixture = await createDiagnosticsFixture();
     let executed = 0, captureDirectory;
     try {
@@ -1540,7 +1558,7 @@ test("retention write failures visibly fail the gate even when all twenty case v
             ),
             /Private evaluation diagnostics retention failed/,
         );
-        assert.equal(executed, 20);
+        assert.equal(executed, LIVE_SUITE_SIZE);
         const report = JSON.parse(await readFile(join(fixture.output, "results.json"), "utf8"));
         assert.equal(report.verdict.accepted, false);
         assert.ok(report.verdict.failures.some((failure) => failure.includes("retention failed")));

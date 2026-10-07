@@ -89,4 +89,37 @@ public sealed class JobOutcomeTests
         Assert.Equal(5, job.ConsecutiveFailures);
         Assert.Equal(now.AddMinutes(10), job.NextRunUtc);
     }
+
+    // A daily digest on an unsupported subscription offer repeated the same blocked run every 15 minutes.
+    [Fact]
+    public void ABlockerOnlyTheUserCanFixPausesTheScheduleAtOnce()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var job = new ScheduledJob { ExpiresUtc = now.AddDays(7) };
+
+        JobRunOutcome.Apply(job, new("action_required", "Cost Management has no data for this subscription offer.", [], null, null), now);
+
+        Assert.False(job.Enabled);
+        Assert.Equal("action_required", job.LastStatus);
+        Assert.Equal(1, job.ConsecutiveFailures);
+    }
+
+    [Fact]
+    public void ScheduledRunsGetTheSameConnectionContextAsChat()
+    {
+        var tokens = new AzureFinOps.Dashboard.Auth.UserTokens { UserId = 101, AzureToken = "synthetic" };
+        var scopes = AzureFinOps.Dashboard.Auth.AzureSessionEndpoints.ScopeContext(
+            [new { id = "sub-1", name = "Sponsored", state = "Enabled", tenantId = "t", quotaId = "Sponsored_2016-01-01" }], []);
+
+        var context = AzureFinOps.Dashboard.AI.ChatEndpoints.ConnectionContext(
+            AzureFinOps.Dashboard.AI.ChatEndpoints.ConnectedApis(tokens), scopes, "t", new DateTime(2026, 10, 7, 12, 0, 0, DateTimeKind.Utc));
+
+        Assert.StartsWith("[CONTEXT: User IS connected to Azure.", context);
+        Assert.Contains("\"quotaId\":\"Sponsored_2016-01-01\"", context);
+        Assert.Contains("Today is 2026-10-07 (UTC)", context);
+        Assert.DoesNotContain("ownerObjectId", context);
+        Assert.Equal(context, AzureFinOps.Dashboard.AI.ChatEndpoints.NewConnectionContext("job-session-synthetic", context));
+        Assert.Null(AzureFinOps.Dashboard.AI.ChatEndpoints.NewConnectionContext("job-session-synthetic", context));
+        AzureFinOps.Dashboard.AI.ChatEndpoints.ClearSessionContext("job-session-synthetic");
+    }
 }

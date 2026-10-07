@@ -71,6 +71,44 @@ public static class ChatEndpoints
     /// <summary>Releases a gate claimed via <see cref="TryBeginTurn"/>.</summary>
     internal static Task<bool> EndTurnAsync(TurnExecution turn, bool dispatchAttempted = true) => turn.FinishAsync(dispatchAttempted);
 
+    /// <summary>The APIs the user's tokens reach, as the connection context names them.</summary>
+    internal static List<string> ConnectedApis(UserTokens tokens)
+    {
+        var apis = new List<string>();
+        if (tokens.AzureToken is not null) apis.Add("Azure ARM (QueryAzure with an ARM path)");
+        if (tokens.GraphToken is not null) apis.Add("Microsoft Graph (QueryAzure https://graph.microsoft.com)");
+        if (tokens.LogAnalyticsToken is not null) apis.Add("Log Analytics and Application Insights (QueryAzure https://api.loganalytics.io, https://api.applicationinsights.io)");
+        if (tokens.StorageToken is not null) apis.Add("Azure Blob Storage (QueryAzure https://{account}.blob.core.windows.net)");
+        return apis;
+    }
+
+    /// <summary>
+    /// The [CONTEXT: …] block a turn starts with: the APIs the user reaches, the discovered subscriptions (with their
+    /// offer quotaId) and management groups, and today's date. Chat turns and scheduled runs send the same block.
+    /// </summary>
+    internal static string ConnectionContext(IReadOnlyList<string> connectedApis, string? scopesJson, string? tenantId, DateTime utcNow)
+    {
+        var tenantScopeHint = !string.IsNullOrWhiteSpace(scopesJson)
+            ? $" Discovered Azure scopes (reuse these; do not list them again): {scopesJson}"
+            : !string.IsNullOrWhiteSpace(tenantId)
+                ? $" Tenant/root management-group candidate: {tenantId}."
+                : "";
+        // Date-only keeps the per-session context dedup stable within a day while
+        // anchoring the model's year, which it otherwise misquotes from tool timestamps.
+        var today = utcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        return connectedApis.Count > 0
+            ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}.{tenantScopeHint} Today is {today} (UTC). Proceed with tool calls directly.]"
+            : $"[CONTEXT: Azure NOT connected. Today is {today} (UTC). Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only suggest 'Connect Azure' when the question needs their tenant data. Do NOT refuse public questions.]";
+    }
+
+    /// <summary>The connection block to send in this session, or null when the current model context already has it.</summary>
+    internal static string? NewConnectionContext(string sessionId, string connectionContext)
+    {
+        if (LastConnectionContext.TryGetValue(sessionId, out var previous) && previous == connectionContext) return null;
+        LastConnectionContext[sessionId] = connectionContext;
+        return connectionContext;
+    }
+
     /// <summary>
     /// Prepended to trivial turns so a greeting costs one model round-trip
     /// instead of model → tool → model.
@@ -250,11 +288,7 @@ public static class ChatEndpoints
                 tokens.AzureToken is not null, tokens.GraphToken is not null,
                 tokens.LogAnalyticsToken is not null, tokens.StorageToken is not null);
 
-            var connectedApis = new List<string>();
-            if (tokens.AzureToken is not null) connectedApis.Add("Azure ARM (QueryAzure with an ARM path)");
-            if (tokens.GraphToken is not null) connectedApis.Add("Microsoft Graph (QueryAzure https://graph.microsoft.com)");
-            if (tokens.LogAnalyticsToken is not null) connectedApis.Add("Log Analytics and Application Insights (QueryAzure https://api.loganalytics.io, https://api.applicationinsights.io)");
-            if (tokens.StorageToken is not null) connectedApis.Add("Azure Blob Storage (QueryAzure https://{account}.blob.core.windows.net)");
+            var connectedApis = ConnectedApis(tokens);
             var cachedAzureScopes = ctx.Session.GetString("azure_scope_context");
             if (!string.IsNullOrWhiteSpace(cachedAzureScopes))
             {
@@ -288,17 +322,7 @@ public static class ChatEndpoints
                     ctx.Session.Remove("azure_scope_context");
                 }
             }
-            var tenantScopeHint = !string.IsNullOrWhiteSpace(cachedAzureScopes)
-                ? $" Discovered Azure scopes (reuse these; do not list them again): {cachedAzureScopes}"
-                : !string.IsNullOrWhiteSpace(azureTenantId)
-                    ? $" Tenant/root management-group candidate: {azureTenantId}."
-                    : "";
-            // Date-only keeps the per-session context dedup stable within a day while
-            // anchoring the model's year, which it otherwise misquotes from tool timestamps.
-            var today = DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
-            var connectionContext = connectedApis.Count > 0
-                ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}.{tenantScopeHint} Today is {today} (UTC). Proceed with tool calls directly.]"
-                : $"[CONTEXT: Azure NOT connected. Today is {today} (UTC). Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only suggest 'Connect Azure' when the question needs their tenant data. Do NOT refuse public questions.]";
+            var connectionContext = ConnectionContext(connectedApis, cachedAzureScopes, azureTenantId, DateTime.UtcNow);
 
             // Surface any files the user has dropped into this session so the LLM
             // immediately knows the fileIds it can pass to QueryUploadedFile.
@@ -433,11 +457,8 @@ public static class ChatEndpoints
                     LastUploadsContext.TryRemove(activeSessionId, out _);
                 }
                 var contextBits = new List<string>(2);
-                if (!LastConnectionContext.TryGetValue(activeSessionId, out var prevConn) || prevConn != connectionContext)
-                {
-                    contextBits.Add(connectionContext);
-                    LastConnectionContext[activeSessionId] = connectionContext;
-                }
+                if (NewConnectionContext(activeSessionId, connectionContext) is { } changedContext)
+                    contextBits.Add(changedContext);
                 if (uploadsContext.Length > 0 && (!LastUploadsContext.TryGetValue(activeSessionId, out var prevUp) || prevUp != uploadsContext))
                 {
                     contextBits.Add(uploadsContext);
@@ -445,7 +466,7 @@ public static class ChatEndpoints
                 }
                 // A greeting does not need the agent machinery. Measured on prod:
                 // "hello" spent 6.25s to first token because the model made an
-                // extra round-trip to call SuggestFollowUp and rendered a markdown
+                // extra round-trip to call a follow-up tool (since removed) and rendered a markdown
                 // capability table, while the same deployment called directly
                 // answers in ~1s. Steering trivial turns to a direct one-line reply
                 // removes the tool round-trip and the table.

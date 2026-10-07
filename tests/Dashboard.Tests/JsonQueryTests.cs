@@ -263,6 +263,30 @@ public sealed class JsonQueryTests
         Assert.Equal("Not in this response, so read as null: it.value[].properties.gpus.", note);
     }
 
+    // A Graph usage report became {format, rows, ...}; it.Count() returned 5, the number of those fields, as if it were rows.
+    [Fact]
+    public void TheResponseRootIsNeverCountedAsAListOfItsFields()
+    {
+        const string report = """{"format":"csv","rowCount":3,"columns":["User","Active"],"truncated":false,"rows":[{"User":"a","Active":"Yes"},{"User":"b","Active":"No"},{"User":"c","Active":"Yes"}]}""";
+
+        var error = Assert.Throws<ArgumentException>(() => Run(report, "it.Count()"));
+
+        Assert.Contains("The response root it is one object, not a list", error.Message);
+        Assert.Contains("rows.Count()", error.Message);
+        Assert.Equal("3", Run(report, "rows.Count()"));
+        // A root whose keys are data and that holds no list is still read as a map.
+        Assert.Equal("""["eastus","westus"]""", Run("""{"eastus":{"price":1},"westus":{"price":2}}""", "it.Select(p => p.Key)"));
+    }
+
+    [Fact]
+    public void AParseErrorShowsWhereInTheQueryItFailed()
+    {
+        var error = Assert.Throws<ArgumentException>(() => Run(Vms, "value.Where(x => x.location == ).Select(x => x.name)"));
+
+        Assert.Contains("(at character ", error.Message);
+        Assert.Contains("⟨here⟩", error.Message);
+    }
+
     // Each case is a first-call query that failed in the live evaluations against a response of this shape.
     [Fact]
     public void ReadsAreAsForgivingAsJson()

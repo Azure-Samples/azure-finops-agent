@@ -46,10 +46,12 @@ Scan `setup-entra-app.ps1` and confirm:
 
 ### 5. Other Tools
 
-Scan all remaining tool files (`ChartTools.cs`, `FaqTools.cs`, `FollowUpTools.cs`, `HtmlPresentationTools.cs`, `MaturityReportTools.cs`, `ReportTools.cs`, `SavingsLedgerTools.cs`, `UploadedFileTools.cs`) and confirm:
+Scan all remaining tool files (`ChartTools.cs`, `FaqTools.cs`, `HtmlPresentationTools.cs`, `MaturityReportTools.cs`, `ReportTools.cs`, `SavingsLedgerTools.cs`, `UploadedFileTools.cs`) and confirm:
 
 - No tool makes authenticated HTTP calls to Azure management APIs.
 - Any external HTTP calls (e.g. RSS feeds, IndexNow) do not use Azure tokens.
+
+Scan `MicrosoftLearnMcp.cs` and confirm it connects only to the fixed `https://learn.microsoft.com/api/mcp` endpoint, sends no user token, and passes only the read-only `microsoft_docs_search` and `microsoft_docs_fetch` tools to the agent.
 
 ### 6. HttpHelper
 

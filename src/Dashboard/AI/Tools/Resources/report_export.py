@@ -29,22 +29,33 @@ def render(request):
     if not isinstance(sheets, list) or not 1 <= len(sheets) <= 10:
         raise ValueError("Provide 1 to 10 sheets")
     total = 0
-    for sheet in sheets:
+    for number, sheet in enumerate(sheets, 1):
+        where = f"Sheet {number} ({sheet.get('name') or 'unnamed'})" if isinstance(sheet, dict) else f"Sheet {number}"
+        if not isinstance(sheet, dict) or "columns" not in sheet or "rows" not in sheet:
+            raise ValueError(f"{where} needs columns and rows")
         columns, rows = sheet["columns"], sheet["rows"]
-        if not 1 <= len(columns) <= 50 or not all(isinstance(column, str) and column for column in columns):
-            raise ValueError("Provide 1 to 50 named columns")
+        if not isinstance(columns, list) or not 1 <= len(columns) <= 50 or not all(isinstance(column, str) and column for column in columns):
+            raise ValueError(f"{where}: provide 1 to 50 named columns")
         if len(set(columns)) != len(columns):
-            raise ValueError("Column names must be unique")
-        if not isinstance(rows, list) or any(not isinstance(row, list) or len(row) != len(columns) for row in rows):
-            raise ValueError("Every row must match its columns")
+            raise ValueError(f"{where}: column names must be unique")
+        if not isinstance(rows, list):
+            raise ValueError(f"{where}: rows must be a list of rows")
+        for index, row in enumerate(rows, 1):
+            if not isinstance(row, list) or len(row) != len(columns):
+                count = len(row) if isinstance(row, list) else "no"
+                raise ValueError(f"{where}: row {index} has {count} values but the sheet has {len(columns)} columns")
         total += len(rows)
         if total > 5000:
-            raise ValueError("Reports support at most 5000 total rows")
-        if int(sheet.get("sourceRowCount", len(rows))) != len(rows):
-            raise ValueError("Delivered rows do not reconcile with the declared source row count")
-        for row in rows:
+            raise ValueError(f"Reports support at most 5000 total rows; {where} brings the total to {total}")
+        declared = int(sheet.get("sourceRowCount", len(rows)))
+        if declared != len(rows):
+            raise ValueError(f"{where}: {len(rows)} rows were supplied but sourceRowCount says {declared}")
+        for index, row in enumerate(rows, 1):
             for value in row:
-                safe_cell(value)
+                try:
+                    safe_cell(value)
+                except ValueError as error:
+                    raise ValueError(f"{where}: row {index}: {error}") from None
     format_name = request["format"]
     if format_name == "csv":
         if len(sheets) != 1:
@@ -96,5 +107,10 @@ def render(request):
 if __name__ == "__main__":
     try:
         print(json.dumps(render(json.loads(sys.stdin.read()))))
-    except (ValueError, TypeError, KeyError):
-        print(json.dumps({"ok": False, "error": "Invalid report data, row coverage, or format"}))
+    except ValueError as error:
+        # The message names the sheet, row or limit to fix; it never echoes cell values.
+        print(json.dumps({"ok": False, "error": f"Invalid report data: {error}"}))
+    except KeyError as error:
+        print(json.dumps({"ok": False, "error": f"Invalid report data: missing {error}"}))
+    except TypeError:
+        print(json.dumps({"ok": False, "error": "Invalid report data: dataJson must be {title, source, sheets:[{name, columns, rows, sourceRowCount}]}"}))

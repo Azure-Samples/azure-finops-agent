@@ -55,6 +55,19 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("never compute a score total, maximum, percentage or average")]
     [InlineData("Sponsored_2016-01-01 (Microsoft Azure Sponsorship)")]
     [InlineData("the offer is unsupported, not zero spend or ingestion lag")]
+    [InlineData("The user's stated goal and constraints come first")]
+    [InlineData("use its exact values and give a better practice as one note, never as a change")]
+    [InlineData("Take names, regions, codes and values from the user or from a read, never from an example")]
+    [InlineData("an optional property it does not return is not set, so report its documented default")]
+    [InlineData("ManagementPolicyNotFound")]
+    [InlineData("A 403 from Azure means the user lacks an Azure role on that scope")]
+    [InlineData("never send the user to App registrations to add permissions to this app")]
+    [InlineData("microsoft_docs_search")]
+    [InlineData("never tenant, resource, user or customer names, IDs or values")]
+    [InlineData("never a round of its own for what the fetching query could compute")]
+    [InlineData("For Azure cost, budget, inventory, tag and pricing answers, quote the reported retrieval time")]
+    [InlineData("Documentation answers carry no retrieval time")]
+    [InlineData("when they are not in your tool list, search with QueryAzure GET https://learn.microsoft.com/api/search")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
@@ -66,13 +79,14 @@ public sealed class SessionQualityGuidanceTests
         Assert.StartsWith(Prompt, withSearch);
         Assert.Contains("never web-search a question those answer", withSearch);
         Assert.Contains("including Azure OpenAI and other Foundry model token prices", withSearch);
-        Assert.Contains("Never web-search to confirm, cross-check or add background to evidence QueryAzure already returned", withSearch);
+        Assert.Contains("Never web-search to confirm, cross-check or add background to evidence QueryAzure or the Microsoft Learn tools already returned", withSearch);
+        Assert.Contains("read a page a search returned with microsoft_docs_fetch, never by opening it through web search", withSearch);
         Assert.Contains("Never web-search or open Microsoft documentation, pricing, API or API specification URLs (prices.azure.com", withSearch);
         Assert.Contains("github.com, api.github.com and raw.githubusercontent.com including the Azure/azure-rest-api-specs and microsoftgraph/msgraph-metadata repositories", withSearch);
         Assert.Contains("never web-search an API path, api-version or field name", withSearch);
         Assert.Contains("needs no web search at all: start it with QueryAzure", withSearch);
         Assert.Contains("These rules take precedence over any general instruction to browse for current information or to cite web results", withSearch);
-        Assert.Contains("QueryAzure is itself a live web request tool", withSearch);
+        Assert.Contains("QueryAzure, microsoft_docs_search and microsoft_docs_fetch are themselves live web request tools", withSearch);
         Assert.Contains("already satisfies any instruction to use the web for current information, prices or citations", withSearch);
         Assert.Contains("a price it returned this turn is already up to date", withSearch);
         Assert.Contains("so an answer built from them needs no web citation", withSearch);
@@ -134,22 +148,20 @@ public sealed class SessionQualityGuidanceTests
     public void NextStepsNeverCostAModelRoundOfTheirOwn()
     {
         Assert.Contains("next steps never get a round of their own", Prompt);
-        Assert.Contains("call SuggestFollowUp only in the same response as another tool call that completes the answer", Prompt);
-        Assert.Contains("make any SuggestFollowUp call in the ReportMaturityScore response, and after scoring call no other tool", Prompt);
+        Assert.Contains("they render as buttons, so no tool call is needed for them", Prompt);
+        Assert.Contains("after scoring call no other tool", Prompt);
         Assert.Contains("no GenerateDataReport unless the user asked for a file", Prompt);
+        Assert.DoesNotContain("SuggestFollowUp", Prompt);
 
         // The link the prompt teaches must match the chip pattern ChatView.vue renders as a button.
         var link = System.Text.RegularExpressions.Regex.Match(Prompt, @"\[[^\]]+\]\(prompt:[^)]+\)");
         Assert.True(link.Success);
         Assert.Equal("[short label](prompt:complete next instruction)", link.Value);
 
-        var followUp = FollowUpTools.Create().Single();
-        Assert.Contains("never in a response of its own", followUp.Description);
-        Assert.Contains("[label](prompt:instruction)", followUp.Description);
-
         var score = new ScoreTools(new UserTokens { UserId = 101 }).Create().First();
         Assert.Equal("ReportMaturityScore", score.Name);
-        Assert.Contains("put any SuggestFollowUp call in this same response, then answer with no further tool call", score.Description);
+        Assert.Contains("never alongside QueryAzure calls, then answer with no further tool call", score.Description);
+        Assert.DoesNotContain("SuggestFollowUp", score.Description);
         Assert.DoesNotContain("by itself", score.Description);
     }
 
@@ -191,6 +203,8 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("learn.microsoft.com/kusto", azure.Description);
         Assert.Contains("learn.microsoft.com/rest/api/storageservices", azure.Description);
         Assert.Contains("azure.status.microsoft", azure.Description);
+        // Learn's own search stays the fallback when its MCP tools are not available.
+        Assert.Contains("only when those tools are not available, search https://learn.microsoft.com/api/search", azure.Description);
     }
 
     // The host takes ARM api-versions from ARM itself, so model-facing text never pins a dated one.
@@ -200,7 +214,7 @@ public sealed class SessionQualityGuidanceTests
         var tokens = new UserTokens { UserId = 101 };
         Microsoft.Extensions.AI.AIFunction[] tools =
         [
-            .. ChartTools.Create(), .. FollowUpTools.Create(), .. new HtmlPresentationTools(101).Create(), .. new ScriptTools(101).Create(),
+            .. ChartTools.Create(), .. new HtmlPresentationTools(101).Create(), .. new ScriptTools(101).Create(),
             .. new MaturityReportTools(101).Create(), .. new AzureFinOps.Dashboard.Jobs.JobOutcomeTools(101).Create(), .. new ReportTools(101).Create(),
             .. new ScoreTools(tokens).Create(), .. new AzureQueryTools(tokens).Create(), .. new SavingsLedgerTools(tokens).Create(),
             .. new UploadedFileTools(tokens).Create(), .. new FaqTools(tokens).Create(),

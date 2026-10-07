@@ -11,7 +11,7 @@ updates:
       otel:
         patterns: ["OpenTelemetry*", "Azure.Monitor.OpenTelemetry*"]
       agent-framework:
-        patterns: ["Microsoft.Agents.AI*", "Microsoft.Extensions.AI*", "Azure.AI.Projects*"]
+        patterns: ["Microsoft.Agents.AI*", "Microsoft.Extensions.AI*", "Azure.AI.Projects*", "ModelContextProtocol*"]
       azure:
         patterns: ["Azure.*"]
       identity-model:

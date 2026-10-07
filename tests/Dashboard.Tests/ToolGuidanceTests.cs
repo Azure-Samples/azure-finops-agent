@@ -103,6 +103,11 @@ public sealed class ToolGuidanceTests
         var content = tool.JsonSchema.GetProperty("properties").GetProperty("scriptContent");
         Assert.Contains("complete executable", content.GetProperty("description").GetString()!);
         Assert.Contains("GenerateScript directly", AgentSessionFactory.SystemPrompt);
+        // A script request cost a documentation and web lookup round before the script, and one answer linked an invented
+        // sandbox path; the code is written from knowledge and the file is the card the UI shows.
+        Assert.Contains("from knowledge, without searching documentation or the web for their syntax first", tool.Description);
+        Assert.Contains("appears to the user as a download card below the answer: refer to it in words and never write a link or file path to it",
+            AgentSessionFactory.SystemPrompt);
     }
 
     [Fact]
@@ -122,7 +127,6 @@ public sealed class ToolGuidanceTests
     [InlineData("GenerateDataReport", "dataJson", "sourceRowCount")]
     [InlineData("GenerateHtmlPresentation", "slidesJson", "scope")]
     [InlineData("GenerateMaturityReport", "reportJson", "source aggregates")]
-    [InlineData("SuggestFollowUp", "prompt", "scope")]
     [InlineData("ReportJobOutcome", "summary", "scope")]
     public void OutputToolsDescribeBoundedEvidenceInputs(string toolName, string parameterName, string guidance)
     {
@@ -132,7 +136,6 @@ public sealed class ToolGuidanceTests
             "GenerateDataReport" => new ReportTools(101).Create(),
             "GenerateHtmlPresentation" => new HtmlPresentationTools(101).Create(),
             "GenerateMaturityReport" => new MaturityReportTools(101).Create(),
-            "SuggestFollowUp" => FollowUpTools.Create(),
             "ReportJobOutcome" => new AzureFinOps.Dashboard.Jobs.JobOutcomeTools(101).Create(),
             _ => throw new InvalidOperationException("Unexpected output tool.")
         };

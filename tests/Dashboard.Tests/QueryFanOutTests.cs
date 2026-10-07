@@ -70,6 +70,28 @@ public class QueryFanOutTests
         Assert.False(EvidenceInspector.Inspect(failed).Success);
     }
 
+    // Four storage accounts without a lifecycle policy were reported as "unconfirmed" instead of "none".
+    [Fact]
+    public async Task A404ThatSaysTheItemDoesNotExistIsNamedAsAbsent()
+    {
+        var (send, _) = Create(url => url == "/a"
+            ? "HTTP 200 OK\n{\"name\":\"DefaultManagementPolicy\"}"
+            : url == "/d"
+                ? "HTTP 404 NotFound\n{\"error\":{\"code\":\"InvalidResourceType\",\"message\":\"synthetic\"}}"
+                : "HTTP 404 NotFound\n{\"error\":{\"code\":\"ManagementPolicyNotFound\",\"message\":\"No ManagementPolicy found for account synthetic\"}}");
+
+        var output = await FanOut("/a\n/b\n/c\n/d", send);
+
+        Assert.StartsWith("PARTIAL RESULT: 3 of 4 requests failed; a failed request is unknown, not empty. 2 of them are 404s that say the requested item does not exist, which shows it is absent.\n", output);
+        Assert.True(AzureQueryTools.IsAbsent("HTTP 404 NotFound\n{\"error\":{\"code\":\"ResourceNotFound\",\"message\":\"x\"}}"));
+        Assert.False(AzureQueryTools.IsAbsent("HTTP 404 NotFound\n{\"error\":{\"code\":\"SubscriptionNotFound\",\"message\":\"x\"}}"));
+        Assert.False(AzureQueryTools.IsAbsent("HTTP 403 Forbidden\n{\"error\":{\"code\":\"ResourceNotFound\"}}"));
+        Assert.False(AzureQueryTools.IsAbsent("HTTP 404 NotFound\nnot json"));
+        // A bare NotFound is also what a wrong path returns, so it proves nothing about the item.
+        Assert.False(AzureQueryTools.IsAbsent("HTTP 404 NotFound\n{\"error\":{\"code\":\"NotFound\",\"message\":\"x\"}}"));
+        Assert.True(AzureQueryTools.IsAbsent("HTTP 404 NotFound\n{\"error\":{\"code\":\"Request_ResourceNotFound\",\"message\":\"x\"}}"));
+    }
+
     [Fact]
     public async Task DeniedRegionsAndIncompletePagesStayUnknownOrPartial()
     {

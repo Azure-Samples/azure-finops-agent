@@ -144,6 +144,12 @@ internal static partial class JsonQuery
                 if (MathOverload().IsMatch(message)) message += ". Numbers are double?; unwrap them for Math with ?? (Math.Max(0, (x.a ?? 0) - (x.b ?? 0)))";
                 if (DuplicateName().IsMatch(message)) message += "; name each projected member once (new { x.kind, propertiesKind = x.properties.kind })";
                 if (IndexedLambda().IsMatch(text)) message += ". " + LinePositions;
+                if (NotCollection().Match(message) is { Success: true } notList && RootLists(shape) is { Count: > 0 } lists
+                    && (shape.Clr!.Name == notList.Groups["type"].Value || shape.Clr.FullName == notList.Groups["type"].Value))
+                    message += $". The response root it is one object, not a list: count or iterate one of its lists ({string.Join(", ", lists.Select(list => list + ".Count()"))})";
+                if (MissingMember().Match(message) is { Success: true } mapped && mapped.Groups["type"].Value.StartsWith("Dictionary", StringComparison.Ordinal))
+                    message += $". This object is read as a map because the query also reads it by key or iterates it, so read its members by key too (x.properties[\"{mapped.Groups["member"].Value}\"])";
+                if (error.Position >= 0) message += $" (at character {error.Position + 1}: {Excerpt(text, error.Position)})";
                 throw new ArgumentException(absent.Count == 0 ? message : $"{message}. {Absent(absent)}", error);
             }
             // A predicate aggregate over a keyed object (notifications.Count(n => n.Value.enabled == true)) fails while its
@@ -167,6 +173,22 @@ internal static partial class JsonQuery
     // Searching a long page by position otherwise turns into refetching it to bisect line ranges.
     private const string LinePositions = "Lists have no IndexOf/FindIndex and lambdas take one parameter (no (x, i) =>): lines.TakeWhile(l => !l.Contains(\"WS2\")).Count() is the first matching line's index, and lines.SkipWhile(l => !l.Contains(\"WS2\")).Take(60) reads the lines from it.";
 
+    // The text around a parse error, so the model can see which part of a long query failed.
+    internal static string Excerpt(string text, int position)
+    {
+        var at = Math.Clamp(position, 0, text.Length);
+        var start = Math.Max(0, at - 30);
+        var end = Math.Min(text.Length, at + 30);
+        return (start > 0 ? "…" : "") + text[start..at] + "⟨here⟩" + text[at..end] + (end < text.Length ? "…" : "");
+    }
+
+    // A response root holding lists (value, rows, lines) is one object; reading it as a collection would count its fields.
+    private static List<string> RootLists(Node root) =>
+        root.Members is null ? [] : root.Members.Where(member => root.Properties[member.Key] is { } child && (child.Arrays > 0 || child.ForceList))
+            .Select(member => member.Value.Identifier).ToList();
+
+    private static bool IsRootWithLists(Node node, string path) => path == "it" && RootLists(node).Count > 0;
+
     // A string key read (parameters["effect"]) of an object is a map read; member access cannot take a key.
     private static bool MapIndexed(Node shape, string text) =>
         Force(shape, StringIndexed().Matches(text).Select(match => match.Groups["m"].Value).ToHashSet(StringComparer.Ordinal));
@@ -178,7 +200,7 @@ internal static partial class JsonQuery
     {
         var changed = false;
         foreach (var (node, path) in Walk(shape, "it").ToList())
-            if (node.Members is not null && !node.ForceMap && Segment(path) is { } name && names.Contains(name))
+            if (node.Members is not null && !node.ForceMap && !IsRootWithLists(node, path) && Segment(path) is { } name && names.Contains(name))
             {
                 node.ForceMap = true;
                 changed = true;
@@ -245,8 +267,9 @@ internal static partial class JsonQuery
         }
         else if (NotCollection().Match(message) is { Success: true } method && CollectionMethods.Contains(method.Groups["method"].Value))
         {
-            foreach (var (node, _) in Walk(shape, "it"))
-                if (node.Members is not null && (node.Clr!.Name == method.Groups["type"].Value || node.Clr.FullName == method.Groups["type"].Value) && !node.ForceMap)
+            foreach (var (node, path) in Walk(shape, "it"))
+                if (node.Members is not null && (node.Clr!.Name == method.Groups["type"].Value || node.Clr.FullName == method.Groups["type"].Value)
+                    && !node.ForceMap && !IsRootWithLists(node, path))
                 {
                     node.ForceMap = true;
                     changed = true;

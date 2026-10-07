@@ -103,7 +103,8 @@ test('markup is escaped everywhere and entities are preserved', () => {
   assert.equal(renderMarkdown('<img src=x onerror=alert(1)>'), '<p>&lt;img src=x onerror=alert(1)&gt;</p>');
   assert.equal(renderMarkdown('| a |\n|---|\n| <script>x</script> |').includes('<script>'), false);
   assert.equal(renderMarkdown('- <b>x</b>'), '<ul><li>&lt;b&gt;x&lt;/b&gt;</li></ul>');
-  assert.equal(renderMarkdown('[<b>](prompt:"><img>)'), '<p><button type="button" class="prompt-chip" data-prompt="&quot;&gt;&lt;img&gt;">&lt;b&gt;</button></p>');
+  assert.equal(renderMarkdown('[<b>](prompt:"><img>)'), '<div class="prompt-chip-row"><button type="button" class="prompt-chip" data-prompt="&quot;&gt;&lt;img&gt;">&lt;b&gt;</button></div>');
+  assert.equal(renderMarkdown('Ask [<b>](prompt:"><img>)'), '<p>Ask <button type="button" class="prompt-chip" data-prompt="&quot;&gt;&lt;img&gt;">&lt;b&gt;</button></p>');
   assert.equal(renderMarkdown('AT&T &amp; &#65;'), '<p>AT&amp;T &amp; &#65;</p>');
   assert.equal(renderMarkdown('> quoted **note**\n> more'), '<blockquote><p>quoted <strong>note</strong><br/>more</p></blockquote>');
 });
@@ -112,4 +113,27 @@ test('citation markers and empty input', () => {
   assert.equal(renderMarkdown('Price \uE200cite\uE202turn0search0\uE201 now'), '<p>Price now</p>');
   assert.equal(renderMarkdown(''), '');
   assert.equal(renderMarkdown(null), '');
+});
+
+test('next-step chips that end an answer become one row of buttons', () => {
+  const chip = (label, prompt) => `<button type="button" class="prompt-chip" data-prompt="${prompt}">${label}</button>`;
+  const row = `<div class="prompt-chip-row">${chip('Top resources', 'Show the top resources')}${chip('Script', 'Write the cleanup script')}</div>`;
+  assert.equal(
+    renderMarkdown('Spend rose 12%.\n\n[Top resources](prompt:Show the top resources) · [Script](prompt:Write the cleanup script)'),
+    `<p>Spend rose 12%.</p>${row}`,
+  );
+  assert.equal(
+    renderMarkdown('Spend rose 12%.\n\n- [Top resources](prompt:Show the top resources)\n- [Script](prompt:Write the cleanup script)'),
+    `<p>Spend rose 12%.</p>${row}`,
+  );
+  // Chips inside a sentence or table, or followed by more text, stay where they are.
+  assert.equal(
+    renderMarkdown('Next: [Script](prompt:Write the cleanup script)'),
+    `<p>Next: ${chip('Script', 'Write the cleanup script')}</p>`,
+  );
+  assert.equal(
+    renderMarkdown('[Script](prompt:Write the cleanup script)\n\nDone.'),
+    `<p>${chip('Script', 'Write the cleanup script')}</p><p>Done.</p>`,
+  );
+  assert.doesNotMatch(renderMarkdown('| a | b |\n|---|---|\n| x | [Ask](prompt:Why?) |'), /prompt-chip-row/);
 });

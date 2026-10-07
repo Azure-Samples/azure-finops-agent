@@ -39,6 +39,8 @@ var foundryProjectEndpoint = AgentSessionFactory.ResolveProjectEndpoint(azureOpe
 // Hosted web search (Bing grounding) is opt-in: it sits outside the Azure data boundary, and QueryAzure already reads public pages.
 var webSearchEnabled = builder.Configuration.GetValue("AzureOpenAI:WebSearch", AgentSessionFactory.DefaultWebSearch);
 var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "medium";
+// Microsoft Learn's public MCP server answers documentation questions; set MicrosoftLearn:Enabled=false to leave it out.
+var microsoftLearnEnabled = builder.Configuration.GetValue("MicrosoftLearn:Enabled", true);
 var appInsightsCs = builder.Configuration["ApplicationInsights:ConnectionString"];
 // Canonical public hostname (bare, no scheme/www) for the owner deployment, e.g.
 // "azure-finops-agent.com". The app is reachable on its *.azurewebsites.net host
@@ -125,7 +127,7 @@ AzureFinOps.Dashboard.Infrastructure.HttpHelper.Logger =
 await using var agentFactory = AgentSessionFactory.Create(
     telemetry, app.Services.GetRequiredService<PersistentIdentity>(),
     foundryProjectEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort,
-    loggerFactory, azureOpenAITenantId, webSearchEnabled);
+    loggerFactory, azureOpenAITenantId, webSearchEnabled, microsoftLearnEnabled);
 
 // Start the janitor now that the factory exists; tie its lifecycle to the host.
 var janitor = new UserStateJanitor(telemetry, agentFactory, loggerFactory.CreateLogger<UserStateJanitor>());

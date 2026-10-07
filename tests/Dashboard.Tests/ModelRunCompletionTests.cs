@@ -53,6 +53,21 @@ public sealed class ModelRunCompletionTests
         Assert.Equal("The model service returned an error: Unable to get resource information.", run.Failure);
     }
 
+    // The provider text named the internal deployment and region and told anonymous users to request more quota.
+    [Theory]
+    [InlineData("rate_limit_exceeded", "Model deployment rate limit exceeded. Your requests to model-x in region-y have exceeded token rate limit.")]
+    [InlineData(null, "Requests to the deployment have exceeded the token rate limit of your current tier.")]
+    [InlineData("429", "Too many requests")]
+    public void ARateLimitIsAPlainBusyNoticeWithoutDeploymentDetails(string? code, string message)
+    {
+        var run = new ModelRunCompletion();
+        run.Observe([new ErrorContent(message) { ErrorCode = code }], null);
+
+        Assert.Equal(ModelRunCompletion.BusyMessage, run.Failure);
+        Assert.DoesNotContain("region", run.Failure);
+        Assert.DoesNotContain("quota", run.Failure);
+    }
+
     [Fact]
     public void ApprovalRequestAfterACompletedResponseIsNotAFailure()
     {

@@ -22,6 +22,78 @@ public static class AzureSessionEndpoints
             && policies.TryGetProperty("quotaId", out var quota) ? quota.GetString() : null
     };
 
+    /// <summary>The subscriptions and management groups the token can read, as the UI and the agent's scope context show them.</summary>
+    internal static async Task<(List<object> Subscriptions, List<object> ManagementGroups)> DiscoverScopesAsync(
+        HttpClient http, string token, ILogger logger, CancellationToken cancellationToken = default)
+    {
+        var subscriptions = new List<object>();
+        try
+        {
+            using var subReq = new HttpRequestMessage(HttpMethod.Get, "https://management.azure.com/subscriptions?api-version=2022-12-01");
+            subReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            subReq.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
+            var subRes = await http.SendAsync(subReq, cancellationToken);
+            var subBody = await subRes.Content.ReadAsStringAsync(cancellationToken);
+            var subJson = JsonSerializer.Deserialize<JsonElement>(subBody);
+            if (subJson.TryGetProperty("value", out var subs))
+            {
+                foreach (var sub in subs.EnumerateArray())
+                    subscriptions.Add(Subscription(sub));
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Failed to list Azure subscriptions");
+        }
+
+        var managementGroups = new List<object>();
+        try
+        {
+            using var mgReq = new HttpRequestMessage(HttpMethod.Get, "https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2021-04-01");
+            mgReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            mgReq.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
+            var mgRes = await http.SendAsync(mgReq, cancellationToken);
+            var mgBody = await mgRes.Content.ReadAsStringAsync(cancellationToken);
+            var mgJson = JsonSerializer.Deserialize<JsonElement>(mgBody);
+            if (mgJson.TryGetProperty("value", out var mgs))
+            {
+                foreach (var mg in mgs.EnumerateArray())
+                {
+                    managementGroups.Add(new
+                    {
+                        id = mg.GetProperty("id").GetString(),
+                        name = mg.TryGetProperty("properties", out var props) && props.TryGetProperty("displayName", out var dn) ? dn.GetString() : mg.GetProperty("name").GetString()
+                    });
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Failed to list management groups");
+        }
+        return (subscriptions, managementGroups);
+    }
+
+    /// <summary>
+    /// The scopes the agent's connection context names, bounded so very large estates do not bloat every model prompt.
+    /// The owner fields bind a cached copy to its Entra principal and are never shown to the model.
+    /// </summary>
+    internal static string ScopeContext(List<object> subscriptions, List<object> managementGroups, string? ownerObjectId = null, string? ownerTenantId = null)
+    {
+        var scope = new Dictionary<string, object?>();
+        if (ownerObjectId is not null || ownerTenantId is not null)
+        {
+            scope["ownerObjectId"] = ownerObjectId;
+            scope["ownerTenantId"] = ownerTenantId;
+        }
+        scope["subscriptionCount"] = subscriptions.Count;
+        scope["subscriptions"] = subscriptions.Take(500);
+        scope["subscriptionsTruncated"] = subscriptions.Count > 500;
+        scope["managementGroups"] = managementGroups.Take(50);
+        scope["managementGroupsTruncated"] = managementGroups.Count > 50;
+        return JsonSerializer.Serialize(scope);
+    }
+
     public static void MapAzureSessionEndpoints(
         this IEndpointRouteBuilder app,
         SessionTokenStore tokenStore,
@@ -87,52 +159,7 @@ public static class AzureSessionEndpoints
                 }
             }
 
-            var http = httpFactory.CreateClient();
-            var subscriptions = new List<object>();
-            try
-            {
-                using var subReq = new HttpRequestMessage(HttpMethod.Get, "https://management.azure.com/subscriptions?api-version=2022-12-01");
-                subReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                subReq.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
-                var subRes = await http.SendAsync(subReq);
-                var subBody = await subRes.Content.ReadAsStringAsync();
-                var subJson = JsonSerializer.Deserialize<JsonElement>(subBody);
-                if (subJson.TryGetProperty("value", out var subs))
-                {
-                    foreach (var sub in subs.EnumerateArray())
-                        subscriptions.Add(Subscription(sub));
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to list Azure subscriptions");
-            }
-
-            var managementGroups = new List<object>();
-            try
-            {
-                using var mgReq = new HttpRequestMessage(HttpMethod.Get, "https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2021-04-01");
-                mgReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                mgReq.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
-                var mgRes = await http.SendAsync(mgReq);
-                var mgBody = await mgRes.Content.ReadAsStringAsync();
-                var mgJson = JsonSerializer.Deserialize<JsonElement>(mgBody);
-                if (mgJson.TryGetProperty("value", out var mgs))
-                {
-                    foreach (var mg in mgs.EnumerateArray())
-                    {
-                        managementGroups.Add(new
-                        {
-                            id = mg.GetProperty("id").GetString(),
-                            name = mg.TryGetProperty("properties", out var props) && props.TryGetProperty("displayName", out var dn) ? dn.GetString() : mg.GetProperty("name").GetString()
-                        });
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to list management groups");
-            }
+            var (subscriptions, managementGroups) = await DiscoverScopesAsync(httpFactory.CreateClient(), token, logger);
 
             var connectedApis = new List<string>
             {
@@ -153,16 +180,7 @@ public static class AzureSessionEndpoints
             // exposing the result to the agent avoids another GET /subscriptions
             // and enables one cross-subscription cost tool call. Keep the cache
             // bounded so very large estates do not bloat every model prompt.
-            ctx.Session.SetString("azure_scope_context", JsonSerializer.Serialize(new
-            {
-                ownerObjectId = scopeOwnerOid,
-                ownerTenantId = scopeTenantId,
-                subscriptionCount = subscriptions.Count,
-                subscriptions = subscriptions.Take(500),
-                subscriptionsTruncated = subscriptions.Count > 500,
-                managementGroups = managementGroups.Take(50),
-                managementGroupsTruncated = managementGroups.Count > 50
-            }));
+            ctx.Session.SetString("azure_scope_context", ScopeContext(subscriptions, managementGroups, scopeOwnerOid, scopeTenantId));
 
             return Results.Json(new
             {

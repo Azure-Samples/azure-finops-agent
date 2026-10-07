@@ -31,7 +31,19 @@ export function renderMarkdown(text) {
   if (!text) return "";
   const escaped = escapeHtml(stripCitationMarkers(String(text)).replace(/\u0000/g, ""));
   const lines = escaped.replace(/\r\n?/g, "\n").split("\n").map(expandIndent);
-  return renderBlocks(lines);
+  return chipRow(renderBlocks(lines));
+}
+
+const PROMPT_CHIP = /<button type="button" class="prompt-chip"[^>]*>[\s\S]*?<\/button>/g;
+
+// The next-step chips that end an answer (a last paragraph or list holding only
+// [label](prompt:...) links) become one row of buttons below it.
+function chipRow(html) {
+  const last = html.match(/<(p|ul|ol)>((?:(?!<\/?(?:p|ul|ol)>)[\s\S])*)<\/\1>$/);
+  const chips = last?.[2].match(PROMPT_CHIP);
+  if (!chips) return html;
+  const rest = last[2].replace(PROMPT_CHIP, "").replace(/<\/?li>|<br\/>|&nbsp;|[\s·•|,;-]/g, "");
+  return rest ? html : `${html.slice(0, last.index)}<div class="prompt-chip-row">${chips.join("")}</div>`;
 }
 
 function expandIndent(line) {

@@ -64,4 +64,33 @@ public sealed class ConversationCompactionTests
     [Fact]
     public void RecapIsNullWithoutVisibleMessages() =>
         Assert.Null(AgentConversation.Recap([new UserMessageEvent("[CONTEXT: only context]"), new TurnIdleEvent()]));
+
+    // A reset lost the exporter script the agent had written and the screenshot the user attached; the agent then asked
+    // the user to upload its own script.
+    [Fact]
+    public void RecapNamesEarlierFilesAndCarriesTheLatestScriptCode()
+    {
+        var recap = AgentConversation.Recap(
+        [
+            new UserMessageEvent("Which VMs does this change affect?"),
+            new ToolStartEvent("s1", "GenerateScript", "{\"language\":\"bash\",\"filename\":\"export\",\"scriptContent\":\"echo first\"}"),
+            new ToolCompleteEvent("s1", true, "__SCRIPT_READY__:a1:export.sh:1:bash:Exporter", null),
+            new ToolStartEvent("r1", "GenerateDataReport", "{\"format\":\"xlsx\"}"),
+            new ToolCompleteEvent("r1", true, "__HTML_READY__:a2:Affected-VMs.xlsx:12 rows (XLSX)", null),
+            new ToolStartEvent("s2", "GenerateScript", "{\"language\":\"bash\",\"filename\":\"export\",\"scriptContent\":\"echo second\"}"),
+            new ToolCompleteEvent("s2", true, "__SCRIPT_READY__:a3:export-v2.sh:1:bash:Exporter", null),
+            new ToolStartEvent("s3", "GenerateScript", "{\"scriptContent\":\"echo failed\"}"),
+            new ToolCompleteEvent("s3", false, null, "Error: invalid"),
+            new AssistantMessageEvent("m1", "The script and workbook are ready."),
+        ], ["notice.png"])!;
+
+        Assert.Contains("Files from earlier turns", recap);
+        Assert.Contains("- export.sh (bash script, 1 lines)", recap);
+        Assert.Contains("- Affected-VMs.xlsx", recap);
+        Assert.Contains("- notice.png, an image the user attached (no longer visible to you", recap);
+        Assert.Contains("Code of the latest script, export-v2.sh:\n```bash\necho second\n```", recap);
+        Assert.DoesNotContain("echo first", recap);
+        Assert.DoesNotContain("echo failed", recap);
+        Assert.EndsWith("The user's new message follows.]", recap);
+    }
 }

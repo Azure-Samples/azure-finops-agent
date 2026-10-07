@@ -80,7 +80,7 @@ The agent acts with your own delegated permissions, so your Azure roles and the 
 - **Real files:** scripts and reports are real downloads tied to your session, kept for 24 hours.
 - **Done is not solved:** a finished answer is not proof the problem is fixed; proposed changes still need your approval.
 
-The [tool and prompt catalog](docs/tool-catalog.md) documents the agent's 17 tools and their limits, and [reliability contracts](docs/agent-reliability.md) describe how answers are verified.
+The [tool and prompt catalog](docs/tool-catalog.md) documents the agent's 16 tools, the two Microsoft Learn documentation tools it uses, and their limits, and [reliability contracts](docs/agent-reliability.md) describe how answers are verified.
 
 ## How it works
 

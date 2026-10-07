@@ -199,12 +199,14 @@
                     'job-dot--dead':
                       !j.running &&
                       (j.lastStatus === 'error' ||
-                        j.lastStatus === 'auth_expired'),
+                        j.lastStatus === 'auth_expired' ||
+                        j.lastStatus === 'action_required'),
                     'job-dot--alive':
                       !j.running &&
                       j.enabled &&
                       j.lastStatus !== 'error' &&
-                      j.lastStatus !== 'auth_expired',
+                      j.lastStatus !== 'auth_expired' &&
+                      j.lastStatus !== 'action_required',
                   }"
                   :title="
                     j.running
@@ -235,6 +237,10 @@
                       </template>
                       <template v-else-if="j.lastStatus === 'auth_expired'">
                         <span class="job-time--dead">reconnect Azure</span> ·
+                        paused
+                      </template>
+                      <template v-else-if="j.lastStatus === 'action_required'">
+                        <span class="job-time--dead">needs your action</span> ·
                         paused
                       </template>
                       <template v-else-if="j.lastRunUtc">
@@ -3785,12 +3791,16 @@ function autosizeJobPrompt() {
   el.style.height = "auto";
   el.style.height = el.scrollHeight + 2 + "px";
 }
+const jobNeedsUser = (j) =>
+  j.lastStatus === "error" ||
+  j.lastStatus === "auth_expired" ||
+  j.lastStatus === "action_required";
 // Display order for a long list: running first, then anything failing (needs
 // the user), then armed jobs by soonest next run, then paused/expired.
 const sortedJobs = computed(() => {
   const rank = (j) => {
     if (j.running) return 0;
-    if (j.lastStatus === "error" || j.lastStatus === "auth_expired") return 1;
+    if (jobNeedsUser(j)) return 1;
     if (j.enabled) return 2;
     return 3;
   };
@@ -3806,10 +3816,7 @@ const activeJobsCount = computed(
   () => jobs.value.filter((j) => j.enabled).length,
 );
 const attentionJobsCount = computed(
-  () =>
-    jobs.value.filter(
-      (j) => j.lastStatus === "error" || j.lastStatus === "auth_expired",
-    ).length,
+  () => jobs.value.filter(jobNeedsUser).length,
 );
 // Live clock for the "next in X min" countdowns — a 30 s ticker the template
 // reads through formatUntil() so countdowns stay fresh without any list churn.
@@ -5523,6 +5530,10 @@ function activityPhrase(tc) {
     }
     case "web_search":
       return "Searching the web";
+    case "microsoft_docs_search":
+      return "Searching Microsoft Learn";
+    case "microsoft_docs_fetch":
+      return "Reading Microsoft Learn";
     case "QueryUploadedFile":
       return "Reading your file";
     case "GenerateScript":
@@ -5757,6 +5768,17 @@ function friendlyToolLabel(tc) {
   if (tool === "web_search") {
     const query = Array.isArray(args?.queries) ? args.queries[0] : "";
     return query ? `Web search · ${query}` : "Web search";
+  }
+  // Microsoft Learn's MCP tools: a search query, or the page read.
+  if (tool === "microsoft_docs_search")
+    return args?.query ? `Microsoft Learn · ${args.query}` : "Microsoft Learn";
+  if (tool === "microsoft_docs_fetch") {
+    const page = String(args?.url || "")
+      .replace(/[?#].*$/, "")
+      .split("/")
+      .filter(Boolean)
+      .pop();
+    return page ? `Microsoft Learn · ${page}` : "Microsoft Learn";
   }
   if (tool === "GenerateHtmlPresentation") {
     let n = 0;
@@ -10916,6 +10938,30 @@ async function send() {
 }
 :deep(.prompt-chip:active) {
   transform: translateY(0);
+}
+/* Next-step chips that end an answer: one row of buttons below it, styled like
+   the follow-up buttons. */
+:deep(.prompt-chip-row) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+:deep(.prompt-chip-row .prompt-chip) {
+  margin: 0;
+  background: #fff;
+  color: #323130;
+  border: 1px solid #e1dfdd;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-weight: 400;
+  text-align: left;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+:deep(.prompt-chip-row .prompt-chip:hover) {
+  background: #fff;
+  border-color: #d2d0ce;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 /* The turn's reasoning summary, shown above its answer while streaming and
    after it completes. Collapsible, but open by default. */

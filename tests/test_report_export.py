@@ -37,7 +37,16 @@ class ReportTests(unittest.TestCase):
     def test_declared_coverage_must_match_delivered_rows(self):
         request = self.request("html")
         request["data"]["sheets"][0]["sourceRowCount"] = 113
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, r"Sheet 1 \(Costs\): 2 rows were supplied but sourceRowCount says 113"):
+            REPORT.render(request)
+
+    def test_errors_name_the_sheet_and_row_to_fix(self):
+        request = self.request("xlsx")
+        request["data"]["sheets"].append({"name": "Disks", "columns": ["name", "size", "tier"], "rows": [["a", 1, "P10"], ["b", 2]], "sourceRowCount": 2})
+        with self.assertRaisesRegex(ValueError, r"Sheet 2 \(Disks\): row 2 has 2 values but the sheet has 3 columns"):
+            REPORT.render(request)
+        request["data"]["sheets"][1]["rows"][1] = ["b", {"nested": True}, "P10"]
+        with self.assertRaisesRegex(ValueError, r"Sheet 2 \(Disks\): row 2: Cells must be scalar values"):
             REPORT.render(request)
 
 

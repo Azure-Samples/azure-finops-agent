@@ -104,11 +104,16 @@ public sealed class AgentConversation : IAsyncDisposable
         string? recap = null;
         if (CompactsNextTurn)
         {
-            recap = Recap(await GetEventsAsync());
+            recap = Recap(await GetEventsAsync(), _meta.Attachments);
             System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("finops.context.compacted",
                 tags: new System.Diagnostics.ActivityTagsCollection { ["finops.context.input_tokens"] = _meta.ContextTokens }));
         }
         await PublishAsync(new UserMessageEvent(prompt));
+        if (images is { Count: > 0 })
+        {
+            _meta.Attachments = [.. (_meta.Attachments ?? []).Concat(images.Select(image => image.DisplayName)).TakeLast(20)];
+            SaveMeta();
+        }
         if (string.IsNullOrWhiteSpace(_meta.Summary))
         {
             _meta.Summary = prompt.Length > 400 ? prompt[..400] : prompt;
@@ -136,12 +141,14 @@ public sealed class AgentConversation : IAsyncDisposable
 
     internal const int RecapCharacters = 24_000;
     internal const int RecapMessageCharacters = 4_000;
+    internal const int RecapScriptCharacters = 6_000;
 
     /// <summary>
     /// The visible exchanges a compacted turn carries into its fresh model context: user questions without host-injected
-    /// context and the assistant's answers, newest kept first within <see cref="RecapCharacters"/>. Tool results are left out.
+    /// context and the assistant's answers, newest kept first within <see cref="RecapCharacters"/>, followed by the files
+    /// earlier turns produced or attached, with the latest generated script's code. Tool results are left out.
     /// </summary>
-    internal static string? Recap(IReadOnlyList<AgentEvent> events)
+    internal static string? Recap(IReadOnlyList<AgentEvent> events, IReadOnlyList<string>? attachments = null)
     {
         var entries = new List<(bool User, string Text)>();
         foreach (var item in events)
@@ -166,14 +173,56 @@ public sealed class AgentConversation : IAsyncDisposable
             kept.Add(entry);
             used += entry.Length;
         }
-        if (kept.Count == 0) return null;
+        var files = RecapFiles(events, attachments);
+        if (kept.Count == 0 && files is null) return null;
         kept.Reverse();
         var omitted = entries.Count - kept.Count;
         return "[CONVERSATION SO FAR: the earlier model context was reset to keep answers fast, so earlier tool results are no longer available. " +
                "These are the messages already exchanged; use them for continuity and query again whenever the new message needs figures, rows or identifiers they do not show.]\n" +
                (omitted > 0 ? $"({omitted} earlier messages omitted)\n\n" : "") +
                string.Join("\n\n", kept) +
+               (files is null ? "" : "\n\n" + files) +
                "\n[END OF CONVERSATION SO FAR. The user's new message follows.]";
+    }
+
+    /// <summary>Generated files and attached images from earlier turns, with the code of the latest generated script.</summary>
+    private static string? RecapFiles(IReadOnlyList<AgentEvent> events, IReadOnlyList<string>? attachments)
+    {
+        var starts = new Dictionary<string, ToolStartEvent>(StringComparer.Ordinal);
+        foreach (var start in events.OfType<ToolStartEvent>()) starts[start.CallId] = start;
+        var lines = new List<string>();
+        (string Name, string Language, string Code)? latest = null;
+        foreach (var done in events.OfType<ToolCompleteEvent>().Where(done => done.Success && done.Result is not null))
+            foreach (var line in done.Result!.Split('\n').Select(line => line.Trim()))
+            {
+                if (line.StartsWith("__SCRIPT_READY__:", StringComparison.Ordinal) && line["__SCRIPT_READY__:".Length..].Split(':', 5) is { Length: >= 4 } script)
+                {
+                    lines.Add($"- {script[1]} ({script[3]} script, {script[2]} lines)");
+                    if (starts.TryGetValue(done.CallId, out var call) && ScriptCode(call.Arguments) is { } code) latest = (script[1], script[3], code);
+                }
+                else if (line.StartsWith("__HTML_READY__:", StringComparison.Ordinal) && line["__HTML_READY__:".Length..].Split(':', 3) is { Length: >= 2 } file)
+                    lines.Add($"- {file[1]}");
+            }
+        foreach (var name in attachments ?? [])
+            lines.Add($"- {name}, an image the user attached (no longer visible to you: ask the user to attach it again if you need it)");
+        if (lines.Count == 0) return null;
+        var text = "Files from earlier turns (the user can still download generated files for 24 hours; you cannot open them):\n" + string.Join('\n', lines.TakeLast(20));
+        if (latest is { } last)
+            text += $"\nCode of the latest script, {last.Name}:\n```{last.Language}\n" +
+                    (last.Code.Length > RecapScriptCharacters ? last.Code[..RecapScriptCharacters] + "\n…[truncated]" : last.Code) + "\n```";
+        return text;
+
+        static string? ScriptCode(string? arguments)
+        {
+            if (string.IsNullOrWhiteSpace(arguments)) return null;
+            try
+            {
+                using var document = JsonDocument.Parse(arguments);
+                return document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("scriptContent", out var code)
+                    && code.ValueKind == JsonValueKind.String ? code.GetString() : null;
+            }
+            catch (JsonException) { return null; }
+        }
     }
 
     /// <summary>Whether <paramref name="requestId"/> is a change this conversation is still waiting for the user to approve.</summary>
@@ -339,7 +388,7 @@ public sealed class AgentConversation : IAsyncDisposable
         try
         {
             var agent = _factory.Agent;
-            var options = _factory.RunOptions(UserId, lightweight);
+            var options = _factory.RunOptions(UserId, lightweight, await _factory.DocumentationToolsAsync(cancellationToken));
             var gated = options.ChatOptions?.Tools?.OfType<ApprovalRequiredAIFunction>().Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal) ?? [];
             List<ChatMessage> messages = [];
             // Agent Framework needs an answer to every approval it surfaced; a new message instead of approving rejects the change.
@@ -476,6 +525,10 @@ public sealed class AgentConversation : IAsyncDisposable
     {
         null => null,
         string text => text,
+        // MCP tools (Microsoft Learn) return their text as AIContent.
+        TextContent content => content.Text,
+        IEnumerable<AIContent> contents when contents.All(content => content is TextContent) =>
+            string.Join("\n", contents.Cast<TextContent>().Select(content => content.Text)),
         JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
         JsonElement element => element.GetRawText(),
         var other => JsonSerializer.Serialize(other, AIJsonUtilities.DefaultOptions),
@@ -532,6 +585,8 @@ public sealed class AgentConversation : IAsyncDisposable
         public List<JsonElement>? PendingApprovals { get; set; }
         /// <summary>An approved change whose turn stopped before it finished; it is never re-run, only reported as unknown.</summary>
         public string? InterruptedApproval { get; set; }
+        /// <summary>Names of images the user attached; a compacted context no longer shows them, so its recap names them.</summary>
+        public List<string>? Attachments { get; set; }
     }
 
     private sealed class Subscription(AgentConversation owner, Func<AgentEvent, Task> handler) : IDisposable

@@ -13,6 +13,7 @@
     <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.6.0" />
     <PackageReference Include="Azure.Monitor.OpenTelemetry.Exporter" Version="1.9.0" />
     <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.22.0-preview.260918.1" />
+    <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
     <PackageReference Include="System.Linq.Dynamic.Core" Version="1.7.4" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.90.1" />
     <PackageReference Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.90.1" />

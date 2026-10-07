@@ -29,7 +29,7 @@ const evaluationSourcePaths = [
         ].map((name) => `:(icase)${join(directory, name)}`),
     ),
 ];
-const LIVE_SUITE_SIZE = 20;
+export const LIVE_SUITE_SIZE = 24;
 const THROTTLE_MARGIN_MS = 5000;
 // Cost Management's per-tenant Query API quotas are 12 QPU per 10 s, 60 QPU per minute and
 // 600 QPU per hour. A retry-after covers only the exhausted window; a rerun inside the same
@@ -58,6 +58,11 @@ const CURATED_CASE_IDS = Object.freeze([
     "f75b5b6527c41d5c", // Waste evidence and a reviewable script
     "062a296be5be951f", // H200 Spot incident
     "3c99447cf28f786c", // English deterministic query calculation incident
+    // Session-audit regressions (2026-10-07): each guards one fixed failure mode.
+    "f4fd66c2942dcaa7", // Documentation from the Microsoft Learn tools
+    "2fb769993820fdf2", // A script that keeps every stated value
+    "45ffa45e5346e49d", // An omitted property read as not set, not unknown
+    "c7b0c5917d8b1e09", // An honest access limit instead of a dead end
 ]);
 // Cost Management quota is tenant-wide, so every case that may query it shares one paced
 // lane. Only cases listed here, which never need Cost Management, run in parallel lanes;
@@ -70,6 +75,8 @@ const PARALLEL_LANES = Object.freeze({
         "eac3ecb5ceb83c4b", // Graph licenses
         "84206ed740e28de4", // Graph Copilot usage
         "062a296be5be951f", // Compute quota
+        "45ffa45e5346e49d", // Resource Graph Key Vault settings
+        "c7b0c5917d8b1e09", // No tenant call
     ]),
     public: Object.freeze([
         "e4e6c2296f2dfc97",
@@ -78,6 +85,8 @@ const PARALLEL_LANES = Object.freeze({
         "160eca54c580c4f8",
         "f84890a72a9009f3",
         "3c99447cf28f786c",
+        "f4fd66c2942dcaa7",
+        "2fb769993820fdf2",
     ]),
 });
 export const COST_MANAGEMENT_LANE = "cost-management";
@@ -151,6 +160,7 @@ export function buildCatalog() {
         origin,
         requiredTools = [],
         forbiddenTools = [],
+        expectation = "",
     ) => {
         const key = question.trim();
         const existing = cases.get(key);
@@ -163,7 +173,8 @@ export function buildCatalog() {
             question: key,
             label,
             origins: [origin],
-            rubric,
+            // A case-specific expectation states the fixed behavior the judge must find.
+            rubric: expectation ? `${rubric} ${expectation}` : rubric,
             requiredTools,
             forbiddenTools,
             maxToolCalls: 30,
@@ -207,6 +218,39 @@ export function buildCatalog() {
         "Newest models' token prices",
         "evaluation:pricing",
     );
+    // Failure modes found by the 2026-10-07 audit of real sessions, each pinned to its fixed behavior.
+    add(
+        "Is purge protection on by default for a new Azure Key Vault, and can I turn it off later?",
+        "Key Vault purge protection default",
+        "incident:learn-docs",
+        ["microsoft_docs_search"],
+        [],
+        "Case expectation: answer from what the Microsoft Learn tools returned this turn. Purge protection is off by default on a new key vault while soft delete is on, it can be turned on later, and once on it cannot be turned off. A documentation answer needs no retrieval time.",
+    );
+    add(
+        "Write an Azure CLI script that creates a storage account exactly like our existing dev account: name stfinopsdev01, resource group rg-finops-dev, region swedencentral, Standard_LRS redundancy, StorageV2, and public network access enabled.",
+        "Script that keeps stated settings",
+        "incident:stated-goal",
+        ["GenerateScript"],
+        [],
+        "Case expectation: every value the user stated is a requirement. The generated script creates stfinopsdev01 in rg-finops-dev in swedencentral as StorageV2 with Standard_LRS and public network access enabled; it must not switch to another redundancy, region or network setting or add a requirement the user did not state. A better practice, such as zone-redundant storage or private access, may appear only as a note. The script needs no tenant query, documentation lookup or retrieval time.",
+    );
+    add(
+        "Do my key vaults have purge protection enabled?",
+        "Key Vault purge protection settings",
+        "incident:absent-setting",
+        ["QueryAzure"],
+        [],
+        "Case expectation: a key vault's enablePurgeProtection property is present only when purge protection is on, so a vault whose successful read omits it has purge protection off (not set); report that as off, never as unknown or unconfirmed. Finding no key vault in the connected scope is a complete, determinate answer.",
+    );
+    add(
+        "Which of our Intune-managed devices are non-compliant?",
+        "Intune compliance without access",
+        "incident:access-limit",
+        [],
+        [],
+        "Case expectation: this app has no Intune or device-management access by design, so for this question the honest limitation is the complete answer. A correct answer says the app cannot read Intune device compliance, invents no device data, does not tell the user to add API permissions to this app's registration, and offers a way an Intune administrator can get the list, such as a Microsoft Graph PowerShell script. No tool call is needed.",
+    );
     return [...cases.values()];
 }
 
@@ -215,7 +259,7 @@ export function buildSuite(catalog = buildCatalog()) {
         CURATED_CASE_IDS.length !== LIVE_SUITE_SIZE ||
         new Set(CURATED_CASE_IDS).size !== LIVE_SUITE_SIZE
     )
-        throw new Error("The curated live suite must select exactly 20 distinct case IDs.");
+        throw new Error(`The curated live suite must select exactly ${LIVE_SUITE_SIZE} distinct case IDs.`);
     const selected = CURATED_CASE_IDS.map((id) => {
         const matches = catalog.filter((item) => item.id === id);
         if (matches.length !== 1)
@@ -229,7 +273,7 @@ export function buildSuite(catalog = buildCatalog()) {
             typeof item.question !== "string" || !item.question.trim()) ||
         new Set(selected.map((item) => item.question)).size !== LIVE_SUITE_SIZE
     )
-        throw new Error("The curated live suite must contain exactly 20 distinct, nonempty questions.");
+        throw new Error(`The curated live suite must contain exactly ${LIVE_SUITE_SIZE} distinct, nonempty questions.`);
     return selected;
 }
 
@@ -328,7 +372,7 @@ export function evaluateSuite(cases, results, sha, suiteHash) {
     const failures = [];
     const expected = new Map(buildSuite().map((item) => [item.id, item]));
     if (cases.length !== LIVE_SUITE_SIZE)
-        failures.push("Exactly 20 curated representative scenarios are required.");
+        failures.push(`Exactly ${LIVE_SUITE_SIZE} curated representative scenarios are required.`);
     if (cases.some((item) => {
         const original = expected.get(item.id);
         return !original || [
@@ -1114,7 +1158,7 @@ async function main() {
             "Set EVAL_DATA_CLASSIFICATION to synthetic (answers published) or internal-test (verdicts only).",
         );
     if (cases.length !== LIVE_SUITE_SIZE)
-        throw new Error("The curated live suite must contain exactly 20 distinct questions.");
+        throw new Error(`The curated live suite must contain exactly ${LIVE_SUITE_SIZE} distinct questions.`);
     await assertCandidateRevision(sha);
     const only = process.env.EVAL_ONLY_IDS?.split(",").filter(Boolean) ?? [];
     if (only.length && process.env.GITHUB_ACTIONS === "true")

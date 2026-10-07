@@ -50,7 +50,15 @@ internal static class EvidenceInspector
         // 202 Accepted means the source has not finished; the result is not complete evidence.
         if (text.StartsWith("HTTP 202 ", StringComparison.Ordinal)) partial = true;
         var body = Infrastructure.ResponseShaper.SplitPreamble(text).Body;
-        try { using var document = JsonDocument.Parse(body); Visit(document.RootElement); }
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            // An MCP tool result (Microsoft Learn) reports its own failure as a root isError; a row or column of that
+            // name in API data is not a failure.
+            if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("isError", out var isError)
+                && isError.ValueKind == JsonValueKind.True) success = false;
+            Visit(document.RootElement);
+        }
         catch (JsonException)
         {
             // Line-oriented results (fan-out, cropped query results, schemas) carry their provenance on RESOLUTION or Coverage lines.
