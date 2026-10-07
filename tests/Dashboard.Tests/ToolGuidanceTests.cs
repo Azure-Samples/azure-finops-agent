@@ -108,6 +108,8 @@ public sealed class ToolGuidanceTests
         Assert.Contains("from knowledge, without searching documentation or the web for their syntax first", tool.Description);
         // A cleanup script read the REST API's totalRecords from az graph query, whose output is snake_case, and exited.
         Assert.Contains("{count, data, skip_token, total_records} in snake_case", tool.Description);
+        // A script read two fields from a list query's TSV, which prints one value per line, so the second stayed empty.
+        Assert.Contains("a JMESPath list ([a, b]) prints one value per line while an object ({a:a, b:b}) prints its values on one tab-separated line", tool.Description);
         Assert.Contains("appears to the user as a download card below the answer: refer to it in words and never write a link or file path to it",
             AgentSessionFactory.SystemPrompt);
     }
