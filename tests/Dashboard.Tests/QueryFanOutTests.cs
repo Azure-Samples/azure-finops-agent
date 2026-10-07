@@ -71,6 +71,24 @@ public class QueryFanOutTests
     }
 
     [Fact]
+    public async Task DeniedRegionsAndIncompletePagesStayUnknownOrPartial()
+    {
+        const string eastus = "/subscriptions/s/providers/Microsoft.App/locations/eastus/availableManagedEnvironmentsWorkloadProfileTypes";
+        const string westus3 = "/subscriptions/s/providers/Microsoft.App/locations/westus3/availableManagedEnvironmentsWorkloadProfileTypes";
+        var (send, _) = Create(url => url == westus3
+            ? "HTTP 403 Forbidden\n{\"error\":{\"code\":\"AuthorizationFailed\",\"message\":\"synthetic\"}}"
+            : "HTTP 200 OK\n{\"value\":[{\"name\":\"Consumption\"}],\"nextLink\":\"https://management.azure.com/next\",\"pagesRead\":10,\"complete\":false}");
+
+        var output = await FanOut(eastus + "\n" + westus3, send, query: "value.Select(p => p.name)");
+
+        Assert.StartsWith("PARTIAL RESULT: 1 of 2 requests failed; a failed request is unknown, not empty.\n", output);
+        Assert.Contains("[1] " + eastus + "\nHTTP 200 OK\nCoverage: {", output);
+        Assert.Contains("\"complete\":false", output);
+        Assert.Contains("[2] " + westus3 + "\nHTTP 403 Forbidden", output);
+        Assert.True(EvidenceInspector.Inspect(output) is { Success: true, Partial: true });
+    }
+
+    [Fact]
     public async Task QueryRunsOnEachResponseAndRepeatedSchemasAreSharedByReference()
     {
         var (send, _) = Create(url => $"HTTP 200 OK\n{{\"value\":[{{\"name\":\"{url.Trim('/')}\",\"limit\":{new string('9', 5)}}}],\"pad\":\"{new string('x', AzureQueryTools.InlineCharacters)}\"}}");

@@ -123,6 +123,7 @@ public sealed class QueryAzureRoutingTests
     [InlineData("DELETE", "/subscriptions/s/resourceGroups/rg?api-version=2021-04-01", "PUT or PATCH")]
     [InlineData("PATCH", "https://graph.microsoft.com/v1.0/users/u", "Azure Resource Manager")]
     [InlineData("PUT", "https://exports01.blob.core.windows.net/c/b.csv", "Azure Resource Manager")]
+    [InlineData("PATCH", "/subscriptions/s/resourceGroups/rg", "explicit api-version")]
     public async Task ChangesAreArmPutOrPatchOnly(string method, string url, string error)
     {
         var result = await InvokeAsync(new AIFunctionArguments { ["method"] = method, ["url"] = url }, "ApplyAzureChange");
@@ -330,6 +331,11 @@ public sealed class QueryAzureRoutingTests
     {
         Assert.Equal("/subscriptions/x/providers/A/b?$top=5&api-version=2025-03-01&x=1",
             WithApiVersion("/subscriptions/x/providers/A/b?$top=5&api-version=2023-01-01-preview&x=1", "2025-03-01"));
+        Assert.Equal("/subscriptions/x/providers/A/b?$top=5&api-version=2025-03-01", WithApiVersion("/subscriptions/x/providers/A/b?$top=5", "2025-03-01"));
+        Assert.Equal("/subscriptions/x/providers/A/b?api-version=2025-03-01", WithApiVersion("/subscriptions/x/providers/A/b", "2025-03-01"));
+        Assert.Equal("/subscriptions/x/providers/A/b?api-version=2025-03-01", WithApiVersion("/subscriptions/x/providers/A/b?api-version=", "2025-03-01"));
+        Assert.False(HasApiVersion("/subscriptions/x/providers/A/b?api-version="));
+        Assert.True(HasApiVersion("/subscriptions/x/providers/A/b?$top=5&API-VERSION=2025-03-01"));
         var annotated = AnnotateApiVersion("HTTP 200 OK\nCurrent UTC time: 2026-01-01 00:00:00\n{\"value\":[]}", "2023-08-01-preview", "2025-03-01");
         Assert.StartsWith("HTTP 200 OK\nCurrent UTC time: 2026-01-01 00:00:00\n", annotated);
         using var document = JsonDocument.Parse(ResponseShaper.SplitPreamble(annotated).Body);
@@ -339,6 +345,121 @@ public sealed class QueryAzureRoutingTests
         Assert.Equal("a", empty.RootElement.GetProperty("_apiVersion").GetProperty("requested").GetString());
         Assert.Equal("HTTP 200 OK\n[1]", AnnotateApiVersion("HTTP 200 OK\n[1]", "a", "b"));
     }
+
+    // Each test uses its own synthetic provider namespace, because chosen versions are kept per resource type for the process.
+    private static Func<string, Task<string>> Arm(List<string> sent, Func<string, string> respond) => path =>
+    {
+        sent.Add(path);
+        return Task.FromResult(respond(path));
+    };
+
+    private static string Listing(string versions) =>
+        $"HTTP 400 BadRequest\n{{\"error\":{{\"code\":\"NoRegisteredProviderFound\",\"message\":\"No registered resource provider found for this API version. The supported api-versions are '{versions}'.\"}}}}";
+
+    [Fact]
+    public async Task AReadWithoutApiVersionUsesTheNewestStableVersionArmNamesAndKeepsIt()
+    {
+        const string path = "/subscriptions/s/providers/Microsoft.TestNewest/locations/westus3/usages";
+        var sent = new List<string>();
+        var send = Arm(sent, url => RequestedVersion(url) == "2026-07-01" ? "HTTP 200 OK\n{\"value\":[]}" : Listing("2025-01-01, 2026-07-01, 2026-08-02-preview"));
+
+        var first = await SendReadAsync(path, send, null);
+        var second = await SendReadAsync(path.Replace("westus3", "eastus"), send, null);
+
+        Assert.Equal([path + "?api-version=9999-12-31", path + "?api-version=2026-07-01", path.Replace("westus3", "eastus") + "?api-version=2026-07-01"], sent);
+        Assert.Equal(path + "?api-version=2026-07-01", first.Path);
+        Assert.Equal(["used", "source"], first.Note!.Keys);
+        Assert.Equal("2026-07-01", first.Note["used"]);
+        Assert.Equal("2026-07-01", second.Note!["used"]);
+    }
+
+    [Fact]
+    public async Task AServiceThatChecksNoApiVersionAnswersThePlaceholder()
+    {
+        const string path = "/subscriptions/s/providers/Microsoft.TestUnchecked/skus?$filter=location eq 'westus3'";
+        var sent = new List<string>();
+
+        var result = await SendReadAsync(path, Arm(sent, _ => "HTTP 200 OK\n{\"value\":[]}"), null);
+
+        Assert.Equal([path + "&api-version=9999-12-31"], sent);
+        Assert.Equal(PlaceholderApiVersion, result.Note!["used"]);
+        Assert.Contains("names no supported api-version", result.Note["source"]);
+        Assert.False(ChosenApiVersions.ContainsKey(ApiVersionKey(path)));
+    }
+
+    [Fact]
+    public async Task AnExpiredOrRejectedChoiceIsReplacedByTheVersionsArmNamesNow()
+    {
+        const string path = "/subscriptions/s/providers/Microsoft.TestRefresh/locations/westus3/usages";
+        var key = ApiVersionKey(path);
+        var sent = new List<string>();
+        var send = Arm(sent, url => RequestedVersion(url) == "2026-09-01" ? "HTTP 200 OK\n{}" : Listing("2026-07-01,2026-09-01"));
+
+        ChosenApiVersions[key] = ("2026-07-01", DateTimeOffset.UtcNow.AddMinutes(-1));
+        await SendReadAsync(path, send, null);
+        ChosenApiVersions[key] = ("2025-01-01", DateTimeOffset.UtcNow.AddHours(1));
+        var refreshed = await SendReadAsync(path, send, null);
+
+        Assert.Equal([path + "?api-version=9999-12-31", path + "?api-version=2026-09-01", path + "?api-version=2025-01-01", path + "?api-version=2026-09-01"], sent);
+        Assert.Equal("2026-09-01", refreshed.Note!["used"]);
+        Assert.Equal("2026-09-01", ChosenApiVersions[key].Version);
+    }
+
+    [Fact]
+    public async Task AProviderRejectionWithoutAListTriesOlderVersionsArmNames()
+    {
+        const string path = "/subscriptions/s/providers/Microsoft.TestOlder/scheduledActions?api-version=2026-08-01";
+        var sent = new List<string>();
+        var send = Arm(sent, url => RequestedVersion(url) switch
+        {
+            "2026-06-01" => "HTTP 200 OK\n{\"value\":[]}",
+            PlaceholderApiVersion => "HTTP 404 NotFound\n{\"error\":{\"code\":\"InvalidResourceType\",\"message\":\"The resource type could not be found for api version '9999-12-31'. The supported api-versions are '2024-10-01-preview,2025-03-01,2026-06-01,2026-08-01'.\"}}",
+            _ => "HTTP 400 BadRequest\n{\"error\":{\"code\":\"UnsupportedApiVersion\",\"message\":\"The HTTP resource does not support the API version.\"}}",
+        });
+
+        var result = await SendReadAsync(path, send, null);
+
+        Assert.Equal([path, path.Replace("2026-08-01", PlaceholderApiVersion), path.Replace("2026-08-01", "2026-06-01")], sent);
+        Assert.Equal(("2026-08-01", "2026-06-01"), (result.Note!["requested"], result.Note["used"]));
+    }
+
+    [Theory]
+    [InlineData("HTTP 404 NotFound\n{\"error\":{\"code\":\"ResourceGroupNotFound\",\"message\":\"Resource group 'rg' could not be found.\"}}")]
+    [InlineData("HTTP 403 Forbidden\n{\"error\":{\"code\":\"AuthorizationFailed\",\"message\":\"synthetic\"}}")]
+    [InlineData("HTTP 409 Conflict\n{\"error\":{\"code\":\"MissingSubscriptionRegistration\",\"message\":\"synthetic\"}}")]
+    public async Task FailuresThatAreNotAboutTheVersionAreReturnedUnchanged(string failure)
+    {
+        const string path = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.TestFailure/environments/e/usages";
+        var sent = new List<string>();
+
+        var result = await SendReadAsync(path, Arm(sent, _ => failure), null);
+
+        Assert.Equal(failure, result.Response);
+        Assert.Null(result.Note);
+        Assert.Single(sent);
+        Assert.False(EvidenceInspector.Inspect(result.Response).Success);
+    }
+
+    [Fact]
+    public async Task AnExplicitApiVersionIsSentAsWritten()
+    {
+        const string path = "/subscriptions/s/providers/Microsoft.TestExplicit/locations/westus3/usages?api-version=2024-03-01";
+        var sent = new List<string>();
+
+        var result = await SendReadAsync(path, Arm(sent, _ => "HTTP 200 OK\n{}"), null);
+
+        Assert.Equal([path], sent);
+        Assert.Null(result.Note);
+    }
+
+    [Theory]
+    [InlineData("/subscriptions/a/providers/Microsoft.App/locations/westus3/usages", "/subscriptions/b/providers/Microsoft.App/locations/eastus/usages?$top=1", true)]
+    [InlineData("/subscriptions/a/resourceGroups/x/providers/Microsoft.App/managedEnvironments/e/usages", "/subscriptions/b/resourceGroups/y/providers/Microsoft.App/managedEnvironments/f/usages", true)]
+    [InlineData("/subscriptions/a/resourcegroups", "/subscriptions/b/resourceGroups", true)]
+    [InlineData("/subscriptions/a/providers/Microsoft.App/locations/westus3/usages", "/subscriptions/a/providers/Microsoft.Compute/locations/westus3/usages", false)]
+    [InlineData("/subscriptions/a/resourcegroups", "/subscriptions/a", false)]
+    public void ChosenVersionsAreKeptPerResourceType(string first, string second, bool same) =>
+        Assert.Equal(same, string.Equals(ApiVersionKey(first), ApiVersionKey(second), StringComparison.OrdinalIgnoreCase));
 
     [Fact]
     public void RedundantCurrencyDimensionGroupingIsRemovedVisiblyFromCostQueriesOnly()
@@ -378,28 +499,17 @@ public sealed class QueryAzureRoutingTests
         Assert.Equal(expected, IsUnlistedApiVersionRejection(response));
 
     [Theory]
-    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement/scheduledActions?api-version=2026-08-01", "/subscriptions/11111111-1111-1111-1111-111111111111", "Microsoft.CostManagement", "scheduledActions")]
-    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm/extensions?api-version=2024-07-01", "/subscriptions/11111111-1111-1111-1111-111111111111", "Microsoft.Compute", "virtualMachines/extensions")]
-    [InlineData("/providers/Microsoft.Billing/billingAccounts/a/providers/Microsoft.CostManagement/exports/e?api-version=2026-08-01", "", "Microsoft.CostManagement", "exports")]
-    public void ResourceTypesComeFromTheLastProviderSegment(string path, string scope, string provider, string type) =>
-        Assert.Equal((scope, provider, type), ResourceTypeOf(path));
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement/scheduledActions?api-version=2026-08-01", "Microsoft.CostManagement", "scheduledActions")]
+    [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm/extensions?api-version=2024-07-01", "Microsoft.Compute", "virtualMachines/extensions")]
+    [InlineData("/providers/Microsoft.Billing/billingAccounts/a/providers/Microsoft.CostManagement/exports/e?api-version=2026-08-01", "Microsoft.CostManagement", "exports")]
+    public void ResourceTypesComeFromTheLastProviderSegment(string path, string provider, string type) =>
+        Assert.Equal((provider, type), ResourceTypeOf(path));
 
     [Theory]
     [InlineData("/subscriptions/x/resourcegroups?api-version=2021-04-01")]
     [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement?api-version=2021-04-01")]
     [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.CostManagement/a%2Fb?api-version=1")]
     public void PathsWithoutAResourceTypeHaveNone(string path) => Assert.Null(ResourceTypeOf(path));
-
-    [Fact]
-    public void OlderStableManifestVersionsAreTriedNewestFirst()
-    {
-        const string manifest = "HTTP 200 OK\n{\"namespace\":\"Microsoft.CostManagement\",\"resourceTypes\":[{\"resourceType\":\"Exports\",\"apiVersions\":[\"2026-08-01\"]},{\"resourceType\":\"ScheduledActions\",\"apiVersions\":[\"2026-08-01\",\"2026-06-01\",\"2025-03-01\",\"2024-10-01-preview\",\"2024-08-01\"]}]}";
-        Assert.Equal(["2026-06-01", "2025-03-01"], OlderStableVersions(manifest, "scheduledActions", "2026-08-01"));
-        Assert.Equal(["2024-08-01"], OlderStableVersions(manifest, "scheduledActions", "2025-03-01"));
-        Assert.Empty(OlderStableVersions(manifest, "exports", "2026-08-01"));
-        Assert.Empty(OlderStableVersions(manifest, "views", "2026-08-01"));
-        Assert.Empty(OlderStableVersions("HTTP 403 Forbidden\n{}", "scheduledActions", "2026-08-01"));
-    }
 
     [Theory]
     [InlineData("/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.PolicyInsights/policyStates/latest/summarize?api-version=2019-10-01", true)]

@@ -22,7 +22,8 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("never resend a failing request unchanged")]
     [InlineData("never search documentation for script commands")]
     [InlineData("azure-rest-api-specs")]
-    [InlineData("apiVersions")]
+    [InlineData("Leave api-version out of Azure Resource Manager reads")]
+    [InlineData("an ApplyAzureChange write carries the version its read used")]
     [InlineData("one at a time")]
     [InlineData("from query results")]
     [InlineData("retrievedAtUtc")]
@@ -42,9 +43,15 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("for every Retail region as url lines of one call, in the same response as the quota query")]
     [InlineData("so every Retail region is accounted for")]
     [InlineData("Never intersect region lists from two responses by typing them into a query-only call")]
+    [InlineData("each valid only for the scope and compute mode it was read at")]
+    [InlineData("offered in a region needs no existing resource")]
+    [InlineData("never carry to another, including a resource not yet created")]
+    [InlineData("allocation is unverified without a documented signal")]
+    [InlineData("a resource that does not exist makes its own quota not applicable, never zero")]
+    [InlineData("never environment variables, app settings or secrets")]
     [InlineData("a response returned this turn shows its API's fields")]
-    [InlineData("policyStates/latest/summarize?api-version=2024-10-01")]
-    [InlineData("Microsoft.Advisor/recommendations?api-version=2025-01-01")]
+    [InlineData("Microsoft.PolicyInsights/policyStates/latest/summarize` (no body)")]
+    [InlineData("Microsoft.Advisor/recommendations?$filter=Category eq 'Cost'")]
     [InlineData("never compute a score total, maximum, percentage or average")]
     [InlineData("Sponsored_2016-01-01 (Microsoft Azure Sponsorship)")]
     [InlineData("the offer is unsupported, not zero spend or ingestion lag")]
@@ -177,11 +184,36 @@ public sealed class SessionQualityGuidanceTests
         var azure = new AzureQueryTools(new UserTokens { UserId = 101 }).Create().First();
         Assert.Equal("QueryAzure", azure.Name);
         Assert.Contains("azure-rest-api-specs", azure.Description);
-        Assert.Contains("apiVersions", azure.Description);
+        Assert.Contains("_apiVersion", azure.Description);
+        Assert.Contains("GET /providers/{namespace}", azure.Description);
         Assert.Contains("learn.microsoft.com/graph", azure.Description);
         Assert.Contains("learn.microsoft.com/rest/api/cost-management/retail-prices", azure.Description);
         Assert.Contains("learn.microsoft.com/kusto", azure.Description);
         Assert.Contains("learn.microsoft.com/rest/api/storageservices", azure.Description);
         Assert.Contains("azure.status.microsoft", azure.Description);
+    }
+
+    // The host takes ARM api-versions from ARM itself, so model-facing text never pins a dated one.
+    [Fact]
+    public void ModelFacingTextNamesNoDatedApiVersion()
+    {
+        var tokens = new UserTokens { UserId = 101 };
+        Microsoft.Extensions.AI.AIFunction[] tools =
+        [
+            .. ChartTools.Create(), .. FollowUpTools.Create(), .. new HtmlPresentationTools(101).Create(), .. new ScriptTools(101).Create(),
+            .. new MaturityReportTools(101).Create(), .. new AzureFinOps.Dashboard.Jobs.JobOutcomeTools(101).Create(), .. new ReportTools(101).Create(),
+            .. new ScoreTools(tokens).Create(), .. new AzureQueryTools(tokens).Create(), .. new SavingsLedgerTools(tokens).Create(),
+            .. new UploadedFileTools(tokens).Create(), .. new FaqTools(tokens).Create(),
+        ];
+        string[] texts =
+        [
+            AgentSessionFactory.Instructions(webSearch: true),
+            AgentSessionFactory.Instructions(webSearch: false),
+            AzureQueryTools.ValidateScopePrefix("/providers/Microsoft.CostManagement/query")!,
+            AzureQueryTools.ValidateScopePrefix("/providers/Microsoft.Consumption/reservationSummaries")!,
+            .. tools.Select(tool => tool.Name + ": " + tool.Description + tool.JsonSchema.GetRawText()),
+        ];
+        Assert.True(tools.Length > 10);
+        Assert.All(texts, text => Assert.DoesNotMatch(@"api-version[= ]\d{4}-\d{2}-\d{2}", text));
     }
 }

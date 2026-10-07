@@ -24,8 +24,8 @@ Inputs below are strings unless `int`, `double`, or `bool` is shown. `=value` is
 | `GenerateDataReport` | Owner-bound artifact | `format`, `dataJson`, `filename=null` | Create CSV, XLSX, or filterable HTML from `{title,source,sheets:[{name,columns,rows,sourceRowCount}]}`; maximum 5,000 rows, 50 columns and 10 sheets. |
 | `ReportMaturityScore` | Owner-bound state | `level`, `scores` (native JSON array) | Persist evidence-backed Crawl/Walk/Run/Playbook dimensions; unknown and not-applicable scores stay null. Submitted once, by itself, after every evidence read it scores has returned. |
 | `GetScoreHistory` | Owner-bound state | `level=null` | Return up to 100 persisted maturity assessments, optionally filtered by level. |
-| `QueryAzure` | Host-routed delegated or public HTTP | `url=""`, `method=GET`, `body`, `query=""` | The one model-authored HTTP evidence tool, with stateless LINQ cropping. A leading `/` is an ARM path; exact hosts select ARM, Graph, Log Analytics/Application Insights, Blob Storage, Retail Prices or public credential-free GET. Empty `url` with `query` is a calculator over copied figures: it sends no request and is not source evidence. URLs must be HTTPS with no userinfo, fragment, custom port, backslash, control characters or `//` prefix, and errors do not echo the URL. CSV/XML success bodies become JSON, HTML becomes text lines. DELETE is blocked; PUT/PATCH return 405 and go through `ApplyAzureChange`; POST is allowlisted for read-only query/report/calculation/diagnostic endpoints including PolicyInsights policy-state summarize/queryResults and policy-event queryResults at subscription, resource-group or management-group scope (never `triggerEvaluation`) and validated Network Watcher `connectivityCheck` from an existing VM. Paginated ARM/Graph/Retail GETs follow same-origin links up to the fixed 10-page host limit. When ARM rejects a read's api-version and supplies versions, a GET or allowlisted POST is retried with the newest listed stable version (newest preview when none is stable), then with up to two additional listed versions while the provider still answers `UnsupportedApiVersion`; an unlisted `UnsupportedApiVersion` reads the provider manifest and tries at most two older stable versions. A successful repaired body carries a root `_apiVersion` note. `body` is native JSON, but JSON strings with comments/trailing commas are read leniently. A subscription-prefixed Resource Graph path whose subscription is already listed in the body is sent to `/providers/Microsoft.ResourceGraph/resources`. Dropped connections are retried up to twice for GETs only. A Cost Management `/query` body's redundant `Dimension` grouping named `Currency` is removed and reported in root `_request`; a `TagKey` named Currency is kept. |
-| `ApplyAzureChange` | Delegated ARM, user approval | `method`, `url`, `body` | The only write path: one ARM PUT or PATCH. An `ApprovalRequiredAIFunction`, so the UI shows the exact method, URL and body and the call runs only after the user approves it; rejection sends nothing. 201/202 is accepted, not complete: the model polls the returned `Azure-AsyncOperation` or `Location` URL with `QueryAzure`. |
+| `QueryAzure` | Host-routed delegated or public HTTP | `url=""`, `method=GET`, `body`, `query=""` | The one model-authored HTTP evidence tool, with stateless LINQ cropping. A leading `/` is an ARM path; exact hosts select ARM, Graph, Log Analytics/Application Insights, Blob Storage, Retail Prices or public credential-free GET. Empty `url` with `query` is a calculator over copied figures: it sends no request and is not source evidence. URLs must be HTTPS with no userinfo, fragment, custom port, backslash, control characters or `//` prefix, and errors do not echo the URL. CSV/XML success bodies become JSON, HTML becomes text lines. DELETE is blocked; PUT/PATCH return 405 and go through `ApplyAzureChange`; POST is allowlisted for read-only query/report/calculation/diagnostic endpoints including PolicyInsights policy-state summarize/queryResults and policy-event queryResults at subscription, resource-group or management-group scope (never `triggerEvaluation`) and validated Network Watcher `connectivityCheck` from an existing VM. Paginated ARM/Graph/Retail GETs follow same-origin links up to the fixed 10-page host limit. A GET or allowlisted POST without `api-version` is first sent with the placeholder `9999-12-31`: ARM rejects it by naming the versions the resource type supports, the host sends the newest stable one (newest preview when none is stable) and keeps that choice per resource type for an hour, and a provider that checks no version answers the placeholder itself. When ARM rejects a read's api-version and supplies versions, the read is retried with the newest listed stable version (newest preview when none is stable), then with up to two additional listed versions while the provider still answers `UnsupportedApiVersion`; an unlisted `UnsupportedApiVersion` asks ARM for the type's versions with the placeholder and tries at most two older stable ones. A chosen or repaired version is noted in root `_apiVersion`. `body` is native JSON, but JSON strings with comments/trailing commas are read leniently. A subscription-prefixed Resource Graph path whose subscription is already listed in the body is sent to `/providers/Microsoft.ResourceGraph/resources`. Dropped connections are retried up to twice for GETs only. A Cost Management `/query` body's redundant `Dimension` grouping named `Currency` is removed and reported in root `_request`; a `TagKey` named Currency is kept. |
+| `ApplyAzureChange` | Delegated ARM, user approval | `method`, `url`, `body` | The only write path: one ARM PUT or PATCH. An `ApprovalRequiredAIFunction`, so the UI shows the exact method, URL and body and the call runs only after the user approves it; rejection sends nothing. The URL carries an explicit api-version (the one its read used), so the approved URL is the URL sent; a versionless write is refused before dispatch. 201/202 is accepted, not complete: the model polls the returned `Azure-AsyncOperation` or `Location` URL with `QueryAzure`. |
 | `RecordSavingsAction` | Owner-bound state | `title`, `category`, `estimatedMonthlyUsd`, `scope`, `status` | Record evidenced remediation. Script delivery/pending writes are proposed; executed requires confirmed application. |
 | `UpdateSavingsAction` | Owner-bound state | `id`, `status`, `verifiedMonthlyUsd=""` | Advance an entry to proposed/executed/verified/dismissed; omitted or empty `verifiedMonthlyUsd` preserves the prior value. |
 | `GetSavingsLedger` | Owner-bound state | `status=null`, `category=null`, `scopeContains=null`, `limit=50`, `offset=0` | Host-side filters and newest-first paging; default 50, max 200 details, or limit 0 for totals only. Totals cover all matches before paging. |
@@ -113,8 +113,8 @@ The nine scheduled templates are Check capacity of X (15 minutes), Reserve X whe
 
 | Section | Main contract |
 | --- | --- |
-| How you work | Investigate like a senior cloud engineer. The model authors every API call with `QueryAzure`, looks up live provider apiVersions and official specs instead of guessing, shapes work at the source, runs independent calls in parallel, crops large responses with `query`, and reuses evidence already returned this turn. |
-| API facts | Preserve service-specific rules for Cost Management, Resource Graph, reservations/savings plans, Compute capacity/Spot, Retail Prices, and Microsoft Graph reports and licensing. |
+| How you work | Investigate like a senior cloud engineer. The model authors every API call with `QueryAzure`, leaves ARM api-versions to the host, looks up resource types and official specs instead of guessing, shapes work at the source, runs independent calls in parallel, crops large responses with `query`, and reuses evidence already returned this turn. |
+| API facts | Preserve service-specific rules for Cost Management, Resource Graph, reservations/savings plans, Compute capacity/Spot, Retail Prices, and Microsoft Graph reports and licensing, plus one product-agnostic rule that keeps availability, quota (at its own scope and compute mode), configuration and allocation as separate claims. |
 | Evidence honesty | State scope, dates, ISO currency, cost type and retrieval time separately from source data-as-of time. Missing, denied, failed and unqueried evidence remains unknown, never zero. |
 | Answer shape | Use the latest user's language, a short evidence-backed headline, one visual at most, concrete entities and amounts, downloadable reports for large results, and explicit clarification when required inputs are missing. |
 | Maturity scoring | Only score explicit maturity or FinOps assessment requests. Gather scoped evidence with general tools, call `ReportMaturityScore` once, and keep unknown or not-applicable dimensions null with reasons. |
@@ -123,7 +123,7 @@ The nine scheduled templates are Check capacity of X (15 minutes), Reserve X whe
 
 | Surface | Required source shaping |
 | --- | --- |
-| ARM list APIs | Use `QueryAzure` with an ARM path, live `api-version`, and `$filter`, `$select`, or a small `$top` only where the endpoint supports them. |
+| ARM list APIs | Use `QueryAzure` with an ARM path (the host adds the newest stable `api-version` when it is left out), and `$filter`, `$select`, or a small `$top` only where the endpoint supports them. |
 | Azure Resource Graph | POST through `QueryAzure` with one explicit nonempty `subscriptions` (GUID strings) or `managementGroups` (ID strings) array. Use `where`, `summarize` and narrow `project`, then `top N by field` or `order by field` then `take N`; never bare `top N` or implicit tenant-wide scope. |
 | Cost Management | Dataset filters, aggregation and at most two grouping dimensions over bounded dates; totals need not have grouping. Start detail requests with the required grouping and never compute a full total from top-N detail. |
 | Microsoft Graph | Use a `QueryAzure` Graph URL with only supported `$filter`, `$select`, `$top` or report/count operations; follow needed `@odata.nextLink` pages and disclose partial coverage. Report CSV becomes row objects. |
@@ -155,7 +155,7 @@ Retail rows also retain `tierMinimumUnits` and currency. Volume bands are separa
 | Directory and Microsoft 365 reports | `QueryAzure` | Supported Graph OData fields/filters/pages or reports/counts; no invented options on unsupported endpoints. |
 | Telemetry | `QueryAzure` | KQL time/resource predicates, aggregate, narrow fields, then detail limits. |
 | Retail | `QueryAzure` | One source-shaped OData filter and fixed bounded pages; raw rows require inspection and `query` for totals/rankings. |
-| Compute and capacity | `QueryAzure` | Exact requested SKUs/scopes/regions through Compute usages, skus, Spot placement score POST, Resource Graph SpotResources and related APIs. |
+| Compute and capacity | `QueryAzure` | Exact requested SKUs/scopes/regions through each provider's own availability and usage operations, Spot placement score POST, Resource Graph SpotResources and related APIs. Availability, quota (at its own scope and compute mode), configuration and allocation stay separate claims. |
 | Connectivity | `QueryAzure` | One validated Network Watcher `connectivityCheck` from an existing VM to a destination and TCP port. No agent-host or broad network scan. |
 | Maturity scoring | `ReportMaturityScore`, `GetScoreHistory` | Model-gathered evidence for each dimension; persisted scores keep observed/unknown/not-applicable distinctions and concise evidence. |
 | Uploads | `QueryUploadedFile` | Row predicates, aggregates, sort, validated column projection and paging while preserving complete totals. |
@@ -181,11 +181,11 @@ For `QueryAzure` retail pricing with immediate projection of the response:
 }
 ```
 
-For quota reads across candidate regions, send the regions as url lines of one call; the same `query` crops each response:
+For quota reads across candidate regions, send the regions as url lines of one call; the same `query` crops each response, and the host adds the api-version:
 
 ```json
 {
-  "url": "/subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/eastus/usages?api-version=2024-07-01\n/subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/westus3/usages?api-version=2024-07-01",
+  "url": "/subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/eastus/usages\n/subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/westus3/usages",
   "query": "value.Where(v => v.name.value == \"cores\" || v.name.value == \"lowPriorityCores\").Select(v => new { name = v.name.value, used = v.currentValue, v.limit })"
 }
 ```
@@ -196,12 +196,12 @@ For a calculation over figures copied from earlier results, omit `url`; no reque
 { "query": "new { monthly = Math.Round(0.096 * 730 * 4, 2) }" }
 ```
 
-For an approved change, `ApplyAzureChange` receives the exact write the user reviews:
+For an approved change, `ApplyAzureChange` receives the exact write the user reviews, with the api-version its read used:
 
 ```json
 {
   "method": "PATCH",
-  "url": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}/providers/Microsoft.Compute/virtualMachines/{vmName}?api-version=2024-07-01",
+  "url": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}/providers/Microsoft.Compute/virtualMachines/{vmName}?api-version={apiVersion}",
   "body": { "tags": { "costCenter": "1234" } }
 }
 ```

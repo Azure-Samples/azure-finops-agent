@@ -252,6 +252,17 @@ public sealed class JsonQueryTests
         Assert.False(EvidenceInspector.Inspect(cropped).Success);
     }
 
+    [Fact]
+    public void ARenamedFieldIsNamedAsAbsentRatherThanReadAsNotOffered()
+    {
+        // A provider renaming gpus must not turn every GPU profile into a silent "not offered".
+        const string profiles = """{"value":[{"name":"Consumption","properties":{"category":"Consumption","gpuCount":0}},{"name":"NC24-A100","properties":{"category":"GPU-NC-A100","gpuCount":1}}]}""";
+        var (json, note) = JsonQuery.Evaluate(JsonQuery.Parse(profiles), "value.Where(p => p.properties.gpus > 0).Select(p => p.name)", 48 * 1024, CancellationToken.None);
+
+        Assert.Equal("[]", json);
+        Assert.Equal("Not in this response, so read as null: it.value[].properties.gpus.", note);
+    }
+
     // Each case is a first-call query that failed in the live evaluations against a response of this shape.
     [Fact]
     public void ReadsAreAsForgivingAsJson()

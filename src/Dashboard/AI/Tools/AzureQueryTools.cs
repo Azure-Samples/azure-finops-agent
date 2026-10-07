@@ -44,7 +44,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         The one tool for every API. You author url, method and body; the host picks the credential from the exact host (the signed-in user's delegated token, so their RBAC and consent are the boundary). Nothing is stored between calls. A response up to 32 KB returns in full; a larger one returns its schema instead (the C# shape inferred from its JSON: property names, types, item counts and sample values), so repeat the request with query to receive only what you need. CSV and XML become JSON, and column/row tables (Cost Management, Log Analytics, Resource Graph table format, CSV reports and exports) become lists of row objects read by column name (r.PreTaxCost); HTML and other text become lines (it.lines). The Current UTC time line (or retrievedAtUtc) is the retrieval time, not the source's data-as-of time.
         query is a C# LINQ expression (Dynamic LINQ) over the response root it, evaluated by the host; only its JSON result returns (up to 48 KB), beside the response's own coverage fields (complete, pagesRead, _finops). Example: value.Where(x => x.location == "eastus").Select(x => new { x.name, size = x.properties.hardwareProfile.vmSize }).OrderBy(x => x.name).Take(50). Use Where, Select, SelectMany, GroupBy (g.Key, g.Sum(...), g.Count()), OrderBy/OrderByDescending, Skip/Take, Distinct, Count, Sum, Average, Min, Max, Any, All and FirstOrDefault, with string methods (Contains, StartsWith, ToLower, Substring), Math and DateTime. Member names are case-sensitive and spelled as the schema shows them (@odata.nextLink is _odata_nextLink); numbers are double? (write x.cost ?? 0 in arithmetic, Math.Round(x.cost ?? 0, 2) for money); tags and other keyed objects are dictionaries (x.tags["env"], or m.Select(p => new { p.Key, p.Value.threshold }) when an object's keys are data); reads are as forgiving as JSON: a member missing from this response, a missing key and anything read through null are null, an empty list is empty, and the result names the members that were absent; inside a nested lambda the response root is root (root.value.Count()). Only JSON boolean members are bool? and are compared (x.enabled == true); string tests such as Contains and StartsWith already return bool, so negate them with ! alone: a negated test compared with false cancels the ! and keeps exactly the rows it meant to drop, so the host rejects it before sending. When you know the API's shape, pass query on the first call so one call returns only what you need. Several GET urls of the same kind (one per region, subscription or scope), one per line and at most 50, are one call: query runs on each response and results return in url order. Compute every total, count, share, ranking, difference and date span in query rather than by reading rows or doing arithmetic yourself; query without url is a calculator for figures copied exactly from earlier results (new { monthly = Math.Round(0.192 * 730 * 3, 2) }) and sends no request. A query error returns the schema instead of data; correct the query and repeat the request.
         Endpoints and where to look up their contracts (look it up instead of guessing: a failed call does not answer the question):
-        - Azure Resource Manager: url is an ARM path starting with / (https://management.azure.com is implied) including api-version. Covers Cost Management, Consumption, Billing, Advisor, Resource Graph, Compute, Monitor, Policy, Network, Resource Health and every provider. Live apiVersions: GET /subscriptions/{id}/providers/{namespace}?api-version=2021-04-01. Schemas: the official OpenAPI specs; list folders and versions with https://api.github.com/repos/Azure/azure-rest-api-specs/contents/specification/{service}/resource-manager, then read the spec JSON on raw.githubusercontent.com with query over its paths and definitions. Reference: https://learn.microsoft.com/rest/api/{service}/.
+        - Azure Resource Manager: url is an ARM path starting with / (https://management.azure.com is implied). Covers Cost Management, Consumption, Billing, Advisor, Resource Graph, Compute, Monitor, Policy, Network, Resource Health and every provider. Leave api-version out of reads: the host sends the newest stable version ARM names for the resource type and reports it in the root _apiVersion. A provider's resource types, which name its operations: GET /providers/{namespace}. Schemas: the official OpenAPI specs; list folders and versions with https://api.github.com/repos/Azure/azure-rest-api-specs/contents/specification/{service}/resource-manager, then read the spec JSON on raw.githubusercontent.com with query over its paths and definitions. Reference: https://learn.microsoft.com/rest/api/{service}/.
         - Microsoft Graph: https://graph.microsoft.com/v1.0/... or /beta/... Reference: https://learn.microsoft.com/graph/api/{resource}-{verb}?view=graph-rest-1.0 and https://github.com/microsoftgraph/msgraph-metadata. Many endpoints, such as subscribedSkus and report functions, reject $filter/$top/$select; report functions return CSV, converted to a rows table. The host sends ConsistencyLevel: eventual, so directory advanced queries work when they also include $count=true (for example users?$filter=assignedLicenses/$count ne 0&$count=true).
         - Log Analytics: POST https://api.loganalytics.io/v1/workspaces/{customerId}/query; Application Insights: POST https://api.applicationinsights.io/v1/apps/{appId}/query; body {"query":"<KQL>","timespan":"P7D"}. KQL: https://learn.microsoft.com/kusto/query/. Discover populated tables with `Usage | summarize GB=sum(Quantity)/1024 by DataType` and columns with `<Table> | getschema`; filter by time first, summarize and project inside KQL, and take/top only after aggregation. FinOps signals: Usage and _BilledSize (ingestion cost), Perf/InsightsMetrics (utilization), Heartbeat and AzureActivity (who changed what).
         - Blob Storage (cost exports): GET https://{account}.blob.core.windows.net/{container}?restype=container&comp=list&prefix={export/period} lists blobs (use the narrowest prefix; a NextMarker means more blobs); GET https://{account}.blob.core.windows.net/{container}/{blob} reads the first 6 MiB of one blob (CSV becomes rows; complete=false when the blob is larger). Never use a SAS or other credential-bearing URL; for complete analysis of a large export ask for an upload and use QueryUploadedFile. Reference: https://learn.microsoft.com/rest/api/storageservices/list-blobs.
@@ -66,7 +66,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     internal const int QueryCharacters = 48 * 1024;
 
     internal const string ChangeDescription = """
-        Applies one Azure Resource Manager PUT or PATCH (tags, SKU or size, autoscale, budgets, schedules, diagnostic settings and similar non-destructive changes) under the signed-in user's RBAC. The host shows the exact method, url and body to the user and runs the call only after they approve it in the UI; a rejection returns without sending anything. Read the current resource with QueryAzure first and send the complete intended body for PUT or only the changed properties for PATCH. Deletions are never available: put destructive steps in a GenerateScript script for the user to review. A 201 or 202 result is accepted, not complete: poll its Azure-AsyncOperation or Location URL with QueryAzure GET until a terminal status.
+        Applies one Azure Resource Manager PUT or PATCH (tags, SKU or size, autoscale, budgets, schedules, diagnostic settings and similar non-destructive changes) under the signed-in user's RBAC. The host shows the exact method, url and body to the user and runs the call only after they approve it in the UI; a rejection returns without sending anything. Read the current resource with QueryAzure first and send the complete intended body for PUT or only the changed properties for PATCH, with the api-version that read used (its _apiVersion.used when the host chose it). Deletions are never available: put destructive steps in a GenerateScript script for the user to review. A 201 or 202 result is accepted, not complete: poll its Azure-AsyncOperation or Location URL with QueryAzure GET until a terminal status.
         """;
 
     public IEnumerable<AIFunction> Create() =>
@@ -76,7 +76,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     ];
 
     private async Task<string> QueryAzure(
-        [Description("An ARM path starting with / (with api-version), or a full https URL for Microsoft Graph, Log Analytics, Application Insights, Blob Storage, Retail Prices or a public page. Several GET urls, one per line (at most 50), are one call: query runs on each and results return in url order. Omit url to evaluate query alone as a calculation.")] string url = "",
+        [Description("An ARM path starting with / (api-version may be left out of reads), or a full https URL for Microsoft Graph, Log Analytics, Application Insights, Blob Storage, Retail Prices or a public page. Several GET urls, one per line (at most 50), are one call: query runs on each and results return in url order. Omit url to evaluate query alone as a calculation.")] string url = "",
         [Description("GET (default) or POST. PUT and PATCH go through ApplyAzureChange; DELETE is blocked.")] string method = "GET",
         [Description("Request body for POST as a native JSON object, not an escaped string; omit for GET.")] JsonElement? body = null,
         [Description("Optional C# LINQ expression over the response root it that returns only what you need, for example value.Where(x => x.location == \"eastus\").Select(x => new { x.name, x.id }). Omit to receive a small response whole or a large one's schema.")] string query = "",
@@ -101,13 +101,15 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
 
     private async Task<string> ApplyAzureChange(
         [Description("PUT or PATCH.")] string method,
-        [Description("The ARM path starting with /, including api-version.")] string url,
+        [Description("The ARM path starting with /, including the api-version your read of the resource used.")] string url,
         [Description("The request body as a native JSON object.")] JsonElement? body = null,
         CancellationToken cancellationToken = default)
     {
         if (!IsWrite(method)) return "HTTP 400 BadRequest\nmethod must be PUT or PATCH. No request was sent.";
         if (ResolveTarget(url) is not { } target || Classify(target) != Service.Arm)
             return "HTTP 400 BadRequest\nurl must be an Azure Resource Manager path starting with /. No request was sent.";
+        if (!HasApiVersion(target.PathAndQuery))
+            return "HTTP 400 BadRequest\nA change needs an explicit api-version: use the one your read of this resource used (its _apiVersion.used when the host chose it). No request was sent.";
         using var activity = HttpHelper.Telemetry.StartActivity("ApplyAzureChange");
         return await SendAsync(url, method.Trim().ToUpperInvariant(), ModelJson.Text(body), activity, cancellationToken);
     }
@@ -297,39 +299,13 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
             (body, removedCurrencyGrouping) = WithoutCurrencyGrouping(path, body);
             if (ValidateQueryBody(path, body) is { } queryError) return queryError;
         }
-        var url = "https://" + ArmHost + path;
         var sendBody = method == HttpMethod.Get ? null : body;
-        var response = await HttpHelper.SendWithRetryAsync(url, token, activity, "azure", method,
+        Task<string> Send(string requestPath) => HttpHelper.SendWithRetryAsync("https://" + ArmHost + requestPath, token, activity, "azure", method,
             sendBody, timestamp, cancellationToken: cancellationToken);
-        string? requestedVersion = null, usedVersion = null;
-        if (method == HttpMethod.Get || method == HttpMethod.Post)
-        {
-            // ARM names the supported versions but can list ones the provider does not serve yet; a provider's own
-            // rejection names none, so its manifest supplies the older stable versions.
-            List<string> candidates = [.. SupportedApiVersions(path, response)];
-            if (candidates.Count == 0 && IsUnlistedApiVersionRejection(response) && ResourceTypeOf(path) is { } resource)
-            {
-                var manifest = await HttpHelper.SendWithRetryAsync($"https://{ArmHost}{resource.Scope}/providers/{resource.Namespace}?api-version=2021-04-01",
-                    token, activity, "azure", HttpMethod.Get, cancellationToken: cancellationToken);
-                candidates.AddRange(OlderStableVersions(manifest, resource.Type, Uri.UnescapeDataString(ApiVersionParameter().Match(path).Groups[1].Value)));
-            }
-            foreach (var version in candidates)
-            {
-                var correctedPath = WithApiVersion(path, version);
-                var corrected = await HttpHelper.SendWithRetryAsync("https://" + ArmHost + correctedPath, token, activity, "azure", method,
-                    sendBody, timestamp, cancellationToken: cancellationToken);
-                if (corrected.StartsWith("HTTP 2", StringComparison.Ordinal))
-                {
-                    requestedVersion = Uri.UnescapeDataString(ApiVersionParameter().Match(path).Groups[1].Value);
-                    usedVersion = version;
-                    response = corrected;
-                    uri = new Uri("https://" + ArmHost + correctedPath);
-                    activity?.SetTag("azure.api_version_corrected", version);
-                    break;
-                }
-                if (!IsUnlistedApiVersionRejection(corrected)) break;
-            }
-        }
+        var (response, sentPath, versionNote) = method == HttpMethod.Get || method == HttpMethod.Post
+            ? await SendReadAsync(path, Send, activity)
+            : (await Send(path), path, null);
+        uri = new Uri("https://" + ArmHost + sentPath);
         var result = method == HttpMethod.Get
             ? await PaginateAsync(response, uri, maxPages, next => HttpHelper.SendWithRetryAsync(next.AbsoluteUri, token, activity, "azure",
                 HttpMethod.Get, cancellationToken: cancellationToken))
@@ -343,8 +319,56 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
                 ["reason"] = "Cost Management rejects Currency as a grouping dimension and every row already carries a Currency column, so the grouping was removed; read each row's Currency.",
             });
         }
-        return usedVersion is null ? result : AnnotateApiVersion(result, requestedVersion!, usedVersion);
+        return versionNote is null ? result : AnnotateRoot(result, "_apiVersion", versionNote);
     }
+
+    // ARM rejects an api-version it does not support by naming the supported ones, and a provider that checks none
+    // treats the latest possible date as its newest, so a read without api-version is first sent with this placeholder.
+    // The newest stable version ARM names is then kept per resource type for an hour.
+    internal const string PlaceholderApiVersion = "9999-12-31";
+    internal static readonly ConcurrentDictionary<string, (string Version, DateTimeOffset Until)> ChosenApiVersions = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Sends one ARM read and returns the response, the path that produced it and the _apiVersion note, if any. A read
+    /// without api-version is sent with the version chosen for its resource type, or the placeholder. When the service
+    /// rejects the version sent, the read is retried with the newest stable versions ARM names; when the provider names
+    /// none, ARM is asked with the placeholder and its older stable versions are tried.
+    /// </summary>
+    internal static async Task<(string Response, string Path, Dictionary<string, string>? Note)> SendReadAsync(string path,
+        Func<string, Task<string>> send, Activity? activity)
+    {
+        var key = ApiVersionKey(path);
+        var chosen = !HasApiVersion(path);
+        if (chosen)
+            path = WithApiVersion(path, ChosenApiVersions.TryGetValue(key, out var known) && known.Until > DateTimeOffset.UtcNow
+                ? known.Version : PlaceholderApiVersion);
+        var sent = RequestedVersion(path);
+        var response = await send(path);
+        List<string> candidates = [.. SupportedApiVersions(path, response)];
+        if (candidates.Count == 0 && sent != PlaceholderApiVersion && IsUnlistedApiVersionRejection(response))
+        {
+            var listing = WithApiVersion(path, PlaceholderApiVersion);
+            candidates.AddRange(SupportedApiVersions(listing, await send(listing), int.MaxValue)
+                .Where(version => version.Length == 10 && string.CompareOrdinal(version, sent) < 0).Take(2));
+        }
+        foreach (var version in candidates)
+        {
+            var correctedPath = WithApiVersion(path, version);
+            var corrected = await send(correctedPath);
+            if (IsUnlistedApiVersionRejection(corrected)) continue;
+            ChosenApiVersions[key] = (version, DateTimeOffset.UtcNow.AddHours(1));
+            activity?.SetTag("azure.api_version_corrected", version);
+            var success = corrected.StartsWith("HTTP 2", StringComparison.Ordinal);
+            if (chosen || success) return (corrected, correctedPath, success ? ApiVersionNote(version, chosen ? null : sent) : null);
+            break;
+        }
+        return (response, path, chosen && response.StartsWith("HTTP 2", StringComparison.Ordinal) ? ApiVersionNote(sent, null) : null);
+    }
+
+    // Supported api-versions belong to a resource type, so the key drops every name (subscription, group, resource, region).
+    internal static string ApiVersionKey(string path) => ResourceTypeOf(path) is { } resource
+        ? resource.Namespace + "/" + resource.Type
+        : string.Join('/', path.Split('?')[0].Split('/', StringSplitOptions.RemoveEmptyEntries).Where((_, index) => index % 2 == 0));
 
     private async Task<string> GraphAsync(Uri uri, HttpMethod method, string? body, int maxPages, bool timestamp,
         Activity? activity, CancellationToken cancellationToken)
@@ -645,7 +669,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
                 @"^/providers/(?:Microsoft\.Billing/billingAccounts/[^/]+(?:/billingProfiles/[^/]+)?|Microsoft\.Capacity/reservationOrders/[^/]+(?:/reservations/[^/]+)?)/providers/Microsoft\.Consumption/reservationSummaries/?$",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             return "HTTP 400 BadRequest\nReservation summaries require a discovered billing account/profile or reservation-order/reservation scope. " +
-                "Use /providers/Microsoft.Capacity/reservationOrders/{orderId}/providers/Microsoft.Consumption/reservationSummaries?api-version=2024-08-01&grain=monthly after listing accessible reservation orders. " +
+                "Use /providers/Microsoft.Capacity/reservationOrders/{orderId}/providers/Microsoft.Consumption/reservationSummaries?grain=monthly after listing accessible reservation orders. " +
                 "A bare tenant-root or subscription path is not supported. No request was sent.";
 
         // Only enforce on the providers that actually require {scope}. Cost Management is the big one.
@@ -676,7 +700,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
                    "  /providers/Microsoft.Management/managementGroups/{mgId}\n" +
                    "  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}\n" +
                    "  /providers/Microsoft.Billing/billingAccounts/{billingAccountId}/billingProfiles/{profileId}\n" +
-                   "Example: POST /subscriptions/abc-123/providers/Microsoft.CostManagement/query?api-version=2026-08-01";
+                   "Example: POST /subscriptions/abc-123/providers/Microsoft.CostManagement/query";
         }
         return null;
     }
@@ -779,10 +803,11 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     internal static string? SupportedApiVersion(string path, string response) => SupportedApiVersions(path, response).FirstOrDefault();
 
     /// <summary>
-    /// The newest three stable listed versions, newest first (previews when no stable exists). ARM's list can name
-    /// versions the provider does not serve yet, so a provider UnsupportedApiVersion reply moves on to the next one.
+    /// The newest stable listed versions, newest first (previews when no stable exists), three unless count says
+    /// otherwise. ARM's list can name versions the provider does not serve yet, so a provider UnsupportedApiVersion
+    /// reply moves on to the next one.
     /// </summary>
-    internal static IReadOnlyList<string> SupportedApiVersions(string path, string response)
+    internal static IReadOnlyList<string> SupportedApiVersions(string path, string response, int count = 3)
     {
         if (!response.StartsWith("HTTP 400", StringComparison.Ordinal) && !response.StartsWith("HTTP 404", StringComparison.Ordinal)) return [];
         var requested = ApiVersionParameter().Match(path);
@@ -810,11 +835,17 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         // A rejected newest version means the problem is not the version, so nothing is retried.
         return ordered.Count == 0 || ordered[0].Equals(rejected, StringComparison.OrdinalIgnoreCase)
             ? []
-            : ordered.Where(version => !version.Equals(rejected, StringComparison.OrdinalIgnoreCase)).Take(3).ToList();
+            : ordered.Where(version => !version.Equals(rejected, StringComparison.OrdinalIgnoreCase)).Take(count).ToList();
     }
 
     internal static string WithApiVersion(string path, string version) =>
-        ApiVersionParameter().Replace(path, match => match.Value[..(match.Value.IndexOf('=') + 1)] + Uri.EscapeDataString(version), 1);
+        ApiVersionParameter().IsMatch(path)
+            ? ApiVersionParameter().Replace(path, match => match.Value[..(match.Value.IndexOf('=') + 1)] + Uri.EscapeDataString(version), 1)
+            : path + (path.Contains('?') ? '&' : '?') + "api-version=" + Uri.EscapeDataString(version);
+
+    internal static bool HasApiVersion(string path) => RequestedVersion(path).Trim().Length > 0;
+
+    internal static string RequestedVersion(string path) => Uri.UnescapeDataString(ApiVersionParameter().Match(path).Groups[1].Value);
 
     /// <summary>True when a resource provider rejects the api-version with UnsupportedApiVersion without naming supported versions.</summary>
     internal static bool IsUnlistedApiVersionRejection(string response)
@@ -833,14 +864,11 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         catch (JsonException) { return false; }
     }
 
-    [GeneratedRegex(@"^/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=/)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex SubscriptionPrefix();
-
     /// <summary>
     /// The provider namespace and resource type addressed by an ARM path (for example Microsoft.CostManagement and
-    /// scheduledActions), with the subscription prefix used to read that provider's manifest; null when the path names no provider.
+    /// scheduledActions); null when the path names no provider.
     /// </summary>
-    internal static (string Scope, string Namespace, string Type)? ResourceTypeOf(string path)
+    internal static (string Namespace, string Type)? ResourceTypeOf(string path)
     {
         var queryIndex = path.IndexOf('?');
         var clean = queryIndex < 0 ? path : path[..queryIndex];
@@ -848,49 +876,31 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         if (index < 0) return null;
         var segments = clean[(index + "/providers/".Length)..].Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length < 2 || segments.Any(segment => !ResourceSegment().IsMatch(segment))) return null;
-        var type = string.Join('/', segments.Skip(1).Where((_, position) => position % 2 == 0));
-        var scope = SubscriptionPrefix().Match(clean) is { Success: true } subscription ? subscription.Value : "";
-        return (scope, segments[0], type);
+        return (segments[0], string.Join('/', segments.Skip(1).Where((_, position) => position % 2 == 0)));
     }
 
     [GeneratedRegex(@"^[A-Za-z0-9._()~-]{1,260}$", RegexOptions.CultureInvariant)]
     private static partial Regex ResourceSegment();
 
-    /// <summary>Stable manifest api-versions of a resource type older than the rejected one, newest first (at most two).</summary>
-    internal static IReadOnlyList<string> OlderStableVersions(string manifestResponse, string type, string requested)
-    {
-        if (!manifestResponse.StartsWith("HTTP 2", StringComparison.Ordinal)) return [];
-        try
-        {
-            using var document = JsonDocument.Parse(ResponseShaper.SplitPreamble(manifestResponse).Body);
-            if (!document.RootElement.TryGetProperty("resourceTypes", out var types) || types.ValueKind != JsonValueKind.Array) return [];
-            foreach (var entry in types.EnumerateArray())
-            {
-                if (entry.ValueKind != JsonValueKind.Object || !entry.TryGetProperty("resourceType", out var name) || name.ValueKind != JsonValueKind.String
-                    || !string.Equals(name.GetString(), type, StringComparison.OrdinalIgnoreCase)
-                    || !entry.TryGetProperty("apiVersions", out var versions) || versions.ValueKind != JsonValueKind.Array) continue;
-                return versions.EnumerateArray()
-                    .Where(version => version.ValueKind == JsonValueKind.String)
-                    .Select(version => version.GetString()!)
-                    .Where(version => version.Length == 10 && ApiVersionValue().IsMatch(version) && string.CompareOrdinal(version, requested) < 0)
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderDescending(StringComparer.Ordinal)
-                    .Take(2)
-                    .ToList();
-            }
-        }
-        catch (JsonException) { }
-        return [];
-    }
-
     /// <summary>Adds a leading root _apiVersion note to a JSON object body; other bodies are unchanged.</summary>
     internal static string AnnotateApiVersion(string response, string requested, string used) =>
-        AnnotateRoot(response, "_apiVersion", new Dictionary<string, string>
+        AnnotateRoot(response, "_apiVersion", ApiVersionNote(used, requested));
+
+    /// <summary>The _apiVersion note: the version that answered and either the rejected one it replaced or how the host chose it.</summary>
+    internal static Dictionary<string, string> ApiVersionNote(string used, string? requested) => requested is not null
+        ? new()
         {
             ["requested"] = requested,
             ["used"] = used,
             ["reason"] = "The service rejected the requested api-version for this resource type; a supported version (stable preferred) answered.",
-        });
+        }
+        : new()
+        {
+            ["used"] = used,
+            ["source"] = used == PlaceholderApiVersion
+                ? "The service names no supported api-version for this resource type and answered the host's newest-possible placeholder."
+                : "The newest stable api-version ARM names for this resource type, chosen by the host.",
+        };
 
     /// <summary>Adds a leading root note to a JSON object body; other bodies are unchanged.</summary>
     internal static string AnnotateRoot(string response, string name, IReadOnlyDictionary<string, string> note)
