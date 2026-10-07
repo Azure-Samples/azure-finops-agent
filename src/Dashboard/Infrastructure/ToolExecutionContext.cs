@@ -17,6 +17,15 @@ internal sealed class ToolExecutionContext : IDisposable
     /// </summary>
     internal ConcurrentDictionary<string, long> ToolDurations { get; } = new(StringComparer.Ordinal);
 
+    private bool _microsoftLearnCalled;
+
+    /// <summary>Whether the model called a Microsoft Learn tool this turn; the turn's later model requests then leave hosted web search out.</summary>
+    internal bool MicrosoftLearnCalled
+    {
+        get => Volatile.Read(ref _microsoftLearnCalled);
+        set => Volatile.Write(ref _microsoftLearnCalled, value);
+    }
+
     internal ToolExecutionContext(string? sessionId, long? userId, CancellationToken cancellationToken)
     {
         _previous = Ambient.Value;

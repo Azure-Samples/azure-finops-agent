@@ -29,7 +29,7 @@ const evaluationSourcePaths = [
         ].map((name) => `:(icase)${join(directory, name)}`),
     ),
 ];
-export const LIVE_SUITE_SIZE = 23;
+export const LIVE_SUITE_SIZE = 24;
 const THROTTLE_MARGIN_MS = 5000;
 // Cost Management's per-tenant Query API quotas are 12 QPU per 10 s, 60 QPU per minute and
 // 600 QPU per hour. A retry-after covers only the exhausted window; a rerun inside the same
@@ -59,6 +59,7 @@ const CURATED_CASE_IDS = Object.freeze([
     "062a296be5be951f", // H200 Spot incident
     "3c99447cf28f786c", // English deterministic query calculation incident
     // Session-audit regressions (2026-10-07): each guards one fixed failure mode.
+    "f4fd66c2942dcaa7", // Documentation from the Microsoft Learn tools
     "2fb769993820fdf2", // A script that keeps every stated value
     "45ffa45e5346e49d", // An omitted property read as not set, not unknown
     "c7b0c5917d8b1e09", // An honest access limit instead of a dead end
@@ -84,6 +85,7 @@ const PARALLEL_LANES = Object.freeze({
         "160eca54c580c4f8",
         "f84890a72a9009f3",
         "3c99447cf28f786c",
+        "f4fd66c2942dcaa7",
         "2fb769993820fdf2",
     ]),
 });
@@ -216,9 +218,7 @@ export function buildCatalog() {
         "Newest models' token prices",
         "evaluation:pricing",
     );
-    // Failure modes found by the 2026-10-07 audit of real sessions, each pinned to its fixed behavior. The documentation
-    // case stays in the catalog but out of the curated gate: the model still re-checks a Learn result with a
-    // site:learn.microsoft.com web search in about a third of runs, which the judge rightly scores as waste.
+    // Failure modes found by the 2026-10-07 audit of real sessions, each pinned to its fixed behavior.
     add(
         "Is purge protection on by default for a new Azure Key Vault, and can I turn it off later?",
         "Key Vault purge protection default",

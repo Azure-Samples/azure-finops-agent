@@ -121,6 +121,9 @@ public sealed class AgentSessionFactory : IAsyncDisposable
 #pragma warning restore OPENAI001
     };
 
+    /// <summary>The model client under Agent Framework's function-invocation loop, which therefore sees every model request.</summary>
+    internal static IChatClient ModelClient(IChatClient responses) => new LearnWebSearchGuard(responses);
+
     private const string TitleInstructions =
         "Summarise the user's question into a 3-6 word title for a chat sidebar. No quotes, no trailing punctuation, no emoji. Title-case.";
 
@@ -175,7 +178,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
                 Name = "azure-finops-agent",
                 ChatOptions = AgentChatOptions(deployment, reasoningEffort, webSearch),
                 AllowConcurrentInvocation = true,
-            }, loggerFactory: loggerFactory)
+            }, clientFactory: ModelClient, loggerFactory: loggerFactory)
             .AsBuilder()
             .UseOpenTelemetry(AiTelemetry.AgentSourceName)
             .Build();

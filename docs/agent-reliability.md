@@ -54,7 +54,7 @@ Run one active application instance. Turn gates, cooldowns and upload leases are
 ## Verification Gates
 
 - `validate.yml` runs credential-free backend, Python, frontend unit and rendered desktop/mobile regressions, builds the Linux image, checks non-root startup and offline telemetry shutdown, and rejects fixable critical runtime vulnerabilities.
-- `live-evaluations.yml` runs the same 23 representative questions against real inference and Azure tools, with a separate judge. All 23 must pass before either deployment workflow can deploy. See [tests/LiveEvaluations/README.md](../tests/LiveEvaluations/README.md).
+- `live-evaluations.yml` runs the same 24 representative questions against real inference and Azure tools, with a separate judge. All 24 must pass before either deployment workflow can deploy. See [tests/LiveEvaluations/README.md](../tests/LiveEvaluations/README.md).
 - After deploying, both workflows send a real anonymous chat through the deployed URL with the deployed identity. On failure or cancellation they restore the previous image and model settings.
 
 See [contributor instructions](../CONTRIBUTING.md#regression-tests) for local commands.
@@ -71,6 +71,7 @@ Each of these has a regression test or an enforced contract; do not report them 
 - Duplicate exception telemetry for handled transcript faults.
 - Unsupported Microsoft Graph query options and stale Copilot report routes.
 - Mental arithmetic, mixed currencies and mixed report cohorts in answers; totals, shares and rankings now come from `query`.
+- Documentation answers that re-checked Microsoft Learn results with `site:learn.microsoft.com` web searches; once a Learn tool has been called, the turn's later requests no longer offer hosted web search.
 
 ## Known Limitations
 
@@ -79,4 +80,4 @@ Each of these has a regression test or an enforced contract; do not report them 
 - A fresh consent flow needs a signed-in browser in a test tenant; automated fixtures do not prove external consent.
 - No billable ARM mutation is used as a test. Real allocation, inherited policy and role-specific failures need controlled deployment checks.
 - Recognizing and refusing credentials is left to the model; users must not paste secrets. Rotating previously disclosed credentials is an operator action.
-- Hosted web search still duplicates documentation reads. In 30 local runs of public questions on 2026-10-07, every documentation question started with `microsoft_docs_search`, yet most runs also made a `site:learn.microsoft.com` web search, although the prompt forbids it; asking for `microsoft_docs_fetch` instead stopped web-search page opens of Learn pages, not the searches. A note in the Learn result itself did not help either (2 of 6 runs still searched). Only turning hosted web search off (`AzureOpenAI:WebSearch=false`) removes them; it stays on by maintainer decision, so the documentation regression case stays in the evaluation catalog but out of the live gate, where the judge rightly scores the extra search as waste. The same runs found no measurable effect from Responses `text.verbosity=low` (110 against 111 words on average), so it is not sent.
+- A hosted web search in the same model response as the first Microsoft Learn call is still possible: `LearnWebSearchGuard` leaves hosted web search out only of the turn's later model requests. In 30 local runs on 2026-10-07, Responses `text.verbosity=low` made no measurable difference (110 against 111 words on average), so it is not sent.
