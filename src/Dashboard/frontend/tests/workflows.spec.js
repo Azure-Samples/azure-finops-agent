@@ -231,14 +231,14 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
   expect(errors).toEqual([]);
 });
 
-test("signed in, scheduled jobs sit right below New chat with no empty-state text", async ({
+test("signed in, scheduled jobs sit in the right rail (below New chat in the mobile menu) with no empty-state text", async ({
   page,
 }, testInfo) => {
   const { errors } = await arrange(page, [], { messages: [] }, {
     azureConnected: true,
   });
-  if (testInfo.project.name === "mobile")
-    await page.locator(".portal-burger").click();
+  const mobile = testInfo.project.name === "mobile";
+  if (mobile) await page.locator(".portal-burger").click();
 
   const newJob = page.getByRole("button", { name: "New job" });
   await expect(newJob).toBeVisible();
@@ -246,12 +246,22 @@ test("signed in, scheduled jobs sit right below New chat with no empty-state tex
   await expect(page.locator("#sidebar-scheduled-jobs")).toHaveCount(0);
   await expect(page.getByText("No jobs yet", { exact: false })).toHaveCount(0);
 
-  const top = async (locator) => (await locator.boundingBox()).y;
-  const newChatTop = await top(page.locator(".sidebar-new-chat"));
-  const jobsTop = await top(newJob);
-  const firstScoreTop = await top(page.locator(".maturity-card").first());
-  expect(jobsTop).toBeGreaterThan(newChatTop);
-  expect(jobsTop).toBeLessThan(firstScoreTop);
+  if (mobile) {
+    const top = async (locator) => (await locator.boundingBox()).y;
+    const newChatTop = await top(page.locator(".sidebar-new-chat"));
+    const jobsTop = await top(newJob);
+    const firstScoreTop = await top(page.locator(".maturity-card").first());
+    expect(jobsTop).toBeGreaterThan(newChatTop);
+    expect(jobsTop).toBeLessThan(firstScoreTop);
+  } else {
+    await expect(page.locator(".tools-sidebar")).toBeVisible();
+    await expect(
+      page.locator(".tools-sidebar").getByRole("button", { name: "New job" }),
+    ).toBeVisible();
+    await expect(
+      page.locator("#chat-navigation").getByRole("button", { name: "New job" }),
+    ).toHaveCount(0);
+  }
   expect(errors).toEqual([]);
 });
 

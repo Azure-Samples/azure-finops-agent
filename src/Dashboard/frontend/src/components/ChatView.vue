@@ -117,7 +117,10 @@
             <span>New chat</span>
           </button>
           <!-- Scheduled jobs — Entra-only background prompts. First below New
-               chat so the capability is visible without scrolling. -->
+               chat so the capability is visible without scrolling. On wide
+               screens it renders in the right rail; on compact screens the
+               Teleport is disabled and it stays here in the overlay menu. -->
+          <Teleport to="#rail-jobs-slot" defer :disabled="compactLayout">
           <div
             v-if="azureConnected"
             class="sidebar-category sidebar-category--border sidebar-library-section"
@@ -308,6 +311,7 @@
               </div>
             </div>
           </div>
+          </Teleport>
 
           <!-- Maturity score cards (Crawl / Walk / Run) — whole card is clickable -->
           <template v-if="azureConnected">
@@ -602,7 +606,9 @@
             </div>
           </div>
 
-          <!-- Chats history — shown once there is a conversation -->
+          <!-- Chats history — shown once there is a conversation; right rail on
+               wide screens, overlay menu on compact screens. -->
+          <Teleport to="#rail-chats-slot" defer :disabled="compactLayout">
           <div
             v-if="chatSessions.length || sessionDeleteError"
             class="sidebar-category sidebar-category--border sidebar-library-section"
@@ -699,6 +705,7 @@
               </div>
             </div>
           </div>
+          </Teleport>
         </div>
 
         <!-- Bottom section -->
@@ -1897,14 +1904,24 @@
         </div>
       </div>
 
-      <!-- Right sidebar: Agent execution for the current conversation -->
+      <!-- Right rail: Scheduled jobs and Chats (teleported in on wide screens),
+           then Agent execution for the current conversation -->
       <aside
         class="tools-sidebar"
-        :class="{
-          'tools-sidebar--open': allToolCalls.length > 0 || streaming,
-        }"
+        :class="{ 'tools-sidebar--open': railOpen }"
+        aria-label="Chats, scheduled jobs and agent execution"
       >
-        <div class="tools-sidebar-pane tools-sidebar-pane--agent">
+        <div
+          class="tools-sidebar-nav"
+          :class="{ 'tools-sidebar-nav--split': showAgentPane }"
+        >
+          <div id="rail-jobs-slot"></div>
+          <div id="rail-chats-slot"></div>
+        </div>
+        <div
+          v-if="showAgentPane"
+          class="tools-sidebar-pane tools-sidebar-pane--agent"
+        >
           <div class="tools-sidebar-header">
             <div class="tools-sidebar-header-text">
               <span class="tools-sidebar-title">Agent execution</span>
@@ -3576,6 +3593,17 @@ const navigationMedia = window.matchMedia("(max-width: 900px)");
 const compactLayout = ref(navigationMedia.matches);
 const sidebarVisible = computed(() =>
   compactLayout.value ? mobileSidebarOpen.value : sidebarOpen.value,
+);
+// Right rail: Chats + Scheduled jobs (wide screens) above Agent execution.
+const showAgentPane = computed(
+  () => allToolCalls.value.length > 0 || streaming.value,
+);
+const railOpen = computed(
+  () =>
+    showAgentPane.value ||
+    azureConnected.value ||
+    chatSessions.value.length > 0 ||
+    !!sessionDeleteError.value,
 );
 function updateNavigationLayout(event) {
   compactLayout.value = event.matches;
@@ -11767,8 +11795,33 @@ async function send() {
   padding: 4px 8px 8px;
 }
 .sidebar .sessions-scroll,
-.sidebar .jobs-scroll {
+.sidebar .jobs-scroll,
+.tools-sidebar-nav .sessions-scroll,
+.tools-sidebar-nav .jobs-scroll {
   padding: 2px 0 8px;
+}
+/* Chats + Scheduled jobs in the right rail: same rows as the left menu. When
+   Agent execution is also showing, the lists share the rail (up to 55%) and
+   scroll on their own so the agent pane keeps its room. */
+.tools-sidebar-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0 8px;
+  scrollbar-width: thin;
+}
+.tools-sidebar-nav--split {
+  flex: 0 1 auto;
+  max-height: 55%;
+}
+.tools-sidebar-nav:not(:has(.sidebar-category)) {
+  display: none;
+}
+.tools-sidebar-nav .sidebar-category--border {
+  margin-top: 4px;
+}
+.tools-sidebar-nav:has(.sidebar-category) + .tools-sidebar-pane--agent {
+  border-top: 1px solid var(--sidebar-border);
 }
 /* ── Scheduled jobs pane ── */
 .tools-sidebar-pane--jobs {
@@ -11783,9 +11836,10 @@ async function send() {
 .jobs-scroll {
   overflow-y: auto;
 }
-/* The jobs list sits at the top of the menu: past about four rows it scrolls
-   instead of pushing the prompts down. */
-.jobs-scroll:not(.collapse-body--collapsed) {
+/* In the left menu the jobs list sits above the prompts: past about four rows
+   it scrolls instead of pushing them down. The right rail has no prompts under
+   it, so the list uses the rail and the rail scrolls. */
+.sidebar .jobs-scroll:not(.collapse-body--collapsed) {
   max-height: 236px;
 }
 .jobs-header-label {
