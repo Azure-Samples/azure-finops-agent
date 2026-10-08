@@ -59,7 +59,7 @@ defineProps({
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--activity-dot);
+  background: var(--accent);
   opacity: 0.7;
   transform: translateY(-1.25px);
   animation: activity-pulse 1.2s linear infinite;

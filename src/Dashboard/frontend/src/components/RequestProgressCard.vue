@@ -79,8 +79,8 @@ defineProps({
   min-width: 0;
   padding: 16px 18px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--card);
+  border-radius: var(--radius);
+  background: var(--tint);
   color: var(--ink);
   text-align: left;
 }
@@ -89,7 +89,7 @@ defineProps({
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  color: var(--activity-dot);
+  color: var(--accent);
 }
 .request-progress-cloud {
   animation: request-breathe 3s ease-in-out infinite;
@@ -132,7 +132,7 @@ h3 {
 .request-progress-badge {
   padding: 2px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--text-muted);
   font-size: var(--text-caption-size);
@@ -177,13 +177,13 @@ time {
   margin-top: 10px;
   overflow: hidden;
   border-radius: 4px;
-  background: rgba(54, 120, 232, 0.16);
+  background: var(--accent-soft-strong);
 }
 .request-progress-fill {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--activity-dot);
+  background: var(--accent);
   transition: width .25s linear;
 }
 .request-progress-resource-note {
@@ -193,7 +193,7 @@ time {
 }
 .request-progress--stopped {
   border-color: rgba(191, 135, 0, 0.25);
-  background: rgba(191, 135, 0, 0.08);
+  background: var(--warning-soft);
 }
 .request-progress--stopped .request-progress-art,
 .request-progress--stopped .request-progress-badge,

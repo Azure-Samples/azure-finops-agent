@@ -154,6 +154,15 @@ The agent is deliberately minimal: tools are thin, host-enforced pass-throughs a
 
 ## Frontend invariants
 
+- One visual system, defined only by the tokens in `src/App.vue`. Rules:
+  - **Font:** Google Sans Flex everywhere, using the type tokens: label size for interface text, caption only for secondary details, title for dialog titles, body for answers.
+  - **Background:** one white background for the page, sidebars, rail, dialogs and cards, separated by `--border`.
+  - **Tints:** `--hover` and `--selected` for row states; `--tint` only for quiet fills (your message bubble, table headers, code, chips).
+  - **Accent:** `--accent` solid for primary actions, `--accent-soft` with an accent border for selections. Secondary buttons are white with a border and ink text.
+  - **Corners:** `--radius` (8px) for everything, `--radius-lg` (12px) for dialogs, the composer and the user bubble; round only for indicators and avatars.
+  - **Shadow:** `--shadow` only on floating layers.
+
+  Never add literal colours, corner sizes, fonts or shadows to components.
 - At 900px and below, the left navigation is an overlay and the right rail is hidden, so on phones everything lives in the left navigation: New chat, Scheduled jobs (signed in only, directly below New chat; the empty state is just the heading and New job), the prompt library (signed out: "AI governance & security" then "AI & LLM pricing" expanded, "Infrastructure pricing" collapsed, each with three or four questions, most important first; each button shows a short customer question of at most 36 characters and sends a precise, slightly technical prompt that names no single model service or version; signed in, all collapsed), and Chats (shown once there is a conversation). Above 900px, Scheduled jobs and Chats render in the right rail instead (one template, moved by a deferred `Teleport` that is disabled on compact screens), so they are never in both places. Menu headings carry no second line (counts appear only for scheduled jobs that exist), and the tenant box is labelled "Tenant ID (optional)" without a separate hint. The right rail shows Scheduled jobs and Chats first, then, only while the conversation has tool calls, its Agent execution; it groups calls under the question that made them, newest first, each headed by its call count, failures and kinds of calls, with only the newest group open (opening an older one scrolls the chat to its question). New chat lives only in the navigation; the top bar has none.
 - Conversation deletion is one click with no confirmation step. The row stays visible and disabled while the server responds. Only confirmed server deletion clears client state; active turns return a conflict and failures remain visible for retry. The composer's Clear chat (shown once a conversation has a question and a response, disabled while a turn runs) uses the same deletion and then opens a new chat; a refused deletion keeps the conversation and shows the reason.
 - Closed navigation must be invisible and inert. Keep the compact overlay aligned to the actual header, dismissible with Escape/backdrop, and return focus to its toggle.

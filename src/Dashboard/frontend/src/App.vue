@@ -57,40 +57,40 @@ async function logout() {
   --font-variation-body: "ROND" 0, "wdth" 92;
   --font-variation-greeting: "ROND" 100, "wdth" 100;
 
+  /* One palette: a white page, one tint for side panels and quiet fills,
+     one hover, one selection and one border colour. */
   --bg: #ffffff;
   --surface: #ffffff;
-  --primary: #0d0d0d;
+  --tint: #f5f7fa;
+  --hover: rgba(31, 51, 82, 0.06);
+  --selected: rgba(31, 51, 82, 0.1);
+  --border: rgba(31, 51, 82, 0.14);
+  --backdrop: rgba(15, 23, 42, 0.4);
+  --code-bg: #1e1e1e;
+
   --ink: #1f1f1f;
-  --text: #1f1f1f;
-  --text-muted: #676767;
-  --text-hint: #73777d;
-  --user-bubble: #f4f4f4;
-  --card: #f7f7f8;
-  --border: #e5e5e5;
-  --focus: #3678e8;
+  --text-muted: #5f6672;
+
+  /* One accent for every primary action, link, focus ring and selection,
+     and one soft fill per status. */
   --accent: #3678e8;
   --accent-hover: #245fbe;
+  --accent-soft: rgba(54, 120, 232, 0.1);
+  --accent-soft-strong: rgba(54, 120, 232, 0.16);
   --danger: #d13438;
+  --danger-soft: rgba(209, 52, 56, 0.08);
   --success: #1a7f37;
+  --success-soft: rgba(26, 127, 55, 0.1);
   --warning: #bf8700;
+  --warning-soft: rgba(191, 135, 0, 0.1);
 
-  --sidebar-bg: #fcfdff;
-  --sidebar-border: rgba(44, 76, 124, 0.14);
-  --sidebar-selected: rgba(44, 76, 124, 0.1);
-  --sidebar-hover: rgba(44, 76, 124, 0.06);
-  --sidebar-secondary: #3e4755;
+  /* Two corner sizes: --radius everywhere, --radius-lg for dialogs, the
+     composer and your message bubble. Indicators and avatars stay round. */
+  --radius: 8px;
+  --radius-lg: 12px;
 
-  --chart-border: #dce5f4;
-  --chart-shadow: rgba(37, 61, 103, 0.08);
-  --activity-dot: #4b7ccd;
-
-  --radius-composer: 32px;
-  --radius-composer-mobile: 40px;
-  --radius-bubble: 20px;
-  --radius-card: 12px;
-  --radius-chip: 14px;
-  --radius-chart: 20px;
-  --shadow-composer: 0 2px 10px rgba(0, 0, 0, 0.05);
+  /* One shadow, only for things that float: dialogs, popovers, the menu. */
+  --shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
 
   --text-body-size: 17px;
   --text-body-line: 26px;
@@ -113,7 +113,7 @@ body {
   font-variation-settings: var(--font-variation-body);
   font-stretch: 92%;
   background: var(--bg);
-  color: var(--text);
+  color: var(--ink);
   line-height: var(--text-body-line);
   letter-spacing: 0;
   -webkit-font-smoothing: antialiased;

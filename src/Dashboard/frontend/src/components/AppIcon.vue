@@ -28,6 +28,7 @@ const props = defineProps({
 });
 
 const icons = {
+  add: ["M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"],
   arrowUpward: ["M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12 12 4z"],
   arrowDownward: [
     "M4 12l1.41-1.41L11 16.17V4h2v12.17l5.59-5.58L20 12l-8 8z",

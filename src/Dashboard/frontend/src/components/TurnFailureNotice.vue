@@ -33,8 +33,8 @@ defineEmits(["edit"]);
   padding: 16px;
   border: 1px solid rgba(209, 52, 56, 0.22);
   border-left: 3px solid var(--danger);
-  border-radius: var(--radius-card);
-  background: rgba(209, 52, 56, 0.06);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
   color: var(--ink);
   text-align: left;
 }
@@ -70,17 +70,17 @@ button {
   margin-bottom: 8px;
   padding: 6px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
   cursor: pointer;
 }
 button:hover:not(:disabled) {
-  background: var(--user-bubble);
+  background: var(--tint);
 }
 button:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 button:disabled {
