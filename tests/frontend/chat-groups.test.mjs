@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { groupChats } from '../../src/Dashboard/frontend/src/chatGroups.js';
+import { groupChats, withQuestionTitle } from '../../src/Dashboard/frontend/src/chatGroups.js';
 
 const now = new Date(2026, 9, 8, 15, 0, 0);
 const at = (days, hours = 0) =>
@@ -39,4 +39,30 @@ test('search matches titles case-insensitively and drops empty groups', () => {
   );
   assert.deepEqual(groupChats(sessions, 'nothing like this', now), []);
   assert.deepEqual(groupChats(undefined, '', now), []);
+});
+
+test('a running conversation shows its question until its title arrives', () => {
+  const question = '\n  Where are my biggest Azure savings opportunities? Score my Crawl maturity.\nUse all subscriptions.';
+  const added = withQuestionTitle(sessions, 'new', question, now);
+  assert.deepEqual(added[0], {
+    id: 'new',
+    summary: 'Where are my biggest Azure savings opportunities? Score my Crawl maturity.',
+    modified: now.toISOString(),
+  });
+  assert.equal(added.length, sessions.length + 1);
+
+  const renamed = withQuestionTitle(
+    [{ id: 'fresh', summary: 'Untitled conversation', started: at(0) }],
+    'fresh',
+    'x'.repeat(90),
+    now,
+  );
+  assert.deepEqual(renamed, [
+    { id: 'fresh', summary: `${'x'.repeat(80)}…`, started: at(0), modified: now.toISOString() },
+  ]);
+
+  // A named conversation keeps its title, and an empty question changes nothing.
+  assert.equal(withQuestionTitle(sessions, 'today-late', 'Another question', now), null);
+  assert.equal(withQuestionTitle(sessions, 'new', '   ', now), null);
+  assert.equal(withQuestionTitle(undefined, '', 'Question', now), null);
 });

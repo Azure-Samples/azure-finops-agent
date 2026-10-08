@@ -30,3 +30,25 @@ export function groupChats(sessions, query = "", now = new Date()) {
     .filter((group) => group.sessions.length)
     .map(({ key, label, sessions: items }) => ({ key, label, sessions: items }));
 }
+
+// A conversation appears as soon as its turn starts, named by the first line of
+// its question until the title generated from it arrives. Returns the updated
+// list, or null when the conversation already has a name.
+export function withQuestionTitle(sessions, id, question, now = new Date()) {
+  const list = sessions || [];
+  const index = list.findIndex((session) => session.id === id);
+  if (index >= 0 && !/^untitled/i.test(list[index].summary || "")) return null;
+  const line = String(question || "")
+    .split("\n")
+    .map((part) => part.trim())
+    .find(Boolean);
+  if (!id || !line) return null;
+  const row = {
+    ...(index >= 0 ? list[index] : { id }),
+    summary: line.length > 80 ? `${line.slice(0, 80)}…` : line,
+    modified: now.toISOString(),
+  };
+  return index >= 0
+    ? [...list.slice(0, index), row, ...list.slice(index + 1)]
+    : [row, ...list];
+}

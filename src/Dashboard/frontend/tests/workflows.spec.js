@@ -61,7 +61,7 @@ async function arrange(
     }
     if (path === "/api/version")
       return route.fulfill({
-        json: { sha: "test", build: "test", branch: "test" },
+        json: options.version || { sha: "test", build: "test", branch: "test" },
       });
     if (path === "/api/config") return route.fulfill({ json: {} });
     if (path === "/api/models")
@@ -116,13 +116,25 @@ async function send(page, prompt = "make an Excel file") {
   await expect(page.locator(".action-btn--stop")).toHaveCount(0);
 }
 
-test("top bar links to the source repository without a personal contact link", async ({ page }) => {
-  const { errors } = await arrange(page, []);
+test("top bar shows the Open source link and the build without repeating the product name or a personal contact link", async ({ page }) => {
+  const { errors } = await arrange(page, [], undefined, {
+    version: { sha: "abc1234", build: "158", branch: "main" },
+  });
+  const wide = page.viewportSize().width > 600;
+  // The start page already names the product.
+  await expect(page.locator(".portal-header")).not.toContainText("Azure FinOps Agent");
   const link = page.locator(
     '.portal-trustline-link[href="https://github.com/Azure-Samples/azure-finops-agent"]',
   );
   await expect(link).toBeVisible();
   await expect(link).toHaveAttribute("target", "_blank");
+  // Phones keep the icon; the label shows wherever it fits.
+  if (wide) await expect(link.getByText("Open source")).toBeVisible();
+  const badge = page.locator(".portal-build-badge");
+  await expect(badge).toBeVisible();
+  await expect(badge).not.toHaveClass(/portal-build-badge--preview/);
+  await expect(badge).toContainText("Build 158");
+  if (wide) await expect(badge).toContainText("main");
   await expect(page.locator('a[href*="linkedin.com"]')).toHaveCount(0);
   expect(
     await page.evaluate(
@@ -130,6 +142,15 @@ test("top bar links to the source repository without a personal contact link", a
     ),
   ).toBeTruthy();
   expect(errors).toEqual([]);
+});
+
+test("a preview branch highlights its build in the top bar", async ({ page }) => {
+  await arrange(page, [], undefined, {
+    version: { sha: "abc1234", build: "42", branch: "feature-x" },
+  });
+  const badge = page.locator(".portal-build-badge--preview");
+  await expect(badge).toBeVisible();
+  await expect(badge).toContainText("Build 42");
 });
 
 test("navigation exposes one New chat and the start page offers the starter questions", async ({
@@ -564,7 +585,7 @@ test("the latest answer offers a deck and a script, and the message box keeps on
   expect(errors).toEqual([]);
 });
 
-test("a maturity score appears as a card inside the answer that scored it", async ({
+test("a maturity score updates the navigation's level, not the answer", async ({
   page,
 }, testInfo) => {
   const scores = [
@@ -584,19 +605,11 @@ test("a maturity score appears as a card inside the answer that scored it", asyn
     { type: "message", content: "Your Crawl maturity is 3 of 5." },
   ], { messages: [] }, { azureConnected: true });
   await send(page, "Score my Crawl maturity");
-  const card = page.getByRole("region", { name: "Crawl maturity score" });
-  await expect(card).toBeVisible();
-  await expect(card.locator(".assessment-label")).toHaveText([
-    "Cost visibility",
-    "Tagging",
-    "Budgets",
-  ]);
-  await expect(card.getByText("Unknown")).toBeVisible();
-  await expect(card.locator(".score-card-header [aria-label]")).toHaveAttribute(
-    "aria-label",
-    "3 out of 5",
+  await expect(page.locator(".message-text").last()).toContainText(
+    "Your Crawl maturity is 3 of 5.",
   );
-  // The navigation's Crawl row keeps the latest score in view.
+  // The navigation's Crawl row holds the score; the answer does not repeat it.
+  await expect(page.locator(".ai-content .assessment-row")).toHaveCount(0);
   if (testInfo.project.name === "mobile")
     await page.locator(".portal-burger").click();
   const crawl = page.locator("#chat-navigation .maturity-card").first();

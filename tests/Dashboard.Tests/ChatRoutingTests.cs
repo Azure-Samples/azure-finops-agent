@@ -30,4 +30,14 @@ public sealed class ChatRoutingTests
     [InlineData("how about on spot you think I can try the other regions for bigger chance for not getting shut down like nwo", false)]
     public void OnlyStandaloneGreetingsSuppressTools(string prompt, bool expected) =>
         Assert.Equal(expected, ChatEndpoints.IsTrivialPrompt(prompt));
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("Untitled conversation", true)]
+    [InlineData("Where are my biggest Azure savings?", true)]
+    [InlineData("Azure Savings And Crawl Maturity", false)]
+    [InlineData("⚙ Job · Daily digest", false)]
+    public void AConversationIsNamedUntilItHasATitleOfItsOwn(string? title, bool expected) =>
+        Assert.Equal(expected, ChatEndpoints.NeedsTitle(title, "Where are my biggest Azure savings?\nScore my Crawl maturity."));
 }

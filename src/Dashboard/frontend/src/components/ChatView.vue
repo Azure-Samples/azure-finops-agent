@@ -4,8 +4,9 @@
     :class="{ 'chat-view--hidden': documentIsHidden }"
     @keydown.esc="closeMobileSidebar"
   >
-    <!-- Top bar: menu and product name left; build label (preview builds
-         only) and the source link right. -->
+    <!-- Top bar: menu and the Open source link left (the start page already
+         names the product); the build (branch and number, highlighted on
+         preview branches) right. -->
     <header class="portal-header">
       <div class="portal-header-left">
         <button
@@ -18,7 +19,26 @@
         >
           <AppIcon name="menu" size="20" />
         </button>
-        <span class="portal-brand">Azure FinOps Agent</span>
+        <a
+          class="portal-trustline-link"
+          href="https://github.com/Azure-Samples/azure-finops-agent"
+          target="_blank"
+          rel="noopener"
+          title="View source on GitHub"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.57.1.78-.25.78-.55 0-.27-.01-.99-.02-1.94-3.2.69-3.87-1.54-3.87-1.54-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.69 1.25 3.34.96.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.62 1.58.23 2.75.11 3.04.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14 0 1.55-.01 2.8-.01 3.18 0 .31.21.66.79.55C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"
+            />
+          </svg>
+          <span>Open source</span>
+        </a>
       </div>
       <div class="portal-header-right">
         <div
@@ -30,26 +50,17 @@
           <span class="portal-build-badge-sep">·</span>
           <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
         </div>
-        <a
-          class="portal-trustline-link portal-icon-btn"
-          href="https://github.com/Azure-Samples/azure-finops-agent"
-          target="_blank"
-          rel="noopener"
-          title="View source on GitHub"
-          aria-label="View source on GitHub"
+        <div
+          v-else-if="buildNumber && buildNumber !== '0'"
+          class="portal-build-badge"
+          :title="`Branch ${buildBranch || 'main'} · Build ${buildNumber} · ${buildSha}`"
         >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.57.1.78-.25.78-.55 0-.27-.01-.99-.02-1.94-3.2.69-3.87-1.54-3.87-1.54-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.69 1.25 3.34.96.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.62 1.58.23 2.75.11 3.04.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14 0 1.55-.01 2.8-.01 3.18 0 .31.21.66.79.55C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"
-            />
-          </svg>
-        </a>
+          <span class="portal-build-badge-branch">{{
+            buildBranch || "main"
+          }}</span>
+          <span class="portal-build-badge-sep">·</span>
+          <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
+        </div>
       </div>
     </header>
 
@@ -1329,77 +1340,6 @@
                     class="chart-container"
                     :ref="(el) => el && mountChart(el, chart)"
                   ></div>
-                  <!-- Maturity score card for the level this answer scored. -->
-                  <section
-                    v-for="card in messageMaturityCards(msg)"
-                    :key="'score-' + i + '-' + card.level"
-                    class="score-card"
-                    :aria-label="`${card.label} maturity score`"
-                  >
-                    <header class="score-card-header">
-                      <span class="score-card-title">{{ card.label }}</span>
-                      <span
-                        class="maturity-card-stars"
-                        :style="{ color: starColor(card.overall) }"
-                        :aria-label="
-                          card.overall >= 0
-                            ? `${card.overall} out of 5`
-                            : 'Not scored'
-                        "
-                      >
-                        <AppIcon
-                          v-for="(star, starIndex) in maturityStarIcons(
-                            card.overall >= 0 ? card.overall : undefined,
-                          )"
-                          :key="`${card.level}-overall-${starIndex}`"
-                          :name="star"
-                          size="18"
-                        />
-                      </span>
-                    </header>
-                    <div class="assessment-summary">
-                      <div
-                        v-for="sc in card.scores"
-                        :key="sc.id"
-                        class="assessment-row"
-                      >
-                        <div class="assessment-label">{{ sc.label }}</div>
-                        <div
-                          class="assessment-stars"
-                          :style="{ color: starColor(sc.score) }"
-                        >
-                          <span v-if="sc.status === 'notApplicable'">N/A</span>
-                          <span v-else-if="sc.status === 'unknown'"
-                            >Unknown</span
-                          >
-                          <span v-else class="assessment-star-icons">
-                            <AppIcon
-                              v-for="(star, starIndex) in maturityStarIcons(
-                                sc.score,
-                              )"
-                              :key="`${sc.id}-${starIndex}`"
-                              :name="star"
-                              size="16"
-                            />
-                          </span>
-                        </div>
-                        <button
-                          class="assessment-detail-text"
-                          type="button"
-                          :aria-expanded="
-                            expandedMaturityDetails.has(
-                              maturityDetailKey(card.level + i, sc.id),
-                            )
-                              ? 'true'
-                              : 'false'
-                          "
-                          @click.stop="toggleMaturityDetail(card.level + i, sc.id)"
-                        >
-                          <span>{{ sc.detail }}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </section>
                   <div
                     class="message-text"
                     v-html="renderContent(msg.content)"
@@ -2547,7 +2487,7 @@ import {
 } from "vue";
 import { createAssistantMessageStream } from "../assistantMessageStream.js";
 import { describeChange } from "../changeSummary.js";
-import { groupChats } from "../chatGroups.js";
+import { groupChats, withQuestionTitle } from "../chatGroups.js";
 import { renderMarkdown } from "../markdown.js";
 import {
   describeServerTurn,
@@ -3984,6 +3924,17 @@ async function loadSessions() {
   // Piggyback: jobs status refreshes on the same cadence as the sidebar
   // (mount + after every turn) — no dedicated poll loop needed.
   loadJobs();
+}
+
+// A conversation appears in Chats as soon as its turn starts, named by its
+// question until the title generated from it arrives (session_title). Returns
+// whether the row now shows the question.
+function showRunningConversation(id, question) {
+  if (!azureConnected.value) return false;
+  const updated = withQuestionTitle(sessions.value, id, question);
+  if (!updated) return false;
+  sessions.value = updated;
+  return true;
 }
 
 // ── Scheduled jobs (Entra-only) ───────────────────────────────
@@ -6185,44 +6136,6 @@ function togglePromptGroup(key) {
   openPromptGroups[key] = !openPromptGroups[key];
 }
 
-// The score card belongs to the answer whose ReportMaturityScore call it shows.
-function messageMaturityCards(msg) {
-  if (msg?.role !== "assistant" || !Array.isArray(msg.toolCalls)) return [];
-  const cards = [];
-  for (const tc of msg.toolCalls) {
-    if (tc.tool !== "ReportMaturityScore" || tc.success === false) continue;
-    let args = tc.args;
-    try {
-      if (typeof args === "string") args = JSON.parse(args);
-    } catch {
-      continue;
-    }
-    const level = String(args?.level || "").toLowerCase();
-    let scores = args?.scores;
-    try {
-      if (typeof scores === "string") scores = JSON.parse(scores);
-    } catch {
-      continue;
-    }
-    if (!level || !Array.isArray(scores) || !scores.length) continue;
-    const observed = scores.filter(
-      (s) => Number.isFinite(s.score) && (!s.status || s.status === "observed"),
-    );
-    const cat = maturityCategories.find((c) => c.key === level);
-    cards.push({
-      level,
-      label: cat?.label || level.charAt(0).toUpperCase() + level.slice(1),
-      scores,
-      overall: observed.length
-        ? Math.round(
-            observed.reduce((sum, s) => sum + s.score, 0) / observed.length,
-          )
-        : -1,
-    });
-  }
-  return cards;
-}
-
 // "Make a deck" and "Write a script" follow the latest finished answer.
 const lastAnswerIndex = computed(() => {
   const list = messages.value;
@@ -8127,6 +8040,9 @@ async function send() {
   // user has navigated to a different session mid-stream, and (b) which
   // entry to drop from runningSessions when we finish.
   let streamingId = startSessionId || "__pending__";
+  // True while this turn's conversation shows its question in Chats and its
+  // generated title has not arrived yet.
+  let titlePending = false;
   runningSessions.add(streamingId);
   streamStartedAt.set(streamingId, Date.now());
   // "Is this turn's answer still what the user is looking at?" Deliberately
@@ -8450,10 +8366,13 @@ async function send() {
                 scheduleCompletionProbe(10000);
               }
               if (streamState.stopRequested) requestServerStop(streamState);
+              titlePending =
+                showRunningConversation(data.id, prompt) || titlePending;
             }
             break;
 
           case "session_title": {
+            if (data.id === streamingId) titlePending = false;
             const idx = sessions.value.findIndex((s) => s.id === data.id);
             if (idx >= 0) {
               const updated = { ...sessions.value[idx], summary: data.title };
@@ -9076,6 +8995,9 @@ async function send() {
     }
     // Refresh the Conversations sidebar so the new/updated summary shows up.
     loadSessions();
+    // A title still being generated when the stream closed is saved on the
+    // server; pick it up once it has had time to finish.
+    if (titlePending) setTimeout(loadSessions, 8000);
     if (availableModels.value.length <= 1) {
       try {
         const mr = await fetch("/api/models");
@@ -9177,6 +9099,7 @@ async function send() {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  font-size: var(--text-label-size);
   line-height: 1;
   color: inherit;
   text-decoration: none;
@@ -9195,30 +9118,6 @@ async function send() {
   color: #fff;
   background: var(--on-brand-hover);
   opacity: 1;
-}
-.portal-brand {
-  font-size: var(--text-label-size);
-  line-height: var(--text-label-line);
-  font-weight: 500;
-  color: #fff;
-  white-space: nowrap;
-}
-.portal-icon-btn {
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--radius);
-  background: transparent;
-  color: #fff;
-  cursor: pointer;
-  transition: background var(--motion-fast);
-}
-.portal-icon-btn:hover {
-  background: var(--on-brand-hover);
 }
 @media (max-width: 520px) {
   .portal-header-left {
@@ -13896,35 +13795,6 @@ async function send() {
   border-color: var(--border);
   box-shadow: none;
   transform: none;
-}
-
-/* Maturity score card inside the answer that scored it. */
-.score-card {
-  margin: 0 0 12px;
-  padding: 12px 16px 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.score-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.score-card-title {
-  font-size: var(--text-label-size);
-  line-height: var(--text-label-line);
-  font-weight: 500;
-  color: var(--ink);
-}
-.score-card .assessment-summary {
-  margin-top: 4px;
-  padding: 0;
-}
-.score-card .assessment-row {
-  padding: 8px 0;
-  border-top: 1px solid var(--border);
 }
 
 /* Quiet actions under the latest answer: a deck or a script from it. */

@@ -109,6 +109,12 @@ public static class ChatEndpoints
         return connectionContext;
     }
 
+    /// <summary>A conversation is named while it has no title, an "Untitled" one or only its question.</summary>
+    internal static bool NeedsTitle(string? title, string question) =>
+        string.IsNullOrWhiteSpace(title)
+        || title.StartsWith("Untitled", StringComparison.OrdinalIgnoreCase)
+        || title.Equals(AzureFinOps.Dashboard.Endpoints.SessionEndpoints.CleanSummary(question), StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Prepended to trivial turns so a greeting costs one model round-trip
     /// instead of model → tool → model.
@@ -472,6 +478,8 @@ public static class ChatEndpoints
                 // removes the tool round-trip and the table.
                 if (trivialTurn)
                     contextBits.Add(TrivialTurnDirective);
+                // The conversation is named from the question the user wrote, not the context blocks.
+                var question = prompt;
                 if (contextBits.Count > 0)
                     prompt = string.Join("\n", contextBits) + "\n" + prompt;
 
@@ -514,6 +522,24 @@ public static class ChatEndpoints
                     }
                     finally { sseLock.Release(); }
                 }
+                // The conversation's title can arrive while the turn streams, so it shares the
+                // stream lock. Once the turn's closing writes begin (titleOpen = 0), a later title is
+                // only saved, and the Chats list picks it up on its next refresh.
+                var titleOpen = 1;
+                async Task EmitTitleAsync(string title)
+                {
+                    await sseLock.WaitAsync();
+                    try
+                    {
+                        if (Volatile.Read(ref titleOpen) == 1 && Volatile.Read(ref streamDetached) == 0)
+                            await EmitAsync(ctx, JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title }));
+                    }
+                    catch (Exception ex) when (IsClientDisconnect(ex))
+                    {
+                        Interlocked.Exchange(ref streamDetached, 1);
+                    }
+                    finally { sseLock.Release(); }
+                }
                 // sdkSw measures time from subscription registration to the
                 // first turn event (time-to-first-byte from model).
                 // Started immediately before the subscription so a fast first
@@ -521,18 +547,10 @@ public static class ChatEndpoints
                 // (which would log a misleading ms=0).
                 var sdkSw = Stopwatch.StartNew();
 
-                // Capture the assistant's full reply so we can generate a sidebar
-                // title after the turn completes. Guarded because the capture
-                // handler and the title reader run on different threads.
-                var assistantBuf = new System.Text.StringBuilder();
-                var completedAssistantMessages = new Dictionary<string, string>(StringComparer.Ordinal);
-                var assistantBufLock = new object();
-
-                // Attaches the streaming and assistant-capture handlers and
-                // returns a disposable that detaches both.
+                // Attaches the streaming handler and returns a disposable that detaches it.
                 IDisposable WireHandlers(AgentConversation s)
                 {
-                    var mainSub = s.On(async evt =>
+                    return s.On(async evt =>
                     {
                         if (System.Threading.Interlocked.Exchange(ref firstEventLogged, 1) == 0)
                         {
@@ -573,20 +591,6 @@ public static class ChatEndpoints
                             logger.LogWarning(eventEx, "Session event processing failed for {SessionId}", activeSessionId);
                         }
                     });
-                    var captureSub = s.On(evt =>
-                    {
-                        if (evt is MessageDeltaEvent ad && !string.IsNullOrEmpty(ad.Content))
-                            lock (assistantBufLock) { assistantBuf.Append(ad.Content); }
-                        else if (evt is AssistantMessageEvent am && !string.IsNullOrWhiteSpace(am.Content))
-                            lock (assistantBufLock)
-                            {
-                                completedAssistantMessages[am.MessageId] = am.Content;
-                                assistantBuf.Clear();
-                                assistantBuf.AppendJoin("\n\n", completedAssistantMessages.Values);
-                            }
-                        return Task.CompletedTask;
-                    });
-                    return new CompositeDisposable(mainSub, captureSub);
                 }
 
                 handlers = WireHandlers(session);
@@ -665,6 +669,27 @@ public static class ChatEndpoints
                 dispatchAttempted = true;
                 await session.SendAsync(prompt, imageAttachments, trivialTurn, approval);
 
+                // Name a signed-in user's conversation from its question alongside the agent: a
+                // separate small request started after the run is dispatched, never awaited, so the
+                // answer is never delayed. It reaches the Chats list during the turn, or on the list's
+                // next refresh when it finishes later. Signed-out users have no Chats list.
+                if (entraOid is not null
+                    && NeedsTitle(telemetry.SessionTitles.TryGetValue(activeSessionId, out var currentTitle) ? currentTitle : null, question))
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var title = await agentFactory.GenerateTitleAsync(question);
+                            if (string.IsNullOrWhiteSpace(title)) return;
+                            telemetry.SaveTitle(activeSessionId, title);
+                            await EmitTitleAsync(title);
+                        }
+                        catch (Exception titleEx)
+                        {
+                            logger.LogDebug(titleEx, "Conversation title was not delivered for {SessionId}", activeSessionId);
+                        }
+                    });
+
                 // Images are consumed by the message they rode in on and now live in
                 // the model context. Delist them so later turns don't re-attach the
                 // same screenshots. (RemoveForUser keeps the temp file for its TTL.)
@@ -714,6 +739,13 @@ public static class ChatEndpoints
                 keepAliveCts.Cancel();
                 try { await keepAliveTask; } catch { /* already swallowed */ }
 
+                // Close the title window under the stream lock, without waiting for a title: the
+                // direct writes below cannot interleave with one, and nothing is written after this
+                // handler returns. A title finishing later is saved for the list's next refresh.
+                await sseLock.WaitAsync();
+                Volatile.Write(ref titleOpen, 0);
+                sseLock.Release();
+
                 // Race-fix: a previous turn's background title call may have
                 // saved a fresh title AFTER its SSE stream closed. Always re-emit
                 // the persisted title on the current open stream so the sidebar
@@ -729,73 +761,6 @@ public static class ChatEndpoints
                         await ctx.Response.Body.FlushAsync();
                     }
                     catch { }
-                }
-
-                // After each turn, refresh the sidebar title via Azure OpenAI if
-                // the current persisted title is missing or still equals the raw
-                // user prompt. Cheap (one ~24-token completion) — we await it so
-                // the SSE stream actually delivers the new title for THIS turn.
-                string assistantReply;
-                lock (assistantBufLock) { assistantReply = assistantBuf.ToString(); }
-                logger.LogDebug("Title-gen check: streamDetached={StreamDetached} replyLen={Len} sessionId={Sid}",
-                    Volatile.Read(ref streamDetached) != 0, assistantReply.Length, activeSessionId);
-                if (!string.IsNullOrWhiteSpace(assistantReply) && !turnState.CancellationToken.IsCancellationRequested)
-                {
-                    var existing = telemetry.SessionTitles.TryGetValue(activeSessionId, out var t) ? t : null;
-                    var promptClean = AzureFinOps.Dashboard.Endpoints.SessionEndpoints.CleanSummary(prompt);
-                    var needsTitle = string.IsNullOrWhiteSpace(existing)
-                        || existing.Equals(promptClean, StringComparison.OrdinalIgnoreCase)
-                        || existing.StartsWith("Untitled", StringComparison.OrdinalIgnoreCase);
-                    if (needsTitle)
-                    {
-                        // Fire-and-forget: a fresh title is nice-to-have, not
-                        // worth blocking the SSE close for. The next turn (or a
-                        // sidebar refresh) will pick up the saved title via the
-                        // session_title re-emit path above. Capture references
-                        // so the background task is independent of the request.
-                        var bgPrompt = prompt;
-                        var bgReply = assistantReply;
-                        var bgSessionId = activeSessionId;
-                        // Race the title call against the SSE close so a fast title
-                        // (~150ms p50) still gets pushed to the live stream. If it
-                        // misses the window, the next turn's re-emit path picks it up.
-                        var titleTask = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                using var bgCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                                var generated = await agentFactory.GenerateTitleAsync(bgPrompt, bgReply, bgCts.Token);
-                                if (!string.IsNullOrWhiteSpace(generated))
-                                    telemetry.SaveTitle(bgSessionId, generated);
-                                return generated;
-                            }
-                            catch (OperationCanceledException bgEx)
-                            {
-                                logger.LogWarning(bgEx, "Background title generation timed out or was canceled for session {Sid}", bgSessionId);
-                                return null;
-                            }
-                            catch (InvalidOperationException bgEx)
-                            {
-                                logger.LogWarning(bgEx, "Background title generation failed for session {Sid}", bgSessionId);
-                                return null;
-                            }
-                        });
-                        var winner = await Task.WhenAny(titleTask, Task.Delay(1500));
-                        if (winner == titleTask && Volatile.Read(ref streamDetached) == 0)
-                        {
-                            var generated = await titleTask;
-                            if (!string.IsNullOrWhiteSpace(generated))
-                            {
-                                try
-                                {
-                                    var p = JsonSerializer.Serialize(new { type = "session_title", id = activeSessionId, title = generated });
-                                    await ctx.Response.WriteAsync($"data: {p}\n\n");
-                                    await ctx.Response.Body.FlushAsync();
-                                }
-                                catch { /* client may have disconnected — title is still saved */ }
-                            }
-                        }
-                    }
                 }
 
                 chatSw.Stop();
@@ -1277,17 +1242,4 @@ public static class ChatEndpoints
 
     private static DateTimeOffset? ParseExpiry(string? raw)
         => DateTimeOffset.TryParse(raw, out var v) ? v : (DateTimeOffset?)null;
-
-    /// <summary>Disposes a set of subscriptions together; safe to call more than once.</summary>
-    private sealed class CompositeDisposable : IDisposable
-    {
-        private readonly IDisposable[] _items;
-        private int _disposed;
-        public CompositeDisposable(params IDisposable[] items) => _items = items;
-        public void Dispose()
-        {
-            if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            foreach (var d in _items) { try { d.Dispose(); } catch { } }
-        }
-    }
 }

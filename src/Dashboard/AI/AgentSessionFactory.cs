@@ -631,9 +631,10 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     }
 
     /// <summary>
-    /// Generates a short sidebar title with the chat deployment. Returns null on any failure.
+    /// Names a conversation from its question in a few words with the chat deployment, while the agent works on
+    /// the answer. Returns null on any failure.
     /// </summary>
-    public async Task<string?> GenerateTitleAsync(string userMessage, string assistantReply, CancellationToken ct = default)
+    public async Task<string?> GenerateTitleAsync(string question, CancellationToken ct = default)
     {
         try
         {
@@ -645,7 +646,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(20));
             var response = await _titleAgent.RunAsync(
-                $"USER: {Truncate(userMessage, 800)}\n\nASSISTANT: {Truncate(assistantReply, 800)}", options: options, cancellationToken: timeout.Token);
+                $"USER: {Truncate(question, 800)}", options: options, cancellationToken: timeout.Token);
             var title = response.Text?.Trim().Trim('"', '\'', '.', ' ');
             if (string.IsNullOrWhiteSpace(title)) return null;
             return title.Length > 80 ? title[..80] : title;
