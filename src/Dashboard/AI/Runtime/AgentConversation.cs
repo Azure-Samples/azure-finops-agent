@@ -279,6 +279,9 @@ public sealed class AgentConversation : IAsyncDisposable
     // A hosted web_search item starts before the service fills in its action, so the query, opened page
     // or in-page find is known only from the completed item carried by the result.
 #pragma warning disable OPENAI001, CS0618 // Experimental Responses item types; Query is the older single-query field.
+    internal static bool WebSearchSucceeded(object? completedItem) =>
+        (completedItem as OpenAI.Responses.WebSearchCallResponseItem)?.Status != OpenAI.Responses.WebSearchCallStatus.Failed;
+
     internal static string WebSearchOutcome(object? completedItem) =>
         (completedItem as OpenAI.Responses.WebSearchCallResponseItem)?.Action switch
         {
@@ -346,7 +349,8 @@ public sealed class AgentConversation : IAsyncDisposable
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_eventsPath)!);
                 await File.AppendAllTextAsync(_eventsPath, JsonSerializer.Serialize(item, Json) + "\n");
-                _meta.Modified = item.Timestamp;
+                // Rating an answer is not conversation activity, so it does not reorder the chat list.
+                if (item is not AnswerFeedbackEvent) _meta.Modified = item.Timestamp;
             }
             Func<AgentEvent, Task>[] handlers;
             lock (_handlersLock) handlers = [.. _handlers];
@@ -385,6 +389,7 @@ public sealed class AgentConversation : IAsyncDisposable
 
         // Tools see their conversation and cancellation through this ambient context.
         using var context = new ToolExecutionContext(SessionId, UserId, cancellationToken);
+        using var searchWatch = new HostedSearchWatchdog(cancellationToken);
         try
         {
             var agent = _factory.Agent;
@@ -421,7 +426,7 @@ public sealed class AgentConversation : IAsyncDisposable
             var surfaced = new List<JsonElement>();
             var completion = new ModelRunCompletion();
 
-            await foreach (var update in agent.RunStreamingAsync(messages, session, options, cancellationToken))
+            await foreach (var update in agent.RunStreamingAsync(messages, session, options, searchWatch.Token))
             {
                 completion.Observe(update.Contents, update.FinishReason);
                 foreach (var content in update.Contents)
@@ -456,11 +461,15 @@ public sealed class AgentConversation : IAsyncDisposable
                             break;
                         case WebSearchToolCallContent search:
                             await FlushMessageAsync();
+                            searchWatch.Started(search.CallId);
                             await ToolStartedAsync(search.CallId, "web_search",
                                 search.Queries is { Count: > 0 } queries ? JsonSerializer.Serialize(new { queries }) : null);
                             break;
                         case WebSearchToolResultContent searchResult:
-                            await ToolCompletedAsync(searchResult.CallId, true, WebSearchOutcome(searchResult.RawRepresentation), null);
+                            searchWatch.Finished(searchResult.CallId);
+                            var searched = WebSearchSucceeded(searchResult.RawRepresentation);
+                            await ToolCompletedAsync(searchResult.CallId, searched, WebSearchOutcome(searchResult.RawRepresentation),
+                                searched ? null : "The web search failed.");
                             break;
                         case UsageContent usage:
                             if (usage.Details.InputTokenCount is { } input) contextTokens = Math.Max(contextTokens ?? 0, input);
@@ -468,6 +477,7 @@ public sealed class AgentConversation : IAsyncDisposable
                             break;
                     }
                 }
+                searchWatch.Progress();
             }
             await FlushMessageAsync();
             await CompleteOpenCallsAsync();
@@ -484,6 +494,13 @@ public sealed class AgentConversation : IAsyncDisposable
             await CompleteOpenCallsAsync();
             _meta.InterruptedApproval = approvedRequest ?? _meta.InterruptedApproval;
             await PublishAsync(new TurnIdleEvent());
+        }
+        catch (OperationCanceledException) when (searchWatch.Stalled)
+        {
+            await FlushMessageAsync();
+            await CompleteOpenCallsAsync();
+            _meta.InterruptedApproval = approvedRequest ?? _meta.InterruptedApproval;
+            await PublishAsync(new TurnErrorEvent(_factory.DescribeFailure(new HostedSearchStalledException()), "model_error"));
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {

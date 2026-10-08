@@ -113,6 +113,48 @@ public sealed class TranscriptProjectionTests
         Assert.Equal("system", result.RootElement[1].GetProperty("role").GetString());
     }
 
+    [Fact]
+    public void ARatingFollowsTheAnswerToItsQuestionAndTheLatestOneWins()
+    {
+        var context = new UserMessageEvent("<skill-context>synthetic context</skill-context>");
+        var first = new UserMessageEvent("[CONTEXT: synthetic] First question");
+        var firstAnswer = new AssistantMessageEvent("a1", "First answer");
+        var second = new UserMessageEvent("Second question");
+        var secondAnswer = new AssistantMessageEvent("a2", "Second answer");
+        AgentEvent[] events =
+        [
+            context, first, firstAnswer, second, secondAnswer,
+            new AnswerFeedbackEvent(2, "down"), new AnswerFeedbackEvent(1, "up"),
+            new AnswerFeedbackEvent(2, "none"), new AnswerFeedbackEvent(1, "down"),
+        ];
+
+        using var result = Project(events);
+        Assert.Equal("down", result.RootElement[1].GetProperty("feedback").GetString());
+        Assert.Equal(JsonValueKind.Null, result.RootElement[3].GetProperty("feedback").ValueKind);
+        Assert.Equal(new[] { 1, 2 }, SessionEndpoints.AnsweredTurns(events).Order());
+        Assert.Equal(new Dictionary<int, string> { [1] = "down" }, SessionEndpoints.AnswerFeedback(events));
+    }
+
+    [Fact]
+    public void AQuestionWithoutAnAnswerCannotBeRated()
+    {
+        AgentEvent[] events =
+        [
+            new UserMessageEvent("Answered question"), new AssistantMessageEvent("a1", "Answer"),
+            new UserMessageEvent("Failed question"), new TurnErrorEvent("Synthetic failure", "model_error"),
+        ];
+        Assert.Equal(new[] { 1 }, SessionEndpoints.AnsweredTurns(events).Order());
+    }
+
+    [Fact]
+    public void AFeedbackEventRoundTripsThroughTheTranscriptFormat()
+    {
+        var json = JsonSerializer.Serialize<AgentEvent>(new AnswerFeedbackEvent(3, "up"));
+        Assert.Contains("\"type\":\"feedback\"", json);
+        var parsed = Assert.IsType<AnswerFeedbackEvent>(JsonSerializer.Deserialize<AgentEvent>(json));
+        Assert.Equal((3, "up"), (parsed.Turn, parsed.Rating));
+    }
+
     private static JsonDocument Project(params AgentEvent[] events) =>
         JsonDocument.Parse(JsonSerializer.Serialize(SessionEndpoints.BuildTranscript(events, 101)));
 }

@@ -70,26 +70,51 @@ async function logout() {
   --ink: #1f1f1f;
   --text-muted: #5f6672;
 
+  /* Brand: the Azure blues of the top bar. The accent is its middle stop and
+     the gradient marks brand surfaces only: the top bar, the agent's working
+     status, Send and Stop, and the title's accent word. */
+  --brand-start: #005a9e;
+  --brand-mid: #0078d4;
+  --brand-end: #0098e0;
+  --brand-gradient: linear-gradient(
+    90deg,
+    var(--brand-start) 0%,
+    var(--brand-mid) 55%,
+    var(--brand-end) 100%
+  );
+
   /* One accent for every primary action, link, focus ring and selection,
      and one soft fill per status. */
-  --accent: #3678e8;
-  --accent-hover: #245fbe;
-  --accent-soft: rgba(54, 120, 232, 0.1);
-  --accent-soft-strong: rgba(54, 120, 232, 0.16);
+  --accent: var(--brand-mid);
+  --accent-hover: var(--brand-start);
+  --accent-soft: rgba(0, 120, 212, 0.1);
+  --accent-soft-strong: rgba(0, 120, 212, 0.16);
   --danger: #d13438;
   --danger-soft: rgba(209, 52, 56, 0.08);
+  --danger-border: rgba(209, 52, 56, 0.22);
   --success: #1a7f37;
   --success-soft: rgba(26, 127, 55, 0.1);
   --warning: #bf8700;
   --warning-soft: rgba(191, 135, 0, 0.1);
+  --warning-border: rgba(191, 135, 0, 0.25);
+
+  /* White tints for controls on the brand gradient (the top bar). */
+  --on-brand-line: rgba(255, 255, 255, 0.2);
+  --on-brand-fill: rgba(255, 255, 255, 0.12);
+  --on-brand-hover: rgba(255, 255, 255, 0.15);
 
   /* Two corner sizes: --radius everywhere, --radius-lg for dialogs, the
      composer and your message bubble. Indicators and avatars stay round. */
   --radius: 8px;
   --radius-lg: 12px;
 
-  /* One shadow, only for things that float: dialogs, popovers, the menu. */
+  /* One shadow, only for things that float: dialogs, popovers, the menu.
+     Start page cards lift under the pointer with Fluent's shadow16 (pressed:
+     shadow8) on its 200 ms decelerate curve. */
   --shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  --shadow-raised: 0 0 2px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.14);
+  --shadow-pressed: 0 0 2px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.14);
+  --motion-lift: 200ms cubic-bezier(0.33, 0, 0.1, 1);
 
   --text-body-size: 17px;
   --text-body-line: 26px;

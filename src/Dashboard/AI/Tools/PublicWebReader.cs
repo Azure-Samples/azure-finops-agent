@@ -33,7 +33,10 @@ internal static class PublicWebReader
 
     static PublicWebReader()
     {
-        Http.DefaultRequestHeaders.UserAgent.ParseAdd("FinOps-Dashboard/1.0 (+https://azure-finops-agent.com)");
+        // The comment links to the public source. With a bare-domain link (+https://azure-finops-agent.com or
+        // +https://example.com), microsoft.com held its Microsoft 365 plan pages open without a byte until the
+        // 20-second deadline, while curl's agent and this one load them in about a second.
+        Http.DefaultRequestHeaders.UserAgent.ParseAdd("FinOps-Dashboard/1.0 (+https://github.com/Azure-Samples/azure-finops-agent)");
         Http.DefaultRequestHeaders.Accept.ParseAdd("text/html,application/xhtml+xml,application/json,application/xml,text/plain,*/*;q=0.8");
         Http.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-US,en;q=0.9");
     }

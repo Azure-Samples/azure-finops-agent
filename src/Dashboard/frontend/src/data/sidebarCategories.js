@@ -1,23 +1,28 @@
 // FinOps maturity sidebar categories — extracted from ChatView.vue for maintainability.
 // Pure static data; no runtime dependencies.
 
-// The signed-out prompt library: at most four questions per section, most
-// important first. Each button shows a short question a customer would ask
-// support (label); the prompt it sends is the precise, slightly technical request
-// the agent answers. Prompts never name a model version, so the agent always looks
-// up the newest models. A prompt that is a curated live-evaluation case is
-// identified by a hash of its text: changing that text changes the gate
-// (CURATED_CASE_IDS).
+// The start page's questions: the five most important per section, most
+// important first, because phones show only the first three. Each button shows
+// a short question a customer would ask support (label); the prompt it sends is
+// the precise, slightly technical request the agent answers. Prompts never name
+// a model version, so the agent always looks up the newest models. A prompt
+// that is a curated live-evaluation case is identified by a hash of its text:
+// changing that text changes the gate (CURATED_CASE_IDS).
 
 // AI governance and security prompts — public, answered briefly from current
 // Microsoft Learn pages. Ranked by what customers raise most: knowing every agent
-// and its owner, auditing what agents do, choosing the control plane, and
-// allowing only approved models and agents.
+// and its owner, what the newest Microsoft 365 suite adds, auditing what agents
+// do, choosing the control plane, and allowing only approved models and agents.
 const aiGovernancePrompts = [
   {
     label: "How do I find all our AI agents?",
     prompt:
       "How do I build one inventory of every AI agent in my organization (Foundry, Copilot Studio and agents on other clouds) with a named owner for each, and find unapproved (shadow) agents? Show the steps in one table: step, Microsoft tool, what to do.",
+  },
+  {
+    label: "What does E7 add for AI agents?",
+    prompt:
+      "What does Microsoft 365 E7 add over Microsoft 365 E5 for AI agents, and what does it cost per user? Use current Microsoft Learn and microsoft.com licensing pages. Show one table: capability, in E5, in E7, what it does for agents. Say which items you could not confirm.",
   },
   {
     label: "How do we audit what agents do?",
@@ -36,16 +41,21 @@ const aiGovernancePrompts = [
   },
 ];
 
-// AI and LLM pricing prompts — public, answered briefly from current Microsoft
-// Learn and GitHub Docs pages. Ranked by what customers raise most: planning and
-// justifying a budget across seats, credits and tokens, seeing who spends what,
-// capping spend, and reconciling costs with the invoice. No prompt names a model
-// service or version, so answers cover every model.
+// AI and LLM pricing prompts — public. Ranked by what customers raise most:
+// planning and justifying a budget across seats, credits and tokens, choosing a
+// model for its quality and price (current benchmarks and Azure retail prices),
+// seeing who spends what, capping spend, and reconciling costs with the invoice.
+// No prompt names a model service or version, so answers cover every model.
 const aiPricingPrompts = [
   {
     label: "How do we budget and justify AI?",
     prompt:
       "How do I plan and justify a monthly AI budget when Microsoft 365 Copilot is billed per user, GitHub Copilot per seat plus AI credits, Copilot Studio per credit and Foundry models per token? Show one table: product, how it is billed, what drives the cost, how to forecast it.",
+  },
+  {
+    label: "Which AI model is best value?",
+    prompt:
+      "Which of the newest models in Foundry give the best quality for the price? Compare the newest OpenAI, Anthropic, Meta, Mistral, DeepSeek and xAI models on their latest published quality benchmark and current Azure token prices. Show one table: model, quality score, input price per 1M tokens, output price per 1M tokens. Give each score's source and date in a note, then name the best-value pick.",
   },
   {
     label: "Who is spending what on AI?",
@@ -64,8 +74,9 @@ const aiPricingPrompts = [
   },
 ];
 
-// Infrastructure retail-pricing prompts — work without an Azure login. All four
-// are curated live-evaluation cases identified by their text (CURATED_CASE_IDS).
+// Infrastructure retail-pricing prompts — work without an Azure login. The first
+// four are curated live-evaluation cases identified by their text
+// (CURATED_CASE_IDS).
 const infrastructurePricingPrompts = [
   {
     label: "What will my 3-tier app cost?",
@@ -86,6 +97,11 @@ const infrastructurePricingPrompts = [
     label: "Which storage tier is cheapest?",
     prompt:
       "Compare Azure Blob Storage costs for 10 TB across Hot, Cool, Cold, and Archive tiers in East US.",
+  },
+  {
+    label: "Reservation or savings plan?",
+    prompt:
+      "Compare the monthly price of a D4s_v5 Linux VM in East US on pay-as-you-go, a 1-year and 3-year reservation, and a 1-year and 3-year savings plan, using Azure retail prices. Show one table: option, monthly cost, saving versus pay-as-you-go.",
   },
 ];
 
@@ -126,31 +142,30 @@ const publicPricingPrompts = [
   ...infrastructurePricingPrompts,
 ];
 
-// The navigation shows the public prompt library as three sections, most
-// important first. Signed out, AI governance & security and AI & LLM pricing open
-// by default; infrastructure pricing starts collapsed and, once Azure is
-// connected, lists the personalised prompts first.
+// The start page shows the public questions as three sections, most important
+// first; once Azure is connected, the price section lists the personalised
+// prompts first. Titles say what the questions help with.
 export const pricingSections = [
   {
     key: "ai-governance",
-    label: "AI governance & security",
+    label: "Govern AI agents",
+    icon: "smartToy",
     prompts: aiGovernancePrompts,
     connectedPrompts: [],
-    defaultOpen: true,
   },
   {
     key: "ai-pricing",
-    label: "AI & LLM pricing",
+    label: "Control AI spending",
+    icon: "attachMoney",
     prompts: aiPricingPrompts,
     connectedPrompts: [],
-    defaultOpen: true,
   },
   {
     key: "infrastructure-pricing",
-    label: "Infrastructure pricing",
+    label: "Compare Azure prices",
+    icon: "tag",
     prompts: infrastructurePricingPrompts,
     connectedPrompts: connectedPricingPrompts,
-    defaultOpen: false,
   },
 ];
 

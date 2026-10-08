@@ -5,21 +5,18 @@ import { pricingSections } from '../../src/Dashboard/frontend/src/data/sidebarCa
 const modelVersion =
   /\bgpt[- ]?\d|\b\d+(\.\d+)?-(sol|luna|astra|terra)\b|\b4o\b|\bgrok[- ]\d|\bdeepseek[- ]v?\d|\bllama[- ]\d|\bmistral[- ]\w+[- ]\d|\b(sol|luna|astra|terra)\b/i;
 
-test('signed-out library leads with AI governance and security, then AI pricing', () => {
+test('the start page leads with AI governance, then AI spending, then Azure prices', () => {
   assert.deepEqual(
-    pricingSections.map((section) => [section.label, section.defaultOpen]),
-    [
-      ['AI governance & security', true],
-      ['AI & LLM pricing', true],
-      ['Infrastructure pricing', false],
-    ],
+    pricingSections.map((section) => section.label),
+    ['Govern AI agents', 'Control AI spending', 'Compare Azure prices'],
   );
 });
 
-test('every public section shows three or four short questions', () => {
+test('every public section offers its five most important short questions', () => {
   for (const section of pricingSections) {
-    assert.ok(
-      section.prompts.length >= 3 && section.prompts.length <= 4,
+    assert.equal(
+      section.prompts.length,
+      5,
       `${section.label} has ${section.prompts.length} questions`,
     );
     for (const { label } of section.prompts)

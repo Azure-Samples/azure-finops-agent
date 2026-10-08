@@ -39,6 +39,29 @@ public class WebSearchOutcomeTests
     }
 
     [Fact]
+    public void AFailedSearchIsReportedAsFailed()
+    {
+        var failed = ModelReaderWriter.Read<ResponseItem>(BinaryData.FromString(
+            """{"type":"web_search_call","id":"ws_1","status":"failed","action":{"type":"search","query":"gpu news"}}"""));
+        Assert.False(AgentConversation.WebSearchSucceeded(failed));
+        Assert.True(AgentConversation.WebSearchSucceeded(Item("""{"type":"search","query":"gpu news"}""")));
+        Assert.True(AgentConversation.WebSearchSucceeded(null));
+    }
+
+    // The service reported a stalled search as "incomplete"; OpenAI .NET could not read it and the turn ended
+    // with the SDK's exception text. When the SDK learns the value this check fails and the mapping can go.
+    [Fact]
+    public void TheSdkCannotReadAnIncompleteSearchSoTheTurnGetsAPlainMessage()
+    {
+        var exception = Assert.ThrowsAny<Exception>(() => ModelReaderWriter.Read<ResponseItem>(BinaryData.FromString(
+            """{"type":"web_search_call","id":"ws_1","status":"incomplete","action":{"type":"search","query":"gpu news"}}""")));
+
+        Assert.True(AzureFinOps.Dashboard.AI.AgentSessionFactory.IsUnreadableWebSearchStatus(exception));
+        Assert.True(AzureFinOps.Dashboard.AI.AgentSessionFactory.IsUnreadableWebSearchStatus(new InvalidOperationException("stream", exception)));
+        Assert.False(AzureFinOps.Dashboard.AI.AgentSessionFactory.IsUnreadableWebSearchStatus(new ArgumentOutOfRangeException("other")));
+    }
+
+    [Fact]
     public void CitationMarkersAreRemovedFromAnswersWithoutTouchingContent()
     {
         Assert.Equal("Retail rates, not invoice prices.*  \n*Retrieved UTC: `2026-10-01T19:25:55Z`.*",

@@ -35,14 +35,14 @@
         position: absolute;
         inset: 0 0 auto 0;
         height: 10px;
-        background: linear-gradient(90deg, #005a9e 0%, #0078d4 55%, #00a4ef 100%);
+        background: linear-gradient(90deg, #005a9e 0%, #0078d4 55%, #0098e0 100%);
       }
       .glow {
         position: absolute;
         inset: 0;
         background:
           radial-gradient(720px 520px at 100% 30%, rgba(0, 120, 212, 0.14), transparent 70%),
-          radial-gradient(560px 420px at 0% 100%, rgba(54, 120, 232, 0.08), transparent 70%);
+          radial-gradient(560px 420px at 0% 100%, rgba(0, 120, 212, 0.08), transparent 70%);
       }
       .copy {
         position: absolute;
@@ -108,7 +108,7 @@
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: #3678e8;
+        background: #0078d4;
       }
       .window {
         position: absolute;
@@ -125,27 +125,33 @@
           0 2px 8px rgba(37, 61, 103, 0.06);
       }
       .heading {
-        padding: 4px 12px 6px;
+        padding: 4px 4px 6px;
         font-size: 18px;
         font-weight: 600;
-        color: #676767;
+        color: #1f1f1f;
       }
       .heading + .question {
         margin-top: 2px;
       }
+      /* The start page's cards: white, a thin border, 12px corners and
+         semibold text; the hovered one lifts with Fluent's shadow16. */
       .question {
-        padding: 10px 12px;
-        border-radius: 10px;
-        font-size: 20px;
+        margin-top: 8px;
+        padding: 9px 14px;
+        border: 1px solid rgba(31, 51, 82, 0.14);
+        border-radius: 12px;
+        font-size: 19px;
+        font-weight: 600;
         line-height: 26px;
-        color: #3e4755;
+        color: #1f1f1f;
       }
       .question--hover {
-        background: rgba(44, 76, 124, 0.07);
-        color: #0d0d0d;
+        box-shadow:
+          0 0 2px rgba(0, 0, 0, 0.12),
+          0 8px 16px rgba(0, 0, 0, 0.14);
       }
       .question + .heading {
-        margin-top: 12px;
+        margin-top: 14px;
       }
       .composer {
         display: flex;
@@ -153,7 +159,7 @@
         justify-content: space-between;
         margin-top: 18px;
         padding: 12px 12px 12px 22px;
-        border: 1px solid #3678e8;
+        border: 1px solid #0078d4;
         border-radius: 32px;
         box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         font-size: 19px;
@@ -165,7 +171,7 @@
         width: 40px;
         height: 40px;
         border-radius: 50%;
-        background: #3678e8;
+        background: linear-gradient(90deg, #005a9e 0%, #0078d4 55%, #0098e0 100%);
       }
       .url {
         position: absolute;
@@ -199,14 +205,14 @@
     </div>
 
     <div class="window" aria-hidden="true">
-      <div class="heading">AI governance &amp; security</div>
+      <div class="heading">Govern AI agents</div>
       <div class="question">How do I find all our AI agents?</div>
-      <div class="question">Agent 365, Foundry or API Center?</div>
-      <div class="heading">AI &amp; LLM pricing</div>
+      <div class="question">What does E7 add for AI agents?</div>
+      <div class="heading">Control AI spending</div>
       <div class="question question--hover">How do we budget and justify AI?</div>
-      <div class="question">Who is spending what on AI?</div>
+      <div class="question">Which AI model is best value?</div>
       <div class="composer">
-        <span>Ask a question about your data</span>
+        <span>Ask a FinOps or Azure pricing question</span>
         <span class="send">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 19V5" />

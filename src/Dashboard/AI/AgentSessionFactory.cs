@@ -331,10 +331,15 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     /// <summary>A bounded failure description that is safe to show and persist.</summary>
     internal string DescribeFailure(Exception exception)
     {
-        if (exception is IncompleteModelResponseException incomplete)
+        if (exception is IncompleteModelResponseException or HostedSearchStalledException)
         {
-            _logger.LogWarning("Agent turn failed: {Reason}", incomplete.Message);
-            return incomplete.Message.Length > 400 ? incomplete.Message[..400] : incomplete.Message;
+            _logger.LogWarning("Agent turn failed: {Reason}", exception.Message);
+            return exception.Message.Length > 400 ? exception.Message[..400] : exception.Message;
+        }
+        if (IsUnreadableWebSearchStatus(exception))
+        {
+            _logger.LogWarning(exception, "Agent turn failed: the SDK could not read a hosted web search status");
+            return HostedSearchWatchdog.Message;
         }
         _logger.LogWarning(exception, "Agent turn failed");
         if (exception is ClientResultException { Status: 429 }) return ModelRunCompletion.BusyMessage;
@@ -345,6 +350,19 @@ public sealed class AgentSessionFactory : IAsyncDisposable
 
         static string FirstLine(string text) =>
             string.Join(' ', text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(4));
+    }
+
+    /// <summary>
+    /// OpenAI .NET (through 2.14.0) reads a web_search_call status as a closed enum and throws on any
+    /// value it does not list, such as the service's "incomplete", which ended the turn with the SDK's
+    /// exception text.
+    /// </summary>
+    internal static bool IsUnreadableWebSearchStatus(Exception? exception)
+    {
+        for (; exception is not null; exception = exception.InnerException)
+            if (exception is ArgumentOutOfRangeException && exception.Message.Contains("WebSearchCallStatus", StringComparison.Ordinal))
+                return true;
+        return false;
     }
 
     /// <summary>
@@ -510,6 +528,34 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     }
 
     internal sealed class HistoryUnavailableException() : Exception("The retained conversation history is unavailable.");
+
+    /// <summary>
+    /// Appends the owner's rating of one answer to the conversation's transcript. Serialized with
+    /// create, open and delete by the user's gate; a live conversation writes it through its own
+    /// publisher so it never interleaves with a running turn. Returns false when the conversation
+    /// is not the caller's or no longer exists.
+    /// </summary>
+    internal async Task<bool> RecordFeedbackAsync(
+        long userId, string? entraTenantId, string? entraOid, string sessionId,
+        AnswerFeedbackEvent feedback, CancellationToken ct = default)
+    {
+        var gate = GateFor(userId);
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (!await UserOwnsSessionAsync(userId, entraTenantId, entraOid, sessionId, ct)) return false;
+            var conversation = _telemetry.LiveSessions.TryGetValue(sessionId, out var live) && live.UserId == userId
+                ? live.Session
+                : AgentConversation.Open(this, userId, GetWorkingDirectory(userId, entraTenantId, entraOid), sessionId);
+            if (conversation is null) return false;
+            await conversation.PublishAsync(feedback);
+            return true;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
 
     /// <summary>Lists conversations under the managed user and anonymous roots only.</summary>
     public IReadOnlyList<AgentSessionInfo> ListAllManagedSessions()

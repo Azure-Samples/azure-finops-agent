@@ -36,19 +36,22 @@ defineProps({
 </script>
 
 <style scoped>
+/* One status unit in the top bar's gradient: the dots take its three stops,
+   the label is filled with it, and both share the label's line box so the
+   dots sit on the text's centre line. */
 .activity {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
   max-width: 100%;
   padding: 2px 0 8px;
-  color: var(--ink);
+  color: var(--accent);
   text-align: left;
 }
 .activity-dots {
-  flex: 0 0 24px;
-  height: 24px;
+  flex: 0 0 22px;
+  height: var(--text-label-line);
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
@@ -65,12 +68,15 @@ defineProps({
   animation: activity-pulse 1.2s linear infinite;
 }
 .activity-dots i:nth-child(1) {
+  background: var(--brand-start);
   animation-delay: -408ms;
 }
 .activity-dots i:nth-child(2) {
+  background: var(--brand-mid);
   animation-delay: -216ms;
 }
 .activity-dots i:nth-child(3) {
+  background: var(--brand-end);
   animation-delay: -24ms;
 }
 .activity-text {
@@ -82,18 +88,23 @@ defineProps({
 .activity-line {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
-  min-height: 24px;
+  min-height: var(--text-label-line);
 }
 .activity-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-body-size);
-  line-height: var(--text-body-line);
-  font-weight: 400;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 500;
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
   -webkit-mask-image: linear-gradient(90deg, #000 33.333%, transparent 50%);
   mask-image: linear-gradient(90deg, #000 33.333%, transparent 50%);
   -webkit-mask-size: 300% 100%;

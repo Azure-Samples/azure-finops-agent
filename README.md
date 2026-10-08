@@ -16,8 +16,8 @@ Azure FinOps Agent is an open-source AI agent for Azure. Ask it in plain words h
 ## See it in action
 
 <p align="center">
-  <img src="docs/assets/readme/start-page.png" alt="Start page: AI governance and AI pricing questions in the left menu, ready to click" width="74%">
-  <img src="docs/assets/readme/mobile-nav.png" alt="The same menu on a phone" width="23%">
+  <img src="docs/assets/readme/start-page.png" alt="Start page: questions on governing AI agents, controlling AI spending and comparing Azure prices, ready to click" width="74%">
+  <img src="docs/assets/readme/mobile-start.png" alt="The same start page on a phone" width="23%">
 </p>
 
 <table>
@@ -43,7 +43,7 @@ Azure FinOps Agent is an open-source AI agent for Azure. Ask it in plain words h
   </tr>
 </table>
 
-The panel on the right lists every call behind an answer, so you can check where each figure came from. The screenshots are real answers; prices and guidance change over time.
+The panel on the right lists every call behind an answer, so you can check where each figure came from; on a phone, the call count under an answer opens it. The screenshots are real answers; prices and guidance change over time.
 
 ## What you can ask
 
@@ -51,12 +51,13 @@ The panel on the right lists every call behind an answer, so you can check where
 
 The start page offers the questions customers ask most:
 
-| AI governance & security           | AI & LLM pricing                  | Infrastructure pricing             |
+| Govern AI agents                   | Control AI spending               | Compare Azure prices               |
 | ---------------------------------- | --------------------------------- | ---------------------------------- |
 | How do I find all our AI agents?   | How do we budget and justify AI?  | What will my 3-tier app cost?      |
-| How do we audit what agents do?    | Who is spending what on AI?       | Which region is cheapest for a VM? |
-| Agent 365, Foundry or API Center?  | Can we cap AI spending?           | Which database is cheapest?        |
-| Can we allow only approved models? | Why don't costs match my invoice? | Which storage tier is cheapest?    |
+| What does E7 add for AI agents?    | Which AI model is best value?     | Which region is cheapest for a VM? |
+| How do we audit what agents do?    | Who is spending what on AI?       | Which database is cheapest?        |
+| Agent 365, Foundry or API Center?  | Can we cap AI spending?           | Which storage tier is cheapest?    |
+| Can we allow only approved models? | Why don't costs match my invoice? | Reservation or savings plan?       |
 
 You can also ask your own question about Azure prices or service health, or upload a CSV, TSV, JSON, Excel, PDF, Parquet, text or image file and ask about it. The [demo data](demo-data/README.md) has samples to try.
 

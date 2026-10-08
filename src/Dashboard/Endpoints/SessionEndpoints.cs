@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.AI.Runtime;
@@ -6,6 +7,9 @@ using AzureFinOps.Dashboard.Observability;
 using AzureFinOps.Dashboard.Infrastructure;
 
 namespace AzureFinOps.Dashboard.Endpoints;
+
+/// <summary>A rating of the answer to the caller's <paramref name="Turn"/>-th visible question.</summary>
+public sealed record AnswerFeedbackRequest(int Turn, string? Rating);
 
 /// <summary>
 /// Per-user chat session management — list past conversations, start a new
@@ -178,6 +182,74 @@ public static class SessionEndpoints
             var pendingChanges = events.Skip(lastUser).OfType<ApprovalRequestEvent>().Select(ChatEndpoints.PendingChange).ToArray();
             return Results.Ok(new { messages, pendingChanges });
         });
+
+        // A thumbs up or down on one answer. Kept in the owner's own transcript, so it
+        // returns on reload and is deleted with the conversation, and reported as a
+        // telemetry event without any question or answer text.
+        app.MapPost("/api/sessions/{sessionId}/feedback", async (HttpContext ctx, string sessionId, AnswerFeedbackRequest? body) =>
+        {
+            if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
+                return Results.Unauthorized();
+            if (body is null || body.Turn < 1 || body.Rating is not ("up" or "down" or "none"))
+                return Results.BadRequest(new { error = "Send the question's turn number and a rating of up, down or none." });
+            if (!await agentFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
+                return Results.NotFound();
+
+            IReadOnlyList<AgentEvent> events;
+            try
+            {
+                events = await agentFactory.LoadTranscriptAsync(
+                    sessionId, userId, entraTenantId, entraOid, ctx.RequestAborted);
+            }
+            catch (AgentSessionFactory.HistoryUnavailableException)
+            {
+                return Results.NotFound();
+            }
+            if (!AnsweredTurns(events).Contains(body.Turn))
+                return Results.BadRequest(new { error = "That question has no answer to rate." });
+            if (AnswerFeedback(events).GetValueOrDefault(body.Turn, "none") == body.Rating)
+                return Results.NoContent();
+            if (events.OfType<AnswerFeedbackEvent>().Count() >= MaxFeedbackChanges)
+                return Results.Conflict(new { error = "This conversation has reached its limit of rating changes." });
+            if (!await agentFactory.RecordFeedbackAsync(userId, entraTenantId, entraOid, sessionId,
+                new AnswerFeedbackEvent(body.Turn, body.Rating), ctx.RequestAborted))
+                return Results.NotFound();
+
+            using var activity = HttpHelper.Telemetry.StartActivity("answer.feedback", ActivityKind.Internal);
+            activity?.SetTag("session.id", sessionId);
+            activity?.SetTag("feedback.turn", body.Turn);
+            activity?.SetTag("feedback.rating", body.Rating);
+            return Results.NoContent();
+        });
+    }
+
+    /// <summary>Bounds how often one conversation's ratings can change, so its transcript cannot be grown without limit.</summary>
+    internal const int MaxFeedbackChanges = 500;
+
+    /// <summary>The visible questions (1-based, in order) that have an answer.</summary>
+    internal static IReadOnlySet<int> AnsweredTurns(IReadOnlyList<AgentEvent> events)
+    {
+        var answered = new HashSet<int>();
+        var turn = 0;
+        foreach (var evt in events)
+        {
+            if (evt is UserMessageEvent user && VisibleUserText(user.Content) is not null) turn++;
+            else if (evt is AssistantMessageEvent { Content.Length: > 0 } && turn > 0) answered.Add(turn);
+        }
+        return answered;
+    }
+
+    /// <summary>The latest rating of each answered question; a cleared rating is absent.</summary>
+    internal static Dictionary<int, string> AnswerFeedback(IEnumerable<AgentEvent> events)
+    {
+        var ratings = new Dictionary<int, string>();
+        foreach (var feedback in events.OfType<AnswerFeedbackEvent>())
+        {
+            if (feedback.Rating is "up" or "down") ratings[feedback.Turn] = feedback.Rating;
+            else ratings.Remove(feedback.Turn);
+        }
+        return ratings;
     }
 
     internal static IReadOnlyList<object> BuildTranscript(IReadOnlyList<AgentEvent> events, long userId)
@@ -192,6 +264,8 @@ public static class SessionEndpoints
         }
 
         var messages = new List<object>();
+        var feedbackByTurn = AnswerFeedback(events);
+        var turn = 0;
         string? pendingAssistantText = null;
         var pendingThinking = new List<string>();
         var pendingTools = new List<object>();
@@ -217,6 +291,7 @@ public static class SessionEndpoints
                 charts = pendingCharts.ToArray(),
                 html = pendingHtml,
                 script = pendingScript,
+                feedback = turn > 0 && feedbackByTurn.TryGetValue(turn, out var rating) ? rating : null,
             });
             pendingAssistantText = null;
             pendingThinking.Clear();
@@ -237,6 +312,7 @@ public static class SessionEndpoints
                 if (string.IsNullOrWhiteSpace(clean)) continue;
                 messages.Add(new { role = "user", content = clean });
                 hasUserMessage = true;
+                turn++;
             }
             else if (evt is AssistantMessageEvent am)
             {

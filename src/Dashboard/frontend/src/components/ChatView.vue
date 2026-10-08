@@ -4,7 +4,8 @@
     :class="{ 'chat-view--hidden': documentIsHidden }"
     @keydown.esc="closeMobileSidebar"
   >
-    <!-- AskMe-style top bar -->
+    <!-- Top bar: menu and product name left; build label (preview builds
+         only), agent activity toggle and the source link right. -->
     <header class="portal-header">
       <div class="portal-header-left">
         <button
@@ -17,16 +18,40 @@
         >
           <AppIcon name="menu" size="20" />
         </button>
+        <span class="portal-brand">Azure FinOps Agent</span>
+      </div>
+      <div class="portal-header-right">
+        <div
+          v-if="buildBranch && buildBranch !== 'main'"
+          class="portal-build-badge portal-build-badge--preview"
+          :title="`Branch ${buildBranch} · Build ${buildNumber} · ${buildSha}`"
+        >
+          <span class="portal-build-badge-branch">{{ buildBranch }}</span>
+          <span class="portal-build-badge-sep">·</span>
+          <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
+        </div>
+        <button
+          v-if="showAgentPane && !compactLayout"
+          type="button"
+          class="portal-icon-btn"
+          :aria-pressed="railOpen ? 'true' : 'false'"
+          :title="railOpen ? 'Hide agent activity' : 'Show agent activity'"
+          aria-label="Agent activity"
+          @click="toggleAgentRail"
+        >
+          <AppIcon name="panelRight" size="20" />
+        </button>
         <a
-          class="portal-trustline-link"
+          class="portal-trustline-link portal-icon-btn"
           href="https://github.com/Azure-Samples/azure-finops-agent"
           target="_blank"
           rel="noopener"
           title="View source on GitHub"
+          aria-label="View source on GitHub"
         >
           <svg
-            width="12"
-            height="12"
+            width="20"
+            height="20"
             viewBox="0 0 24 24"
             fill="currentColor"
             aria-hidden="true"
@@ -35,45 +60,7 @@
               d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.57.1.78-.25.78-.55 0-.27-.01-.99-.02-1.94-3.2.69-3.87-1.54-3.87-1.54-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.69 1.25 3.34.96.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.62 1.58.23 2.75.11 3.04.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14 0 1.55-.01 2.8-.01 3.18 0 .31.21.66.79.55C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"
             />
           </svg>
-          <span>Open source</span>
         </a>
-      </div>
-      <!-- Build/branch badge in the top-right corner. Highlights non-main
-           (preview slot) deployments so it's obvious which build you're on. -->
-      <div
-        v-if="buildBranch && buildBranch !== 'main'"
-        class="portal-build-badge portal-build-badge--preview"
-        :title="`Branch ${buildBranch} · Build ${buildNumber} · ${buildSha}`"
-      >
-        <span class="portal-build-badge-branch">{{ buildBranch }}</span>
-        <span class="portal-build-badge-sep">·</span>
-        <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
-      </div>
-      <div
-        v-else-if="buildNumber && buildNumber !== '0'"
-        class="portal-build-badge"
-        :title="`Branch ${buildBranch || 'main'} · Build ${buildNumber} · ${buildSha}`"
-      >
-        <span class="portal-build-badge-branch">{{
-          buildBranch || "main"
-        }}</span>
-        <span class="portal-build-badge-sep">·</span>
-        <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
-      </div>
-      <!-- Hidden — email + disconnect are already shown in the sidebar.
-           Re-enable by removing v-if="false". -->
-      <div
-        v-if="false && azureConnected && azureUserEmail"
-        class="portal-header-right"
-      >
-        <span class="portal-header-email">{{ azureUserEmail }}</span>
-        <button
-          class="portal-header-disconnect"
-          @click="disconnectAzure"
-          title="Disconnect Azure"
-        >
-          <AppIcon name="close" size="18" />
-        </button>
       </div>
     </header>
 
@@ -116,11 +103,8 @@
             <AppIcon name="squarePen" size="19" />
             <span>New chat</span>
           </button>
-          <!-- Scheduled jobs — Entra-only background prompts. First below New
-               chat so the capability is visible without scrolling. On wide
-               screens it renders in the right rail; on compact screens the
-               Teleport is disabled and it stays here in the overlay menu. -->
-          <Teleport to="#rail-jobs-slot" defer :disabled="compactLayout">
+          <!-- Scheduled jobs — Entra-only background prompts, directly below
+               New chat on every screen size. -->
           <div
             v-if="azureConnected"
             class="sidebar-category sidebar-category--border sidebar-library-section"
@@ -272,349 +256,161 @@
                     </template>
                   </span>
                 </div>
-                <div class="job-actions">
+                <div
+                  class="job-actions"
+                  @click.stop
+                  @keydown.esc.stop="closeJobMenu"
+                >
                   <button
-                    class="job-row-btn"
-                    @click.stop="runJobNow(j)"
-                    :disabled="j.running"
-                    title="Run once now"
-                    aria-label="Run job now"
+                    type="button"
+                    class="job-menu-btn"
+                    :aria-expanded="openJobMenuId === j.id ? 'true' : 'false'"
+                    aria-haspopup="menu"
+                    :aria-label="`Actions for ${j.name}`"
+                    title="Job actions"
+                    @click.stop="toggleJobMenu(j.id, $event)"
                   >
-                    <AppIcon name="playArrow" size="16" />
+                    <AppIcon name="moreHoriz" size="18" />
                   </button>
-                  <button
-                    class="job-row-btn"
-                    @click.stop="editJob(j)"
-                    title="Edit job"
-                    aria-label="Edit job"
+                  <Teleport to="body">
+                  <div
+                    v-if="openJobMenuId === j.id"
+                    class="job-menu"
+                    role="menu"
+                    :aria-label="`Actions for ${j.name}`"
+                    :style="jobMenuStyle"
+                    @click.stop
+                    @keydown.esc.stop="closeJobMenu"
                   >
-                    <AppIcon name="edit" size="16" />
-                  </button>
-                  <button
-                    class="job-switch"
-                    :class="{ 'job-switch--on': j.enabled }"
-                    role="switch"
-                    :aria-checked="j.enabled ? 'true' : 'false'"
-                    @click.stop="toggleJob(j)"
-                    :title="
-                      j.enabled
-                        ? 'Schedule is on — click to pause'
-                        : 'Schedule is off — click to resume'
-                    "
-                    aria-label="Toggle schedule"
-                  >
-                    <span class="job-switch-knob"></span>
-                  </button>
-                  <button
-                    class="session-row-delete"
-                    @click.stop="deleteJob(j)"
-                    title="Delete this job (its conversation is kept)"
-                    aria-label="Delete job"
-                  >
-                    <AppIcon name="delete" size="16" />
-                  </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="job-menu-item"
+                      :disabled="j.running"
+                      aria-label="Run job now"
+                      @click.stop="closeJobMenu(), runJobNow(j)"
+                    >
+                      <AppIcon name="playArrow" size="16" />
+                      <span>Run now</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="job-menu-item"
+                      aria-label="Edit job"
+                      @click.stop="closeJobMenu(), editJob(j)"
+                    >
+                      <AppIcon name="edit" size="16" />
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitemcheckbox"
+                      class="job-menu-item"
+                      :aria-checked="j.enabled ? 'true' : 'false'"
+                      aria-label="Toggle schedule"
+                      @click.stop="closeJobMenu(), toggleJob(j)"
+                    >
+                      <AppIcon :name="j.enabled ? 'pause' : 'playArrow'" size="16" />
+                      <span>{{ j.enabled ? "Pause" : "Resume" }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="job-menu-item job-menu-item--danger"
+                      aria-label="Delete job"
+                      title="Delete this job (its conversation is kept)"
+                      @click.stop="closeJobMenu(), deleteJob(j)"
+                    >
+                      <AppIcon name="delete" size="16" />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                  </Teleport>
                 </div>
               </div>
             </div>
           </div>
-          </Teleport>
 
-          <!-- Maturity score cards (Crawl / Walk / Run) — whole card is clickable -->
-          <template v-if="azureConnected">
-            <div
-              v-for="cat in scoreCategories"
-              :key="'score-' + cat.key"
-              class="maturity-card"
-              :class="{
-                'maturity-card--scored': maturityScores[cat.key],
-                'maturity-card--disabled': streaming,
-              }"
-              role="button"
-              tabindex="0"
-              :title="cat.scorePrompt"
-              @click="!streaming && sendQuestion(cat.scorePrompt)"
-              @keydown.enter="!streaming && sendQuestion(cat.scorePrompt)"
+          <!-- Prompts (signed in): every prompt group, one row each, between
+               the scheduled jobs and the chat history. -->
+          <div
+            v-if="navigationPromptGroups.length"
+            class="sidebar-category sidebar-category--border sidebar-library-section"
+          >
+            <button
+              class="sidebar-section-toggle sidebar-category-label sidebar-category-label--toggle"
+              type="button"
+              :aria-expanded="promptsCollapsed ? 'false' : 'true'"
+              aria-controls="sidebar-prompts"
+              @click="togglePane('prompts')"
             >
-              <div class="maturity-card-header">
-                <div class="maturity-card-title">
-                  <span class="maturity-card-label">{{ cat.label }}</span>
-                  <span v-if="cat.subtitle" class="maturity-card-subtitle">{{
-                    cat.subtitle
-                  }}</span>
-                </div>
-                <span v-if="maturityScores[cat.key]" class="maturity-card-cta">
-                  Re-score
-                </span>
+              <div class="sidebar-category-left">
+                <span>Prompts</span>
               </div>
-              <div class="maturity-card-body">
-                <span
-                  class="maturity-card-stars"
-                  :style="{
-                    color: maturityScores[cat.key]
-                      ? starColor(maturityOverall(cat.key))
-                      : '#c8c6c4',
-                  }"
-                  :aria-label="
-                    maturityScores[cat.key]
-                      ? `${Math.max(0, Math.min(5, Math.round(maturityOverall(cat.key) || 0)))} out of 5`
-                      : 'Not scored'
-                  "
+              <AppIcon
+                name="moreDown"
+                size="16"
+                class="collapse-chevron"
+                :class="{ 'collapse-chevron--collapsed': promptsCollapsed }"
+              />
+            </button>
+            <div
+              id="sidebar-prompts"
+              class="collapse-body"
+              :class="{ 'collapse-body--collapsed': promptsCollapsed }"
+              role="region"
+              aria-label="Prompts"
+            >
+              <div
+                v-for="group in navigationPromptGroups"
+                :key="group.key"
+                class="prompt-group"
+              >
+                <button
+                  type="button"
+                  class="prompt-group-toggle"
+                  :aria-expanded="openPromptGroups[group.key] ? 'true' : 'false'"
+                  :aria-controls="'prompt-group-' + group.key"
+                  @click="togglePromptGroup(group.key)"
                 >
-                  <AppIcon
-                    v-for="(star, starIndex) in maturityStarIcons(
-                      maturityScores[cat.key]
-                        ? maturityOverall(cat.key)
-                        : undefined,
-                    )"
-                    :key="`${cat.key}-${starIndex}`"
-                    :name="star"
-                    size="18"
-                  />
-                </span>
-                <AppIcon
-                  v-if="maturityScores[cat.key]"
-                  name="moreDown"
-                  size="16"
-                  class="collapse-chevron maturity-card-chevron"
-                  :class="{
-                    'collapse-chevron--collapsed':
-                      collapsedSections['cm_' + cat.key],
-                  }"
-                  role="button"
-                  tabindex="0"
-                  :aria-label="
-                    collapsedSections['cm_' + cat.key] ? 'Expand' : 'Collapse'
-                  "
-                  @click.stop="toggleSection('cm_' + cat.key)"
-                  @keydown.enter.stop="toggleSection('cm_' + cat.key)"
-                />
-              </div>
-              <!-- Per-dimension breakdown (only after scoring) -->
-              <div
-                v-if="maturityScores[cat.key]"
-                class="collapse-body"
-                :class="{
-                  'collapse-body--collapsed':
-                    collapsedSections['cm_' + cat.key],
-                }"
-              >
-                <div class="assessment-summary">
-                  <div
-                    v-for="sc in maturityScores[cat.key]"
-                    :key="sc.id"
-                    class="assessment-row"
-                  >
-                    <div class="assessment-label">{{ sc.label }}</div>
-                    <div
-                      class="assessment-stars"
-                      :style="{ color: starColor(sc.score) }"
-                    >
-                      <span v-if="sc.status === 'notApplicable'">N/A</span>
-                      <span v-else-if="sc.status === 'unknown'">Unknown</span>
-                      <span v-else class="assessment-star-icons">
-                        <AppIcon
-                          v-for="(star, starIndex) in maturityStarIcons(sc.score)"
-                          :key="`${sc.id}-${starIndex}`"
-                          :name="star"
-                          size="16"
-                        />
-                      </span>
-                    </div>
-                    <button
-                      class="assessment-detail-text"
-                      type="button"
-                      :aria-expanded="
-                        expandedMaturityDetails.has(
-                          maturityDetailKey(cat.key, sc.id),
-                        )
-                          ? 'true'
-                          : 'false'
-                      "
-                      @click.stop="toggleMaturityDetail(cat.key, sc.id)"
-                      @keydown.enter.stop
-                      @keydown.space.stop
-                    >
-                      <span>{{ sc.detail }}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Playbook parent — collapses all detailed prompts under one node -->
-            <div class="sidebar-category sidebar-category--border">
-              <div
-                class="sidebar-category-label sidebar-category-label--toggle"
-                @click="toggleSection('playbookRoot')"
-              >
-                <div class="sidebar-category-left">
-                  <span>All prompts</span>
-                </div>
-                <div class="sidebar-category-right">
+                  <span class="prompt-group-label">{{ group.label }}</span>
+                  <span v-if="group.subtitle" class="prompt-group-subtitle">{{
+                    group.subtitle
+                  }}</span>
                   <AppIcon
                     name="moreDown"
                     size="16"
                     class="collapse-chevron"
                     :class="{
-                      'collapse-chevron--collapsed':
-                        collapsedSections.playbookRoot,
+                      'collapse-chevron--collapsed': !openPromptGroups[group.key],
                     }"
                   />
-                </div>
-              </div>
-              <div
-                class="collapse-body"
-                :class="{
-                  'collapse-body--collapsed': collapsedSections.playbookRoot,
-                }"
-              >
+                </button>
                 <div
-                  v-for="grp in playbookGroups"
-                  :key="grp.key"
-                  class="sidebar-subgroup"
+                  :id="'prompt-group-' + group.key"
+                  class="collapse-body"
+                  :class="{
+                    'collapse-body--collapsed': !openPromptGroups[group.key],
+                  }"
                 >
-                  <div
-                    class="sidebar-subgroup-label sidebar-category-label--toggle"
-                    @click="toggleSection('pb_' + grp.key)"
+                  <button
+                    v-for="q in group.prompts"
+                    :key="q.label"
+                    type="button"
+                    class="sidebar-question"
+                    :disabled="streaming || clearing"
+                    :title="q.prompt"
+                    @click="sendQuestion(q.prompt)"
                   >
-                    <span>{{ grp.label }}</span>
-                    <AppIcon
-                      name="moreDown"
-                      size="16"
-                      class="collapse-chevron"
-                      :class="{
-                        'collapse-chevron--collapsed':
-                          collapsedSections['pb_' + grp.key],
-                      }"
-                    />
-                  </div>
-                  <div
-                    class="collapse-body"
-                    :class="{
-                      'collapse-body--collapsed':
-                        collapsedSections['pb_' + grp.key],
-                    }"
-                  >
-                    <button
-                      v-for="q in grp.prompts"
-                      :key="q.label"
-                      class="sidebar-question"
-                      :disabled="streaming || clearing"
-                      :title="q.prompt"
-                      @click="sendQuestion(q.prompt)"
-                    >
-                      <span>{{ q.label }}</span>
-                    </button>
-                  </div>
+                    <span>{{ q.label }}</span>
+                  </button>
                 </div>
               </div>
             </div>
-          </template>
-
-          <!-- Pricing — always visible, no login required -->
-          <div
-            v-for="section in pricingNavigationSections"
-            :key="section.key"
-            class="sidebar-category"
-            :class="{ 'sidebar-category--border': azureConnected }"
-          >
-            <button
-              class="sidebar-section-toggle sidebar-category-label sidebar-category-label--toggle"
-              type="button"
-              :id="pricingSectionHeaderId(section.key)"
-              :aria-expanded="
-                isPricingSectionExpanded(section.key) ? 'true' : 'false'
-              "
-              :aria-controls="pricingSectionPanelId(section.key)"
-              @click="togglePricingSection(section.key)"
-            >
-              <div class="sidebar-category-left">
-                <span>{{ section.label }}</span>
-              </div>
-              <div class="sidebar-category-right">
-                <AppIcon
-                  name="moreDown"
-                  size="16"
-                  class="collapse-chevron"
-                  :class="{
-                    'collapse-chevron--collapsed':
-                      !isPricingSectionExpanded(section.key),
-                  }"
-                />
-              </div>
-            </button>
-            <div
-              :id="pricingSectionPanelId(section.key)"
-              class="collapse-body"
-              role="region"
-              :aria-labelledby="pricingSectionHeaderId(section.key)"
-              :class="{
-                'collapse-body--collapsed':
-                  !isPricingSectionExpanded(section.key),
-              }"
-            >
-              <button
-                v-for="q in section.prompts"
-                :key="q.label"
-                class="sidebar-question"
-                :disabled="streaming || clearing"
-                :title="q.prompt"
-                @click="sendQuestion(q.prompt)"
-              >
-                <span>{{ q.label }}</span>
-              </button>
-            </div>
           </div>
 
-          <!-- Subscriptions (after Azure login) -->
-          <div
-            v-if="azureConnected && azureSubscriptions.length"
-            class="sidebar-category sidebar-category--border"
-          >
-            <div
-              class="sidebar-category-label sidebar-category-label--toggle"
-              @click="toggleSection('subs')"
-            >
-              <span>Subscriptions ({{ azureSubscriptions.length }})</span>
-              <AppIcon
-                name="moreDown"
-                size="16"
-                class="collapse-chevron"
-                :class="{
-                  'collapse-chevron--collapsed': collapsedSections.subs,
-                }"
-              />
-            </div>
-            <div
-              class="collapse-body"
-              :class="{ 'collapse-body--collapsed': collapsedSections.subs }"
-            >
-              <div
-                v-for="sub in azureSubscriptions"
-                :key="sub.id"
-                class="sidebar-sub"
-                :title="
-                  sub.name +
-                  '\n' +
-                  sub.id +
-                  (sub.tenantId ? '\nTenant: ' + sub.tenantId : '')
-                "
-              >
-                <span class="sidebar-sub-name">{{ sub.name }}</span>
-                <span class="sidebar-sub-id" :title="sub.id">{{ sub.id }}</span>
-                <span
-                  v-if="tenantNameFor(sub.tenantId)"
-                  class="sidebar-sub-tenant"
-                  :title="sub.tenantId"
-                  >Tenant: {{ tenantNameFor(sub.tenantId) }}</span
-                >
-              </div>
-            </div>
-          </div>
-
-          <!-- Chats history — shown once there is a conversation; right rail on
-               wide screens, overlay menu on compact screens. -->
-          <Teleport to="#rail-chats-slot" defer :disabled="compactLayout">
+          <!-- Chats history — shown once there is a conversation. -->
           <div
             v-if="chatSessions.length || sessionDeleteError"
             class="sidebar-category sidebar-category--border sidebar-library-section"
@@ -650,8 +446,24 @@
               >
                 {{ sessionDeleteError }}
               </div>
+              <input
+                v-if="chatSessions.length > CHAT_SEARCH_THRESHOLD"
+                v-model="chatSearch"
+                type="search"
+                class="chat-search"
+                placeholder="Search chats"
+                aria-label="Search chats"
+              />
+              <p
+                v-if="chatSearch.trim() && !chatGroups.length"
+                class="chat-search-empty"
+              >
+                No chats match "{{ chatSearch.trim() }}"
+              </p>
+              <template v-for="group in chatGroups" :key="group.key">
+              <div class="session-group-label">{{ group.label }}</div>
               <div
-                v-for="s in chatSessions"
+                v-for="s in group.sessions"
                 :key="s.id"
                 :class="[
                   'session-row',
@@ -706,12 +518,12 @@
                         : 'Delete conversation'
                   "
                 >
-                  {{ deletingSessions.has(s.id) ? "Deleting..." : "Delete" }}
+                  <AppIcon name="delete" size="16" />
                 </button>
               </div>
+              </template>
             </div>
           </div>
-          </Teleport>
         </div>
 
         <!-- Bottom section -->
@@ -744,8 +556,10 @@
                 }}
               </button>
             </div>
-            <!-- Manual tenant input -->
-            <div class="tenant-input-area">
+            <!-- Connect uses the home tenant; Switch tenant changes it after
+                 sign-in. A tenant box appears only when the home tenant
+                 blocked this app, so the user can connect to another one. -->
+            <div v-if="tenantError" class="tenant-input-area">
               <input
                 v-model="tenantId"
                 type="text"
@@ -865,6 +679,59 @@
                         >{{ t.defaultDomain }}</span
                       >
                     </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- Subscriptions the connection reaches: same row as Switch tenant. -->
+            <div class="addons-section" v-if="azureSubscriptions.length">
+              <button
+                class="addons-heading"
+                type="button"
+                @click="subscriptionsOpen = !subscriptionsOpen"
+                :aria-expanded="subscriptionsOpen"
+                aria-controls="footer-subscriptions"
+              >
+                <AppIcon name="barChart" size="16" aria-hidden="true" />
+                <span class="addons-heading-text">
+                  <span class="addons-title">Subscriptions</span>
+                  <span class="addons-sub"
+                    >· {{ azureSubscriptions.length }} connected</span
+                  >
+                </span>
+                <AppIcon
+                  name="moreDown"
+                  size="14"
+                  class="addons-heading-chevron"
+                  :class="{ open: subscriptionsOpen }"
+                  aria-hidden="true"
+                />
+              </button>
+              <div
+                id="footer-subscriptions"
+                class="addons-body-wrap"
+                :class="{ open: subscriptionsOpen }"
+              >
+                <div class="addons-body footer-subscriptions">
+                  <div
+                    v-for="sub in azureSubscriptions"
+                    :key="sub.id"
+                    class="sidebar-sub"
+                    :title="
+                      sub.name +
+                      '\n' +
+                      sub.id +
+                      (sub.tenantId ? '\nTenant: ' + sub.tenantId : '')
+                    "
+                  >
+                    <span class="sidebar-sub-name">{{ sub.name }}</span>
+                    <span class="sidebar-sub-id">{{ sub.id }}</span>
+                    <span
+                      v-if="tenantNameFor(sub.tenantId)"
+                      class="sidebar-sub-tenant"
+                      :title="sub.tenantId"
+                      >Tenant: {{ tenantNameFor(sub.tenantId) }}</span
+                    >
                   </div>
                 </div>
               </div>
@@ -1203,51 +1070,91 @@
                 <h1 class="hero-title">
                   Azure <span class="hero-title-accent">FinOps</span> Agent
                 </h1>
-                <p class="hero-tagline">
-                  Weeks of FinOps work. Done in minutes.
-                </p>
-                <div class="hero-cards">
-                  <div class="hero-card">
-                    <div class="hero-card-title">Quantified savings</div>
-                    <div class="hero-card-desc">
-                      Reservations. Savings Plans. Hybrid Benefit. Rightsizing.
-                      Idle &amp; orphaned — ranked by annual $ impact.
+                <!-- Starting points: the maturity scores (signed in) and the
+                     most asked questions, each one click from an answer. -->
+                <div class="starters">
+                  <section
+                    v-if="azureConnected"
+                    class="starters-group"
+                    aria-labelledby="starters-maturity"
+                  >
+                    <h2
+                      id="starters-maturity"
+                      class="starters-heading starters-heading--section"
+                    >
+                      <span class="starters-heading-icon" aria-hidden="true">
+                        <AppIcon name="star" size="18" />
+                      </span>
+                      Score your FinOps maturity
+                    </h2>
+                    <div class="starter-levels">
+                      <button
+                        v-for="cat in scoreCategories"
+                        :key="'score-' + cat.key"
+                        type="button"
+                        class="starter-level"
+                        :disabled="streaming || clearing"
+                        :title="cat.scorePrompt"
+                        @click="sendQuestion(cat.scorePrompt)"
+                      >
+                        <span class="starter-level-label">{{ cat.label }}</span>
+                        <span class="starter-level-subtitle">{{
+                          cat.subtitle
+                        }}</span>
+                      </button>
                     </div>
-                  </div>
-                  <div class="hero-card">
-                    <div class="hero-card-title">Maturity score</div>
-                    <div class="hero-card-desc">
-                      FinOps Foundation Crawl / Walk / Run. Scored 0–5 per
-                      capability. The consultant assessment, in a chat.
-                    </div>
-                  </div>
-                  <div class="hero-card">
-                    <div class="hero-card-title">Agentic remediation</div>
-                    <div class="hero-card-desc">
-                      Applies tags. Sets budgets. Drafts cleanup scripts. Never
-                      deletes.
-                    </div>
-                  </div>
-                  <div class="hero-card">
-                    <div class="hero-card-title">Spots cost spikes</div>
-                    <div class="hero-card-desc">
-                      Flags unusual spending as billing data becomes available.
-                      Investigates likely causes and cost ownership.
-                    </div>
-                  </div>
-                  <div class="hero-card">
-                    <div class="hero-card-title">License &amp; Copilot ROI</div>
-                    <div class="hero-card-desc">
-                      Microsoft Graph surfaces unused M365 licenses, idle
-                      Copilot seats, SKU mismatches — savings other tools miss.
-                    </div>
-                  </div>
-                  <div class="hero-card">
-                    <div class="hero-card-title">CFO-ready decks</div>
-                    <div class="hero-card-desc">
-                      20+ inline charts. One-click branded HTML deck. Walk in
-                      with the presentation already built.
-                    </div>
+                  </section>
+                  <div class="starter-columns">
+                    <section
+                      v-for="section in startPageSections"
+                      :key="section.key"
+                      :id="'starters-' + section.key"
+                      class="starters-group"
+                      :aria-labelledby="'starters-' + section.key + '-heading'"
+                    >
+                      <h2
+                        :id="'starters-' + section.key + '-heading'"
+                        class="starters-heading starters-heading--section"
+                      >
+                        <span class="starters-heading-icon" aria-hidden="true">
+                          <AppIcon :name="section.icon" size="18" />
+                        </span>
+                        {{ section.label }}
+                      </h2>
+                      <!-- Five questions (phones: the first three, with More
+                           showing the rest in place). -->
+                      <button
+                        v-for="(q, qi) in section.prompts"
+                        :key="q.label"
+                        type="button"
+                        class="starter-question"
+                        :class="{
+                          'starter-question--wide':
+                            !section.expanded && qi >= START_PAGE_PHONE_QUESTIONS,
+                        }"
+                        :disabled="streaming || clearing"
+                        :title="q.prompt"
+                        @click="sendQuestion(q.prompt)"
+                      >
+                        {{ q.label }}
+                      </button>
+                      <button
+                        v-if="section.expandable"
+                        type="button"
+                        class="starter-more"
+                        :aria-expanded="section.expanded ? 'true' : 'false'"
+                        :aria-controls="'starters-' + section.key"
+                        @click="toggleStarterSection(section.key)"
+                      >
+                        {{ section.expanded ? "Fewer questions" : "More questions" }}
+                        <AppIcon
+                          name="moreDown"
+                          size="16"
+                          class="starter-more-chevron"
+                          :class="{ 'starter-more-chevron--up': section.expanded }"
+                        />
+                      </button>
+                    </section>
                   </div>
                 </div>
               </div>
@@ -1267,9 +1174,28 @@
                     : 'message-row--ai'
               "
             >
-              <div v-if="msg.role === 'user'" class="bubble bubble--user">
-                {{ msg.content }}
-              </div>
+              <template v-if="msg.role === 'user'">
+                <div class="bubble bubble--user">
+                  {{ msg.content }}
+                </div>
+                <!-- The latest question can go back to the message box to be
+                     changed and asked again (the answer stays above it). -->
+                <button
+                  v-if="i === lastUserIndex && questionEditable"
+                  type="button"
+                  class="question-edit"
+                  :disabled="clearing || !!input.trim()"
+                  :title="
+                    input.trim()
+                      ? 'Clear the message box to edit this question'
+                      : 'Put this question back in the message box to change it'
+                  "
+                  @click="editSavedQuestion(i + 1)"
+                >
+                  <AppIcon name="edit" size="14" />
+                  <span>Edit</span>
+                </button>
+              </template>
               <TurnFailureNotice
                 v-else-if="msg.failure"
                 :failure="msg.failure"
@@ -1313,6 +1239,77 @@
                     class="chart-container"
                     :ref="(el) => el && mountChart(el, chart)"
                   ></div>
+                  <!-- Maturity score card for the level this answer scored. -->
+                  <section
+                    v-for="card in messageMaturityCards(msg)"
+                    :key="'score-' + i + '-' + card.level"
+                    class="score-card"
+                    :aria-label="`${card.label} maturity score`"
+                  >
+                    <header class="score-card-header">
+                      <span class="score-card-title">{{ card.label }}</span>
+                      <span
+                        class="maturity-card-stars"
+                        :style="{ color: starColor(card.overall) }"
+                        :aria-label="
+                          card.overall >= 0
+                            ? `${card.overall} out of 5`
+                            : 'Not scored'
+                        "
+                      >
+                        <AppIcon
+                          v-for="(star, starIndex) in maturityStarIcons(
+                            card.overall >= 0 ? card.overall : undefined,
+                          )"
+                          :key="`${card.level}-overall-${starIndex}`"
+                          :name="star"
+                          size="18"
+                        />
+                      </span>
+                    </header>
+                    <div class="assessment-summary">
+                      <div
+                        v-for="sc in card.scores"
+                        :key="sc.id"
+                        class="assessment-row"
+                      >
+                        <div class="assessment-label">{{ sc.label }}</div>
+                        <div
+                          class="assessment-stars"
+                          :style="{ color: starColor(sc.score) }"
+                        >
+                          <span v-if="sc.status === 'notApplicable'">N/A</span>
+                          <span v-else-if="sc.status === 'unknown'"
+                            >Unknown</span
+                          >
+                          <span v-else class="assessment-star-icons">
+                            <AppIcon
+                              v-for="(star, starIndex) in maturityStarIcons(
+                                sc.score,
+                              )"
+                              :key="`${sc.id}-${starIndex}`"
+                              :name="star"
+                              size="16"
+                            />
+                          </span>
+                        </div>
+                        <button
+                          class="assessment-detail-text"
+                          type="button"
+                          :aria-expanded="
+                            expandedMaturityDetails.has(
+                              maturityDetailKey(card.level + i, sc.id),
+                            )
+                              ? 'true'
+                              : 'false'
+                          "
+                          @click.stop="toggleMaturityDetail(card.level + i, sc.id)"
+                        >
+                          <span>{{ sc.detail }}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </section>
                   <div
                     class="message-text"
                     v-html="renderContent(msg.content)"
@@ -1329,6 +1326,80 @@
                     >
                       {{ a.label }}
                     </button>
+                  </div>
+                  <!-- Copy any finished answer; turn the latest into a deck or
+                       a script. -->
+                  <div
+                    v-if="answerCopyable(msg)"
+                    class="answer-actions"
+                  >
+                    <button
+                      type="button"
+                      class="answer-action"
+                      :title="copiedAnswer === i ? 'Copied' : 'Copy this answer'"
+                      @click="copyAnswer(msg, i)"
+                    >
+                      <AppIcon
+                        :name="copiedAnswer === i ? 'check' : 'contentCopy'"
+                        size="16"
+                      />
+                      <span>{{ copiedAnswer === i ? "Copied" : "Copy" }}</span>
+                    </button>
+                    <template v-if="feedbackAvailable">
+                      <button
+                        v-for="option in ANSWER_RATINGS"
+                        :key="option.rating"
+                        type="button"
+                        class="answer-action answer-action--icon"
+                        :aria-pressed="msg.feedback === option.rating ? 'true' : 'false'"
+                        :aria-label="option.label"
+                        :title="option.label"
+                        :disabled="msg.feedbackSaving"
+                        @click="rateAnswer(msg, i, option.rating)"
+                      >
+                        <AppIcon :name="option.icon" size="16" />
+                      </button>
+                    </template>
+                    <button
+                      v-if="answerEvidence(i)"
+                      type="button"
+                      class="answer-action answer-evidence"
+                      :title="`Show the ${answerEvidence(i).summary.total} ${answerEvidence(i).summary.total === 1 ? 'call' : 'calls'} behind this answer`"
+                      @click="openEvidence(i, $event)"
+                    >
+                      <AppIcon name="panelRight" size="16" />
+                      <span
+                        >{{ answerEvidence(i).summary.total }}
+                        {{ answerEvidence(i).summary.total === 1 ? "call" : "calls"
+                        }}<template v-if="answerEvidence(i).summary.failed">
+                          · {{ answerEvidence(i).summary.failed }} failed</template
+                        ></span
+                      >
+                    </button>
+                    <template
+                      v-if="i === lastAnswerIndex && answerActionsAvailable"
+                    >
+                      <button
+                        type="button"
+                        class="answer-action"
+                        :disabled="streaming || clearing"
+                        title="Build a short HTML deck from this conversation"
+                        @click="requestPresentation()"
+                      >
+                        <AppIcon name="slideshow" size="16" />
+                        <span>Make a deck</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="answer-action"
+                        :disabled="streaming || clearing"
+                        title="Write an Azure CLI script for the recommendations in this conversation"
+                        @click="requestScript()"
+                      >
+                        <AppIcon name="code" size="16" />
+                        <span>Write a script</span>
+                      </button>
+                    </template>
                   </div>
                   <div v-if="msg.html" class="html-deck-card">
                     <div class="html-deck-card-icon">
@@ -1501,6 +1572,7 @@
                 <summary>
                   {{ change.method }} change: {{ changeStatusLabel(change) }}
                 </summary>
+                <p class="change-review-summary">{{ describeChange(change) }}</p>
                 <div class="change-review-target">{{ change.target }}</div>
                 <pre>{{ change.body || "No request body" }}</pre>
                 <template v-if="change.status === 'awaitingApproval'">
@@ -1830,7 +1902,11 @@
               @keydown.enter.exact.prevent="send"
               @input="autoGrowInput"
               @paste="onPaste"
-              placeholder="Ask a question about your data"
+              :placeholder="
+                azureConnected
+                  ? 'Ask a question about your Azure costs'
+                  : 'Ask a FinOps or Azure pricing question'
+              "
               class="input-field"
               :disabled="!user"
             ></textarea>
@@ -1863,43 +1939,8 @@
                   <AppIcon name="search" size="16" />
                   <span>Analyze</span>
                 </button>
-                <button
-                  class="input-action-btn"
-                  :disabled="messages.length < 2 || streaming"
-                  @click="requestPresentation()"
-                  title="Generate Presentation"
-                >
-                  <AppIcon name="slideshow" size="16" />
-                  <span>Presentation</span>
-                </button>
-                <button
-                  class="input-action-btn"
-                  :disabled="messages.length < 2 || streaming"
-                  @click="requestScript()"
-                  title="Generate Script"
-                >
-                  <AppIcon name="code" size="16" />
-                  <span>Script</span>
-                </button>
               </div>
               <div class="input-bottom-right">
-                <button
-                  v-if="canClearChat"
-                  type="button"
-                  class="input-action-btn input-action-btn--clear"
-                  :disabled="
-                    streaming || serverTurnStoppable || clearing || clearingChat
-                  "
-                  :title="
-                    streaming || serverTurnStoppable
-                      ? 'Stop or wait for the answer before clearing the chat'
-                      : 'Clear this conversation and start a new chat'
-                  "
-                  @click="clearChat"
-                >
-                  <AppIcon name="delete" size="16" />
-                  <span>{{ clearingChat ? "Clearing…" : "Clear chat" }}</span>
-                </button>
                 <button
                   v-if="streaming || serverTurnStoppable"
                   class="action-btn action-btn--stop"
@@ -1930,31 +1971,40 @@
               </div>
             </div>
           </div>
+          <p v-if="!currentJob" class="input-notice">
+            AI-generated answers can be wrong. Check important figures.
+          </p>
         </div>
       </div>
 
-      <!-- Right rail: Scheduled jobs and Chats (teleported in on wide screens),
-           then Agent execution for the current conversation -->
+      <!-- Right rail: Agent activity for the current conversation, shown
+           while it has tool calls; the user can hide it and bring it back
+           from the top bar. On phones it opens over the chat from an
+           answer's call count. -->
+      <button
+        v-if="evidenceOverlayOpen"
+        type="button"
+        class="tools-sidebar-backdrop"
+        aria-label="Close agent activity"
+        @click="closeAgentRail"
+      ></button>
       <aside
         class="tools-sidebar"
-        :class="{ 'tools-sidebar--open': railOpen }"
-        aria-label="Chats, scheduled jobs and agent execution"
+        :class="{
+          'tools-sidebar--open': railOpen,
+          'tools-sidebar--overlay': evidenceOverlayOpen,
+        }"
+        aria-label="Agent activity"
+        @keydown.esc="evidenceOverlayOpen && closeAgentRail()"
       >
-        <div
-          class="tools-sidebar-nav"
-          :class="{ 'tools-sidebar-nav--split': showAgentPane }"
-        >
-          <div id="rail-jobs-slot"></div>
-          <div id="rail-chats-slot"></div>
-        </div>
         <div
           v-if="showAgentPane"
           class="tools-sidebar-pane tools-sidebar-pane--agent"
         >
           <div class="tools-sidebar-header">
             <div class="tools-sidebar-header-text">
-              <span class="tools-sidebar-title">Agent execution</span>
-              <span class="tools-sidebar-status">
+              <span class="tools-sidebar-title">Agent activity</span>
+              <span v-if="agentStatus" class="tools-sidebar-status">
                 <span
                   class="tools-sidebar-status-dot"
                   :class="{ 'tools-sidebar-status-dot--live': streaming }"
@@ -1963,12 +2013,23 @@
               </span>
             </div>
             <span class="st-count">{{ allToolCalls.length }}</span>
+            <button
+              ref="agentRailCloseButton"
+              type="button"
+              class="tools-sidebar-close"
+              title="Hide agent activity"
+              aria-label="Hide agent activity"
+              @click="closeAgentRail"
+            >
+              <AppIcon name="close" size="18" />
+            </button>
           </div>
           <div class="tools-sidebar-scroll">
             <section
               v-for="group in toolGroups"
               :key="group.key"
               class="st-group"
+              :data-group-key="group.key"
               :class="{
                 'st-group--open': isToolGroupOpen(group),
                 'st-group--running': group.summary.running,
@@ -2387,6 +2448,8 @@ import {
   watch,
 } from "vue";
 import { createAssistantMessageStream } from "../assistantMessageStream.js";
+import { describeChange } from "../changeSummary.js";
+import { groupChats } from "../chatGroups.js";
 import { renderMarkdown } from "../markdown.js";
 import {
   describeServerTurn,
@@ -2418,6 +2481,16 @@ const CHART_FONT_LABEL = 15;
 const CHART_LINE_CAPTION = 18;
 const CHART_WEIGHT_MEDIUM = 500;
 const CHART_WEIGHT_SEMIBOLD = 600;
+
+// Chart text uses the app's ink colours, read from its theme tokens.
+function themeToken(name, fallback) {
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+  return value || fallback;
+}
+const CHART_INK = themeToken("--ink", "#1f1f1f");
+const CHART_INK_MUTED = themeToken("--text-muted", "#5f6672");
 
 const props = defineProps({
   user: { type: Object, default: null },
@@ -3616,17 +3689,124 @@ const compactLayout = ref(navigationMedia.matches);
 const sidebarVisible = computed(() =>
   compactLayout.value ? mobileSidebarOpen.value : sidebarOpen.value,
 );
-// Right rail: Chats + Scheduled jobs (wide screens) above Agent execution.
+// Right rail: Agent activity only, while the conversation has tool calls or
+// an answer is running. The user can hide it; the top bar brings it back.
 const showAgentPane = computed(
   () => allToolCalls.value.length > 0 || streaming.value,
 );
+const agentRailHidden = ref(loadPaneCollapsed("agentRail"));
 const railOpen = computed(
-  () =>
-    showAgentPane.value ||
-    azureConnected.value ||
-    chatSessions.value.length > 0 ||
-    !!sessionDeleteError.value,
+  () => showAgentPane.value && !agentRailHidden.value,
 );
+function toggleAgentRail() {
+  agentRailHidden.value = !agentRailHidden.value;
+  try {
+    localStorage.setItem(
+      "finops.paneCollapsed.agentRail",
+      agentRailHidden.value ? "1" : "0",
+    );
+  } catch {}
+}
+
+// An answer's call count opens Agent activity at its question: the rail on
+// wide screens, an overlay on phones, where the rail is otherwise hidden.
+// Escape, the backdrop or the close button dismisses the overlay and returns
+// focus to the count that opened it.
+const evidenceOverlay = ref(false);
+const evidenceOverlayOpen = computed(
+  () => compactLayout.value && evidenceOverlay.value && showAgentPane.value,
+);
+const agentRailCloseButton = ref(null);
+let evidenceTrigger = null;
+watch(compactLayout, (compact) => {
+  if (!compact) evidenceOverlay.value = false;
+});
+
+function closeAgentRail() {
+  if (evidenceOverlayOpen.value) {
+    evidenceOverlay.value = false;
+    evidenceTrigger?.focus?.();
+    evidenceTrigger = null;
+    return;
+  }
+  toggleAgentRail();
+}
+
+// The calls behind an answer are its question's group; only the last message
+// of a turn shows the count.
+function answerEvidence(index) {
+  const list = messages.value;
+  if (list[index + 1]?.role === "assistant") return null;
+  const question = list.slice(0, index).findLastIndex((m) => m.role === "user");
+  const key = question >= 0 ? `q-${question}` : "q-start";
+  return toolGroups.value.find((group) => group.key === key) || null;
+}
+
+async function openEvidence(index, event) {
+  const group = answerEvidence(index);
+  if (!group) return;
+  toolGroupOpen.set(group.key, true);
+  if (compactLayout.value) {
+    evidenceTrigger = event?.currentTarget || null;
+    evidenceOverlay.value = true;
+  } else if (agentRailHidden.value) toggleAgentRail();
+  await nextTick();
+  document
+    .querySelector(`.tools-sidebar [data-group-key="${group.key}"]`)
+    ?.scrollIntoView({ block: "start" });
+  if (compactLayout.value) agentRailCloseButton.value?.focus();
+}
+// One open "⋯" menu at a time for scheduled job rows. It renders at the page
+// root with fixed coordinates (the compact menu's transform would otherwise
+// offset it, and the job list's scroll area would clip it); a click
+// elsewhere, Escape, a resize or scrolling the navigation closes it.
+const openJobMenuId = ref(null);
+const jobMenuStyle = ref({});
+const JOB_MENU_WIDTH = 176;
+const JOB_MENU_HEIGHT = 176;
+function toggleJobMenu(id, event) {
+  if (openJobMenuId.value === id) {
+    openJobMenuId.value = null;
+    return;
+  }
+  const rect = event?.currentTarget?.getBoundingClientRect?.();
+  if (rect) {
+    const left = Math.max(
+      8,
+      Math.min(rect.right - JOB_MENU_WIDTH, window.innerWidth - JOB_MENU_WIDTH - 8),
+    );
+    const below = rect.bottom + 4;
+    const top =
+      below + JOB_MENU_HEIGHT > window.innerHeight - 8
+        ? Math.max(8, rect.top - 4 - JOB_MENU_HEIGHT)
+        : below;
+    jobMenuStyle.value = { top: `${top}px`, left: `${left}px` };
+  }
+  openJobMenuId.value = id;
+}
+function closeJobMenu() {
+  openJobMenuId.value = null;
+}
+function closeJobMenuOnOutsideClick() {
+  if (openJobMenuId.value) openJobMenuId.value = null;
+}
+function closeJobMenuOnNavigationScroll(event) {
+  if (
+    openJobMenuId.value &&
+    document.getElementById("chat-navigation")?.contains(event.target)
+  )
+    openJobMenuId.value = null;
+}
+onMounted(() => {
+  document.addEventListener("click", closeJobMenuOnOutsideClick);
+  document.addEventListener("scroll", closeJobMenuOnNavigationScroll, true);
+  window.addEventListener("resize", closeJobMenuOnOutsideClick);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("click", closeJobMenuOnOutsideClick);
+  document.removeEventListener("scroll", closeJobMenuOnNavigationScroll, true);
+  window.removeEventListener("resize", closeJobMenuOnOutsideClick);
+});
 function updateNavigationLayout(event) {
   compactLayout.value = event.matches;
   mobileSidebarOpen.value = false;
@@ -3666,6 +3846,7 @@ const availableTenants = ref([]);
 const currentTenantId = ref("");
 const showTenantSwitcher = ref(false);
 const tenantError = ref(false);
+const subscriptionsOpen = ref(false);
 const clearing = ref(false);
 
 // ── Multi-session state (Entra-only) ─────────────────────────────
@@ -3736,6 +3917,17 @@ function loadPaneCollapsed(key) {
 }
 const agentCollapsed = ref(loadPaneCollapsed("agent"));
 const sessionsCollapsed = ref(loadPaneCollapsed("sessions"));
+// Prompts start open on wide screens and closed in the compact menu, so the
+// phone menu reaches Chats without scrolling; the user's choice sticks.
+const promptsCollapsed = ref(
+  (() => {
+    try {
+      const stored = localStorage.getItem("finops.paneCollapsed.prompts");
+      if (stored !== null) return stored === "1";
+    } catch {}
+    return window.matchMedia("(max-width: 900px)").matches;
+  })(),
+);
 const jobsCollapsed = ref(
   (() => {
     try {
@@ -3754,6 +3946,7 @@ function togglePane(key) {
     agent: agentCollapsed,
     sessions: sessionsCollapsed,
     jobs: jobsCollapsed,
+    prompts: promptsCollapsed,
   };
   const r = map[key];
   r.value = !r.value;
@@ -4159,6 +4352,14 @@ const chatSessions = computed(() =>
   sessions.value.filter((s) => !jobs.value.some((j) => j.sessionId === s.id)),
 );
 
+// The chat list groups conversations by last activity; a search box appears
+// once the list is long enough to need one.
+const CHAT_SEARCH_THRESHOLD = 5;
+const chatSearch = ref("");
+const chatGroups = computed(() =>
+  groupChats(chatSessions.value, chatSearch.value),
+);
+
 // While a JOB conversation is in view, keep it live: scheduled runs land in
 // the persisted transcript server-side with no SSE to this browser, so
 // without this the view silently freezes while runs pile up on disk.
@@ -4293,47 +4494,6 @@ async function startNewChat() {
   return created;
 }
 
-// Clear chat removes the conversation the user is looking at (server-confirmed,
-// like deleting it from Chats) and opens a fresh one. It appears once there is
-// a question and a response to clear.
-const clearingChat = ref(false);
-const canClearChat = computed(
-  () =>
-    !currentJob.value &&
-    messages.value.some((m) => m.role === "user") &&
-    messages.value.some((m) => m.role !== "user"),
-);
-
-async function clearChat() {
-  if (
-    !canClearChat.value ||
-    streaming.value ||
-    serverTurnStoppable.value ||
-    clearing.value ||
-    clearingChat.value
-  )
-    return;
-  clearingChat.value = true;
-  try {
-    const sessionId = currentSessionId.value;
-    if (sessionId) {
-      await deleteSession(sessionId);
-      if (currentSessionId.value === sessionId) {
-        setNotice(
-          "error",
-          sessionDeleteError.value ||
-            "Couldn't clear the conversation. Try again.",
-        );
-        return;
-      }
-    }
-    await startNewChat();
-    inputEl.value?.focus();
-  } finally {
-    clearingChat.value = false;
-  }
-}
-
 async function selectSession(sessionId) {
   if (!sessionId || sessionId === currentSessionId.value) return true;
   viewEpoch++;
@@ -4432,6 +4592,10 @@ async function reloadSessionTranscript(sessionId) {
           charts: m.charts || [],
           html: m.html || null,
           script: m.script ? { ...m.script, expanded: false } : null,
+          feedback:
+            m.role === "assistant" && (m.feedback === "up" || m.feedback === "down")
+              ? m.feedback
+              : null,
           followUp,
         };
       });
@@ -4932,10 +5096,7 @@ async function revokeAllPermissions() {
   } catch {}
 }
 
-// When Azure connects, force Crawl/Walk/Run/Playbook/Pricing to collapsed.
-// This guarantees a clean initial state every time the user reconnects.
 watch(azureConnected, async (connected, wasConnected) => {
-  resetPricingSectionOpen(connected);
   if (!connected) {
     sessions.value = [];
     currentSessionId.value = null;
@@ -5429,7 +5590,10 @@ function toolKind(tc) {
 // The newest question's calls are open; a user's choice for any group sticks
 // until they switch conversations.
 const toolGroupOpen = reactive(new Map());
-watch(currentSessionId, () => toolGroupOpen.clear());
+watch(currentSessionId, () => {
+  toolGroupOpen.clear();
+  evidenceOverlay.value = false;
+});
 function isToolGroupOpen(group) {
   return toolGroupOpen.get(group.key) ?? group.key === toolGroups.value[0]?.key;
 }
@@ -5448,11 +5612,10 @@ function scrollToMessage(index) {
   });
 }
 
-// Live status line under the "Agent" header — shows what the agent is doing right now.
+// Live status line under the panel title while the agent works; nothing once
+// it is done (the count beside the title already says how many calls ran).
 const agentStatus = computed(() => {
-  if (!streaming.value) {
-    return allToolCalls.value.length > 0 ? "idle" : "ready";
-  }
+  if (!streaming.value) return "";
   // Find the most recent in-flight tool call
   const running = [...allToolCalls.value].reverse().find((t) => !t.done);
   if (running) return friendlyToolLabel(running) + "…";
@@ -5837,13 +6000,10 @@ function friendlyToolLabel(tc) {
 }
 
 // ── Prompt categories ──
-// New simplified layout for the demo:
-//   - Crawl / Walk / Run rendered as 3 hero "Score" buttons (with stars when scored)
-//   - All detailed prompts collapsed under a single "Playbook" parent
-//   - Pricing & Estimates always visible (no login required)
+// The start page offers the Crawl / Walk / Run scores (signed in) and each
+// section's five questions; signed in, the navigation lists every prompt.
 const SCORE_KEYS = ["crawl", "walk", "run"];
 
-// Hero score categories: just label + subtitle + score CTA + (post-score) results
 const scoreCategories = computed(() =>
   SCORE_KEYS.map((key) => {
     const cat = maturityCategories.find((c) => c.key === key);
@@ -5860,28 +6020,6 @@ const scoreCategories = computed(() =>
   }).filter(Boolean),
 );
 
-// Playbook groups: every maturity level's non-Score prompts. Pricing has its
-// own dedicated sidebar card and is no longer in maturityCategories.
-const playbookGroups = computed(() =>
-  maturityCategories.map((cat) => ({
-    key: cat.key,
-    label: cat.label,
-    prompts: cat.prompts.filter((p) => !p.label.startsWith("Score ")),
-  })),
-);
-
-const pricingSectionOpen = reactive({});
-
-function resetPricingSectionOpen(connected) {
-  for (const section of pricingSections) {
-    pricingSectionOpen[section.key] = connected
-      ? false
-      : section.defaultOpen === true;
-  }
-}
-
-resetPricingSectionOpen(false);
-
 const pricingNavigationSections = computed(() =>
   pricingSections.map((section) => ({
     ...section,
@@ -5892,21 +6030,207 @@ const pricingNavigationSections = computed(() =>
   })),
 );
 
-function pricingSectionHeaderId(key) {
-  return `pricing-section-${key}-header`;
+// The start page shows each section's five most important questions; phones
+// show the first three (CSS), and More shows the rest in place there.
+const START_PAGE_QUESTIONS = 5;
+const START_PAGE_PHONE_QUESTIONS = 3;
+const expandedStarterSections = ref({});
+
+function toggleStarterSection(key) {
+  expandedStarterSections.value = {
+    ...expandedStarterSections.value,
+    [key]: !expandedStarterSections.value[key],
+  };
 }
 
-function pricingSectionPanelId(key) {
-  return `pricing-section-${key}-panel`;
+// The start page reappears collapsed.
+watch(
+  () => messages.value.length === 0,
+  (empty) => {
+    if (empty) expandedStarterSections.value = {};
+  },
+);
+
+const startPageSections = computed(() =>
+  pricingNavigationSections.value.map((section) => {
+    const expanded = !!expandedStarterSections.value[section.key];
+    const prompts = section.prompts.slice(0, START_PAGE_QUESTIONS);
+    return {
+      key: section.key,
+      label: section.label,
+      icon: section.icon,
+      prompts,
+      expanded,
+      expandable: prompts.length > START_PAGE_PHONE_QUESTIONS,
+    };
+  }),
+);
+
+// Signed in, the navigation lists every prompt group (the maturity levels,
+// then the start page's sections in full), each collapsed to one row.
+const navigationPromptGroups = computed(() =>
+  azureConnected.value
+    ? [
+        ...maturityCategories.map((cat) => ({
+          key: cat.key,
+          label: cat.label,
+          subtitle: cat.subtitle || "",
+          prompts: cat.prompts,
+        })),
+        ...pricingNavigationSections.value.map((section) => ({
+          key: section.key,
+          label: section.label,
+          subtitle: "",
+          prompts: section.prompts,
+        })),
+      ]
+    : [],
+);
+const openPromptGroups = reactive({});
+function togglePromptGroup(key) {
+  openPromptGroups[key] = !openPromptGroups[key];
 }
 
-function isPricingSectionExpanded(key) {
-  return pricingSectionOpen[key] === true;
+// The score card belongs to the answer whose ReportMaturityScore call it shows.
+function messageMaturityCards(msg) {
+  if (msg?.role !== "assistant" || !Array.isArray(msg.toolCalls)) return [];
+  const cards = [];
+  for (const tc of msg.toolCalls) {
+    if (tc.tool !== "ReportMaturityScore" || tc.success === false) continue;
+    let args = tc.args;
+    try {
+      if (typeof args === "string") args = JSON.parse(args);
+    } catch {
+      continue;
+    }
+    const level = String(args?.level || "").toLowerCase();
+    let scores = args?.scores;
+    try {
+      if (typeof scores === "string") scores = JSON.parse(scores);
+    } catch {
+      continue;
+    }
+    if (!level || !Array.isArray(scores) || !scores.length) continue;
+    const observed = scores.filter(
+      (s) => Number.isFinite(s.score) && (!s.status || s.status === "observed"),
+    );
+    const cat = maturityCategories.find((c) => c.key === level);
+    cards.push({
+      level,
+      label: cat?.label || level.charAt(0).toUpperCase() + level.slice(1),
+      scores,
+      overall: observed.length
+        ? Math.round(
+            observed.reduce((sum, s) => sum + s.score, 0) / observed.length,
+          )
+        : -1,
+    });
+  }
+  return cards;
 }
 
-function togglePricingSection(key) {
-  pricingSectionOpen[key] = !pricingSectionOpen[key];
+// "Make a deck" and "Write a script" follow the latest finished answer.
+const lastAnswerIndex = computed(() => {
+  const list = messages.value;
+  const last = list.length - 1;
+  return last >= 0 && list[last].role === "assistant" ? last : -1;
+});
+
+// Edit puts the latest question back in the message box once its turn has
+// an answer (a failed turn offers the same from its notice).
+const lastUserIndex = computed(() =>
+  messages.value.findLastIndex((m) => m.role === "user"),
+);
+const questionEditable = computed(
+  () =>
+    !currentJob.value &&
+    !streaming.value &&
+    lastUserIndex.value >= 0 &&
+    lastAnswerIndex.value > lastUserIndex.value &&
+    !messages.value[lastAnswerIndex.value].failure,
+);
+
+// Copy: the answer's text as written (Markdown), with a short confirmation.
+const copiedAnswer = ref(-1);
+let copiedAnswerTimer = 0;
+function answerCopyable(msg) {
+  return (
+    msg.role === "assistant" &&
+    !msg.failure &&
+    String(msg.content || "").trim().length > 0
+  );
 }
+async function copyAnswer(msg, index) {
+  const text = String(msg.content || "").trim();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    try {
+      document.execCommand("copy");
+    } finally {
+      area.remove();
+    }
+  }
+  copiedAnswer.value = index;
+  clearTimeout(copiedAnswerTimer);
+  copiedAnswerTimer = setTimeout(() => (copiedAnswer.value = -1), 2000);
+}
+
+// Thumbs up or down on an answer, saved with the conversation; pressing the
+// same one again clears it. The answer is identified by the question it
+// answers (its 1-based turn), which the replayed transcript counts the same way.
+const ANSWER_RATINGS = [
+  { rating: "up", label: "Good answer", icon: "thumbUp" },
+  { rating: "down", label: "Poor answer", icon: "thumbDown" },
+];
+const feedbackAvailable = computed(
+  () => !currentJob.value && !!currentSessionId.value,
+);
+function answerTurn(index) {
+  return messages.value.slice(0, index).filter((m) => m.role === "user")
+    .length;
+}
+async function rateAnswer(msg, index, rating) {
+  const sessionId = currentSessionId.value;
+  if (!sessionId || msg.feedbackSaving) return;
+  const previous = msg.feedback || null;
+  const next = previous === rating ? null : rating;
+  msg.feedback = next;
+  msg.feedbackSaving = true;
+  try {
+    const res = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/feedback`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turn: answerTurn(index), rating: next || "none" }),
+      },
+    );
+    if (!res.ok) msg.feedback = previous;
+  } catch {
+    msg.feedback = previous;
+  } finally {
+    msg.feedbackSaving = false;
+  }
+}
+const answerActionsAvailable = computed(
+  () =>
+    !currentJob.value &&
+    !streaming.value &&
+    lastAnswerIndex.value >= 0 &&
+    messages.value.some((m) => m.role === "user") &&
+    !messages.value[lastAnswerIndex.value].failure &&
+    String(messages.value[lastAnswerIndex.value].content || "").trim().length >
+      0,
+);
 
 // ── Maturity scores (set by LLM via ReportMaturityScore tool → SSE) ──
 const maturityScores = reactive({
@@ -6145,12 +6469,12 @@ function replaceWithChartFallback(option, message) {
       left: "center",
       top: "middle",
       textStyle: {
-        color: "#1f2328",
+        color: CHART_INK,
         fontSize: CHART_FONT_LABEL,
         fontWeight: CHART_WEIGHT_SEMIBOLD,
       },
       subtextStyle: {
-        color: "#656d76",
+        color: CHART_INK_MUTED,
         fontSize: CHART_FONT_CAPTION,
         width: 320,
         overflow: "break",
@@ -6323,8 +6647,8 @@ function buildEChartsOption(raw) {
           chartType === "pie" ? `Total ${total.toLocaleString()}` : undefined,
         left: "center",
         top: 0,
-        textStyle: { fontSize: CHART_FONT_LABEL, color: "#1f2328" },
-        subtextStyle: { fontSize: CHART_FONT_CAPTION, color: "#656d76" },
+        textStyle: { fontSize: CHART_FONT_LABEL, color: CHART_INK },
+        subtextStyle: { fontSize: CHART_FONT_CAPTION, color: CHART_INK_MUTED },
       },
       tooltip: {
         trigger: "item",
@@ -6335,7 +6659,7 @@ function buildEChartsOption(raw) {
         left: "center",
         type: "scroll",
         data: pieData.map((d) => d.name),
-        textStyle: { color: "#656d76", fontSize: CHART_FONT_CAPTION },
+        textStyle: { color: CHART_INK_MUTED, fontSize: CHART_FONT_CAPTION },
       },
       color: colors,
       series: [
@@ -6349,7 +6673,7 @@ function buildEChartsOption(raw) {
           label: {
             show: true,
             formatter: "{b}",
-            color: "#1f2328",
+            color: CHART_INK,
             fontSize: CHART_FONT_CAPTION,
           },
           labelLine: { show: true, length: 8, length2: 12 },
@@ -6398,14 +6722,14 @@ function buildEChartsOption(raw) {
   const xRotate = categories.length > 14 && longest > 18 ? 30 : 0;
   const xAxisLabel = {
     fontSize: CHART_FONT_CAPTION,
-    color: "#1f2328",
+    color: CHART_INK,
     fontWeight: CHART_WEIGHT_MEDIUM,
     interval: 0,
     rotate: xRotate,
     lineHeight: CHART_LINE_CAPTION,
     formatter: wrapXLabel,
   };
-  const yAxisLabel = { fontSize: CHART_FONT_CAPTION, color: "#1f2328", fontWeight: CHART_WEIGHT_MEDIUM };
+  const yAxisLabel = { fontSize: CHART_FONT_CAPTION, color: CHART_INK, fontWeight: CHART_WEIGHT_MEDIUM };
 
   // Detect multi-series: objects with keys beyond "name" and "value"
   const firstItem = dataArr[0];
@@ -6423,14 +6747,14 @@ function buildEChartsOption(raw) {
       title: {
         text: title,
         left: "center",
-        textStyle: { fontSize: CHART_FONT_LABEL, color: "#1f2328" },
+        textStyle: { fontSize: CHART_FONT_LABEL, color: CHART_INK },
       },
       tooltip: { trigger: "axis", order: "valueDesc" },
       legend: {
         data: seriesKeys,
         bottom: 0,
         type: "scroll",
-        textStyle: { color: "#656d76", fontSize: CHART_FONT_CAPTION },
+        textStyle: { color: CHART_INK_MUTED, fontSize: CHART_FONT_CAPTION },
       },
       color: colors,
       grid: { left: 60, right: 140, bottom: 40, top: 50 },
@@ -6471,13 +6795,13 @@ function buildEChartsOption(raw) {
       title: {
         text: title,
         left: "center",
-        textStyle: { fontSize: CHART_FONT_LABEL, color: "#1f2328" },
+        textStyle: { fontSize: CHART_FONT_LABEL, color: CHART_INK },
       },
       tooltip: { trigger: "axis" },
       legend: {
         data: seriesKeys,
         bottom: 0,
-        textStyle: { color: "#656d76", fontSize: CHART_FONT_CAPTION },
+        textStyle: { color: CHART_INK_MUTED, fontSize: CHART_FONT_CAPTION },
       },
       color: colors,
       grid: { left: 60, right: 20, bottom: 40, top: 50 },
@@ -6531,7 +6855,7 @@ function buildEChartsOption(raw) {
     nameLocation: "center",
     nameGap: isHorizontal ? 60 : 30,
     axisLabel: isHorizontal
-      ? { fontSize: CHART_FONT_CAPTION, color: "#1f2328", fontWeight: CHART_WEIGHT_MEDIUM }
+      ? { fontSize: CHART_FONT_CAPTION, color: CHART_INK, fontWeight: CHART_WEIGHT_MEDIUM }
       : xAxisLabel,
   };
   const valueAxis = {
@@ -6546,7 +6870,7 @@ function buildEChartsOption(raw) {
     title: {
       text: title,
       left: "center",
-      textStyle: { fontSize: CHART_FONT_LABEL, color: "#1f2328" },
+      textStyle: { fontSize: CHART_FONT_LABEL, color: CHART_INK },
     },
     tooltip: { trigger: "axis" },
     color: colors,
@@ -6772,9 +7096,9 @@ function forceChartFont(option) {
 //  - staggered entry animations on every series
 function applyWowTheme(opts) {
   if (!opts || typeof opts !== "object") return;
-  const ink = "#1f2328";
-  const inkDim = "#656d76";
-  const inkMute = "#8b96a0";
+  const ink = CHART_INK;
+  const inkDim = CHART_INK_MUTED;
+  const inkMute = CHART_INK_MUTED;
   const grid = "#eef0f3";
   const tooltipBg = "rgba(255,255,255,0.98)";
 
@@ -7046,7 +7370,7 @@ function decorateSeries(s, baseColor, idx) {
     };
     if (!s.radius) s.radius = ["45%", "70%"];
     s.label = {
-      color: "#656d76",
+      color: CHART_INK_MUTED,
       fontSize: CHART_FONT_CAPTION,
       ...(s.label || {}),
     };
@@ -7060,7 +7384,7 @@ function decorateSeries(s, baseColor, idx) {
         shadowBlur: 18,
         shadowColor: "rgba(0,120,212,0.4)",
       },
-      label: { show: true, fontSize: CHART_FONT_LABEL, fontWeight: CHART_WEIGHT_SEMIBOLD, color: "#1f2328" },
+      label: { show: true, fontSize: CHART_FONT_LABEL, fontWeight: CHART_WEIGHT_SEMIBOLD, color: CHART_INK },
       ...(s.emphasis || {}),
     };
   } else if (t === "scatter" || t === "effectScatter") {
@@ -7088,7 +7412,7 @@ function decorateSeries(s, baseColor, idx) {
         shadowBlur: 8,
         shadowColor: "rgba(0,120,212,0.4)",
       },
-      label: { color: "#1f2328", fontWeight: CHART_WEIGHT_SEMIBOLD },
+      label: { color: CHART_INK, fontWeight: CHART_WEIGHT_SEMIBOLD },
       ...(s.emphasis || {}),
     };
   } else if (t === "heatmap") {
@@ -8726,27 +9050,15 @@ async function send() {
   align-items: center;
   justify-content: space-between;
   height: var(--portal-header-height);
-  background: linear-gradient(90deg, #005a9e 0%, #0078d4 55%, #0098e0 100%);
+  background: var(--brand-gradient);
   color: #fff;
   padding: 0 12px;
   flex-shrink: 0;
   z-index: 100;
   position: relative;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  border-bottom: 1px solid var(--on-brand-line);
 }
-.portal-trustline {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--text-caption-size);
-  font-weight: 500;
-  line-height: 1;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 60vw;
-}
+
 .portal-trustline-dot {
   width: 6px;
   height: 6px;
@@ -8787,19 +9099,39 @@ async function send() {
 }
 .portal-trustline-link:hover {
   color: #fff;
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--on-brand-hover);
   opacity: 1;
+}
+.portal-brand {
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 500;
+  color: #fff;
+  white-space: nowrap;
+}
+.portal-icon-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
+.portal-icon-btn:hover,
+.portal-icon-btn[aria-pressed="true"] {
+  background: var(--on-brand-hover);
 }
 @media (max-width: 520px) {
   .portal-header-left {
     gap: 8px;
   }
   .portal-trustline-link span {
-    display: none;
-  }
-}
-@media (max-width: 720px) {
-  .portal-trustline {
     display: none;
   }
 }
@@ -8826,7 +9158,7 @@ async function send() {
     transform var(--motion-fast);
 }
 .portal-burger:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--on-brand-hover);
   color: #fff;
 }
 .portal-burger:active {
@@ -8856,20 +9188,20 @@ async function send() {
 .portal-header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 .portal-build-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
+  margin-right: 4px;
   padding: 4px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--on-brand-line);
   border-radius: var(--radius);
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
   font-weight: 500;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--on-brand-fill);
   color: #fff;
   white-space: nowrap;
 }
@@ -8887,47 +9219,14 @@ async function send() {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.portal-header-email {
-  font-size: var(--text-label-size);
-  line-height: var(--text-label-line);
-  font-weight: 500;
-  color: #fff;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
+/* Phones keep the top bar on one line: the badge shows only its build. */
+@media (max-width: 600px) {
+  .portal-build-badge-branch,
+  .portal-build-badge-sep {
+    display: none;
+  }
 }
-.portal-header-disconnect {
-  background: none;
-  border: none;
-  color: rgba(255, 255, 255, 0.8);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background var(--motion-fast),
-    color var(--motion-fast);
-}
-.portal-header-disconnect:hover {
-  background: var(--hover);
-  color: var(--danger);
-}
-.portal-user-identity {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 2px 8px;
-  border-radius: var(--radius);
-  transition: background var(--motion-fast);
-}
-.portal-user-identity:hover {
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
-}
+
 .sidebar-new-chat,
 .new-chat-control {
   display: inline-flex;
@@ -8965,12 +9264,7 @@ async function send() {
   opacity: 0.55;
   cursor: not-allowed;
 }
-.portal-user-identity--anon {
-  cursor: default;
-}
-.portal-user-identity--anon:hover {
-  background: none;
-}
+
 .portal-user-text {
   display: flex;
   flex-direction: column;
@@ -9157,119 +9451,13 @@ async function send() {
   box-shadow: none;
 }
 
-/* ── Maturity score rows (Crawl / Walk / Run): navigation rows with stars ── */
-.maturity-card {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 1px 12px;
-  padding: 8px 12px;
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: background var(--motion-fast);
-  user-select: none;
-}
-.maturity-card:hover:not(.maturity-card--disabled) {
-  background: var(--hover);
-}
-.maturity-card:focus,
-.maturity-card:focus-visible {
-  outline: none;
-}
-.maturity-card--disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-.maturity-card-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-.maturity-card-title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.maturity-card-label {
-  font-size: var(--text-label-size);
-  line-height: var(--text-label-line);
-  font-weight: 500;
-  color: var(--ink);
-}
-.maturity-card-subtitle {
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  font-weight: 400;
-  color: var(--text-muted);
-}
-.maturity-card-cta {
-  flex-shrink: 0;
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  font-weight: 500;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.maturity-card:hover:not(.maturity-card--disabled) .maturity-card-cta {
-  color: var(--ink);
-}
-.maturity-card-body {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 2px;
-}
 .maturity-card-stars {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   line-height: 1;
 }
-.maturity-card-chevron {
-  width: 16px;
-  height: 16px;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 2px;
-  border-radius: var(--radius);
-  transition:
-    transform 0.15s ease,
-    background 0.15s ease,
-    color 0.15s ease;
-}
-.maturity-card-chevron:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-.maturity-card-chevron:focus,
-.maturity-card-chevron:focus-visible {
-  outline: none;
-}
 
-.sidebar-subgroup {
-  margin-top: 6px;
-}
-.sidebar-subgroup:first-child {
-  margin-top: 0;
-}
-.sidebar-subgroup-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px 8px 20px;
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  font-weight: 500;
-  color: var(--text-muted);
-  cursor: pointer;
-  user-select: none;
-}
-.sidebar-subgroup-label:hover {
-  background: var(--hover);
-}
 .sidebar-question--locked {
   opacity: 0.4;
 }
@@ -9378,7 +9566,7 @@ async function send() {
 }
 .sidebar-source-dot--azure {
   background: var(--accent);
-  box-shadow: 0 0 4px rgba(54, 120, 232, 0.4);
+  box-shadow: 0 0 4px rgba(0, 120, 212, 0.4);
 }
 .sidebar-source-divider {
   font-size: var(--text-caption-size);
@@ -9696,13 +9884,13 @@ async function send() {
 }
 @keyframes scope-glow {
   0% {
-    box-shadow: 0 0 0 0 rgba(54, 120, 232, 0);
+    box-shadow: 0 0 0 0 rgba(0, 120, 212, 0);
   }
   40% {
-    box-shadow: 0 0 0 4px rgba(54, 120, 232, 0.2);
+    box-shadow: 0 0 0 4px rgba(0, 120, 212, 0.2);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(54, 120, 232, 0);
+    box-shadow: 0 0 0 0 rgba(0, 120, 212, 0);
   }
 }
 .scope-row-summary {
@@ -10033,7 +10221,7 @@ async function send() {
 .attachment-chip-thumb {
   width: 22px;
   height: 22px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   object-fit: cover;
   flex-shrink: 0;
   border: 1px solid var(--border);
@@ -10085,7 +10273,7 @@ async function send() {
   line-height: var(--text-label-line);
   font-weight: 500;
   cursor: pointer;
-  box-shadow: 0 0 0 0 rgba(54, 120, 232, 0.5);
+  box-shadow: 0 0 0 0 rgba(0, 120, 212, 0.5);
   animation: attach-analyze-glow 2.2s ease-in-out infinite;
   transition:
     background 0.15s,
@@ -10106,10 +10294,10 @@ async function send() {
 @keyframes attach-analyze-glow {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(54, 120, 232, 0.5);
+    box-shadow: 0 0 0 0 rgba(0, 120, 212, 0.5);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(54, 120, 232, 0);
+    box-shadow: 0 0 0 8px rgba(0, 120, 212, 0);
   }
 }
 
@@ -10177,7 +10365,7 @@ async function send() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: clamp(18px, 5vh, 44px) 0 16px;
+  padding: clamp(12px, 3.5vh, 40px) 0 0;
   max-width: 960px;
   margin: 0 auto;
   width: 100%;
@@ -10237,90 +10425,183 @@ async function send() {
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 4px rgba(54, 120, 232, 0.18);
+  box-shadow: 0 0 0 4px rgba(0, 120, 212, 0.18);
   animation: hero-pulse 2.4s ease-in-out infinite;
 }
 @keyframes hero-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 4px rgba(54, 120, 232, 0.18);
+    box-shadow: 0 0 0 4px rgba(0, 120, 212, 0.18);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(54, 120, 232, 0.04);
+    box-shadow: 0 0 0 8px rgba(0, 120, 212, 0.04);
   }
 }
 .hero-title {
-  font-size: clamp(2.2rem, 5.5vw, 4.5rem);
+  font-size: clamp(2rem, 4vw, 2.75rem);
   font-weight: 800;
   line-height: 1.05;
   letter-spacing: -0.035em;
-  margin: 0 0 0.6rem;
+  margin: 0 0 clamp(20px, 4vh, 36px);
   color: var(--ink);
 }
 .hero-title-accent {
-  background: linear-gradient(135deg, var(--accent-hover) 0%, var(--accent) 60%, #6f9cf0 100%);
+  background: var(--brand-gradient);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
 }
-.hero-tagline {
-  font-size: var(--text-body-size);
-  line-height: var(--text-body-line);
-  font-weight: 400;
-  color: var(--text-muted);
-  margin: 0.4rem 0 clamp(1.6rem, 4vh, 2.6rem);
-  max-width: 640px;
-}
-.hero-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
+/* Start page: the maturity scores (signed in) above the most asked questions,
+   each one click from an answer. */
+.starters {
   width: 100%;
-}
-.hero-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
   text-align: left;
-  box-shadow: none;
-  animation: fadeSlideIn var(--motion-enter) both;
 }
-.hero-card-icon {
+.starters-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.starters-heading {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-title-size);
+  line-height: var(--text-title-line);
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.starters-heading-icon {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
   border-radius: var(--radius);
   background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 500;
+}
+.starter-levels {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+/* Starter cards follow Microsoft's Copilot prompt starter (Fluent AI
+   PromptStarter, compact layout): a white card with a thin border, 12 px
+   corners and semibold text that lifts under the pointer with Fluent's
+   shadow16 and a 3% scale on its 200 ms decelerate curve. Nothing moves
+   while idle. */
+.starter-level,
+.starter-question {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform var(--motion-lift),
+    box-shadow var(--motion-lift);
+}
+.starter-level:hover:not(:disabled),
+.starter-question:hover:not(:disabled) {
+  box-shadow: var(--shadow-raised);
+  transform: scale(1.03);
+}
+.starter-level:active:not(:disabled),
+.starter-question:active:not(:disabled) {
+  box-shadow: var(--shadow-pressed);
+}
+@media (prefers-reduced-motion: reduce) {
+  .starter-level:hover:not(:disabled),
+  .starter-question:hover:not(:disabled) {
+    transform: none;
+  }
+}
+.starter-level:disabled,
+.starter-question:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.starter-level {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  padding: 12px;
+}
+.starter-level-label {
   font-size: var(--text-body-size);
   line-height: var(--text-body-line);
-  margin-bottom: 10px;
+  font-weight: 600;
 }
-.hero-card-title {
-  font-size: var(--text-label-size);
-  line-height: var(--text-label-line);
-  font-weight: 500;
-  color: var(--ink);
-  margin-bottom: 4px;
-}
-.hero-card-desc {
+.starter-level-subtitle {
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
   color: var(--text-muted);
 }
+.starter-columns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+.starter-question {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+  font-weight: 600;
+}
+/* More/Fewer: a quiet text button under a section's cards, on phones only. */
+.starter-more {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  font: inherit;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
+.starter-more:hover {
+  background: var(--hover);
+}
+.starter-more-chevron {
+  transition: transform var(--motion-fast);
+}
+.starter-more-chevron--up {
+  transform: rotate(180deg);
+}
+@media (min-width: 721px) {
+  .starter-more {
+    display: none;
+  }
+}
 @media (max-width: 720px) {
-  .hero-cards {
+  .starter-levels,
+  .starter-columns {
     grid-template-columns: 1fr;
   }
-  .hero-eyebrow {
-    font-size: var(--text-caption-size);
-    line-height: var(--text-caption-line);
-    padding: 5px 11px;
+  .starter-question--wide {
+    display: none;
   }
 }
 .es-eyebrow {
@@ -10783,7 +11064,35 @@ async function send() {
   }
 }
 .message-row--user {
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
+}
+/* Edit under the latest question: a quiet text button. */
+.question-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast);
+}
+.question-edit:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.question-edit:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .message-row--ai {
   justify-content: flex-start;
@@ -10822,9 +11131,16 @@ async function send() {
   cursor: pointer;
   font-weight: 500;
 }
+/* What the change does in plain words, derived from the exact request below. */
+.change-review .change-review-summary {
+  margin: 12px 0 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 .change-review-target {
   margin: 12px 0;
   overflow-wrap: anywhere;
+  color: var(--text-muted);
 }
 .change-review pre {
   max-height: 240px;
@@ -11064,7 +11380,7 @@ async function send() {
   line-height: var(--text-caption-line);
   background: var(--tint);
   padding: 0 4px;
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 .reasoning-md :deep(pre) {
   font-style: normal;
@@ -11106,8 +11422,8 @@ async function send() {
 .message-text :deep(code) {
   background: var(--tint);
   padding: 2px 6px;
-  border-radius: 6px;
-  font-size: 0.9em;
+  border-radius: var(--radius);
+  font-size: inherit;
   font-family: inherit;
 }
 .message-text :deep(pre code) {
@@ -11330,7 +11646,7 @@ async function send() {
   height: 14px;
   margin: 0 8px -2px -20px;
   border: 1.5px solid var(--text-muted);
-  border-radius: 6px;
+  border-radius: var(--radius);
   vertical-align: baseline;
 }
 .message-text :deep(li:has(> .md-task)) {
@@ -11354,7 +11670,7 @@ async function send() {
 .message-text :deep(a) {
   color: var(--accent);
   text-decoration: underline;
-  text-decoration-color: rgba(54, 120, 232, 0.35);
+  text-decoration-color: rgba(0, 120, 212, 0.35);
   text-underline-offset: 2px;
 }
 .message-text :deep(a:hover) {
@@ -11402,6 +11718,14 @@ async function send() {
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
+}
+/* The AI notice under the composer (Microsoft's AI Notice pattern). */
+.input-notice {
+  margin: 0;
+  text-align: center;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
 }
 /* ── Job conversation context bar (above the composer) ── */
 .job-context-bar {
@@ -11476,7 +11800,7 @@ async function send() {
 .input-wrapper:focus-within {
   border-color: var(--accent);
   box-shadow:
-    0 0 0 3px rgba(54, 120, 232, 0.12);
+    0 0 0 3px rgba(0, 120, 212, 0.12);
 }
 .input-wrapper--disabled {
   background: var(--tint);
@@ -11558,9 +11882,7 @@ async function send() {
   align-items: center;
   gap: 8px;
 }
-.input-action-btn--clear:hover:not(:disabled) {
-  color: #b42318;
-}
+
 /* Narrow composers keep the actions as icons; the label stays the button's
    accessible name. */
 @media (max-width: 600px) {
@@ -11593,6 +11915,7 @@ async function send() {
   transition:
     background var(--motion-fast),
     color var(--motion-fast),
+    filter var(--motion-fast),
     transform var(--motion-fast);
 }
 .action-btn:active {
@@ -11602,24 +11925,19 @@ async function send() {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.action-btn--active {
-  background: var(--accent);
+.action-btn--active,
+.action-btn--stop {
+  background: var(--brand-gradient);
   color: var(--surface);
 }
-.action-btn--active:hover {
-  background: var(--accent-hover);
+.action-btn--active:hover,
+.action-btn--stop:hover {
+  filter: brightness(0.9);
 }
 .action-btn--disabled {
   background: var(--border);
-  color: #9e9e9e;
-  cursor: default;
-}
-.action-btn--stop {
-  background: var(--accent);
   color: var(--surface);
-}
-.action-btn--stop:hover {
-  background: var(--accent-hover);
+  cursor: default;
 }
 
 /* ── Tools sidebar (right) ── */
@@ -11640,16 +11958,42 @@ async function send() {
   width: 300px;
   visibility: visible;
 }
+.tools-sidebar-backdrop {
+  display: none;
+}
 .chat-view--hidden .tools-sidebar {
   transition: none;
 }
 .tools-sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   min-height: 48px;
-  padding: 6px 12px;
+  padding: 6px 8px 6px 12px;
   flex-shrink: 0; /* headers stay pinned while the pane's scroll area shrinks */
+}
+.tools-sidebar-header .st-count {
+  margin-left: auto;
+}
+.tools-sidebar-close {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast);
+}
+.tools-sidebar-close:hover {
+  background: var(--hover);
+  color: var(--ink);
 }
 .tools-sidebar-header-text {
   display: flex;
@@ -11807,33 +12151,8 @@ async function send() {
   padding: 4px 8px 8px;
 }
 .sidebar .sessions-scroll,
-.sidebar .jobs-scroll,
-.tools-sidebar-nav .sessions-scroll,
-.tools-sidebar-nav .jobs-scroll {
+.sidebar .jobs-scroll {
   padding: 2px 0 8px;
-}
-/* Chats + Scheduled jobs in the right rail: same rows as the left menu. When
-   Agent execution is also showing, the lists share the rail (up to 55%) and
-   scroll on their own so the agent pane keeps its room. */
-.tools-sidebar-nav {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0 0 8px;
-  scrollbar-width: thin;
-}
-.tools-sidebar-nav--split {
-  flex: 0 1 auto;
-  max-height: 55%;
-}
-.tools-sidebar-nav:not(:has(.sidebar-category)) {
-  display: none;
-}
-.tools-sidebar-nav .sidebar-category--border {
-  margin-top: 4px;
-}
-.tools-sidebar-nav:has(.sidebar-category) + .tools-sidebar-pane--agent {
-  border-top: 1px solid var(--border);
 }
 /* ── Scheduled jobs pane ── */
 .tools-sidebar-pane--jobs {
@@ -11947,11 +12266,11 @@ async function send() {
 @keyframes job-breathe {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(54, 120, 232, 0.45);
+    box-shadow: 0 0 0 0 rgba(0, 120, 212, 0.45);
     opacity: 1;
   }
   50% {
-    box-shadow: 0 0 0 5px rgba(54, 120, 232, 0);
+    box-shadow: 0 0 0 5px rgba(0, 120, 212, 0);
     opacity: 0.55;
   }
 }
@@ -11998,96 +12317,70 @@ async function send() {
 .job-runnow-hint {
   color: var(--text-muted);
 }
-.job-row-btn {
-  flex: 0 0 auto;
-  border: none;
-  background: none;
-  font-size: var(--text-caption-size);
-  line-height: 1;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius);
-  transition: background 0.12s ease;
-}
-.job-row-btn:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-.job-row-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-/* ── Job row actions — a hover OVERLAY on the right edge, not layout: the
-   buttons used to permanently reserve ~120px of a ~225px row (opacity-0 but
-   still in flow), squeezing the title + meta to a third of the row. Now the
-   text owns the full width; actions fade in over the right edge on
-   hover/focus with a gradient backdrop so covered text reads as intentional. ── */
+/* Job row actions: one "⋯" button; its menu renders at the page root. */
 .job-actions {
-  position: absolute;
-  top: 1px;
-  bottom: 1px;
-  right: 1px;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 0 6px 0 22px;
-  border-radius: 0 var(--radius) var(--radius) 0;
-  background: linear-gradient(
-    to right,
-    rgba(245, 246, 247, 0),
-    var(--job-row-bg, var(--tint)) 24px
-  );
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
 }
-.session-row.job-row:hover .job-actions,
-.session-row.job-row:focus-within .job-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-.session-row--current.job-row {
-  --job-row-bg: var(--selected);
-}
-.job-actions .session-row-delete {
-  opacity: 1; /* container controls reveal — no double fade */
-}
-/* ── Schedule on/off switch — replaces the ambiguous ⏸/⟳ icon (▶ next to ⏸
-   read as contradictory transport controls; a switch reads as "schedule
-   armed: yes/no"). Always visible on a PAUSED row (it's the state
-   indicator); hover-revealed on armed rows like the other actions. ── */
-.job-switch {
-  flex: 0 0 auto;
-  width: 26px;
-  height: 15px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  background: var(--selected);
-  padding: 0;
-  position: relative;
+.job-menu-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
   cursor: pointer;
   transition:
     background var(--motion-fast),
-    border-color var(--motion-fast);
+    color var(--motion-fast);
 }
-.job-switch--on {
-  background: var(--accent);
-  border-color: var(--accent);
+.job-menu-btn:hover,
+.job-menu-btn[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--ink);
 }
-.job-switch-knob {
-  position: absolute;
-  top: 1px;
-  left: 1px;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
+.job-menu {
+  position: fixed;
+  z-index: 400;
+  width: 176px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  transition: transform 0.15s ease;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-family: var(--font-sans);
 }
-.job-switch--on .job-switch-knob {
-  transform: translateX(11px);
+.job-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.job-menu-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+.job-menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.job-menu-item--danger {
+  color: var(--danger);
 }
 .job-form {
   padding: 10px 12px;
@@ -12353,6 +12646,36 @@ async function send() {
 .job-modal .job-form-create:hover:not(:disabled) {
   background: var(--accent-hover);
 }
+/* Chat list: a search box once the list is long, and date-group labels. */
+.chat-search {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 4px 12px 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font: inherit;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  color: var(--ink);
+}
+.chat-search::placeholder {
+  color: var(--text-muted);
+}
+.chat-search-empty {
+  margin: 4px 24px;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
+}
+.session-group-label {
+  padding: 10px 24px 2px;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 500;
+  color: var(--text-muted);
+}
 .session-row {
   display: flex;
   align-items: center;
@@ -12433,12 +12756,11 @@ async function send() {
     color 0.12s;
 }
 .session-row-delete--conversation {
-  width: auto;
-  min-width: 42px;
-  height: 24px;
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  font-weight: 500;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .session-row:hover .session-row-delete {
   opacity: 1;
@@ -12452,7 +12774,7 @@ async function send() {
 }
 .session-row-delete:disabled {
   cursor: not-allowed;
-  color: #c8c6c4;
+  opacity: 0.4;
 }
 @media (hover: none), (pointer: coarse) {
   .session-row-delete {
@@ -12692,7 +13014,7 @@ async function send() {
 .st-cooler-url code {
   background: var(--tint);
   padding: 2px 4px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-family: inherit;
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
@@ -12702,10 +13024,10 @@ async function send() {
 }
 @keyframes cool-sweep {
   0% {
-    box-shadow: inset 0 0 0 0 rgba(54, 120, 232, 0.18);
+    box-shadow: inset 0 0 0 0 rgba(0, 120, 212, 0.18);
   }
   100% {
-    box-shadow: inset 0 0 0 999px rgba(54, 120, 232, 0);
+    box-shadow: inset 0 0 0 999px rgba(0, 120, 212, 0);
   }
 }
 @keyframes sidebar-row-enter {
@@ -12947,7 +13269,7 @@ async function send() {
 .auth-overlay-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid rgba(54, 120, 232, 0.15);
+  border: 3px solid rgba(0, 120, 212, 0.15);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: auth-spin 0.7s linear infinite;
@@ -13401,6 +13723,152 @@ async function send() {
   transform: none;
 }
 
+/* Maturity score card inside the answer that scored it. */
+.score-card {
+  margin: 0 0 12px;
+  padding: 12px 16px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.score-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.score-card-title {
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 500;
+  color: var(--ink);
+}
+.score-card .assessment-summary {
+  margin-top: 4px;
+  padding: 0;
+}
+.score-card .assessment-row {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+/* Quiet actions under the latest answer: a deck or a script from it. */
+.answer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.answer-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast);
+}
+.answer-action:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.answer-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.answer-action--icon {
+  padding: 6px 8px;
+}
+.answer-action[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Job row "⋯": revealed on hover or focus, always on touch screens. */
+.job-row .job-menu-btn {
+  opacity: 0;
+}
+.job-row:hover .job-menu-btn,
+.job-row:focus-within .job-menu-btn,
+.job-row .job-menu-btn[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (hover: none), (pointer: coarse) {
+  .job-row .job-menu-btn {
+    opacity: 1;
+  }
+}
+
+/* Account footer: the subscription list. */
+.azure-connect {
+  display: flex;
+  flex-direction: column;
+}
+.footer-subscriptions {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.footer-subscriptions .sidebar-sub {
+  padding: 8px 12px;
+}
+.footer-subscriptions .sidebar-sub:last-child {
+  border-bottom: none;
+}
+
+/* Navigation prompt groups: one row per group, its questions below. */
+.prompt-group-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: calc(100% - 24px);
+  min-height: 40px;
+  margin: 1px 12px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
+.prompt-group-toggle:hover {
+  background: var(--hover);
+}
+.prompt-group-label {
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  color: var(--ink);
+}
+.prompt-group-subtitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
+}
+.prompt-group-toggle .collapse-chevron {
+  margin-left: auto;
+  align-self: center;
+  color: var(--text-muted);
+}
+.prompt-group .sidebar-question {
+  padding-left: 24px;
+}
+
 /* ── Mobile ── */
 .mobile-auth-bar {
   display: none;
@@ -13509,7 +13977,7 @@ async function send() {
     width: 80vw;
     max-width: 320px;
     z-index: 150;
-    background: var(--tint);
+    background: var(--surface);
     box-shadow: none;
     visibility: hidden;
     opacity: 1;
@@ -13543,6 +14011,27 @@ async function send() {
   }
   .tools-sidebar {
     display: none;
+  }
+  /* Opened from an answer's call count: the rail as a sheet over the chat. */
+  .tools-sidebar.tools-sidebar--overlay {
+    display: flex;
+    position: fixed;
+    top: var(--portal-header-height);
+    right: 0;
+    bottom: 0;
+    width: min(92vw, 360px);
+    z-index: 160;
+    visibility: visible;
+    box-shadow: var(--shadow);
+  }
+  .tools-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: var(--portal-header-height) 0 0;
+    z-index: 155;
+    border: 0;
+    background: var(--backdrop);
+    cursor: pointer;
   }
   .tool-popover {
     display: none;
@@ -13583,9 +14072,6 @@ async function send() {
     padding: 8px 12px;
     max-width: 100%;
   }
-  .hero-tagline {
-    margin-bottom: 18px;
-  }
   .input-wrapper {
     border-radius: var(--radius-lg);
   }
@@ -13617,7 +14103,6 @@ async function send() {
   }
 }
 .chat-view--hidden .message-row,
-.chat-view--hidden .hero-card,
 .chat-view--hidden .session-row,
 .chat-view--hidden .collapse-body,
 .chat-view--hidden .st-row,
@@ -13627,7 +14112,6 @@ async function send() {
 }
 @media (prefers-reduced-motion: reduce) {
   .message-row,
-  .hero-card,
   .session-row,
   .collapse-body,
   .collapse-chevron,

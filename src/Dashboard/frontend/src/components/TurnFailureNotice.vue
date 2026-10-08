@@ -31,7 +31,7 @@ defineEmits(["edit"]);
   width: 100%;
   max-width: 756px;
   padding: 16px;
-  border: 1px solid rgba(209, 52, 56, 0.22);
+  border: 1px solid var(--danger-border);
   border-left: 3px solid var(--danger);
   border-radius: var(--radius);
   background: var(--danger-soft);

@@ -89,7 +89,9 @@ async function arrange(
     if (path === "/api/chat/stop" && options.stopTurn)
       return options.stopTurn(route);
     if (path === "/api/jobs")
-      return route.fulfill({ json: { jobs: [], entraRequired: true } });
+      return route.fulfill({
+        json: { jobs: options.jobs || [], entraRequired: !options.jobs },
+      });
     if (path.startsWith("/api/download/"))
       return route.fulfill({
         contentType:
@@ -130,7 +132,7 @@ test("top bar links to the source repository without a personal contact link", a
   expect(errors).toEqual([]);
 });
 
-test("navigation exposes one New chat and signed-out pricing sections", async ({
+test("navigation exposes one New chat and the start page offers the starter questions", async ({
   page,
 }, testInfo) => {
   const { requests, errors } = await arrange(page, [
@@ -153,118 +155,134 @@ test("navigation exposes one New chat and signed-out pricing sections", async ({
     await expect(page.locator(".sidebar-new-chat")).toBeVisible();
   }
 
-  expect(
-    await page
-      .locator('[id^="pricing-section-"][id$="-header"]')
-      .evaluateAll((headers) => headers.map((header) => header.id)),
-  ).toEqual([
-    "pricing-section-ai-governance-header",
-    "pricing-section-ai-pricing-header",
-    "pricing-section-infrastructure-pricing-header",
-  ]);
-  // Signed out, the menu is headings and questions only: no second lines, no
-  // empty chat history and no tenant hint.
-  await expect(page.locator(".sidebar .sidebar-category-subtitle")).toHaveCount(0);
+  // Signed out, the menu is New chat and Connect Azure: no prompt library, no
+  // empty chat history and no tenant box (Switch tenant changes it later).
+  await expect(page.locator("#sidebar-prompts")).toHaveCount(0);
   await expect(page.locator("#sidebar-chat-history")).toHaveCount(0);
-  await expect(page.locator(".tenant-input")).toHaveAttribute(
-    "placeholder",
-    "Tenant ID (optional)",
+  await expect(page.locator(".tenant-input")).toHaveCount(0);
+  await expect(
+    page.locator("#chat-navigation").getByRole("button", { name: "Connect Azure" }),
+  ).toBeVisible();
+  if (testInfo.project.name === "mobile")
+    await page.locator(".portal-burger").click();
+
+  // The start page keeps the brand title and shows each section's five
+  // questions as cards; phones show three, with More showing the rest in place.
+  await expect(page.locator(".hero-title")).toHaveText("Azure FinOps Agent");
+  await expect(page.locator(".starters-heading--section")).toHaveText(
+    pricingSections.map((section) => section.label),
   );
-
-  const governanceSection = page.getByRole("button", {
-    name: /AI governance & security/,
-  });
-  await expect(governanceSection).toHaveAttribute("aria-expanded", "true");
-  await expect(
-    page.locator("#pricing-section-ai-governance-panel .sidebar-question"),
-  ).toHaveText([
-    "How do I find all our AI agents?",
-    "How do we audit what agents do?",
-    "Agent 365, Foundry or API Center?",
-    "Can we allow only approved models?",
-  ]);
-  const findAgents = page.getByRole("button", {
-    name: "How do I find all our AI agents?",
-  });
-  await expect(findAgents).toBeVisible();
-
-  const aiSection = page.getByRole("button", { name: /AI & LLM pricing/ });
-  await expect(aiSection).toHaveAttribute("aria-expanded", "true");
-  await expect(
-    page.locator("#pricing-section-ai-pricing-panel .sidebar-question"),
-  ).toHaveText([
-    "How do we budget and justify AI?",
-    "Who is spending what on AI?",
-    "Can we cap AI spending?",
-    "Why don't costs match my invoice?",
-  ]);
+  const mobile = testInfo.project.name === "mobile";
+  const visibleLabels = (key) =>
+    page
+      .locator(`#starters-${key} .starter-question:visible`)
+      .allTextContents()
+      .then((labels) => labels.map((label) => label.trim()));
+  const shown = mobile ? 3 : 5;
+  for (const section of pricingSections)
+    expect(await visibleLabels(section.key)).toEqual(
+      section.prompts.slice(0, shown).map((p) => p.label),
+    );
+  await expect(page.getByText("Browse all prompts")).toHaveCount(0);
+  await expect(page.locator(".input-notice")).toHaveText(
+    "AI-generated answers can be wrong. Check important figures.",
+  );
   await page.screenshot({
-    path: testInfo.outputPath("navigation-prompt-library.png"),
+    path: testInfo.outputPath("start-page-starters.png"),
     animations: "disabled",
   });
 
-  const infrastructureSection = page.getByRole("button", {
-    name: /Infrastructure pricing/,
-  });
-  await expect(infrastructureSection).toHaveAttribute(
-    "aria-expanded",
-    "false",
+  const more = page.locator(
+    `#starters-${pricingSections[0].key} .starter-more`,
   );
-  await infrastructureSection.click();
-  await expect(infrastructureSection).toHaveAttribute(
-    "aria-expanded",
-    "true",
-  );
-  await expect(
-    page.locator("#pricing-section-infrastructure-pricing-panel .sidebar-question"),
-  ).toHaveText([
-    "What will my 3-tier app cost?",
-    "Which region is cheapest for a VM?",
-    "Which database is cheapest?",
-    "Which storage tier is cheapest?",
-  ]);
+  if (shown < pricingSections[0].prompts.length) {
+    await expect(more).toHaveText("More questions");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await more.click();
+    await expect(more).toHaveText("Fewer questions");
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    expect(await visibleLabels(pricingSections[0].key)).toEqual(
+      pricingSections[0].prompts.map((p) => p.label),
+    );
+    await more.click();
+    await expect(more).toHaveText("More questions");
+    expect((await visibleLabels(pricingSections[0].key)).length).toBe(shown);
+  } else await expect(more).toBeHidden();
 
-  await findAgents.click();
+  await page
+    .locator(`#starters-${pricingSections[0].key} .starter-question`)
+    .first()
+    .click();
   await expect.poll(() => requests.length).toBe(1);
-  expect(firstQuestion.label).toBe("How do I find all our AI agents?");
   expect(requests[0].prompt).toBe(firstQuestion.prompt);
   expect(errors).toEqual([]);
 });
-
-test("signed in, scheduled jobs sit in the right rail (below New chat in the mobile menu) with no empty-state text", async ({
+test("signed in, the navigation lists scheduled jobs, prompts and chats below New chat", async ({
   page,
 }, testInfo) => {
-  const { errors } = await arrange(page, [], { messages: [] }, {
-    azureConnected: true,
-  });
+  const { requests, errors } = await arrange(
+    page,
+    [{ type: "message", content: "Synthetic Crawl answer." }],
+    { messages: [] },
+    {
+      azureConnected: true,
+      jobs: [
+        {
+          id: "synthetic-job",
+          name: "Daily cost digest",
+          enabled: true,
+          lastStatus: "ok",
+          intervalMinutes: 1440,
+          nextRunUtc: "2099-01-01T00:00:00Z",
+        },
+      ],
+    },
+  );
   const mobile = testInfo.project.name === "mobile";
   if (mobile) await page.locator(".portal-burger").click();
+  const navigation = page.locator("#chat-navigation");
 
-  const newJob = page.getByRole("button", { name: "New job" });
+  // Jobs sit directly below New chat on every screen size; the right rail
+  // holds only agent activity, so it stays hidden without tool calls.
+  const newJob = navigation.getByRole("button", { name: "New job" });
   await expect(newJob).toBeVisible();
-  await expect(page.locator(".jobs-header-label")).toHaveText("Scheduled jobs");
-  await expect(page.locator("#sidebar-scheduled-jobs")).toHaveCount(0);
+  await expect(page.locator(".tools-sidebar")).toBeHidden();
   await expect(page.getByText("No jobs yet", { exact: false })).toHaveCount(0);
+  const top = async (locator) => (await locator.boundingBox()).y;
+  const promptsToggle = navigation.getByRole("button", { name: "Prompts" });
+  expect(await top(newJob)).toBeGreaterThan(
+    await top(page.locator(".sidebar-new-chat")),
+  );
+  expect(await top(promptsToggle)).toBeGreaterThan(await top(newJob));
 
-  if (mobile) {
-    const top = async (locator) => (await locator.boundingBox()).y;
-    const newChatTop = await top(page.locator(".sidebar-new-chat"));
-    const jobsTop = await top(newJob);
-    const firstScoreTop = await top(page.locator(".maturity-card").first());
-    expect(jobsTop).toBeGreaterThan(newChatTop);
-    expect(jobsTop).toBeLessThan(firstScoreTop);
-  } else {
-    await expect(page.locator(".tools-sidebar")).toBeVisible();
-    await expect(
-      page.locator(".tools-sidebar").getByRole("button", { name: "New job" }),
-    ).toBeVisible();
-    await expect(
-      page.locator("#chat-navigation").getByRole("button", { name: "New job" }),
-    ).toHaveCount(0);
-  }
+  // One "⋯" menu per job instead of four hover icons.
+  await navigation.getByRole("button", { name: "Actions for Daily cost digest" }).click();
+  const menu = page.getByRole("menu", { name: "Actions for Daily cost digest" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem")).toHaveText(["Run now", "Edit", "Delete"]);
+  await expect(menu.getByRole("menuitemcheckbox")).toHaveText("Pause");
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  // Prompts start open on wide screens and closed in the phone menu.
+  await expect(promptsToggle).toHaveAttribute(
+    "aria-expanded",
+    mobile ? "false" : "true",
+  );
+  if (mobile) await promptsToggle.click();
+  const crawl = navigation.getByRole("button", { name: /^Crawl/ });
+  await expect(crawl).toHaveAttribute("aria-expanded", "false");
+  await crawl.click();
+  await expect(crawl).toHaveAttribute("aria-expanded", "true");
+  await page.screenshot({
+    path: testInfo.outputPath("navigation-signed-in.png"),
+    animations: "disabled",
+  });
+  await navigation.getByRole("button", { name: "Score Crawl maturity" }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].prompt).toContain("Crawl");
   expect(errors).toEqual([]);
 });
-
 test("execution sidebar is empty-chat hidden and opens for tool activity", async ({
   page,
 }, testInfo) => {
@@ -285,13 +303,46 @@ test("execution sidebar is empty-chat hidden and opens for tool activity", async
     { type: "message", content: "Synthetic answer." },
   ]);
   await expect(page.locator(".tools-sidebar")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Agent activity", exact: true })).toHaveCount(0);
   await send(page, "Show my costs");
+  const evidence = page.locator(".answer-evidence");
+  await expect(evidence).toHaveText("1 call");
   if (testInfo.project.name === "desktop") {
     await expect(page.locator(".tools-sidebar")).toBeVisible();
     await expect(page.locator(".tools-sidebar-title")).toHaveText(
-      "Agent execution",
+      "Agent activity",
     );
+    await expect(page.locator(".tools-sidebar-status")).toHaveCount(0);
+    // The rail can be hidden and brought back from the top bar.
+    const toggle = page.getByRole("button", { name: "Agent activity", exact: true });
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Hide agent activity" }).click();
+    await expect(page.locator(".tools-sidebar")).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await toggle.click();
+    await expect(page.locator(".tools-sidebar")).toBeVisible();
+    // An answer's call count also brings back a hidden rail.
+    await page.getByRole("button", { name: "Hide agent activity" }).click();
+    await expect(page.locator(".tools-sidebar")).toBeHidden();
+    await evidence.click();
+    await expect(page.locator(".tools-sidebar")).toBeVisible();
   } else {
+    // Phones have no rail; the answer's call count opens it over the chat.
+    await expect(page.locator(".tools-sidebar")).toBeHidden();
+    await expect(page.getByRole("button", { name: "Agent activity", exact: true })).toHaveCount(0);
+    await evidence.click();
+    const sheet = page.locator(".tools-sidebar--overlay");
+    await expect(sheet).toBeVisible();
+    await expect(sheet.locator(".st-group--open")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Hide agent activity" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".tools-sidebar")).toBeHidden();
+    await expect(evidence).toBeFocused();
+    await evidence.click();
+    // Tapping the dimmed strip beside the sheet closes it too.
+    await page
+      .getByRole("button", { name: "Close agent activity" })
+      .click({ position: { x: 8, y: 200 } });
     await expect(page.locator(".tools-sidebar")).toBeHidden();
   }
   expect(errors).toEqual([]);
@@ -359,54 +410,160 @@ test("conversation deletion stays stable until the server confirms it", async ({
   expect(errors).toEqual([]);
 });
 
-test("clear chat appears after an answer and starts fresh only after the server confirms", async ({
+test("signed in, chats are grouped by day and searchable once the list is long", async ({
   page,
 }, testInfo) => {
-  let deletes = 0;
-  const { errors } = await arrange(
-    page,
-    [{ type: "message", content: "Synthetic answer to clear." }],
-    { messages: [] },
-    {
-      deleteSession: (route) => {
-        deletes++;
-        return deletes === 1
-          ? route.fulfill({
-              status: 409,
-              json: { code: "session_active", error: "synthetic" },
-            })
-          : route.fulfill({ status: 204 });
-      },
-    },
-  );
-  const clear = page.getByRole("button", { name: "Clear chat" });
-  await expect(clear).toHaveCount(0);
-
-  await send(page, "Synthetic question");
-  await expect(page.getByText("Synthetic answer to clear.")).toBeVisible();
-  await expect(clear).toBeVisible();
-  await expect(clear).toBeEnabled();
-
-  await clear.click();
-  await expect(page.locator(".session-notice")).toContainText(
-    "This conversation is still answering",
-  );
-  await expect(page.getByText("Synthetic answer to clear.")).toBeVisible();
-
-  await clear.click();
-  await expect(page.getByText("Synthetic answer to clear.")).toHaveCount(0);
-  await expect(page.locator(".bubble--user")).toHaveCount(0);
-  await expect(page.locator(".hero-title")).toBeVisible();
-  await expect(clear).toHaveCount(0);
-  await expect(page.locator("textarea")).toBeEnabled();
-  await page.screenshot({
-    path: testInfo.outputPath("clear-chat-fresh.png"),
-    animations: "disabled",
+  const now = Date.now();
+  const at = (days) => new Date(now - days * 86400000).toISOString();
+  const sessions = [
+    ["s1", "Why did my VM costs rise?", 0],
+    ["s2", "Cheapest region for a D4s v5", 1],
+    ["s3", "Budget guard setup", 3],
+    ["s4", "Reservation review", 20],
+    ["s5", "Storage tier savings", 25],
+    ["s6", "Tag coverage report", 30],
+  ].map(([id, summary, days]) => ({ id, summary, modified: at(days), started: at(days) }));
+  const { errors } = await arrange(page, [], { messages: [] }, {
+    azureConnected: true,
+    sessions,
+    currentSessionId: "s1",
   });
-  expect(deletes).toBe(2);
+  if (testInfo.project.name === "mobile")
+    await page.locator(".portal-burger").click();
+
+  const history = page.locator("#sidebar-chat-history");
+  await expect(history.locator(".session-group-label")).toHaveText([
+    "Today",
+    "Yesterday",
+    "Previous 7 days",
+    "Older",
+  ]);
+  await expect(history.locator(".session-row-title")).toHaveText(
+    sessions.map((s) => s.summary),
+  );
+  const search = history.getByRole("searchbox", { name: "Search chats" });
+  await search.fill("REGION");
+  await expect(history.locator(".session-row-title")).toHaveText([
+    "Cheapest region for a D4s v5",
+  ]);
+  await expect(history.locator(".session-group-label")).toHaveText(["Yesterday"]);
+  await search.fill("nothing like this");
+  await expect(history.locator(".session-row")).toHaveCount(0);
+  await expect(history.locator(".chat-search-empty")).toHaveText(
+    'No chats match "nothing like this"',
+  );
   expect(errors).toEqual([]);
 });
 
+test("the latest answer offers a deck and a script, and the message box keeps only Attach and Send", async ({
+  page,
+}, testInfo) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  const { requests, errors } = await arrange(page, [
+    { type: "message", content: "Synthetic answer with recommendations." },
+  ]);
+  const actions = page.locator(".answer-actions");
+  await expect(actions).toHaveCount(0);
+  await expect(page.locator(".question-edit")).toHaveCount(0);
+
+  await send(page, "Synthetic question");
+  await expect(page.getByText("Synthetic answer with recommendations.")).toBeVisible();
+  await expect(actions).toHaveCount(1);
+  await expect(actions.getByRole("button")).toHaveText([
+    "Copy",
+    "",
+    "",
+    "Make a deck",
+    "Write a script",
+  ]);
+  const composer = page.locator(".input-area");
+  for (const name of ["Clear chat", "Presentation", "Script"])
+    await expect(composer.getByRole("button", { name })).toHaveCount(0);
+  await expect(composer.getByRole("button", { name: "Attach" })).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("answer-actions.png"),
+    animations: "disabled",
+  });
+
+  // Copy takes the answer as written and confirms it briefly.
+  await actions.getByRole("button", { name: "Copy" }).click();
+  await expect(actions.getByRole("button", { name: "Copied" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "Synthetic answer with recommendations.",
+  );
+
+  // A rating is saved against the question it answers; pressing it again clears it.
+  const good = actions.getByRole("button", { name: "Good answer" });
+  const rated = page.waitForRequest(
+    (request) => request.method() === "POST" && request.url().endsWith(`/api/sessions/${sessionId}/feedback`),
+  );
+  await good.click();
+  expect((await rated).postDataJSON()).toEqual({ turn: 1, rating: "up" });
+  await expect(good).toHaveAttribute("aria-pressed", "true");
+  await expect(actions.getByRole("button", { name: "Poor answer" })).toHaveAttribute("aria-pressed", "false");
+  const cleared = page.waitForRequest(
+    (request) => request.method() === "POST" && request.url().endsWith("/feedback"),
+  );
+  await good.click();
+  expect((await cleared).postDataJSON()).toEqual({ turn: 1, rating: "none" });
+  await expect(good).toHaveAttribute("aria-pressed", "false");
+
+  // Edit puts the latest question back in the message box without sending it.
+  await page.locator(".question-edit").click();
+  await expect(page.locator("textarea")).toHaveValue("Synthetic question");
+  expect(requests).toHaveLength(1);
+  await page.locator("textarea").fill("");
+
+  await actions.getByRole("button", { name: "Write a script" }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1].prompt).toContain("generate an Azure CLI script");
+  // Every answer can be copied and rated; the deck and script follow only the latest.
+  await expect(actions).toHaveCount(2);
+  await expect(actions.first().getByRole("button")).toHaveText(["Copy", "", ""]);
+  await expect(actions.last().getByRole("button")).toHaveText([
+    "Copy",
+    "",
+    "",
+    "Make a deck",
+    "Write a script",
+  ]);
+  await expect(page.locator(".question-edit")).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test("a maturity score appears as a card inside the answer that scored it", async ({
+  page,
+}) => {
+  const scores = [
+    { id: "visibility", label: "Cost visibility", score: 4, detail: "Cost data reviewed monthly." },
+    { id: "tagging", label: "Tagging", score: 2, detail: "Owner tags on 40% of resources." },
+    { id: "budgets", label: "Budgets", score: null, status: "unknown", detail: "Budget reader role missing." },
+  ];
+  const { errors } = await arrange(page, [
+    {
+      type: "tool_start",
+      tool: "ReportMaturityScore",
+      id: "score-call",
+      args: JSON.stringify({ level: "crawl", scores }),
+    },
+    { type: "tool_done", tool: "ReportMaturityScore", id: "score-call", success: true, result: "{}" },
+    { type: "message", content: "Your Crawl maturity is 3 of 5." },
+  ]);
+  await send(page, "Score my Crawl maturity");
+  const card = page.getByRole("region", { name: "Crawl maturity score" });
+  await expect(card).toBeVisible();
+  await expect(card.locator(".assessment-label")).toHaveText([
+    "Cost visibility",
+    "Tagging",
+    "Budgets",
+  ]);
+  await expect(card.getByText("Unknown")).toBeVisible();
+  await expect(card.locator(".score-card-header [aria-label]")).toHaveAttribute(
+    "aria-label",
+    "3 out of 5",
+  );
+  expect(errors).toEqual([]);
+});
 test("execution sidebar groups calls under each question with a summary", async ({
   page,
 }, testInfo) => {
@@ -1941,6 +2098,11 @@ test("approval requires explicit acknowledgement and answers the held call with 
     },
   ]);
   await send(page, "Apply this tag");
+  // A plain-language line derived from the exact request sits above it.
+  await expect(page.locator(".change-review-summary")).toHaveText(
+    "Update tags on with-a-long-name-for-mobile-layout",
+  );
+  await expect(page.locator(".change-review-target")).toHaveText(change.target);
   const approve = page.getByRole("button", {
     name: "Approve change",
     exact: true,

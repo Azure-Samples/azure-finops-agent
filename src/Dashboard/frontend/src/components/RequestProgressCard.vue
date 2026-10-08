@@ -192,7 +192,7 @@ time {
   line-height: var(--text-caption-line);
 }
 .request-progress--stopped {
-  border-color: rgba(191, 135, 0, 0.25);
+  border-color: var(--warning-border);
   background: var(--warning-soft);
 }
 .request-progress--stopped .request-progress-art,
@@ -201,7 +201,7 @@ time {
   color: var(--warning);
 }
 .request-progress--stopped .request-progress-badge {
-  border-color: rgba(191, 135, 0, 0.25);
+  border-color: var(--warning-border);
 }
 .request-progress--stopped * {
   animation: none;

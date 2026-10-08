@@ -16,6 +16,7 @@ namespace AzureFinOps.Dashboard.AI.Runtime;
 [JsonDerivedType(typeof(ApprovalRequestEvent), "approval_request")]
 [JsonDerivedType(typeof(TurnErrorEvent), "error")]
 [JsonDerivedType(typeof(TurnIdleEvent), "idle")]
+[JsonDerivedType(typeof(AnswerFeedbackEvent), "feedback")]
 public abstract record AgentEvent
 {
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
@@ -59,6 +60,12 @@ public sealed record ApprovalDecision(string RequestId, bool Approved);
 public sealed record TurnErrorEvent(string Message, string? Code = null) : AgentEvent;
 
 public sealed record TurnIdleEvent : AgentEvent;
+
+/// <summary>
+/// The owner's rating of the answer to their <paramref name="Turn"/>-th visible question:
+/// "up", "down", or "none" to clear it. The latest rating for a turn wins.
+/// </summary>
+public sealed record AnswerFeedbackEvent(int Turn, string Rating) : AgentEvent;
 
 /// <summary>Listing entry for one locally indexed conversation.</summary>
 public sealed record AgentSessionInfo(string SessionId, DateTimeOffset StartTime, DateTimeOffset ModifiedTime, string? Summary, string WorkingDirectory);
