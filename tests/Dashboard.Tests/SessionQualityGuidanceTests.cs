@@ -113,6 +113,10 @@ public sealed class SessionQualityGuidanceTests
         // A Global Standard answer quoted East US 2 rows, then told the user the rates were region-independent; the judge
         // rejected that unshown claim (live gate run 37756397255).
         Assert.Contains("quote eastus2 rows and name that region as the rows' source, without telling the user the rates apply to other regions", Prompt);
+        // A budget answer gauged unfiltered subscription spend against the budget and called the budget's own currentSpend
+        // "an older snapshot"; the judge rejected the comparison (live gate run 37772538434, attempt 2).
+        Assert.Contains("Its currentSpend and forecastSpend are the service's own measure for the budget's scope, filter and period, so budget-versus-actual answers, risk calls and gauges use them", Prompt);
+        Assert.Contains("never call either figure an older snapshot or a lagging copy of the other", Prompt);
         Assert.Contains("the Retail Prices API lists every priced model and deployment type, and the answer names only the models it returned", withSearch);
         Assert.Contains("so an abbreviation stays an abbreviation and is said to be one", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);
