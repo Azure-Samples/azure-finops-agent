@@ -49,13 +49,12 @@ async function logout() {
 }
 
 :root {
+  /* One font for every piece of text in the app, code included; sizes,
+     weights and colours vary, the family and its width never do. */
   --font-sans:
     "Google Sans Flex", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto,
     Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", SFMono-Regular, Consolas,
-    monospace;
   --font-variation-body: "ROND" 0, "wdth" 92;
-  --font-variation-greeting: "ROND" 100, "wdth" 100;
 
   /* One palette: a white page, one tint for side panels and quiet fills,
      one hover, one selection and one border colour. */
@@ -124,7 +123,11 @@ body {
 button,
 input,
 select,
-textarea {
+textarea,
+code,
+pre,
+kbd,
+samp {
   font-family: inherit;
   font-stretch: inherit;
   font-variation-settings: inherit;

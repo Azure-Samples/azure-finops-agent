@@ -155,7 +155,7 @@ The agent is deliberately minimal: tools are thin, host-enforced pass-throughs a
 ## Frontend invariants
 
 - One visual system, defined only by the tokens in `src/App.vue`. Rules:
-  - **Font:** Google Sans Flex everywhere, using the type tokens: label size for interface text, caption only for secondary details, title for dialog titles, body for answers.
+  - **Font:** Google Sans Flex everywhere, at the body width and variation, including code, chart text (`forceChartFont` overrides any font a chart's options name) and the start-page title; `<pre>`/`<code>` inherit it. Use the type tokens: label size for interface text, caption only for secondary details, title for dialog titles, body for answers.
   - **Background:** one white background for the page, sidebars, rail, dialogs and cards, separated by `--border`.
   - **Tints:** `--hover` and `--selected` for row states; `--tint` only for quiet fills (your message bubble, table headers, code, chips).
   - **Accent:** `--accent` solid for primary actions, `--accent-soft` with an accent border for selections. Secondary buttons are white with a border and ink text.

@@ -807,44 +807,66 @@
                 <AppIcon name="close" size="14" />
               </button>
             </div>
-            <!-- Tenant switcher -->
-            <div class="tenant-switcher" v-if="availableTenants.length > 1">
-              <label
-                class="tenant-switch-label"
+            <!-- Tenant switcher: expands in place exactly like Add scopes below. -->
+            <div class="addons-section" v-if="availableTenants.length > 1">
+              <button
+                class="addons-heading"
+                type="button"
                 @click="showTenantSwitcher = !showTenantSwitcher"
+                :aria-expanded="showTenantSwitcher"
               >
-                <AppIcon name="home" size="16" />
-                Switch tenant ({{ availableTenants.length }})
+                <AppIcon name="home" size="16" aria-hidden="true" />
+                <span class="addons-heading-text">
+                  <span class="addons-title">Switch tenant</span>
+                  <span class="addons-sub"
+                    >· {{ availableTenants.length }} tenants</span
+                  >
+                </span>
                 <AppIcon
                   name="moreDown"
                   size="14"
-                  :class="['tenant-chevron', { open: showTenantSwitcher }]"
+                  class="addons-heading-chevron"
+                  :class="{ open: showTenantSwitcher }"
+                  aria-hidden="true"
                 />
-              </label>
-              <div v-if="showTenantSwitcher" class="tenant-list">
-                <button
-                  v-for="t in availableTenants"
-                  :key="t.tenantId"
-                  class="tenant-list-item"
-                  :class="{ active: t.tenantId === currentTenantId }"
-                  :disabled="t.tenantId === currentTenantId"
-                  @click="switchTenant(t.tenantId)"
-                  :title="t.tenantId"
-                >
-                  <span class="tenant-list-name">{{
-                    t.displayName || t.defaultDomain || t.tenantId
-                  }}</span>
-                  <span
-                    v-if="t.tenantId === currentTenantId"
-                    class="tenant-list-current"
-                    >current</span
+              </button>
+              <div class="addons-body-wrap" :class="{ open: showTenantSwitcher }">
+                <div class="addons-body">
+                  <div
+                    v-for="t in availableTenants"
+                    :key="t.tenantId"
+                    class="scope-row"
+                    :class="{
+                      'scope-row--active': t.tenantId === currentTenantId,
+                    }"
                   >
-                  <span
-                    v-if="t.defaultDomain && t.displayName"
-                    class="tenant-list-domain"
-                    >{{ t.defaultDomain }}</span
-                  >
-                </button>
+                    <button
+                      class="scope-row-summary tenant-row"
+                      type="button"
+                      :disabled="t.tenantId === currentTenantId"
+                      :aria-current="
+                        t.tenantId === currentTenantId ? 'true' : undefined
+                      "
+                      @click="switchTenant(t.tenantId)"
+                      :title="t.tenantId"
+                    >
+                      <span
+                        v-if="t.tenantId === currentTenantId"
+                        class="scope-row-mark"
+                      >
+                        <AppIcon name="check" size="14" />
+                      </span>
+                      <span class="scope-row-title">{{
+                        t.displayName || t.defaultDomain || t.tenantId
+                      }}</span>
+                      <span
+                        v-if="t.defaultDomain && t.displayName"
+                        class="tenant-row-domain"
+                        >{{ t.defaultDomain }}</span
+                      >
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
             <!-- Incremental consent: one row per scope, all delegated, separate Entra ID consent each. -->
@@ -6721,6 +6743,26 @@ function wowAreaGradient(hex) {
   ]);
 }
 
+// Every chart text uses the app font, whatever the chart's own options name: a
+// model-supplied fontFamily or ECharts' sans-serif default would otherwise show
+// a second typeface beside the answer.
+function forceChartFont(option) {
+  if (!option || typeof option !== "object") return;
+  option.textStyle = { ...(option.textStyle || {}), fontFamily: CHART_FONT_FAMILY };
+  const seen = new Set();
+  const visit = (node) => {
+    if (!node || typeof node !== "object" || seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    if ("fontFamily" in node) node.fontFamily = CHART_FONT_FAMILY;
+    Object.values(node).forEach(visit);
+  };
+  visit(option);
+}
+
 // Wow theme overlay applied to every ECharts option just before setOption.
 // Keeps the existing white/Azure-blue look but adds:
 //  - vertical gradient bars
@@ -7149,6 +7191,7 @@ function mountChart(el, chartData) {
       });
       applyResponsiveChartLayout(option, el.clientWidth);
       applyWowTheme(option);
+      forceChartFont(option);
       if (document.hidden) {
         option.animation = false;
         option.animationDuration = 0;
@@ -9542,88 +9585,26 @@ async function send() {
 .azure-disconnect-btn:hover {
   color: var(--danger);
 }
-/* ── Tenant switcher ── */
-.tenant-switcher {
-  margin-top: 0;
-}
-.tenant-switch-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--text-label-size);
-  line-height: var(--text-label-line);
-  color: var(--ink);
-  cursor: pointer;
-  user-select: none;
-  padding: 8px 12px;
-  border-radius: var(--radius);
-  transition: background var(--motion-fast);
-}
-.tenant-switch-label:hover {
-  background: var(--hover);
-}
-.tenant-switch-label .tenant-chevron {
-  margin-left: auto;
-  color: var(--text-muted);
-}
 /* Footer rows share one icon treatment: 16px, muted, before the label. */
-.tenant-switch-label > .app-icon:first-child,
 .addons-heading > .app-icon:first-child {
   flex-shrink: 0;
   color: var(--text-muted);
 }
-.tenant-list {
-  margin-top: 4px;
-  max-height: 160px;
-  overflow-y: auto;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface);
-}
-.tenant-list-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 12px;
-  border: none;
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  font-size: var(--text-label-size);
-  line-height: var(--text-label-line);
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--motion-fast);
-}
-.tenant-list-item:hover:not(.active) {
-  background: var(--hover);
-}
-.tenant-list-item.active {
-  background: var(--selected);
+/* Tenant rows reuse the scope rows; the current tenant carries the check mark. */
+.tenant-row:disabled {
   cursor: default;
 }
-.tenant-list-item + .tenant-list-item {
-  border-top: 1px solid var(--border);
+.tenant-row:disabled:hover {
+  background: transparent;
 }
-.tenant-list-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tenant-list-current {
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  color: var(--accent);
-  font-weight: 500;
+.tenant-row-domain {
   flex-shrink: 0;
-}
-.tenant-list-domain {
+  align-self: center;
+  margin: 0 12px 0 8px;
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
   color: var(--text-muted);
-  flex-shrink: 0;
+  white-space: nowrap;
 }
 /* ── Add-on scopes (delegated, incremental consent) ── */
 .addons-section {
@@ -10273,7 +10254,6 @@ async function send() {
   font-weight: 800;
   line-height: 1.05;
   letter-spacing: -0.035em;
-  font-variation-settings: var(--font-variation-greeting);
   margin: 0 0 0.6rem;
   color: var(--ink);
 }
@@ -11079,7 +11059,7 @@ async function send() {
 }
 .reasoning-md :deep(code) {
   font-style: normal;
-  font-family: var(--font-mono);
+  font-family: inherit;
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
   background: var(--tint);
@@ -11128,7 +11108,7 @@ async function send() {
   padding: 2px 6px;
   border-radius: 6px;
   font-size: 0.9em;
-  font-family: var(--font-mono);
+  font-family: inherit;
 }
 .message-text :deep(pre code) {
   background: none;
@@ -12713,7 +12693,7 @@ async function send() {
   background: var(--tint);
   padding: 2px 4px;
   border-radius: 6px;
-  font-family: var(--font-mono);
+  font-family: inherit;
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
   word-break: break-all;
@@ -12837,7 +12817,7 @@ async function send() {
   border-radius: var(--radius);
   padding: 12px 14px;
   margin: 0;
-  font-family: var(--font-mono);
+  font-family: inherit;
   font-size: var(--text-caption-size);
   font-variant-ligatures: none;
   white-space: pre-wrap;
@@ -13382,7 +13362,7 @@ async function send() {
   background: var(--code-bg);
   color: #d4d4d4;
   font-size: var(--text-caption-size);
-  font-family: var(--font-mono);
+  font-family: inherit;
   line-height: var(--text-caption-line);
   overflow-x: auto;
   max-height: 350px;
