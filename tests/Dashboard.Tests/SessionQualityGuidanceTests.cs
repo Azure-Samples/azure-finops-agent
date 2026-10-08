@@ -110,6 +110,9 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("never search the web or documentation to identify or name models, their availability or deployment types for a pricing question", Prompt);
         // A price answer once added "newer announced" models from release trackers that no returned evidence supported.
         Assert.Contains("a pricing answer names only models the price list returned, never a newer or announced version from search results or memory", Prompt);
+        // A Global Standard answer quoted East US 2 rows, then told the user the rates were region-independent; the judge
+        // rejected that unshown claim (live gate run 37756397255).
+        Assert.Contains("quote eastus2 rows and name that region as the rows' source, without telling the user the rates apply to other regions", Prompt);
         Assert.Contains("the Retail Prices API lists every priced model and deployment type, and the answer names only the models it returned", withSearch);
         Assert.Contains("so an abbreviation stays an abbreviation and is said to be one", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);
