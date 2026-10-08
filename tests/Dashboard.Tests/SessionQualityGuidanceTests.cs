@@ -87,6 +87,8 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("needs no web search at all: start it with QueryAzure", withSearch);
         Assert.Contains("These rules take precedence over any general instruction to browse for current information or to cite web results", withSearch);
         Assert.Contains("QueryAzure, microsoft_docs_search and microsoft_docs_fetch are themselves live web request tools", withSearch);
+        // The host enforces this (WebSearchGuard); the model is told so it plans a needed search for its first response.
+        Assert.Contains("Make any web search in your first response, beside the calls it needs", withSearch);
         Assert.Contains("already satisfies any instruction to use the web for current information, prices or citations", withSearch);
         Assert.Contains("a price it returned this turn is already up to date", withSearch);
         Assert.Contains("so an answer built from them needs no web citation", withSearch);

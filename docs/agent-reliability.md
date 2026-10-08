@@ -71,7 +71,7 @@ Each of these has a regression test or an enforced contract; do not report them 
 - Duplicate exception telemetry for handled transcript faults.
 - Unsupported Microsoft Graph query options and stale Copilot report routes.
 - Mental arithmetic, mixed currencies and mixed report cohorts in answers; totals, shares and rankings now come from `query`.
-- Documentation answers that re-checked Microsoft Learn results with `site:learn.microsoft.com` web searches; once a Learn tool has been called, the turn's later requests no longer offer hosted web search.
+- Late web searches that re-checked evidence an API had just returned (`site:learn.microsoft.com` searches after a Learn read, opening the Retail Prices URL just queried): a turn may start a hosted web search only in its first model response, and none after a Learn call.
 
 ## Known Limitations
 
@@ -80,4 +80,4 @@ Each of these has a regression test or an enforced contract; do not report them 
 - A fresh consent flow needs a signed-in browser in a test tenant; automated fixtures do not prove external consent.
 - No billable ARM mutation is used as a test. Real allocation, inherited policy and role-specific failures need controlled deployment checks.
 - Recognizing and refusing credentials is left to the model; users must not paste secrets. Rotating previously disclosed credentials is an operator action.
-- A hosted web search in the same model response as the first Microsoft Learn call is still possible: `LearnWebSearchGuard` leaves hosted web search out only of the turn's later model requests. In 30 local runs on 2026-10-07, Responses `text.verbosity=low` made no measurable difference (110 against 111 words on average), so it is not sent.
+- A hosted web search in a turn's first model response, beside its first API or Microsoft Learn call, is still possible: `WebSearchGuard` only stops later responses from starting a search or searching after a Learn call. In 30 local runs on 2026-10-07, Responses `text.verbosity=low` made no measurable difference (110 against 111 words on average), so it is not sent.

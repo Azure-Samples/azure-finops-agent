@@ -81,17 +81,45 @@ public sealed class WebSearchCapTests
         {
             Tools = [AIFunctionFactory.Create((string region) => $"price for {region}", "get_price")],
         }));
+        Assert.Contains("web_search", ToolTypes(bodies[0]));
+    }
+
+    // Web search is for information no API returns, which the question shows: a turn that did not search in its first
+    // response gets no web search later, so it cannot re-check prices or pages an API already returned.
+    [Fact]
+    public async Task ALaterRequestOffersWebSearchOnlyToContinueASearchTheFirstResponseStarted()
+    {
+        var bodies = new List<JsonObject>();
+        using (new AzureFinOps.Dashboard.Infrastructure.ToolExecutionContext("synthetic-session", 101, CancellationToken.None))
+            await Agent(bodies, webSearch: true).RunAsync("price?", options: new ChatClientAgentRunOptions(new ChatOptions
+            {
+                Tools = [AIFunctionFactory.Create((string region) => $"price for {region}", "get_price")],
+            }));
+        Assert.Equal(2, bodies.Count);
+        Assert.Contains("web_search", ToolTypes(bodies[0]));
+        Assert.DoesNotContain("web_search", ToolTypes(bodies[1]));
+
+        bodies.Clear();
+        using (var turn = new AzureFinOps.Dashboard.Infrastructure.ToolExecutionContext("synthetic-session", 101, CancellationToken.None))
+        {
+            await Agent(bodies, webSearch: true, searchFirst: true).RunAsync("benchmarks and prices?", options: new ChatClientAgentRunOptions(new ChatOptions
+            {
+                Tools = [AIFunctionFactory.Create((string region) => $"price for {region}", "get_price")],
+            }));
+            Assert.True(turn.WebSearchStarted);
+        }
+        Assert.Equal(2, bodies.Count);
         Assert.All(bodies, body => Assert.Contains("web_search", ToolTypes(body)));
     }
 
     private static List<string> ToolTypes(JsonObject body) =>
         body["tools"]!.AsArray().Select(item => item!["type"]!.GetValue<string>()).ToList();
 
-    private static AIAgent Agent(List<JsonObject> bodies, bool webSearch, string functionName = "get_price")
+    private static AIAgent Agent(List<JsonObject> bodies, bool webSearch, string functionName = "get_price", bool searchFirst = false)
     {
         // The same construction as production: the Foundry project client's agent over its Responses API.
         var project = new AIProjectClient(new Uri("https://account.services.ai.azure.com/api/projects/project"), new FakeCredential(),
-            new AIProjectClientOptions { Transport = new HttpClientPipelineTransport(new HttpClient(new FakeResponses(bodies, functionName))) });
+            new AIProjectClientOptions { Transport = new HttpClientPipelineTransport(new HttpClient(new FakeResponses(bodies, functionName, searchFirst))) });
         return project.AsAIAgent(new ChatClientAgentOptions { ChatOptions = AgentSessionFactory.AgentChatOptions("gpt-6-sol", null, webSearch) },
             clientFactory: AgentSessionFactory.ModelClient);
     }
@@ -105,15 +133,18 @@ public sealed class WebSearchCapTests
             ValueTask.FromResult(GetToken(requestContext, cancellationToken));
     }
 
-    // Answers the first request with a call to the named function and the next with a final message.
-    private sealed class FakeResponses(List<JsonObject> bodies, string functionName) : HttpMessageHandler
+    // Answers the first request with a call to the named function (after a web search when asked) and the next with a final message.
+    private sealed class FakeResponses(List<JsonObject> bodies, string functionName, bool searchFirst) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!.AsObject();
             bodies.Add(body);
+            var search = searchFirst
+                ? """{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"benchmarks"}},"""
+                : "";
             var output = bodies.Count == 1
-                ? $$"""[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"{{functionName}}","arguments":"{\"region\":\"eastus\",\"query\":\"purge protection\"}","status":"completed"}]"""
+                ? $$"""[{{search}}{"type":"function_call","id":"fc_1","call_id":"call_1","name":"{{functionName}}","arguments":"{\"region\":\"eastus\",\"query\":\"purge protection\"}","status":"completed"}]"""
                 : """[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[]}]}]""";
             var json = $$$"""{"id":"resp_{{{bodies.Count}}}","object":"response","created_at":1,"status":"completed","model":"gpt-6-sol","output":{{{output}}},"parallel_tool_calls":true,"tool_choice":"auto","tools":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}""";
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
