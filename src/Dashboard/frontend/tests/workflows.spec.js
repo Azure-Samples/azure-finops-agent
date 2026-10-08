@@ -217,15 +217,23 @@ test("navigation exposes one New chat and the start page offers the starter ques
   expect(requests[0].prompt).toBe(firstQuestion.prompt);
   expect(errors).toEqual([]);
 });
-test("signed in, the navigation lists scheduled jobs, prompts and chats below New chat", async ({
+test("signed in, jobs and chats sit in the right rail and the maturity levels in the navigation", async ({
   page,
 }, testInfo) => {
+  const conversation = {
+    id: "synthetic-chat",
+    summary: "Quarterly cost review",
+    modified: new Date().toISOString(),
+    started: new Date().toISOString(),
+  };
   const { requests, errors } = await arrange(
     page,
     [{ type: "message", content: "Synthetic Crawl answer." }],
     { messages: [] },
     {
       azureConnected: true,
+      sessions: [conversation],
+      currentSessionId: "other-session",
       jobs: [
         {
           id: "synthetic-job",
@@ -239,24 +247,51 @@ test("signed in, the navigation lists scheduled jobs, prompts and chats below Ne
     },
   );
   const mobile = testInfo.project.name === "mobile";
-  if (mobile) await page.locator(".portal-burger").click();
   const navigation = page.locator("#chat-navigation");
+  const rail = page.locator(".tools-sidebar");
 
-  // Jobs sit directly below New chat on every screen size; the right rail
-  // holds only agent activity, so it stays hidden without tool calls.
-  const newJob = navigation.getByRole("button", { name: "New job" });
-  await expect(newJob).toBeVisible();
-  await expect(page.locator(".tools-sidebar")).toBeHidden();
-  await expect(page.getByText("No jobs yet", { exact: false })).toHaveCount(0);
+  // The start page shows the question sections only; the maturity levels live
+  // in the navigation with their stars.
+  await expect(page.locator(".starters-heading--section")).toHaveText(
+    pricingSections.map((section) => section.label),
+  );
+  await expect(page.getByText("Score your FinOps maturity")).toHaveCount(0);
+
+  if (mobile) await page.locator(".portal-burger").click();
+  const levels = navigation.locator(".maturity-card");
+  await expect(levels).toHaveCount(3);
+  await expect(levels.locator(".maturity-card-label")).toHaveText(["Crawl", "Walk", "Run"]);
+  await expect(levels.first().locator(".maturity-card-stars")).toHaveAttribute(
+    "aria-label",
+    "Not scored",
+  );
+
   const top = async (locator) => (await locator.boundingBox()).y;
   const promptsToggle = navigation.getByRole("button", { name: "Prompts" });
-  expect(await top(newJob)).toBeGreaterThan(
-    await top(page.locator(".sidebar-new-chat")),
-  );
-  expect(await top(promptsToggle)).toBeGreaterThan(await top(newJob));
+  const holder = mobile ? navigation : rail;
+  const newJob = holder.getByRole("button", { name: "New job" });
+  const chats = holder.locator("#sidebar-chat-history");
+  await expect(newJob).toBeVisible();
+  await expect(chats.locator(".session-row-title")).toHaveText(["Quarterly cost review"]);
+  await expect(page.getByText("No jobs yet", { exact: false })).toHaveCount(0);
+  if (mobile) {
+    // Phones keep everything in the menu: New chat, jobs, maturity, prompts, chats.
+    await expect(rail).toBeHidden();
+    expect(await top(newJob)).toBeGreaterThan(await top(page.locator(".sidebar-new-chat")));
+    expect(await top(levels.first())).toBeGreaterThan(await top(newJob));
+    expect(await top(promptsToggle)).toBeGreaterThan(await top(levels.last()));
+    expect(await top(chats)).toBeGreaterThan(await top(promptsToggle));
+  } else {
+    // Wide screens: your jobs and chats on the right, things to start on the left.
+    await expect(rail).toBeVisible();
+    await expect(navigation.getByRole("button", { name: "New job" })).toHaveCount(0);
+    await expect(navigation.locator("#sidebar-chat-history")).toHaveCount(0);
+    expect(await top(chats)).toBeGreaterThan(await top(newJob));
+    expect(await top(promptsToggle)).toBeGreaterThan(await top(levels.last()));
+  }
 
   // One "⋯" menu per job instead of four hover icons.
-  await navigation.getByRole("button", { name: "Actions for Daily cost digest" }).click();
+  await holder.getByRole("button", { name: "Actions for Daily cost digest" }).click();
   const menu = page.getByRole("menu", { name: "Actions for Daily cost digest" });
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem")).toHaveText(["Run now", "Edit", "Delete"]);
@@ -270,15 +305,19 @@ test("signed in, the navigation lists scheduled jobs, prompts and chats below Ne
     mobile ? "false" : "true",
   );
   if (mobile) await promptsToggle.click();
-  const crawl = navigation.getByRole("button", { name: /^Crawl/ });
-  await expect(crawl).toHaveAttribute("aria-expanded", "false");
-  await crawl.click();
-  await expect(crawl).toHaveAttribute("aria-expanded", "true");
+  const crawlPrompts = navigation
+    .locator(".prompt-group-toggle")
+    .filter({ hasText: /^Crawl/ });
+  await expect(crawlPrompts).toHaveAttribute("aria-expanded", "false");
+  await crawlPrompts.click();
+  await expect(crawlPrompts).toHaveAttribute("aria-expanded", "true");
   await page.screenshot({
     path: testInfo.outputPath("navigation-signed-in.png"),
     animations: "disabled",
   });
-  await navigation.getByRole("button", { name: "Score Crawl maturity" }).click();
+
+  // A maturity level scores itself with one click.
+  await levels.first().click();
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0].prompt).toContain("Crawl");
   expect(errors).toEqual([]);
@@ -303,7 +342,6 @@ test("execution sidebar is empty-chat hidden and opens for tool activity", async
     { type: "message", content: "Synthetic answer." },
   ]);
   await expect(page.locator(".tools-sidebar")).toBeHidden();
-  await expect(page.getByRole("button", { name: "Agent activity", exact: true })).toHaveCount(0);
   await send(page, "Show my costs");
   const evidence = page.locator(".answer-evidence");
   await expect(evidence).toHaveText("1 call");
@@ -313,19 +351,14 @@ test("execution sidebar is empty-chat hidden and opens for tool activity", async
       "Agent activity",
     );
     await expect(page.locator(".tools-sidebar-status")).toHaveCount(0);
-    // The rail can be hidden and brought back from the top bar.
-    const toggle = page.getByRole("button", { name: "Agent activity", exact: true });
-    await expect(toggle).toHaveAttribute("aria-pressed", "true");
-    await page.getByRole("button", { name: "Hide agent activity" }).click();
-    await expect(page.locator(".tools-sidebar")).toBeHidden();
-    await expect(toggle).toHaveAttribute("aria-pressed", "false");
-    await toggle.click();
-    await expect(page.locator(".tools-sidebar")).toBeVisible();
-    // An answer's call count also brings back a hidden rail.
-    await page.getByRole("button", { name: "Hide agent activity" }).click();
-    await expect(page.locator(".tools-sidebar")).toBeHidden();
+    // The rail stays while it has something to show; there is nothing to hide.
+    await expect(page.getByRole("button", { name: "Hide agent activity" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Agent activity", exact: true })).toHaveCount(0);
+    // An answer's call count opens its question's calls in the rail.
+    await page.locator(".st-group-head").first().click();
+    await expect(page.locator(".st-group--open")).toHaveCount(0);
     await evidence.click();
-    await expect(page.locator(".tools-sidebar")).toBeVisible();
+    await expect(page.locator(".tools-sidebar .st-group--open")).toHaveCount(1);
   } else {
     // Phones have no rail; the answer's call count opens it over the chat.
     await expect(page.locator(".tools-sidebar")).toBeHidden();
@@ -533,7 +566,7 @@ test("the latest answer offers a deck and a script, and the message box keeps on
 
 test("a maturity score appears as a card inside the answer that scored it", async ({
   page,
-}) => {
+}, testInfo) => {
   const scores = [
     { id: "visibility", label: "Cost visibility", score: 4, detail: "Cost data reviewed monthly." },
     { id: "tagging", label: "Tagging", score: 2, detail: "Owner tags on 40% of resources." },
@@ -547,8 +580,9 @@ test("a maturity score appears as a card inside the answer that scored it", asyn
       args: JSON.stringify({ level: "crawl", scores }),
     },
     { type: "tool_done", tool: "ReportMaturityScore", id: "score-call", success: true, result: "{}" },
+    { type: "maturity_score", level: "crawl", scores },
     { type: "message", content: "Your Crawl maturity is 3 of 5." },
-  ]);
+  ], { messages: [] }, { azureConnected: true });
   await send(page, "Score my Crawl maturity");
   const card = page.getByRole("region", { name: "Crawl maturity score" });
   await expect(card).toBeVisible();
@@ -562,6 +596,15 @@ test("a maturity score appears as a card inside the answer that scored it", asyn
     "aria-label",
     "3 out of 5",
   );
+  // The navigation's Crawl row keeps the latest score in view.
+  if (testInfo.project.name === "mobile")
+    await page.locator(".portal-burger").click();
+  const crawl = page.locator("#chat-navigation .maturity-card").first();
+  await expect(crawl.locator(".maturity-card-stars")).toHaveAttribute(
+    "aria-label",
+    "3 out of 5",
+  );
+  await expect(crawl.locator(".maturity-card-cta")).toHaveText("Re-score");
   expect(errors).toEqual([]);
 });
 test("execution sidebar groups calls under each question with a summary", async ({

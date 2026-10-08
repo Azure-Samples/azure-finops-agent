@@ -5,7 +5,7 @@
     @keydown.esc="closeMobileSidebar"
   >
     <!-- Top bar: menu and product name left; build label (preview builds
-         only), agent activity toggle and the source link right. -->
+         only) and the source link right. -->
     <header class="portal-header">
       <div class="portal-header-left">
         <button
@@ -30,17 +30,6 @@
           <span class="portal-build-badge-sep">·</span>
           <span class="portal-build-badge-build">Build {{ buildNumber }}</span>
         </div>
-        <button
-          v-if="showAgentPane && !compactLayout"
-          type="button"
-          class="portal-icon-btn"
-          :aria-pressed="railOpen ? 'true' : 'false'"
-          :title="railOpen ? 'Hide agent activity' : 'Show agent activity'"
-          aria-label="Agent activity"
-          @click="toggleAgentRail"
-        >
-          <AppIcon name="panelRight" size="20" />
-        </button>
         <a
           class="portal-trustline-link portal-icon-btn"
           href="https://github.com/Azure-Samples/azure-finops-agent"
@@ -103,8 +92,10 @@
             <AppIcon name="squarePen" size="19" />
             <span>New chat</span>
           </button>
-          <!-- Scheduled jobs — Entra-only background prompts, directly below
-               New chat on every screen size. -->
+          <!-- Scheduled jobs — Entra-only background prompts. On wide screens
+               they render in the right rail; on compact screens the Teleport
+               is disabled and they stay here, directly below New chat. -->
+          <Teleport to="#rail-jobs-slot" defer :disabled="compactLayout">
           <div
             v-if="azureConnected"
             class="sidebar-category sidebar-category--border sidebar-library-section"
@@ -331,9 +322,135 @@
               </div>
             </div>
           </div>
+          </Teleport>
 
-          <!-- Prompts (signed in): every prompt group, one row each, between
-               the scheduled jobs and the chat history. -->
+          <!-- Maturity levels (signed in): each row scores its level, and its
+               stars keep the latest score in view. -->
+          <template v-if="azureConnected">
+            <div
+              v-for="cat in scoreCategories"
+              :key="'score-' + cat.key"
+              class="maturity-card"
+              :class="{
+                'maturity-card--scored': maturityScores[cat.key],
+                'maturity-card--disabled': streaming,
+              }"
+              role="button"
+              tabindex="0"
+              :title="cat.scorePrompt"
+              @click="!streaming && sendQuestion(cat.scorePrompt)"
+              @keydown.enter="!streaming && sendQuestion(cat.scorePrompt)"
+            >
+              <div class="maturity-card-header">
+                <div class="maturity-card-title">
+                  <span class="maturity-card-label">{{ cat.label }}</span>
+                  <span v-if="cat.subtitle" class="maturity-card-subtitle">{{
+                    cat.subtitle
+                  }}</span>
+                </div>
+                <span v-if="maturityScores[cat.key]" class="maturity-card-cta">
+                  Re-score
+                </span>
+              </div>
+              <div class="maturity-card-body">
+                <span
+                  class="maturity-card-stars"
+                  :class="{ 'maturity-card-stars--empty': !maturityScores[cat.key] }"
+                  :style="{
+                    color: maturityScores[cat.key]
+                      ? starColor(maturityOverall(cat.key))
+                      : 'var(--text-muted)',
+                  }"
+                  :aria-label="
+                    maturityScores[cat.key]
+                      ? `${Math.max(0, Math.min(5, Math.round(maturityOverall(cat.key) || 0)))} out of 5`
+                      : 'Not scored'
+                  "
+                >
+                  <AppIcon
+                    v-for="(star, starIndex) in maturityStarIcons(
+                      maturityScores[cat.key]
+                        ? maturityOverall(cat.key)
+                        : undefined,
+                    )"
+                    :key="`${cat.key}-${starIndex}`"
+                    :name="star"
+                    size="18"
+                  />
+                </span>
+                <AppIcon
+                  v-if="maturityScores[cat.key]"
+                  name="moreDown"
+                  size="16"
+                  class="collapse-chevron maturity-card-chevron"
+                  :class="{
+                    'collapse-chevron--collapsed':
+                      collapsedSections['cm_' + cat.key],
+                  }"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="
+                    collapsedSections['cm_' + cat.key] ? 'Expand' : 'Collapse'
+                  "
+                  @click.stop="toggleSection('cm_' + cat.key)"
+                  @keydown.enter.stop="toggleSection('cm_' + cat.key)"
+                />
+              </div>
+              <!-- Per-dimension breakdown (only after scoring) -->
+              <div
+                v-if="maturityScores[cat.key]"
+                class="collapse-body"
+                :class="{
+                  'collapse-body--collapsed':
+                    collapsedSections['cm_' + cat.key],
+                }"
+              >
+                <div class="assessment-summary">
+                  <div
+                    v-for="sc in maturityScores[cat.key]"
+                    :key="sc.id"
+                    class="assessment-row"
+                  >
+                    <div class="assessment-label">{{ sc.label }}</div>
+                    <div
+                      class="assessment-stars"
+                      :style="{ color: starColor(sc.score) }"
+                    >
+                      <span v-if="sc.status === 'notApplicable'">N/A</span>
+                      <span v-else-if="sc.status === 'unknown'">Unknown</span>
+                      <span v-else class="assessment-star-icons">
+                        <AppIcon
+                          v-for="(star, starIndex) in maturityStarIcons(sc.score)"
+                          :key="`${sc.id}-${starIndex}`"
+                          :name="star"
+                          size="16"
+                        />
+                      </span>
+                    </div>
+                    <button
+                      class="assessment-detail-text"
+                      type="button"
+                      :aria-expanded="
+                        expandedMaturityDetails.has(
+                          maturityDetailKey(cat.key, sc.id),
+                        )
+                          ? 'true'
+                          : 'false'
+                      "
+                      @click.stop="toggleMaturityDetail(cat.key, sc.id)"
+                      @keydown.enter.stop
+                      @keydown.space.stop
+                    >
+                      <span>{{ sc.detail }}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- Prompts (signed in): every prompt group, one row each, below the
+               maturity levels. -->
           <div
             v-if="navigationPromptGroups.length"
             class="sidebar-category sidebar-category--border sidebar-library-section"
@@ -410,7 +527,9 @@
             </div>
           </div>
 
-          <!-- Chats history — shown once there is a conversation. -->
+          <!-- Chats history — shown once there is a conversation; in the right
+               rail on wide screens, here on compact screens. -->
+          <Teleport to="#rail-chats-slot" defer :disabled="compactLayout">
           <div
             v-if="chatSessions.length || sessionDeleteError"
             class="sidebar-category sidebar-category--border sidebar-library-section"
@@ -524,6 +643,7 @@
               </template>
             </div>
           </div>
+          </Teleport>
         </div>
 
         <!-- Bottom section -->
@@ -1070,40 +1190,10 @@
                 <h1 class="hero-title">
                   Azure <span class="hero-title-accent">FinOps</span> Agent
                 </h1>
-                <!-- Starting points: the maturity scores (signed in) and the
-                     most asked questions, each one click from an answer. -->
+                <!-- The most asked questions, each one click from an answer.
+                     Signed in, the maturity levels sit in the navigation with
+                     their scores. -->
                 <div class="starters">
-                  <section
-                    v-if="azureConnected"
-                    class="starters-group"
-                    aria-labelledby="starters-maturity"
-                  >
-                    <h2
-                      id="starters-maturity"
-                      class="starters-heading starters-heading--section"
-                    >
-                      <span class="starters-heading-icon" aria-hidden="true">
-                        <AppIcon name="star" size="18" />
-                      </span>
-                      Score your FinOps maturity
-                    </h2>
-                    <div class="starter-levels">
-                      <button
-                        v-for="cat in scoreCategories"
-                        :key="'score-' + cat.key"
-                        type="button"
-                        class="starter-level"
-                        :disabled="streaming || clearing"
-                        :title="cat.scorePrompt"
-                        @click="sendQuestion(cat.scorePrompt)"
-                      >
-                        <span class="starter-level-label">{{ cat.label }}</span>
-                        <span class="starter-level-subtitle">{{
-                          cat.subtitle
-                        }}</span>
-                      </button>
-                    </div>
-                  </section>
                   <div class="starter-columns">
                     <section
                       v-for="section in startPageSections"
@@ -1977,10 +2067,10 @@
         </div>
       </div>
 
-      <!-- Right rail: Agent activity for the current conversation, shown
-           while it has tool calls; the user can hide it and bring it back
-           from the top bar. On phones it opens over the chat from an
-           answer's call count. -->
+      <!-- Right rail: Scheduled jobs and Chats (teleported in on wide
+           screens), then Agent activity for the current conversation. On
+           phones the rail is hidden unless an answer's call count opens its
+           activity as a sheet over the chat. -->
       <button
         v-if="evidenceOverlayOpen"
         type="button"
@@ -1994,9 +2084,16 @@
           'tools-sidebar--open': railOpen,
           'tools-sidebar--overlay': evidenceOverlayOpen,
         }"
-        aria-label="Agent activity"
+        aria-label="Chats, scheduled jobs and agent activity"
         @keydown.esc="evidenceOverlayOpen && closeAgentRail()"
       >
+        <div
+          class="tools-sidebar-nav"
+          :class="{ 'tools-sidebar-nav--split': showAgentPane }"
+        >
+          <div id="rail-jobs-slot"></div>
+          <div id="rail-chats-slot"></div>
+        </div>
         <div
           v-if="showAgentPane"
           class="tools-sidebar-pane tools-sidebar-pane--agent"
@@ -2014,6 +2111,7 @@
             </div>
             <span class="st-count">{{ allToolCalls.length }}</span>
             <button
+              v-if="evidenceOverlayOpen"
               ref="agentRailCloseButton"
               type="button"
               class="tools-sidebar-close"
@@ -3689,28 +3787,22 @@ const compactLayout = ref(navigationMedia.matches);
 const sidebarVisible = computed(() =>
   compactLayout.value ? mobileSidebarOpen.value : sidebarOpen.value,
 );
-// Right rail: Agent activity only, while the conversation has tool calls or
-// an answer is running. The user can hide it; the top bar brings it back.
+// Right rail: Scheduled jobs and Chats (wide screens) above Agent activity,
+// shown whenever one of them has something to show.
 const showAgentPane = computed(
   () => allToolCalls.value.length > 0 || streaming.value,
 );
-const agentRailHidden = ref(loadPaneCollapsed("agentRail"));
 const railOpen = computed(
-  () => showAgentPane.value && !agentRailHidden.value,
+  () =>
+    showAgentPane.value ||
+    azureConnected.value ||
+    chatSessions.value.length > 0 ||
+    !!sessionDeleteError.value,
 );
-function toggleAgentRail() {
-  agentRailHidden.value = !agentRailHidden.value;
-  try {
-    localStorage.setItem(
-      "finops.paneCollapsed.agentRail",
-      agentRailHidden.value ? "1" : "0",
-    );
-  } catch {}
-}
 
-// An answer's call count opens Agent activity at its question: the rail on
-// wide screens, an overlay on phones, where the rail is otherwise hidden.
-// Escape, the backdrop or the close button dismisses the overlay and returns
+// An answer's call count opens Agent activity at its question: in the rail on
+// wide screens, as a sheet over the chat on phones, where the rail is hidden.
+// Escape, the backdrop or the close button dismisses the sheet and returns
 // focus to the count that opened it.
 const evidenceOverlay = ref(false);
 const evidenceOverlayOpen = computed(
@@ -3723,13 +3815,10 @@ watch(compactLayout, (compact) => {
 });
 
 function closeAgentRail() {
-  if (evidenceOverlayOpen.value) {
-    evidenceOverlay.value = false;
-    evidenceTrigger?.focus?.();
-    evidenceTrigger = null;
-    return;
-  }
-  toggleAgentRail();
+  if (!evidenceOverlayOpen.value) return;
+  evidenceOverlay.value = false;
+  evidenceTrigger?.focus?.();
+  evidenceTrigger = null;
 }
 
 // The calls behind an answer are its question's group; only the last message
@@ -3749,7 +3838,7 @@ async function openEvidence(index, event) {
   if (compactLayout.value) {
     evidenceTrigger = event?.currentTarget || null;
     evidenceOverlay.value = true;
-  } else if (agentRailHidden.value) toggleAgentRail();
+  }
   await nextTick();
   document
     .querySelector(`.tools-sidebar [data-group-key="${group.key}"]`)
@@ -3791,9 +3880,14 @@ function closeJobMenuOnOutsideClick() {
   if (openJobMenuId.value) openJobMenuId.value = null;
 }
 function closeJobMenuOnNavigationScroll(event) {
+  // The job list scrolls in the navigation on phones and in the rail on wide
+  // screens; either way the open menu would no longer sit at its row.
+  const target = event.target;
   if (
     openJobMenuId.value &&
-    document.getElementById("chat-navigation")?.contains(event.target)
+    target instanceof Node &&
+    (document.getElementById("chat-navigation")?.contains(target) ||
+      document.querySelector(".tools-sidebar")?.contains(target))
   )
     openJobMenuId.value = null;
 }
@@ -9123,8 +9217,7 @@ async function send() {
   cursor: pointer;
   transition: background var(--motion-fast);
 }
-.portal-icon-btn:hover,
-.portal-icon-btn[aria-pressed="true"] {
+.portal-icon-btn:hover {
   background: var(--on-brand-hover);
 }
 @media (max-width: 520px) {
@@ -9451,11 +9544,97 @@ async function send() {
   box-shadow: none;
 }
 
+/* ── Maturity levels (Crawl / Walk / Run): navigation rows with stars ── */
+.maturity-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 1px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--motion-fast);
+  user-select: none;
+}
+.maturity-card:hover:not(.maturity-card--disabled) {
+  background: var(--hover);
+}
+.maturity-card:focus-visible,
+.maturity-card-chevron:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.maturity-card--disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.maturity-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.maturity-card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.maturity-card-label {
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 500;
+  color: var(--ink);
+}
+.maturity-card-subtitle {
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.maturity-card-cta {
+  flex-shrink: 0;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.maturity-card:hover:not(.maturity-card--disabled) .maturity-card-cta {
+  color: var(--ink);
+}
+.maturity-card-body {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+}
 .maturity-card-stars {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   line-height: 1;
+}
+/* Not scored yet: outline stars, quieter than a score. */
+.maturity-card-stars--empty {
+  opacity: 0.45;
+}
+.maturity-card-chevron {
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius);
+  transition:
+    transform var(--motion-fast),
+    background var(--motion-fast),
+    color var(--motion-fast);
+}
+.maturity-card-chevron:hover {
+  background: var(--hover);
+  color: var(--ink);
 }
 
 .sidebar-question--locked {
@@ -10489,17 +10668,11 @@ async function send() {
   background: var(--accent-soft);
   color: var(--accent);
 }
-.starter-levels {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
 /* Starter cards follow Microsoft's Copilot prompt starter (Fluent AI
    PromptStarter, compact layout): a white card with a thin border, 12 px
    corners and semibold text that lifts under the pointer with Fluent's
    shadow16 and a 3% scale on its 200 ms decelerate curve. Nothing moves
    while idle. */
-.starter-level,
 .starter-question {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -10512,43 +10685,21 @@ async function send() {
     transform var(--motion-lift),
     box-shadow var(--motion-lift);
 }
-.starter-level:hover:not(:disabled),
 .starter-question:hover:not(:disabled) {
   box-shadow: var(--shadow-raised);
   transform: scale(1.03);
 }
-.starter-level:active:not(:disabled),
 .starter-question:active:not(:disabled) {
   box-shadow: var(--shadow-pressed);
 }
 @media (prefers-reduced-motion: reduce) {
-  .starter-level:hover:not(:disabled),
   .starter-question:hover:not(:disabled) {
     transform: none;
   }
 }
-.starter-level:disabled,
 .starter-question:disabled {
   opacity: 0.45;
   cursor: default;
-}
-.starter-level {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  min-width: 0;
-  padding: 12px;
-}
-.starter-level-label {
-  font-size: var(--text-body-size);
-  line-height: var(--text-body-line);
-  font-weight: 600;
-}
-.starter-level-subtitle {
-  font-size: var(--text-caption-size);
-  line-height: var(--text-caption-line);
-  color: var(--text-muted);
 }
 .starter-columns {
   display: grid;
@@ -10596,7 +10747,6 @@ async function send() {
   }
 }
 @media (max-width: 720px) {
-  .starter-levels,
   .starter-columns {
     grid-template-columns: 1fr;
   }
@@ -12151,8 +12301,33 @@ async function send() {
   padding: 4px 8px 8px;
 }
 .sidebar .sessions-scroll,
-.sidebar .jobs-scroll {
+.sidebar .jobs-scroll,
+.tools-sidebar-nav .sessions-scroll,
+.tools-sidebar-nav .jobs-scroll {
   padding: 2px 0 8px;
+}
+/* Chats + Scheduled jobs in the right rail: same rows as the left menu. When
+   Agent activity is also showing, the lists share the rail (up to 55%) and
+   scroll on their own so the activity keeps its room. */
+.tools-sidebar-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0 8px;
+  scrollbar-width: thin;
+}
+.tools-sidebar-nav--split {
+  flex: 0 1 auto;
+  max-height: 55%;
+}
+.tools-sidebar-nav:not(:has(.sidebar-category)) {
+  display: none;
+}
+.tools-sidebar-nav .sidebar-category--border {
+  margin-top: 4px;
+}
+.tools-sidebar-nav:has(.sidebar-category) + .tools-sidebar-pane--agent {
+  border-top: 1px solid var(--border);
 }
 /* ── Scheduled jobs pane ── */
 .tools-sidebar-pane--jobs {
@@ -13139,7 +13314,7 @@ async function send() {
   border-radius: var(--radius);
   padding: 12px 14px;
   margin: 0;
-  font-family: inherit;
+  font-family: var(--font-mono);
   font-size: var(--text-caption-size);
   font-variant-ligatures: none;
   white-space: pre-wrap;
@@ -13684,7 +13859,7 @@ async function send() {
   background: var(--code-bg);
   color: #d4d4d4;
   font-size: var(--text-caption-size);
-  font-family: inherit;
+  font-family: var(--font-mono);
   line-height: var(--text-caption-line);
   overflow-x: auto;
   max-height: 350px;

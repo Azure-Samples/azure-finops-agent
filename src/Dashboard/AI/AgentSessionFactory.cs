@@ -313,14 +313,47 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         _telemetry.UserTools.GetOrAdd(userId, uid =>
             BuildTools(uid, _telemetry.UserTokens.GetOrAdd(uid, id => new UserTokens { UserId = id })));
 
+    /// <summary>What one turn can use beyond the tools every turn gets.</summary>
+    /// <param name="AzureConnected">The owner holds an Azure Resource Manager token.</param>
+    /// <param name="Scheduled">A scheduled job run, which must report its outcome.</param>
+    /// <param name="DataUploads">The conversation has uploaded data files (images go to the model directly).</param>
+    internal readonly record struct TurnScope(bool AzureConnected, bool Scheduled, bool DataUploads);
+
     /// <summary>
-    /// Run options for one turn: the owner's tools plus Microsoft Learn's documentation tools when connected, and low
-    /// reasoning effort for greetings.
+    /// Tools that only work with the owner's Azure connection: without one they can only answer "connect Azure",
+    /// which the turn's context already says. Every model call sends the definitions of the tools it is given (about
+    /// 27,000 tokens in all, and a larger input makes every call slower), so a turn gets only the tools it can use.
     /// </summary>
-    internal ChatClientAgentRunOptions RunOptions(long userId, bool lightweight, IReadOnlyList<AITool>? documentationTools = null) =>
+    internal static readonly IReadOnlySet<string> AzureConnectedTools = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "ReportMaturityScore", "GetScoreHistory", "GenerateMaturityReport", "ApplyAzureChange",
+        "RecordSavingsAction", "UpdateSavingsAction", "GetSavingsLedger", "PublishFAQ",
+    };
+
+    internal static IEnumerable<AITool> ToolsFor(IEnumerable<AITool> tools, TurnScope scope) =>
+        tools.Where(tool => tool.Name switch
+        {
+            // ReportJobOutcome refuses outside a scheduled run, and only data uploads need the file tool.
+            "ReportJobOutcome" => scope.Scheduled,
+            "QueryUploadedFile" => scope.DataUploads,
+            var name when AzureConnectedTools.Contains(name) => scope.AzureConnected,
+            _ => true,
+        });
+
+    /// <summary>The scope of the owner's next turn in one conversation.</summary>
+    internal TurnScope ScopeFor(long userId, string sessionId) => new(
+        _telemetry.UserTokens.TryGetValue(userId, out var tokens) && !string.IsNullOrEmpty(tokens.AzureToken),
+        TurnExecution.Active.TryGetValue(sessionId, out var turn) && turn.UserId == userId && turn.IsScheduled,
+        UploadedFileTools.ListForUser(userId, sessionId).Any(upload => upload.Kind != "image"));
+
+    /// <summary>
+    /// Run options for one turn: the owner's tools the turn can use (all of them without a scope) plus Microsoft
+    /// Learn's documentation tools when connected, and low reasoning effort for greetings.
+    /// </summary>
+    internal ChatClientAgentRunOptions RunOptions(long userId, bool lightweight, IReadOnlyList<AITool>? documentationTools = null, TurnScope? scope = null) =>
         new(new ChatOptions
         {
-            Tools = [.. GetOrCreateUserTools(userId), .. documentationTools ?? []],
+            Tools = [.. scope is { } turn ? ToolsFor(GetOrCreateUserTools(userId), turn) : GetOrCreateUserTools(userId), .. documentationTools ?? []],
             Reasoning = lightweight && _reasoning ? new ReasoningOptions { Effort = ReasoningEffort.Low, Output = ReasoningOutput.Summary } : null,
         });
 

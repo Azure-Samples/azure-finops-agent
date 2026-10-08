@@ -49,12 +49,19 @@ async function logout() {
 }
 
 :root {
-  /* One font for every piece of text in the app, code included; sizes,
-     weights and colours vary, the family and its width never do. */
+  /* One font for every piece of text in the app; sizes, weights and colours
+     vary, the family and its width never do. The one exception is a code
+     window (a block of code, a script, a request body or tool details), which
+     uses the monospace face so columns and indentation line up. System
+     monospace fonts need no download, which the same-origin font policy
+     requires. */
   --font-sans:
     "Google Sans Flex", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto,
     Helvetica, Arial, sans-serif;
   --font-variation-body: "ROND" 0, "wdth" 92;
+  --font-mono:
+    ui-monospace, "Cascadia Mono", "Cascadia Code", "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
 
   /* One palette: a white page, one tint for side panels and quiet fills,
      one hover, one selection and one border colour. */
@@ -150,12 +157,19 @@ input,
 select,
 textarea,
 code,
-pre,
 kbd,
 samp {
   font-family: inherit;
   font-stretch: inherit;
   font-variation-settings: inherit;
+}
+
+/* Code windows: the one place with its own font. Code inside them inherits it;
+   inline code in a sentence keeps the UI font. */
+pre {
+  font-family: var(--font-mono);
+  font-stretch: normal;
+  font-variation-settings: normal;
 }
 
 .app {

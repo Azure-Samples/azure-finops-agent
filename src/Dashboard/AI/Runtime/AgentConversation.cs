@@ -393,7 +393,8 @@ public sealed class AgentConversation : IAsyncDisposable
         try
         {
             var agent = _factory.Agent;
-            var options = _factory.RunOptions(UserId, lightweight, await _factory.DocumentationToolsAsync(cancellationToken));
+            var options = _factory.RunOptions(UserId, lightweight, await _factory.DocumentationToolsAsync(cancellationToken),
+                _factory.ScopeFor(UserId, SessionId));
             var gated = options.ChatOptions?.Tools?.OfType<ApprovalRequiredAIFunction>().Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal) ?? [];
             List<ChatMessage> messages = [];
             // Agent Framework needs an answer to every approval it surfaced; a new message instead of approving rejects the change.
