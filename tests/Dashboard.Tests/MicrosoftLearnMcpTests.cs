@@ -56,7 +56,7 @@ public sealed class MicrosoftLearnMcpTests
 
         var error = JsonSerializer.SerializeToElement(new { content = new[] { new { type = "text", text = "Invalid URL" } }, isError = true });
         Assert.Equal(error.GetRawText(), Assert.IsType<JsonElement>(MicrosoftLearnMcp.Bound(error)).GetRawText());
-        Assert.False(EvidenceInspector.Inspect(AzureFinOps.Dashboard.AI.Runtime.AgentConversation.ResultText(MicrosoftLearnMcp.Bound(error))).Success);
+        Assert.False(EvidenceInspector.Inspect(AzureFinOps.Dashboard.AI.Runtime.AgentConversation.ResultText(MicrosoftLearnMcp.Bound(error))!).Success);
     }
 
     [Fact]

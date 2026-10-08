@@ -401,7 +401,7 @@ test("full catalog retains every frontend template, both concrete incident cases
 });
 
 test("live gate selects every stable representative question without changing case contracts", () => {
-    assert.equal(LIVE_SUITE_SIZE, 24);
+    assert.equal(LIVE_SUITE_SIZE, 23);
     assert.equal(cases.length, LIVE_SUITE_SIZE);
     assert.deepEqual(cases.map((item) => item.id), [
         "fa300ef5396c951b", "967d9300e17ef22a", "c0172debe25f1c20",
@@ -410,8 +410,8 @@ test("live gate selects every stable representative question without changing ca
         "eac3ecb5ceb83c4b", "84206ed740e28de4", "979163d9aeedc2b8",
         "e4e6c2296f2dfc97", "095d1c30190c1015", "ab693d258eaed365",
         "160eca54c580c4f8", "f84890a72a9009f3", "f75b5b6527c41d5c",
-        "062a296be5be951f", "3c99447cf28f786c", "f4fd66c2942dcaa7",
-        "2fb769993820fdf2", "45ffa45e5346e49d", "c7b0c5917d8b1e09",
+        "062a296be5be951f", "3c99447cf28f786c", "2fb769993820fdf2",
+        "45ffa45e5346e49d", "c7b0c5917d8b1e09",
     ]);
     assert.notDeepEqual(cases, catalog.slice(0, LIVE_SUITE_SIZE));
     assert.equal(
@@ -428,15 +428,19 @@ test("live gate selects every stable representative question without changing ca
     assert.deepEqual(cases[19].requiredTools, ["QueryAzure"]);
     // The session-audit regressions pin each fixed behavior in their rubric.
     assert.deepEqual(cases.slice(20).map((item) => item.origins[0]), [
-        "incident:learn-docs", "incident:stated-goal", "incident:absent-setting", "incident:access-limit",
+        "incident:stated-goal", "incident:absent-setting", "incident:access-limit",
     ]);
     assert.deepEqual(cases.slice(20).map((item) => item.requiredTools), [
-        ["microsoft_docs_search"], ["GenerateScript"], ["QueryAzure"], [],
+        ["GenerateScript"], ["QueryAzure"], [],
     ]);
     for (const scenario of cases.slice(20))
         assert.ok(scenario.rubric.startsWith(cases[1].rubric + " Case expectation: "));
     for (const scenario of cases.slice(0, 20))
         assert.equal(scenario.rubric, cases[1].rubric);
+    // The documentation case stays in the catalog but out of the gate until hosted web search stops re-checking Learn.
+    const docs = catalog.find((item) => item.origins.includes("incident:learn-docs"));
+    assert.deepEqual(docs.requiredTools, ["microsoft_docs_search"]);
+    assert.ok(!cases.includes(docs));
 });
 
 test("curated selection fails if a pinned catalog case is missing, duplicated or has a duplicate question", () => {
@@ -1060,7 +1064,7 @@ test("only cases that never need Cost Management leave its paced lane", () => {
     ]);
     assert.ok(lanes.public.every((scenario) =>
         scenario.origins.every((origin) =>
-            ["pricing:public", "evaluation:pricing", "incident:language", "incident:learn-docs", "incident:stated-goal"].includes(origin))));
+            ["pricing:public", "evaluation:pricing", "incident:language", "incident:stated-goal"].includes(origin))));
     assert.equal(evaluationLane({ id: "an-unclassified-future-case" }), COST_MANAGEMENT_LANE);
     assert.equal(evaluationLane(undefined), COST_MANAGEMENT_LANE);
 });
