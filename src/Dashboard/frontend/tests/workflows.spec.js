@@ -241,6 +241,9 @@ test("navigation exposes one New chat and the start page offers the starter ques
 test("signed in, jobs and chats sit in the right rail and the maturity levels in the navigation", async ({
   page,
 }, testInfo) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("finops.paneCollapsed.prompts", "0"),
+  );
   const conversation = {
     id: "synthetic-chat",
     summary: "Quarterly cost review",
@@ -320,12 +323,12 @@ test("signed in, jobs and chats sit in the right rail and the maturity levels in
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
 
-  // Prompts start open on wide screens and closed in the phone menu.
+  // Prompts start collapsed on every screen size.
   await expect(promptsToggle).toHaveAttribute(
     "aria-expanded",
-    mobile ? "false" : "true",
+    "false",
   );
-  if (mobile) await promptsToggle.click();
+  await promptsToggle.click();
   const crawlPrompts = navigation
     .locator(".prompt-group-toggle")
     .filter({ hasText: /^Crawl/ });

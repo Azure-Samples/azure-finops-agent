@@ -3962,17 +3962,8 @@ function loadPaneCollapsed(key) {
 }
 const agentCollapsed = ref(loadPaneCollapsed("agent"));
 const sessionsCollapsed = ref(loadPaneCollapsed("sessions"));
-// Prompts start open on wide screens and closed in the compact menu, so the
-// phone menu reaches Chats without scrolling; the user's choice sticks.
-const promptsCollapsed = ref(
-  (() => {
-    try {
-      const stored = localStorage.getItem("finops.paneCollapsed.prompts");
-      if (stored !== null) return stored === "1";
-    } catch {}
-    return window.matchMedia("(max-width: 900px)").matches;
-  })(),
-);
+// Start collapsed on every visit, regardless of an earlier saved pane state.
+const promptsCollapsed = ref(true);
 const jobsCollapsed = ref(
   (() => {
     try {
@@ -3995,6 +3986,7 @@ function togglePane(key) {
   };
   const r = map[key];
   r.value = !r.value;
+  if (key === "prompts") return;
   try {
     localStorage.setItem(`finops.paneCollapsed.${key}`, r.value ? "1" : "0");
   } catch {}
