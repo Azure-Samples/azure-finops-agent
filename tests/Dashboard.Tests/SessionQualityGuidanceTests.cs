@@ -58,6 +58,8 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("The user's stated goal and constraints come first")]
     [InlineData("use its exact values and give a better practice as one note, never as a change")]
     [InlineData("Take names, regions, codes and values from the user or from a read, never from an example")]
+    [InlineData("an identifier is copied exactly as returned, never shortened, numbered or relabelled")]
+    [InlineData("when rows share a name the cell adds the parent's exact name in parentheses, even in a column layout the user specified")]
     [InlineData("an optional property it does not return is not set, so report its documented default")]
     [InlineData("ManagementPolicyNotFound")]
     [InlineData("A 403 from Azure means the user lacks an Azure role on that scope")]

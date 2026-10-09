@@ -36,7 +36,12 @@ public static class SessionEndpoints
             var sessions = await agentFactory.ListUserSessionsAsync(
                 userId, entraTenantId, entraOid, ctx.RequestAborted);
             telemetry.CurrentSessionId.TryGetValue(userId, out var currentId);
-            var payload = sessions.Select(s => new
+            // A conversation appears once its first question is asked; the blank one a page load
+            // or New chat starts is not listed.
+            var payload = sessions
+                .Where(s => !string.IsNullOrWhiteSpace(s.Summary)
+                    || (telemetry.SessionTitles.TryGetValue(s.SessionId, out var named) && !string.IsNullOrWhiteSpace(named)))
+                .Select(s => new
             {
                 id = s.SessionId,
                 summary = telemetry.SessionTitles.TryGetValue(s.SessionId, out var t) && !string.IsNullOrWhiteSpace(t)
@@ -84,9 +89,6 @@ public static class SessionEndpoints
         {
             if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
-            // No-op for anonymous; they only have one ephemeral session.
-            if (string.IsNullOrEmpty(entraOid)) return Results.NoContent();
-
             // IDOR guard: a sessionId is a public-ish string (it's emitted to the
             // browser and logged to App Insights). Reject any id that doesn't
             // belong to this user's workdir.
@@ -104,7 +106,6 @@ public static class SessionEndpoints
         {
             if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
-            if (string.IsNullOrEmpty(entraOid)) return Results.NoContent();
 
             if (!await agentFactory.UserOwnsSessionAsync(
                 userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))

@@ -424,6 +424,9 @@ IResult ServeSlides(IWebHostEnvironment env)
 app.MapGet("/slides", ServeSlides);
 app.MapGet("/slide", ServeSlides);
 
+// An unmatched API or auth path is a 404 for the caller, not the single-page app's HTML with a 200.
+app.MapUnmatchedApiNotFound();
+
 // SPA fallback (deep links like /faq/... handled elsewhere; anything unmatched
 // gets index.html). Must carry the same no-cache policy as direct index.html
 // hits — MapFallbackToFile uses its OWN StaticFileOptions, not UseStaticFiles'.

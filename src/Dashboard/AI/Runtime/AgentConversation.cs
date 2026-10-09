@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using AzureFinOps.Dashboard.Endpoints;
 using AzureFinOps.Dashboard.Infrastructure;
 
 namespace AzureFinOps.Dashboard.AI.Runtime;
@@ -71,10 +72,39 @@ public sealed class AgentConversation : IAsyncDisposable
         return meta is null ? null : new AgentConversation(factory, userId, workingDirectory, sessionId, meta);
     }
 
-    internal static AgentSessionInfo? Describe(string workingDirectory, string sessionId)
+    /// <param name="repairSummary">Reads the first question from the transcript for a conversation saved without a usable summary.</param>
+    internal static AgentSessionInfo? Describe(string workingDirectory, string sessionId, bool repairSummary = false)
     {
         var meta = ReadMeta(workingDirectory, sessionId);
-        return meta is null ? null : new AgentSessionInfo(sessionId, meta.Created, meta.Modified, meta.Summary, workingDirectory);
+        if (meta is null) return null;
+        var summary = repairSummary && SessionEndpoints.VisibleUserText(meta.Summary ?? "") is null
+            ? FirstQuestion(workingDirectory, sessionId)
+            : meta.Summary;
+        return new AgentSessionInfo(sessionId, meta.Created, meta.Modified, summary, workingDirectory);
+    }
+
+    /// <summary>The user's own words in a prompt, capped for the conversation list; null when none remain.</summary>
+    internal static string? SummaryFor(string prompt) =>
+        SessionEndpoints.VisibleUserText(prompt) is { } text ? (text.Length > 400 ? text[..400] : text) : null;
+
+    // Conversations saved before the summary excluded the host's context block hold only that block (it can fill the
+    // whole 400-character cap), so their question is read from the head of the transcript.
+    private static string? FirstQuestion(string workingDirectory, string sessionId)
+    {
+        var path = Path.Combine(SessionDirectory(workingDirectory, sessionId), "events.jsonl");
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            for (var read = 0; read < 20 && reader.ReadLine() is { } line; read++)
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (JsonSerializer.Deserialize<AgentEvent>(line, Json) is UserMessageEvent user && SummaryFor(user.Content) is { } question)
+                    return question;
+            }
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException) { }
+        return null;
     }
 
     private static Meta? ReadMeta(string workingDirectory, string sessionId)
@@ -114,9 +144,9 @@ public sealed class AgentConversation : IAsyncDisposable
             _meta.Attachments = [.. (_meta.Attachments ?? []).Concat(images.Select(image => image.DisplayName)).TakeLast(20)];
             SaveMeta();
         }
-        if (string.IsNullOrWhiteSpace(_meta.Summary))
+        if (SummaryFor(prompt) is { } question && SessionEndpoints.VisibleUserText(_meta.Summary ?? "") is null)
         {
-            _meta.Summary = prompt.Length > 400 ? prompt[..400] : prompt;
+            _meta.Summary = question;
             SaveMeta();
         }
         _runTask = Task.Run(() => RunAsync(prompt, recap, images, lightweight, approval, run.Token));

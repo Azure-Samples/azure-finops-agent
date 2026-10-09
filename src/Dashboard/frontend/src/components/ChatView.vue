@@ -2028,8 +2028,8 @@
         <div
           class="tools-sidebar-nav tools-sidebar-nav--split"
         >
-          <div id="rail-chats-slot"></div>
-          <div id="rail-jobs-slot"></div>
+          <div id="rail-chats-slot" class="rail-slot rail-slot--sessions"></div>
+          <div id="rail-jobs-slot" class="rail-slot rail-slot--jobs"></div>
         </div>
         <div
           class="tools-sidebar-pane tools-sidebar-pane--agent"
@@ -2484,6 +2484,7 @@ import {
 import { createAssistantMessageStream } from "../assistantMessageStream.js";
 import { describeChange } from "../changeSummary.js";
 import { groupChats, withQuestionTitle } from "../chatGroups.js";
+import { mapFeatureNames, resolveCountryName } from "../mapNames.js";
 import { renderMarkdown } from "../markdown.js";
 import {
   describeServerTurn,
@@ -6386,68 +6387,20 @@ async function sendQuestion(q) {
 
 // ── ECharts rendering ──
 
-// Country name aliases → Natural Earth canonical names used by world-atlas GeoJSON.
-// The LLM may produce short/common names; this map normalizes them so ECharts can match features.
-const COUNTRY_NAME_ALIASES = {
-  "United States": "United States of America",
-  US: "United States of America",
-  USA: "United States of America",
-  "U.S.": "United States of America",
-  "U.S.A.": "United States of America",
-  Russia: "Russia",
-  "South Korea": "South Korea",
-  Korea: "South Korea",
-  "Republic of Korea": "South Korea",
-  "North Korea": "North Korea",
-  "Dem. Rep. Korea": "North Korea",
-  DPRK: "North Korea",
-  "Czech Republic": "Czechia",
-  "DR Congo": "Dem. Rep. Congo",
-  "Democratic Republic of the Congo": "Dem. Rep. Congo",
-  "Congo (DRC)": "Dem. Rep. Congo",
-  "Republic of the Congo": "Congo",
-  Tanzania: "United Republic of Tanzania",
-  "United Republic of Tanzania": "United Republic of Tanzania",
-  "Ivory Coast": "Côte d'Ivoire",
-  "Cote d'Ivoire": "Côte d'Ivoire",
-  Bosnia: "Bosnia and Herzegovina",
-  "Bosnia & Herzegovina": "Bosnia and Herzegovina",
-  UAE: "United Arab Emirates",
-  UK: "United Kingdom",
-  Britain: "United Kingdom",
-  "Great Britain": "United Kingdom",
-  "Dominican Rep.": "Dominican Republic",
-  "Central African Rep.": "Central African Republic",
-  "Eq. Guinea": "Equatorial Guinea",
-  eSwatini: "eSwatini",
-  Swaziland: "eSwatini",
-  "East Timor": "Timor-Leste",
-  Burma: "Myanmar",
-  Laos: "Lao PDR",
-  Vatican: "Vatican City",
-  Palestine: "Palestine",
-  "Falkland Islands": "Falkland Islands",
-  Macedonia: "North Macedonia",
-  FYROM: "North Macedonia",
-};
-
-function normalizeCountryName(name) {
-  return COUNTRY_NAME_ALIASES[name] || name;
-}
-
-// Normalize all data items in map-type series
-function normalizeMapSeriesData(opts) {
-  if (!opts || !opts.series) return opts;
+// The model writes common country names; the loaded world map decides how each
+// is spelled, so names resolve against it once it is registered.
+function resolveMapSeriesNames(opts) {
+  if (!opts || !opts.series) return;
+  const known = mapFeatureNames(echarts.getMap?.("world")?.geoJson);
   const series = Array.isArray(opts.series) ? opts.series : [opts.series];
   for (const s of series) {
     if (s.type === "map" && Array.isArray(s.data)) {
       s.data = s.data.map((d) => ({
         ...d,
-        name: normalizeCountryName(d.name),
+        name: resolveCountryName(d.name, known),
       }));
     }
   }
-  return opts;
 }
 
 // World map GeoJSON cache
@@ -6579,8 +6532,6 @@ function buildEChartsOption(raw) {
           ? JSON.parse(parsed.options)
           : parsed.options;
       sanitizeAdvancedChartOptions(opts);
-      // Normalize country names in map series so they match the GeoJSON feature names
-      normalizeMapSeriesData(opts);
       // Force white/light map styling to match page background
       applyMapDefaults(opts);
       // Mark as needing map registration
@@ -7492,6 +7443,7 @@ function mountChart(el, chartData) {
       delete option._needsMap;
       if (isMap) {
         el.style.height = "520px";
+        resolveMapSeriesNames(option);
       }
       if (el.clientWidth < 2 || el.clientHeight < 2) {
         // ECharts geo creates an inverse layout matrix during setOption. A
@@ -12208,6 +12160,33 @@ async function send() {
 .tools-sidebar-nav--split {
   flex: 0 0 50%;
   max-height: 50%;
+  /* Two rows, Sessions then Jobs: each list scrolls inside its own row, so both
+     headings stay in view however many sessions there are. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.rail-slot {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 0 1 auto;
+}
+.rail-slot--jobs {
+  flex: 0 0 auto;
+  max-height: 50%;
+}
+.rail-slot > .sidebar-category {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.rail-slot .sessions-scroll:not(.collapse-body--collapsed),
+.rail-slot .jobs-scroll:not(.collapse-body--collapsed) {
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 .tools-sidebar-nav:not(:has(.sidebar-category)) {
   display: none;

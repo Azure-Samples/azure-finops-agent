@@ -212,6 +212,37 @@ test("desktop rail always shows Sessions then Jobs above a half-height Agent act
   expect(errors).toEqual([]);
 });
 
+test("a long Sessions list scrolls inside its own row and leaves Jobs in view", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "mobile", "the right rail is desktop only");
+  const sessions = Array.from({ length: 14 }, (_, index) => ({
+    id: `synthetic-session-${index}`,
+    summary: `Synthetic question number ${index + 1}`,
+    modified: new Date(Date.now() - index * 60_000).toISOString(),
+    started: new Date(Date.now() - index * 60_000).toISOString(),
+  }));
+  const { errors } = await arrange(page, [], { messages: [] }, {
+    sessions,
+    currentSessionId: "synthetic-session-0",
+  });
+  const rail = page.locator(".tools-sidebar");
+  await expect(rail.locator("#sidebar-chat-history .session-row")).toHaveCount(14);
+  const railBox = await rail.boundingBox();
+  const jobs = rail.getByText("Jobs", { exact: true });
+  await expect(jobs).toBeVisible();
+  const jobsBox = await jobs.boundingBox();
+  // Jobs sits in the top half with the list above it scrolling, not pushing it down.
+  expect(jobsBox.y + jobsBox.height).toBeLessThanOrEqual(railBox.y + railBox.height / 2 + 1);
+  expect(
+    await rail.locator("#sidebar-chat-history").evaluate((list) => list.scrollHeight > list.clientHeight),
+  ).toBeTruthy();
+  expect(
+    await rail.locator(".tools-sidebar-nav").evaluate((half) => half.scrollHeight <= half.clientHeight + 1),
+  ).toBeTruthy();
+  await expect(rail.locator(".tools-sidebar-pane--agent")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("long-session-list.png"), animations: "disabled" });
+  expect(errors).toEqual([]);
+});
+
 test("top bar shows the Open source link and the build without repeating the product name or a personal contact link", async ({ page }) => {
   const { errors } = await arrange(page, [], undefined, {
     version: { sha: "abc1234", build: "158", branch: "main" },

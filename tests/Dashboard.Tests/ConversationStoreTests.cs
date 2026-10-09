@@ -108,6 +108,43 @@ public sealed class ConversationStoreTests : IAsyncLifetime
         }
         Assert.DoesNotContain(await _factory.ListUserSessionsAsync(owner, null, null),
             item => item.SessionId == conversation.SessionId);
+        // The signed-out store is shared across test runs (listing even recreates the owner folder), so remove both
+        // identities' folders last.
+        foreach (var directory in new[] { conversation.WorkingDirectory, Path.Combine(Path.GetDirectoryName(conversation.WorkingDirectory)!, other.ToString()) })
+        {
+            try { Directory.Delete(directory, recursive: true); }
+            catch (DirectoryNotFoundException) { }
+        }
+    }
+
+    [Fact]
+    public void SummaryKeepsTheUsersWordsWhenTheContextBlockFillsTheCap()
+    {
+        var context = "[CONTEXT: Azure NOT connected. " + new string('x', 600) + "]\n[Answer in one short sentence.]\n";
+        Assert.Equal("hi", AgentConversation.SummaryFor(context + "hi"));
+        Assert.Equal(400, AgentConversation.SummaryFor(context + new string('q', 900))!.Length);
+        Assert.Null(AgentConversation.SummaryFor(context));
+        Assert.Null(AgentConversation.SummaryFor("   "));
+    }
+
+    [Fact]
+    public async Task ListedSummaryIsRepairedFromTheFirstQuestionAndBlankDraftsHaveNone()
+    {
+        var owner = Guid.NewGuid().ToString();
+        var userId = PersistentIdentity.DeriveUserId(Tenant, owner);
+        var asked = await _factory.CreateNewAsync(userId, "synthetic", Tenant, owner);
+        await asked.PublishAsync(new UserMessageEvent("[CONTEXT: " + new string('x', 600) + "]\nWhat did I spend last month?"));
+        var draft = await _factory.CreateNewAsync(userId, "synthetic", Tenant, owner);
+
+        // The value older builds stored: the first 400 characters of the prompt, all of it context.
+        var metaPath = Path.Combine(asked.WorkingDirectory, "sessions", asked.SessionId, "session.json");
+        var meta = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(metaPath))!;
+        meta["summary"] = "[CONTEXT: " + new string('x', 389);
+        File.WriteAllText(metaPath, meta.ToJsonString());
+
+        var listed = (await _factory.ListUserSessionsAsync(userId, Tenant, owner)).ToDictionary(item => item.SessionId);
+        Assert.Equal("What did I spend last month?", listed[asked.SessionId].Summary);
+        Assert.Null(listed[draft.SessionId].Summary);
     }
 
     [Fact]
