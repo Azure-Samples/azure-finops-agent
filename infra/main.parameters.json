@@ -62,6 +62,9 @@
     "enableDeleteLocks": {
       "value": "${ENABLE_DELETE_LOCKS=false}"
     },
+    "alertEmail": {
+      "value": "${ALERT_EMAIL=}"
+    },
     "appServiceInboundIp": {
       "value": "${APP_SERVICE_INBOUND_IP=}"
     },

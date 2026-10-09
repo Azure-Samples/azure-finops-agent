@@ -130,6 +130,9 @@ param dmarcReportEmail string = ''
 @description('Apply CanNotDelete locks to the DNS zone. Leave false for evaluation deployments so `azd down` tears the environment down cleanly; set true for a long-lived production domain where an accidental delete would mean a registrar change and DNS re-propagation.')
 param enableDeleteLocks bool = false
 
+@description('Mailbox notified by the FinOps-PublicEndpoint-Down alert when the public URL (custom domain when set) fails from several locations or its certificate nears expiry. Empty leaves the alert with no recipient, so a DNS or certificate outage goes unnoticed. Set it for any long-lived deployment.')
+param alertEmail string = ''
+
 @description('Comma-separated App Service inbound VIPs for the custom domain apex A record. Only knowable after the web app exists, so leave empty on the first `azd up` — the zone is created without an apex record and the runbook adds them. Ignored when customDomainName is empty.')
 param appServiceInboundIp string = ''
 
@@ -181,6 +184,7 @@ module resources 'main-resources.bicep' = {
     customDomainName: customDomainName
     dmarcReportEmail: dmarcReportEmail
     enableDeleteLocks: enableDeleteLocks
+    alertEmail: alertEmail
     appServiceInboundIp: appServiceInboundIp
     previewSlotName: previewSlotName
     previewDeploySubjects: previewDeploySubjectList

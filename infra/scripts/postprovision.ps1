@@ -162,6 +162,11 @@ if (-not $appObjectId -or -not $tenantId -or -not $miPrincipalId) {
     }
 }
 
+if ($customDomain) {
+    # Never fails the deployment: a stale registrar entry is fixed at the registrar, not by azd.
+    try { & "$PSScriptRoot/check-dns-delegation.ps1" } catch { Write-Host "  DNS delegation check skipped: $($_.Exception.Message)" -ForegroundColor Yellow }
+}
+
 Write-Host "`n  Web App:    $webUrl" -ForegroundColor Cyan
 if ($slotHost) { Write-Host "  Preview:    https://$slotHost" -ForegroundColor Cyan }
 $deployClientId = $envValues['PREVIEW_DEPLOY_CLIENT_ID']

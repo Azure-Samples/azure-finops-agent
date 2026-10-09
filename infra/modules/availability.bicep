@@ -19,6 +19,11 @@ param testUrl string
 @description('Optional resource IDs of action groups to notify. The alert is always created; an empty list means it has no notification destination yet.')
 param actionGroupIds array = []
 
+@description('Mailbox notified when the public endpoint is down or its certificate is close to expiry. Empty creates no action group, so the alert fires with nobody told. Set it for any long-lived deployment.')
+param alertEmail string = ''
+
+var notifyGroupIds = empty(alertEmail) ? actionGroupIds : concat(actionGroupIds, [availabilityActionGroup.id])
+
 // Keyed on the component only — NOT on testUrl. A web test's name is its identity,
 // so hashing a mutable property meant changing the probe URL (e.g. once the custom
 // domain was set) provisioned a *second* test and orphaned the first: still running,
@@ -73,6 +78,23 @@ resource webTest 'Microsoft.Insights/webtests@2022-06-15' = {
   }
 }
 
+resource availabilityActionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = if (!empty(alertEmail)) {
+  name: 'FinOps-PublicEndpoint-Notify'
+  location: 'global'
+  tags: tags
+  properties: {
+    groupShortName: 'FinOpsDown'
+    enabled: true
+    emailReceivers: [
+      {
+        name: 'owner'
+        emailAddress: alertEmail
+        useCommonAlertSchema: true
+      }
+    ]
+  }
+}
+
 resource availabilityAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: 'FinOps-PublicEndpoint-Down'
   location: 'global'
@@ -94,7 +116,7 @@ resource availabilityAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
       failedLocationCount: 2
     }
     actions: [
-      for agId in actionGroupIds: {
+      for agId in notifyGroupIds: {
         actionGroupId: agId
       }
     ]

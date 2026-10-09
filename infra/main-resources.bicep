@@ -23,6 +23,7 @@ param entraTenantId string
 param customDomainName string
 param dmarcReportEmail string
 param enableDeleteLocks bool
+param alertEmail string = ''
 param appServiceInboundIp string
 param previewSlotName string = ''
 param previewDeploySubjects string[] = []
@@ -137,6 +138,7 @@ module availability 'modules/availability.bicep' = {
     tags: tags
     appInsightsId: monitoring.outputs.appInsightsId
     testUrl: '${publicUrl}/api/version'
+    alertEmail: alertEmail
   }
 }
 

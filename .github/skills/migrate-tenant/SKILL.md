@@ -67,6 +67,7 @@ Never place addresses, verification tokens, resource names, or DNS zone coordina
 - Validate DNS from multiple resolvers.
 - Validate HTTPS, certificate chain/expiry, redirects, security headers, canonical/noindex behavior, `/api/version`, sign-in, and a representative chat turn.
 - Keep the source deployment and DNS zone intact through the agreed soak period.
+- A DNS zone's nameservers are assigned when it is created, so a zone recreated in the target subscription gets different ones. Until the registrar is updated to the new zone's `nameServers`, the domain is down even though the app is healthy. Run `infra/scripts/check-dns-delegation.ps1` after the cutover and again after the source zone is deleted.
 
 Move DNS hosting or registrar nameservers only as a separate, later phase after the application cutover is stable.
 

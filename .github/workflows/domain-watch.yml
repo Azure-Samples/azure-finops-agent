@@ -1,0 +1,61 @@
+name: Domain watch
+
+# Hourly outside-in check of the production URL through two public resolvers.
+# It exists because a broken registrar delegation takes the site offline while
+# the app itself stays healthy: the app's own logs and alerts see nothing, and
+# only a probe from outside notices. A failed run emails the people watching
+# the repository's Actions (Settings > Notifications).
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: domain-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      VERIFY_URL: ${{ vars.PROD_VERIFY_URL }}
+    steps:
+      - name: Check public DNS and HTTPS
+        run: |
+          set -u
+          if [ -z "$VERIFY_URL" ]; then
+            echo "::notice::PROD_VERIFY_URL is not set; nothing to watch."
+            exit 0
+          fi
+          host="${VERIFY_URL#*://}"; host="${host%%/*}"
+          failed=0
+          dns_failures=0
+
+          for resolver in "https://dns.google/resolve?name=$host&type=A" "https://cloudflare-dns.com/dns-query?name=$host&type=A"; do
+            answer=$(curl -sf --connect-timeout 10 --max-time 20 -H 'accept: application/dns-json' "$resolver" \
+              | python3 -c 'import sys,json; j=json.load(sys.stdin); print(",".join(a["data"] for a in j.get("Answer",[]) if a["type"]==1))' || true)
+            if [ -z "$answer" ]; then
+              echo "::warning::${resolver%%\?*} cannot resolve $host."
+              dns_failures=$((dns_failures + 1))
+            else
+              echo "${resolver%%\?*} -> $answer"
+            fi
+          done
+          # One resolver can serve a stale cached delegation for up to two days after a
+          # registrar change, so a single failure only warns; both failing is an outage.
+          if [ "$dns_failures" -ge 2 ]; then
+            echo "::error::No public resolver can resolve $host. Check that the registrar delegates to the nameservers of the Azure DNS zone (az network dns zone show --query nameServers)."
+            failed=1
+          fi
+
+          status=$(curl -s -o /dev/null --connect-timeout 10 --max-time 30 -w '%{http_code}' "${VERIFY_URL%/}/api/version" || true)
+          echo "GET /api/version -> $status"
+          if [ "$status" != "200" ]; then
+            echo "::error::${VERIFY_URL%/}/api/version returned ${status:-no response} (expected 200)."
+            failed=1
+          fi
+          exit $failed
