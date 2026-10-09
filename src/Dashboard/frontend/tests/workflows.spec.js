@@ -116,6 +116,73 @@ async function send(page, prompt = "make an Excel file") {
   await expect(page.locator(".action-btn--stop")).toHaveCount(0);
 }
 
+test("a new chat remains listed after completion until the server list catches up", async ({ page }, testInfo) => {
+  await page.addInitScript((id) => {
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if (new URL(typeof input === "string" ? input : input.url, location.href).pathname !== "/api/chat")
+        return original(input, init);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          window.emitChatEvent = (event) => controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+          );
+          window.finishChat = () => {
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          };
+          window.emitChatEvent({ type: "session", id });
+        },
+      });
+      return Promise.resolve(new Response(stream, {
+        headers: { "Content-Type": "text/event-stream" },
+      }));
+    };
+  }, sessionId);
+  const savedSessions = [];
+  const { errors } = await arrange(page, [], undefined, {
+    azureConnected: true,
+    sessions: savedSessions,
+    deleteSession: (route) => route.fulfill({ status: 204 }),
+  });
+  await page.locator("textarea").fill("Review my Azure costs");
+  await page.locator("textarea").press("Enter");
+  await expect(page.locator(".action-btn--stop")).toBeVisible();
+  if (testInfo.project.name === "mobile")
+    await page.locator(".portal-burger").click();
+  const row = page.locator(`.session-row[data-session-id="${sessionId}"]`);
+  await expect(row.locator(".session-row-title")).toHaveText("Review my Azure costs");
+  await expect(row.getByRole("button", { name: "Conversation is running and cannot be deleted" })).toBeDisabled();
+
+  await page.evaluate((id) => window.emitChatEvent({
+    type: "session_title", id, title: "Azure cost review",
+  }), sessionId);
+  await expect(row.locator(".session-row-title")).toHaveText("Azure cost review");
+  const refreshed = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === "/api/sessions",
+  );
+  await page.evaluate(() => {
+    window.emitChatEvent({ type: "message", id: "answer", content: "Synthetic cost answer." });
+    window.emitChatEvent({ type: "done" });
+    window.finishChat();
+  });
+  await refreshed;
+  await expect(page.locator(".action-btn--stop")).toHaveCount(0);
+  await expect(row).toHaveCount(1);
+  await expect(row.locator(".session-row-title")).toHaveText("Azure cost review");
+
+  savedSessions.push({ id: sessionId, summary: "Azure cost review", modified: new Date().toISOString() });
+  await page.reload();
+  if (testInfo.project.name === "mobile")
+    await page.locator(".portal-burger").click();
+  await expect(row).toHaveCount(1);
+  await expect(row.locator(".session-row-title")).toHaveText("Azure cost review");
+  await row.getByRole("button", { name: "Delete conversation" }).click();
+  await expect(row).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test("top bar shows the Open source link and the build without repeating the product name or a personal contact link", async ({ page }) => {
   const { errors } = await arrange(page, [], undefined, {
     version: { sha: "abc1234", build: "158", branch: "main" },

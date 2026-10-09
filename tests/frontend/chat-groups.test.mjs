@@ -50,6 +50,12 @@ test('a running conversation shows its question until its title arrives', () => 
     modified: now.toISOString(),
   });
   assert.equal(added.length, sessions.length + 1);
+  for (const summary of [null, "", "   "]) {
+    assert.equal(
+      withQuestionTitle([{ id: 'blank', summary }], 'blank', 'My question', now)[0].summary,
+      'My question',
+    );
+  }
 
   const renamed = withQuestionTitle(
     [{ id: 'fresh', summary: 'Untitled conversation', started: at(0) }],

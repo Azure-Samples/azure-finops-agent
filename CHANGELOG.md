@@ -114,6 +114,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Keep a newly streamed chat in the conversation list after its answer completes until the server list includes it. Ignore older overlapping list refreshes, clear pending rows on disconnect, and correctly name rows with blank titles.
+
 - Name a new conversation while the agent works, without delaying the answer. The title generator (one small call that turns the question into a few words) started only after the answer, because it also read the reply, and the stream waited at most 1.5 s for it. The reasoning model takes several seconds, so the title was saved but Chats showed "Untitled conversation" until a reload, and the wait held Stop on screen for up to 1.5 s after a new chat's first answer. The same call now starts from the question once the turn is dispatched, runs alongside the agent and is never awaited. It reaches Chats during the turn, or on the list's next refresh when it finishes later, and until then the row shows the question. Signed-out users have no Chats list and no longer trigger the call.
 - Stop a stalled hosted web search from hanging a turn for minutes. A local turn sat on "web search" for eight minutes; the service then marked the search `incomplete`, a status OpenAI .NET (through 2.14.0) cannot read, and the turn failed with "Unknown WebSearchCallStatus value". A hosted search that makes no progress for 90 seconds now ends the run (searches normally finish in under 2 s), a failed search shows as failed in Agent activity, and both cases tell the user "The web search did not finish, so this answer stopped. Ask again." instead of the SDK's exception text. Whether to search stays the model's decision.
 - Read microsoft.com's Microsoft 365 plan and pricing pages. The page reader's user agent ended in a bare-domain link (`+https://azure-finops-agent.com`), and microsoft.com held those pages open without a byte until the 20-second deadline (curl with the same string stalled too, and its default agent loaded them in 2 s). The comment now links to the public source repository. The question "What does E7 add for AI agents?" went from 203 s with five timed-out reads to 44 s, and its answer now includes the E5 price and the difference.
@@ -451,5 +453,4 @@ Initial public release.
 [0.3.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Azure-Samples/azure-finops-agent/releases/tag/v0.1.0
-
 

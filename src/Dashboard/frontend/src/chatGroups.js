@@ -37,7 +37,11 @@ export function groupChats(sessions, query = "", now = new Date()) {
 export function withQuestionTitle(sessions, id, question, now = new Date()) {
   const list = sessions || [];
   const index = list.findIndex((session) => session.id === id);
-  if (index >= 0 && !/^untitled/i.test(list[index].summary || "")) return null;
+  if (
+    index >= 0 &&
+    list[index].summary?.trim() &&
+    !/^untitled/i.test(list[index].summary)
+  ) return null;
   const line = String(question || "")
     .split("\n")
     .map((part) => part.trim())

@@ -155,6 +155,7 @@ The agent is deliberately minimal: tools are thin, host-enforced pass-throughs a
 ## Frontend invariants
 
 - Prompts starts collapsed on every page load, on desktop and mobile, ignoring any previously saved open state. Opening it is a choice for the current visit only.
+- New chat rows announced by SSE remain listed through completion until the server list acknowledges them. Older overlapping list refreshes cannot overwrite newer lists; disconnect clears pending rows and invalidates in-flight refreshes. Confirmed deletion always removes a pending row.
 
 - One visual system, defined only by the tokens in `src/App.vue`. Rules:
   - **Font:** Google Sans Flex everywhere, at the body width and variation, including chart text (`forceChartFont` overrides any font a chart's options name), inline code and the start-page title. The one exception is a code window (`<pre>`: fenced code blocks, the script viewer, a change's request body, tool details), which uses `--font-mono` (system monospace fonts, which the same-origin font policy allows). Use the type tokens: label size for interface text, caption only for secondary details, title for dialog titles, body for answers.

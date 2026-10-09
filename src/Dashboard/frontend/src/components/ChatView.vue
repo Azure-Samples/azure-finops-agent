@@ -3893,22 +3893,34 @@ const currentSessionId = ref(null);
 const deletingSessions = reactive(new Set());
 const sessionDeleteError = ref("");
 const deletedSessionIds = new Set();
+const unlistedSessionIds = new Set();
+let sessionsRefresh = 0;
 
 async function loadSessions() {
+  const refresh = ++sessionsRefresh;
   if (!azureConnected.value) {
     sessions.value = [];
+    unlistedSessionIds.clear();
     return;
   }
   try {
     const res = await fetch("/api/sessions", { credentials: "same-origin" });
     if (!res.ok) return;
     const data = await res.json();
+    if (refresh !== sessionsRefresh || !azureConnected.value) return;
     const refreshed = Array.isArray(data.sessions)
       ? data.sessions.filter((session) => !deletedSessionIds.has(session.id))
       : [];
     const refreshedIds = new Set(refreshed.map((session) => session.id));
+    for (const id of refreshedIds) unlistedSessionIds.delete(id);
     for (const session of sessions.value) {
-      if (deletingSessions.has(session.id) && !refreshedIds.has(session.id))
+      // A list snapshot can predate the session event. Keep its new row until
+      // the server has listed it, not just until the answer finishes.
+      if (
+        !deletedSessionIds.has(session.id) &&
+        (deletingSessions.has(session.id) || unlistedSessionIds.has(session.id)) &&
+        !refreshedIds.has(session.id)
+      )
         refreshed.push(session);
     }
     sessions.value = refreshed;
@@ -3933,6 +3945,8 @@ function showRunningConversation(id, question) {
   if (!azureConnected.value) return false;
   const updated = withQuestionTitle(sessions.value, id, question);
   if (!updated) return false;
+  if (!sessions.value.some((session) => session.id === id))
+    unlistedSessionIds.add(id);
   sessions.value = updated;
   return true;
 }
@@ -4916,6 +4930,7 @@ async function deleteSession(sessionId) {
     }
 
     deletedSessionIds.add(sessionId);
+    unlistedSessionIds.delete(sessionId);
     sessions.value = sessions.value.filter((s) => s.id !== sessionId);
     perSessionToolCalls.delete(sessionId);
     perSessionCharts.delete(sessionId);
@@ -5135,6 +5150,8 @@ async function revokeAllPermissions() {
 
 watch(azureConnected, async (connected, wasConnected) => {
   if (!connected) {
+    ++sessionsRefresh;
+    unlistedSessionIds.clear();
     sessions.value = [];
     currentSessionId.value = null;
     return;
@@ -8375,6 +8392,7 @@ async function send() {
               ];
             } else {
               // New session not yet in sidebar — prepend a stub row.
+              unlistedSessionIds.add(data.id);
               sessions.value = [
                 {
                   id: data.id,
