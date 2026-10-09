@@ -84,6 +84,33 @@ public sealed class ConversationStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AnonymousConversationsRemainListedAfterCompletionAndBelongOnlyToTheirBrowserIdentity()
+    {
+        var owner = PersistentIdentity.DeriveUserId(Tenant, Guid.NewGuid().ToString());
+        var other = PersistentIdentity.DeriveUserId(Tenant, Guid.NewGuid().ToString());
+        var conversation = await _factory.CreateNewAsync(owner, "synthetic", null, null);
+        try
+        {
+            await conversation.PublishAsync(new UserMessageEvent("Synthetic question"));
+            await conversation.PublishAsync(new AssistantMessageEvent("answer", "Synthetic answer"));
+            await conversation.PublishAsync(new TurnIdleEvent());
+            Assert.Contains(await _factory.ListUserSessionsAsync(owner, null, null),
+                item => item.SessionId == conversation.SessionId);
+            Assert.DoesNotContain(await _factory.ListUserSessionsAsync(other, null, null),
+                item => item.SessionId == conversation.SessionId);
+            Assert.False(await _factory.UserOwnsSessionAsync(other, null, null, conversation.SessionId));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+                _factory.DeleteUserSessionAsync(other, null, null, conversation.SessionId));
+        }
+        finally
+        {
+            await _factory.DeleteUserSessionAsync(owner, null, null, conversation.SessionId);
+        }
+        Assert.DoesNotContain(await _factory.ListUserSessionsAsync(owner, null, null),
+            item => item.SessionId == conversation.SessionId);
+    }
+
+    [Fact]
     public void EachRunExposesPlainToolsAndOnlyChangesNeedApproval()
     {
         var options = _factory.RunOptions(101, lightweight: false);

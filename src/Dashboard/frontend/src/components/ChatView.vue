@@ -108,7 +108,6 @@
                is disabled and they stay here, directly below New chat. -->
           <Teleport to="#rail-jobs-slot" defer :disabled="compactLayout">
           <div
-            v-if="azureConnected"
             class="sidebar-category sidebar-category--border sidebar-library-section"
           >
             <div class="sidebar-section-heading">
@@ -124,7 +123,7 @@
                 :title="jobsCollapsed ? 'Expand jobs' : 'Collapse jobs'"
               >
                 <div class="sidebar-category-left">
-                  <span>Scheduled jobs</span>
+                  <span>Jobs</span>
                   <span class="sidebar-category-subtitle">
                     {{ activeJobsCount }} active<span
                       v-if="attentionJobsCount"
@@ -142,7 +141,7 @@
                 />
               </button>
               <span v-else class="sidebar-category-label jobs-header-label"
-                >Scheduled jobs</span
+                >Jobs</span
               >
               <button
                 class="sessions-new-btn sidebar-section-action"
@@ -538,11 +537,10 @@
             </div>
           </div>
 
-          <!-- Chats history — shown once there is a conversation; in the right
-               rail on wide screens, here on compact screens. -->
+          <!-- Sessions stay in the right rail on wide screens and in the
+               navigation on compact screens, including when empty. -->
           <Teleport to="#rail-chats-slot" defer :disabled="compactLayout">
           <div
-            v-if="chatSessions.length || sessionDeleteError"
             class="sidebar-category sidebar-category--border sidebar-library-section"
           >
             <button
@@ -553,7 +551,7 @@
               @click="togglePane('sessions')"
             >
               <div class="sidebar-category-left">
-                <span>Chats</span>
+                <span>Sessions</span>
               </div>
               <AppIcon
                 name="moreDown"
@@ -567,7 +565,7 @@
               class="collapse-body sessions-scroll"
               :class="{ 'collapse-body--collapsed': sessionsCollapsed }"
               role="region"
-              aria-label="Chats"
+              aria-label="Sessions"
             >
               <div
                 v-if="sessionDeleteError"
@@ -2024,18 +2022,16 @@
           'tools-sidebar--open': railOpen,
           'tools-sidebar--overlay': evidenceOverlayOpen,
         }"
-        aria-label="Chats, scheduled jobs and agent activity"
+        aria-label="Sessions, jobs and agent activity"
         @keydown.esc="evidenceOverlayOpen && closeAgentRail()"
       >
         <div
-          class="tools-sidebar-nav"
-          :class="{ 'tools-sidebar-nav--split': showAgentPane }"
+          class="tools-sidebar-nav tools-sidebar-nav--split"
         >
-          <div id="rail-jobs-slot"></div>
           <div id="rail-chats-slot"></div>
+          <div id="rail-jobs-slot"></div>
         </div>
         <div
-          v-if="showAgentPane"
           class="tools-sidebar-pane tools-sidebar-pane--agent"
         >
           <div class="tools-sidebar-header">
@@ -3727,18 +3723,11 @@ const compactLayout = ref(navigationMedia.matches);
 const sidebarVisible = computed(() =>
   compactLayout.value ? mobileSidebarOpen.value : sidebarOpen.value,
 );
-// Right rail: Scheduled jobs and Chats (wide screens) above Agent activity,
-// shown whenever one of them has something to show.
+// Desktop keeps Sessions and Jobs above Agent activity, even while idle.
 const showAgentPane = computed(
   () => allToolCalls.value.length > 0 || streaming.value,
 );
-const railOpen = computed(
-  () =>
-    showAgentPane.value ||
-    azureConnected.value ||
-    chatSessions.value.length > 0 ||
-    !!sessionDeleteError.value,
-);
+const railOpen = computed(() => !compactLayout.value || showAgentPane.value);
 
 // An answer's call count opens Agent activity at its question: in the rail on
 // wide screens, as a sheet over the chat on phones, where the rail is hidden.
@@ -3883,7 +3872,7 @@ const tenantError = ref(false);
 const subscriptionsOpen = ref(false);
 const clearing = ref(false);
 
-// ── Multi-session state (Entra-only) ─────────────────────────────
+// ── Owner-bound multi-session state ─────────────────────────────
 // `sessions` mirrors the server's view of the user's saved conversations.
 // `currentSessionId` is the one the next /api/chat request will hit. The
 // backend echoes it back as the first SSE event of every chat so we always
@@ -3898,16 +3887,11 @@ let sessionsRefresh = 0;
 
 async function loadSessions() {
   const refresh = ++sessionsRefresh;
-  if (!azureConnected.value) {
-    sessions.value = [];
-    unlistedSessionIds.clear();
-    return;
-  }
   try {
     const res = await fetch("/api/sessions", { credentials: "same-origin" });
     if (!res.ok) return;
     const data = await res.json();
-    if (refresh !== sessionsRefresh || !azureConnected.value) return;
+    if (refresh !== sessionsRefresh) return;
     const refreshed = Array.isArray(data.sessions)
       ? data.sessions.filter((session) => !deletedSessionIds.has(session.id))
       : [];
@@ -3942,7 +3926,6 @@ async function loadSessions() {
 // question until the title generated from it arrives (session_title). Returns
 // whether the row now shows the question.
 function showRunningConversation(id, question) {
-  if (!azureConnected.value) return false;
   const updated = withQuestionTitle(sessions.value, id, question);
   if (!updated) return false;
   if (!sessions.value.some((session) => session.id === id))
@@ -5314,8 +5297,7 @@ onMounted(async () => {
       return cooler._uid;
     };
   }
-  // Load saved conversations once we know whether the user is Azure-connected.
-  // (The auth check fires on mount too; loadSessions is a no-op until then.)
+  // Restore conversations belonging to this browser's current identity.
   setTimeout(() => {
     loadSessions();
   }, 500);
@@ -12215,9 +12197,7 @@ async function send() {
 .tools-sidebar-nav .jobs-scroll {
   padding: 2px 0 8px;
 }
-/* Chats + Scheduled jobs in the right rail: same rows as the left menu. When
-   Agent activity is also showing, the lists share the rail (up to 55%) and
-   scroll on their own so the activity keeps its room. */
+/* Session and job lists share the top half and scroll independently of activity. */
 .tools-sidebar-nav {
   flex: 1 1 auto;
   min-height: 0;
@@ -12226,8 +12206,8 @@ async function send() {
   scrollbar-width: thin;
 }
 .tools-sidebar-nav--split {
-  flex: 0 1 auto;
-  max-height: 55%;
+  flex: 0 0 50%;
+  max-height: 50%;
 }
 .tools-sidebar-nav:not(:has(.sidebar-category)) {
   display: none;

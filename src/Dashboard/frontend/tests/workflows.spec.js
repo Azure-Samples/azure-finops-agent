@@ -116,7 +116,8 @@ async function send(page, prompt = "make an Excel file") {
   await expect(page.locator(".action-btn--stop")).toHaveCount(0);
 }
 
-test("a new chat remains listed after completion until the server list catches up", async ({ page }, testInfo) => {
+for (const azureConnected of [false, true]) {
+test(`a new chat remains listed after completion until the server list catches up (${azureConnected ? "connected" : "signed out"})`, async ({ page }, testInfo) => {
   await page.addInitScript((id) => {
     const original = window.fetch.bind(window);
     window.fetch = (input, init) => {
@@ -142,7 +143,7 @@ test("a new chat remains listed after completion until the server list catches u
   }, sessionId);
   const savedSessions = [];
   const { errors } = await arrange(page, [], undefined, {
-    azureConnected: true,
+    azureConnected,
     sessions: savedSessions,
     deleteSession: (route) => route.fulfill({ status: 204 }),
   });
@@ -155,10 +156,12 @@ test("a new chat remains listed after completion until the server list catches u
   await expect(row.locator(".session-row-title")).toHaveText("Review my Azure costs");
   await expect(row.getByRole("button", { name: "Conversation is running and cannot be deleted" })).toBeDisabled();
 
-  await page.evaluate((id) => window.emitChatEvent({
-    type: "session_title", id, title: "Azure cost review",
-  }), sessionId);
-  await expect(row.locator(".session-row-title")).toHaveText("Azure cost review");
+  const title = azureConnected ? "Azure cost review" : "Review my Azure costs";
+  if (azureConnected)
+    await page.evaluate((id) => window.emitChatEvent({
+      type: "session_title", id, title: "Azure cost review",
+    }), sessionId);
+  await expect(row.locator(".session-row-title")).toHaveText(title);
   const refreshed = page.waitForResponse((response) =>
     new URL(response.url()).pathname === "/api/sessions",
   );
@@ -170,16 +173,42 @@ test("a new chat remains listed after completion until the server list catches u
   await refreshed;
   await expect(page.locator(".action-btn--stop")).toHaveCount(0);
   await expect(row).toHaveCount(1);
-  await expect(row.locator(".session-row-title")).toHaveText("Azure cost review");
+  await expect(row.locator(".session-row-title")).toHaveText(title);
 
-  savedSessions.push({ id: sessionId, summary: "Azure cost review", modified: new Date().toISOString() });
+  savedSessions.push({ id: sessionId, summary: title, modified: new Date().toISOString() });
   await page.reload();
   if (testInfo.project.name === "mobile")
     await page.locator(".portal-burger").click();
   await expect(row).toHaveCount(1);
-  await expect(row.locator(".session-row-title")).toHaveText("Azure cost review");
+  await expect(row.locator(".session-row-title")).toHaveText(title);
   await row.getByRole("button", { name: "Delete conversation" }).click();
   await expect(row).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+}
+
+test("desktop rail always shows Sessions then Jobs above a half-height Agent activity pane", async ({ page }, testInfo) => {
+  const { errors } = await arrange(page, []);
+  if (testInfo.project.name === "mobile") {
+    await expect(page.locator(".tools-sidebar")).toBeHidden();
+    await page.locator(".portal-burger").click();
+    await expect(page.getByRole("button", { name: "Sessions", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New job", exact: true })).toBeDisabled();
+  } else {
+    const rail = page.locator(".tools-sidebar");
+    await expect(rail).toBeVisible();
+    const sessions = rail.getByRole("button", { name: "Sessions", exact: true });
+    const jobs = rail.getByText("Jobs", { exact: true });
+    const activity = rail.locator(".tools-sidebar-pane--agent");
+    await expect(sessions).toBeVisible();
+    await expect(jobs).toBeVisible();
+    await expect(activity.getByText("Agent activity", { exact: true })).toBeVisible();
+    await expect(rail.getByRole("button", { name: "New job" })).toBeDisabled();
+    const bounds = await rail.boundingBox();
+    expect((await jobs.boundingBox()).y).toBeGreaterThan((await sessions.boundingBox()).y);
+    expect(Math.abs((await activity.boundingBox()).y - (bounds.y + bounds.height / 2))).toBeLessThan(3);
+    await page.screenshot({ path: testInfo.outputPath("permanent-rail.png"), animations: "disabled" });
+  }
   expect(errors).toEqual([]);
 });
 
@@ -246,7 +275,8 @@ test("navigation exposes one New chat and the start page offers the starter ques
   // Signed out, the menu is New chat and Connect Azure: no prompt library, no
   // empty chat history and no tenant box (Switch tenant changes it later).
   await expect(page.locator("#sidebar-prompts")).toHaveCount(0);
-  await expect(page.locator("#sidebar-chat-history")).toHaveCount(0);
+  await expect(page.locator("#sidebar-chat-history")).toHaveCount(1);
+  await expect(page.locator("#sidebar-chat-history .session-row")).toHaveCount(0);
   await expect(page.locator(".tenant-input")).toHaveCount(0);
   await expect(
     page.locator("#chat-navigation").getByRole("button", { name: "Connect Azure" }),
@@ -377,7 +407,7 @@ test("signed in, jobs and chats sit in the right rail and the maturity levels in
     await expect(rail).toBeVisible();
     await expect(navigation.getByRole("button", { name: "New job" })).toHaveCount(0);
     await expect(navigation.locator("#sidebar-chat-history")).toHaveCount(0);
-    expect(await top(chats)).toBeGreaterThan(await top(newJob));
+    expect(await top(newJob)).toBeGreaterThan(await top(chats));
     expect(await top(promptsToggle)).toBeGreaterThan(await top(levels.last()));
   }
 
@@ -413,7 +443,7 @@ test("signed in, jobs and chats sit in the right rail and the maturity levels in
   expect(requests[0].prompt).toContain("Crawl");
   expect(errors).toEqual([]);
 });
-test("execution sidebar is empty-chat hidden and opens for tool activity", async ({
+test("execution sidebar stays visible on desktop and opens as a mobile activity sheet", async ({
   page,
 }, testInfo) => {
   const { errors } = await arrange(page, [
@@ -432,7 +462,10 @@ test("execution sidebar is empty-chat hidden and opens for tool activity", async
     },
     { type: "message", content: "Synthetic answer." },
   ]);
-  await expect(page.locator(".tools-sidebar")).toBeHidden();
+  if (testInfo.project.name === "desktop")
+    await expect(page.locator(".tools-sidebar")).toBeVisible();
+  else
+    await expect(page.locator(".tools-sidebar")).toBeHidden();
   await send(page, "Show my costs");
   const evidence = page.locator(".answer-evidence");
   await expect(evidence).toHaveText("1 call");
@@ -529,7 +562,7 @@ test("conversation deletion stays stable until the server confirms it", async ({
   });
   await row.getByRole("button", { name: "Delete conversation" }).click();
   await expect(row).toHaveCount(0);
-  await expect(page.locator("#sidebar-chat-history")).toHaveCount(0);
+  await expect(page.locator("#sidebar-chat-history .session-row")).toHaveCount(0);
   expect(deleteAttempts).toBe(2);
   expect(errors).toEqual([]);
 });

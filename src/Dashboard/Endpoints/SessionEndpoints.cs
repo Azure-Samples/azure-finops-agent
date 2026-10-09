@@ -33,12 +33,6 @@ public static class SessionEndpoints
             if (!TryResolveUser(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
                 return Results.Unauthorized();
 
-            // Anonymous users get a random userId per browser session, so they
-            // can never re-find their old conversations after a refresh anyway.
-            // Hide the sidebar entirely for them; multi-session is Entra-only.
-            if (string.IsNullOrEmpty(entraOid))
-                return Results.Ok(new { sessions = Array.Empty<object>(), currentSessionId = (string?)null });
-
             var sessions = await agentFactory.ListUserSessionsAsync(
                 userId, entraTenantId, entraOid, ctx.RequestAborted);
             telemetry.CurrentSessionId.TryGetValue(userId, out var currentId);

@@ -31,6 +31,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- Keep the desktop right rail visible with Sessions first, Jobs second, and Agent activity occupying its lower half even when idle. Signed-out users can list, reopen and delete their own browser identity's conversations; jobs still require Entra sign-in.
+
 - Start Prompts collapsed on desktop and mobile on every visit, including browsers that previously saved it open. Opening the library no longer persists into the next visit.
 
 - Rework the start page and navigation. The start page keeps the brand title and shows three sections, Govern AI agents, Control AI spending and Compare Azure prices, each with its five most important questions (new: what Microsoft 365 E7 adds for AI agents, which AI model is best value on published benchmarks and Azure token prices, and reservation versus savings plan); phones show three per section with More. The questions are cards styled after Microsoft's Copilot prompt starter: white, a thin border, 12px corners and semibold text that lifts with Fluent's `shadow16` and a 3% scale under the pointer. The Fluent AI (Copilot) packages are marked internal-only, so the cards follow their published styles with Fluent's public token values; nothing moves while idle. The prompt library moves from the navigation to the start page; signed in, the navigation keeps the full library as Prompts below the Crawl, Walk and Run rows. Scheduled jobs (one ⋯ menu per job instead of four hover icons) and Chats stay in the right rail above Agent activity (renamed from Agent execution, with its status line only while the agent works). A build briefly placed them in the navigation and the maturity levels on the start page; the navigation then pushed Chats below the fold on a laptop, and the rows lost their always-visible stars, so both returned. The message box keeps Attach and Send: Clear chat is gone (delete a conversation from its row), and Make a deck and Write a script sit under the latest answer. The tenant box appears only when the home tenant blocked the app; Switch tenant changes it after sign-in. The account footer gains a Subscriptions row. The social sharing card (`og-image.png?v=3`) and the README's start-page screenshots (`start-page.png`, and `mobile-start.png` in place of `mobile-nav.png`) show the new start page.
@@ -453,4 +455,3 @@ Initial public release.
 [0.3.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Azure-Samples/azure-finops-agent/releases/tag/v0.1.0
-
