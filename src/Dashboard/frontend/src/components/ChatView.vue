@@ -10513,7 +10513,7 @@ async function send() {
 }
 /* Starter cards follow Microsoft's Copilot prompt starter (Fluent AI
    PromptStarter, compact layout): a white card with a thin border, 12 px
-   corners and semibold text that lifts under the pointer with Fluent's
+   corners and regular body text that lifts under the pointer with Fluent's
    shadow16 and a 3% scale on its 200 ms decelerate curve. Nothing moves
    while idle. */
 .starter-question {
@@ -10555,7 +10555,7 @@ async function send() {
   padding: 8px 14px;
   font-size: var(--text-body-size);
   line-height: var(--text-body-line);
-  font-weight: 600;
+  font-weight: 400;
 }
 /* More/Fewer: a quiet text button under a section's cards, on phones only. */
 .starter-more {

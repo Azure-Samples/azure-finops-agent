@@ -33,6 +33,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- Show the start page's question cards in regular body-weight text instead of semibold, matching the rest of the page; only each section's heading stays bold. The social sharing card (`og-image.png?v=4`) matches.
 - Keep the desktop right rail visible with Sessions first, Jobs second, and Agent activity occupying its lower half even when idle. Signed-out users can list, reopen and delete their own browser identity's conversations; jobs still require Entra sign-in.
 
 - Start Prompts collapsed on desktop and mobile on every visit, including browsers that previously saved it open. Opening the library no longer persists into the next visit.
