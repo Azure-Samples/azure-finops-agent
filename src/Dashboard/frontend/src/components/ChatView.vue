@@ -3270,8 +3270,12 @@ watch(
   },
 );
 const sessionConsentActions = reactive(new Map());
-const activeConsentActions = computed(
-  () => sessionConsentActions.get(currentSessionId.value) || [],
+// A consent button for access the user has since granted would read as a failed grant, notably after the consent
+// redirect reloads the page and the conversation replays.
+const activeConsentActions = computed(() =>
+  (sessionConsentActions.get(currentSessionId.value) || []).filter(
+    (action) => !consentTierGranted(action.href.split("tier=")[1]),
+  ),
 );
 const sessionChanges = reactive(new Map());
 const activeChanges = computed(
@@ -3327,6 +3331,22 @@ const consentActionLabels = {
   licenses: "Grant license reporting access",
   chargeback: "Grant cost allocation access",
 };
+// Only the host's own consent routes, with its own labels, whatever a tool result or event names.
+function allowedConsentActions(actions) {
+  const requested = new Set((actions || []).map((action) => action?.href));
+  return Object.entries(consentActionLabels)
+    .filter(([tier]) => requested.has(`/auth/microsoft?tier=${tier}`))
+    .map(([tier, label]) => ({ label, href: `/auth/microsoft?tier=${tier}` }));
+}
+function consentTierGranted(tier) {
+  return {
+    base: azureConnected.value,
+    loganalytics: logAnalyticsEnabled.value,
+    storage: storageEnabled.value,
+    licenses: licensesEnabled.value,
+    chargeback: chargebackEnabled.value,
+  }[tier] === true;
+}
 function setNotice(kind, text, progress = null) {
   sessionNotice.value = { kind, text, progress };
 }
@@ -4588,6 +4608,10 @@ async function reloadSessionTranscript(sessionId) {
       sessionChanges.set(sessionId, []);
       for (const change of j.pendingChanges || [])
         rememberChange(sessionId, change);
+      sessionConsentActions.set(
+        sessionId,
+        allowedConsentActions(j.consentActions),
+      );
       const restored = (j.messages || []).map((m) => {
         // Re-derive the follow-up buttons from the persisted SuggestFollowUp
         // tool result — live turns keep them on the committed message, so a
@@ -8647,16 +8671,10 @@ async function send() {
             break;
 
           case "consent_required": {
-            const requested = new Set(
-              (data.actions || []).map((action) => action.href),
+            sessionConsentActions.set(
+              streamingId,
+              allowedConsentActions(data.actions),
             );
-            const actions = Object.entries(consentActionLabels)
-              .filter(([tier]) => requested.has(`/auth/microsoft?tier=${tier}`))
-              .map(([tier, label]) => ({
-                label,
-                href: `/auth/microsoft?tier=${tier}`,
-              }));
-            sessionConsentActions.set(streamingId, actions);
             break;
           }
 

@@ -10,7 +10,7 @@ namespace AzureFinOps.Dashboard.Infrastructure;
 /// Shared HTTP helper for all API tools — handles retry on 429/5xx, response formatting, and telemetry.
 /// Eliminates duplicated retry loops, response formatting, and HttpClient instances across tools.
 /// </summary>
-public static class HttpHelper
+public static partial class HttpHelper
 {
     // Shared IPv4-only SocketsHttpHandler (see Ipv4HttpHandler.cs). Corp egress
     // drops IPv6 SYNs and the OS only gives up after ~21 s; forcing IPv4 here
@@ -380,12 +380,32 @@ public static class HttpHelper
         ["chargeback"] = "Grant cost allocation access"
     };
 
+    /// <summary>
+    /// The allow-listed consent buttons a tool result asks for: a consent_required 401 as the whole result, or as one url's
+    /// part of a multi-url QueryAzure result ("[n] url", then "HTTP 401 ...", then its JSON). Only the host's own consent
+    /// routes are returned, with the host's labels, whatever the JSON says.
+    /// </summary>
     internal static object[] ConsentActions(string? response)
     {
-        if (response is null || !response.StartsWith("HTTP 401 ", StringComparison.Ordinal)) return [];
+        if (response is null) return [];
+        if (response.StartsWith("HTTP 401 ", StringComparison.Ordinal))
+            return ConsentActionsIn(response[(response.IndexOf('\n') + 1)..]);
+        var lines = response.Split('\n');
+        var actions = new List<object>();
+        for (var index = 0; index + 2 < lines.Length; index++)
+            if (FanOutItem().IsMatch(lines[index]) && lines[index + 1].StartsWith("HTTP 401 ", StringComparison.Ordinal))
+                actions.AddRange(ConsentActionsIn(lines[index + 2]));
+        return [.. actions.Distinct()];
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^\[\d+\] \S")]
+    private static partial System.Text.RegularExpressions.Regex FanOutItem();
+
+    private static object[] ConsentActionsIn(string json)
+    {
         try
         {
-            using var document = System.Text.Json.JsonDocument.Parse(response[(response.IndexOf('\n') + 1)..]);
+            using var document = System.Text.Json.JsonDocument.Parse(json);
             if (document.RootElement.GetProperty("error").GetProperty("code").GetString() != "consent_required") return [];
             return document.RootElement.GetProperty("authActions").EnumerateArray().Select(action => action.GetProperty("href").GetString())
                 .Select(href => ConsentLabels.FirstOrDefault(pair => href == "/auth/microsoft?tier=" + pair.Key))

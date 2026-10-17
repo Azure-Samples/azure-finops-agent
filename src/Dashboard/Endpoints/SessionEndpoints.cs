@@ -175,7 +175,7 @@ public static class SessionEndpoints
             // A pending approval is answered by the next user message, so only requests after the last one still wait.
             var lastUser = events.Select((item, index) => (item, index)).LastOrDefault(entry => entry.item is UserMessageEvent).index;
             var pendingChanges = events.Skip(lastUser).OfType<ApprovalRequestEvent>().Select(ChatEndpoints.PendingChange).ToArray();
-            return Results.Ok(new { messages, pendingChanges });
+            return Results.Ok(new { messages, pendingChanges, consentActions = ConsentActions(events) });
         });
 
         // A thumbs up or down on one answer. Kept in the owner's own transcript, so it
@@ -221,6 +221,14 @@ public static class SessionEndpoints
 
     /// <summary>Bounds how often one conversation's ratings can change, so its transcript cannot be grown without limit.</summary>
     internal const int MaxFeedbackChanges = 500;
+
+    /// <summary>
+    /// The consent buttons the conversation's tool results asked the user to press, so a reopened conversation shows the
+    /// button its answer names. Live turns send them as consent_required events; the same allow-listed tiers and hrefs
+    /// are rebuilt from the saved results, and the page hides the ones the user has since granted.
+    /// </summary>
+    internal static object[] ConsentActions(IEnumerable<AgentEvent> events) =>
+        [.. events.OfType<ToolCompleteEvent>().SelectMany(done => HttpHelper.ConsentActions(done.Result)).Distinct()];
 
     /// <summary>The visible questions (1-based, in order) that have an answer.</summary>
     internal static IReadOnlySet<int> AnsweredTurns(IReadOnlyList<AgentEvent> events)

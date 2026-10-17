@@ -18,7 +18,9 @@ namespace AzureFinOps.Dashboard.Infrastructure;
 /// </summary>
 internal static partial class JsonQuery
 {
-    internal const int MaxExpressionLength = 4000;
+    // A combined calculation retypes figures from earlier calls (nothing is stored between calls), so it can be long;
+    // the step budget, deadline and output cap bound what it costs.
+    internal const int MaxExpressionLength = 16_000;
     private const long MaxSteps = 20_000_000;
     private const int MaxDepth = 16;
     private const int MaxMapKeys = 64;
@@ -149,6 +151,10 @@ internal static partial class JsonQuery
                     message += $". The response root it is one object, not a list: count or iterate one of its lists ({string.Join(", ", lists.Select(list => list + ".Count()"))})";
                 if (MissingMember().Match(message) is { Success: true } mapped && mapped.Groups["type"].Value.StartsWith("Dictionary", StringComparison.Ordinal))
                     message += $". This object is read as a map because the query also reads it by key or iterates it, so read its members by key too (x.properties[\"{mapped.Groups["member"].Value}\"])";
+                // Inside a lambda a bare name is read from the lambda's item (an IGrouping in GroupBy(...).Select(g => ...)), not the response.
+                else if (MissingMember().Match(message) is { Success: true } scoped && shape.Properties.ContainsKey(scoped.Groups["member"].Value)
+                    && scoped.Groups["type"].Value != shape.Clr!.Name && scoped.Groups["type"].Value != shape.Clr.FullName)
+                    message += $". Inside a lambda a name is read from the lambda's item; read the response's {scoped.Groups["member"].Value} as root.{scoped.Groups["member"].Value}";
                 if (error.Position >= 0) message += $" (at character {error.Position + 1}: {Excerpt(text, error.Position)})";
                 throw new ArgumentException(absent.Count == 0 ? message : $"{message}. {Absent(absent)}", error);
             }

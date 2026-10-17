@@ -40,6 +40,31 @@ internal sealed class MicrosoftLearnMcp : IAsyncDisposable
 
     internal static bool IsLearnTool(string? name) => name is not null && ToolNames.Contains(name, StringComparer.Ordinal);
 
+    // Learn's table-of-contents and breadcrumb parameters only change a page's navigation, but the server rejects a link
+    // carrying them as "not a valid Microsoft documentation webpage link" (Learn pages link to each other with them).
+    private static readonly string[] NavigationParameters = ["toc", "bc"];
+
+    /// <summary>
+    /// Removes Learn's navigation-only query parameters (toc, bc) from a microsoft_docs_fetch url, so a link copied from
+    /// a Learn page reads like the same page without them. Every other parameter (tabs, pivots, view) is kept.
+    /// </summary>
+    internal static void NormalizeArguments(string toolName, AIFunctionArguments arguments)
+    {
+        if (toolName != "microsoft_docs_fetch" || !arguments.TryGetValue("url", out var value)) return;
+        var url = value switch
+        {
+            string text => text,
+            JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
+            _ => null,
+        };
+        if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Query.Length < 2
+            || !uri.Host.Equals("learn.microsoft.com", StringComparison.OrdinalIgnoreCase)) return;
+        var kept = uri.Query[1..].Split('&').Where(pair => pair.Length > 0
+            && !NavigationParameters.Contains(pair.Split('=')[0], StringComparer.OrdinalIgnoreCase)).ToArray();
+        var cleaned = uri.GetLeftPart(UriPartial.Path) + (kept.Length > 0 ? "?" + string.Join('&', kept) : "") + uri.Fragment;
+        if (cleaned != url) arguments["url"] = cleaned;
+    }
+
     /// <summary>
     /// The server's documentation tools, waiting briefly (3 s unless <paramref name="wait"/> says otherwise) for a
     /// connection that is still opening.

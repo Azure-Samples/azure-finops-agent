@@ -169,6 +169,21 @@ public sealed class HttpHelperTests
         Assert.Empty(HttpHelper.ConsentActions(response));
     }
 
+    // A multi-url QueryAzure call that needed Graph consent ended "Error: all 7 requests failed." and showed no button,
+    // although the answer told the user to press it.
+    [Fact]
+    public void AConsentFailureInsideAMultiUrlResultStillOffersItsButton()
+    {
+        var missing = HttpHelper.TokenMissing("GraphToken", null, "test", "chargeback");
+        var fanOut = $"Error: all 2 requests failed.\n[1] https://graph.microsoft.com/v1.0/users/a\n{missing}\n\n[2] https://graph.microsoft.com/v1.0/users/b\n{missing}";
+
+        var action = Assert.Single(HttpHelper.ConsentActions(fanOut));
+        Assert.Equal("""{"label":"Grant cost allocation access","href":"/auth/microsoft?tier=chargeback"}""", System.Text.Json.JsonSerializer.Serialize(action));
+        // Text that merely contains a 401 body is not a QueryAzure url part, and foreign hrefs stay excluded.
+        Assert.Empty(HttpHelper.ConsentActions("page line\n" + missing));
+        Assert.Empty(HttpHelper.ConsentActions("Error: all 1 requests failed.\n[1] https://x.test/a\nHTTP 401 Unauthorized\n{\"error\":{\"code\":\"consent_required\"},\"authActions\":[{\"href\":\"https://example.test/steal\"}]}"));
+    }
+
     [Fact]
     public async Task LaterRequestWaitsForExistingCostCooldownBeforeDispatch()
     {

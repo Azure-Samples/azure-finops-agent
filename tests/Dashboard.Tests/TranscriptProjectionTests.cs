@@ -155,6 +155,29 @@ public sealed class TranscriptProjectionTests
         Assert.Equal((3, "up"), (parsed.Turn, parsed.Rating));
     }
 
+    // Reopened conversations lost the consent button their answer told the user to press.
+    [Fact]
+    public void AReopenedConversationOffersTheConsentButtonsItsResultsAskedFor()
+    {
+        var missing = AzureFinOps.Dashboard.Infrastructure.HttpHelper.TokenMissing("LogAnalyticsToken", null, "test");
+        AgentEvent[] events =
+        [
+            new UserMessageEvent("Which machines send Syslog?"),
+            new ToolStartEvent("call-1", "QueryAzure", "{}"),
+            new ToolCompleteEvent("call-1", false, missing, null),
+            new AssistantMessageEvent("answer", "Press Grant Log Analytics access."),
+            new UserMessageEvent("And again?"),
+            new ToolStartEvent("call-2", "QueryAzure", "{}"),
+            new ToolCompleteEvent("call-2", false, missing, null),
+            new ToolStartEvent("call-3", "QueryAzure", "{}"),
+            new ToolCompleteEvent("call-3", true, "HTTP 200 OK\n{}", null),
+        ];
+
+        var action = Assert.Single(SessionEndpoints.ConsentActions(events));
+        Assert.Equal("""{"label":"Grant Log Analytics access","href":"/auth/microsoft?tier=loganalytics"}""", JsonSerializer.Serialize(action));
+        Assert.Empty(SessionEndpoints.ConsentActions([new UserMessageEvent("hi"), new AssistantMessageEvent("a", "hello")]));
+    }
+
     private static JsonDocument Project(params AgentEvent[] events) =>
         JsonDocument.Parse(JsonSerializer.Serialize(SessionEndpoints.BuildTranscript(events, 101)));
 }

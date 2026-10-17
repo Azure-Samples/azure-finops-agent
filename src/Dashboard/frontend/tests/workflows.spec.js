@@ -2231,6 +2231,60 @@ test("consent actions cannot navigate to tool-supplied external URLs", async ({
   );
 });
 
+// A reopened conversation lost the consent button its saved answer told the user to press.
+for (const granted of [false, true]) {
+  test(`a reopened conversation ${granted ? "hides a consent button for access already granted" : "restores its consent button"}`, async ({
+    page,
+  }) => {
+    const prompt = "Which machines send Syslog?";
+    await arrange(
+      page,
+      [],
+      {
+        messages: [
+          { role: "user", content: prompt },
+          { role: "assistant", content: "Press **Grant Log Analytics access**, then ask again." },
+        ],
+        consentActions: [
+          { label: "ignored", href: "/auth/microsoft?tier=loganalytics" },
+          { label: "unsafe", href: "https://attacker.invalid/" },
+        ],
+      },
+    );
+    await page.route("**/auth/azure/status", (route) =>
+      route.fulfill({
+        json: {
+          connected: true,
+          user: { email: "synthetic@example.test" },
+          subscriptions: [],
+          managementGroups: [],
+          apis: [],
+          logAnalyticsEnabled: granted,
+        },
+      }),
+    );
+    await page.route("**/api/sessions", (route) =>
+      route.fulfill({
+        json: {
+          sessions: [{ id: sessionId, summary: prompt, modified: new Date().toISOString() }],
+          currentSessionId: sessionId,
+        },
+      }),
+    );
+    await page.evaluate(
+      (session) => sessionStorage.setItem("finops_last_session", session),
+      sessionId,
+    );
+    await page.reload({ waitUntil: "domcontentloaded" });
+
+    await expect(page.getByText("then ask again", { exact: false })).toBeVisible();
+    const button = page.getByRole("link", { name: "Grant Log Analytics access" });
+    if (granted) await expect(button).toHaveCount(0);
+    else await expect(button).toHaveAttribute("href", "/auth/microsoft?tier=loganalytics");
+    await expect(page.locator('a[href^="https://attacker.invalid"]')).toHaveCount(0);
+  });
+}
+
 test("HTML report preview preserves contrast and stays isolated", async ({
   page,
 }, testInfo) => {

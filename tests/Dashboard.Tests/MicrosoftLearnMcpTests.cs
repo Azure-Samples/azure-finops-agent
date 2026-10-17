@@ -20,6 +20,28 @@ public sealed class MicrosoftLearnMcpTests
         Assert.Equal("https://learn.microsoft.com/api/mcp", MicrosoftLearnMcp.Endpoint.AbsoluteUri);
     }
 
+    // The server rejected these links (copied from Learn pages) as invalid, and read the same pages without toc and bc.
+    [Theory]
+    [InlineData("https://learn.microsoft.com/en-us/microsoft-365/admin/manage/agent-registry?toc=/microsoft-agent-365/toc.json&bc=/microsoft-agent-365/breadcrumb/agent365/toc.json",
+        "https://learn.microsoft.com/en-us/microsoft-365/admin/manage/agent-registry")]
+    [InlineData("https://learn.microsoft.com/azure/page?tabs=portal&toc=/x/toc.json#section", "https://learn.microsoft.com/azure/page?tabs=portal#section")]
+    [InlineData("https://learn.microsoft.com/azure/page?tabs=portal", "https://learn.microsoft.com/azure/page?tabs=portal")]
+    [InlineData("https://learn.microsoft.com/dotnet/api/system.string?view=net-9.0", "https://learn.microsoft.com/dotnet/api/system.string?view=net-9.0")]
+    [InlineData("https://example.com/page?toc=/x", "https://example.com/page?toc=/x")]
+    public void AFetchedLearnLinkLosesOnlyItsNavigationParameters(string url, string expected)
+    {
+        foreach (var value in new object[] { url, JsonSerializer.SerializeToElement(url) })
+        {
+            var arguments = new AIFunctionArguments { ["url"] = value };
+            MicrosoftLearnMcp.NormalizeArguments("microsoft_docs_fetch", arguments);
+            Assert.Equal(expected, arguments["url"] is JsonElement element ? element.GetString() : arguments["url"]);
+        }
+
+        var search = new AIFunctionArguments { ["url"] = url };
+        MicrosoftLearnMcp.NormalizeArguments("microsoft_docs_search", search);
+        Assert.Equal(url, search["url"]);
+    }
+
     [Fact]
     public void ALongPageIsCutWithANoteAndShortResultsStayUnchanged()
     {

@@ -287,6 +287,36 @@ public sealed class JsonQueryTests
         Assert.Contains("⟨here⟩", error.Message);
     }
 
+    // A per-service share divided by properties.rows.Sum(...) inside GroupBy(...).Select(g => ...) failed on both
+    // subscriptions of one session with "No property or field 'properties' exists in type 'IGrouping`2'" and no hint.
+    [Fact]
+    public void AResponseMemberReadInsideALambdaPointsToRoot()
+    {
+        const string costs = """{"properties":{"rows":[{"ServiceName":"Storage","PreTaxCost":30},{"ServiceName":"Compute","PreTaxCost":60},{"ServiceName":"Compute","PreTaxCost":10}]}}""";
+        const string share = "properties.rows.GroupBy(r => r.ServiceName).Select(g => new { service = g.Key, percent = Math.Round(100 * g.Sum(r => r.PreTaxCost ?? 0) / {0}.rows.Sum(r => r.PreTaxCost ?? 0), 1) })";
+
+        var error = Assert.ThrowsAny<ArgumentException>(() => Run(costs, share.Replace("{0}", "properties")));
+
+        Assert.Contains("read the response's properties as root.properties", error.Message);
+        Assert.Equal("""[{"service":"Storage","percent":30},{"service":"Compute","percent":70}]""", Run(costs, share.Replace("{0}", "root.properties")));
+        // A case-only mismatch with a response member stays the plain error, without the root hint.
+        Assert.DoesNotContain("as root.", Assert.ThrowsAny<Exception>(() => Run(costs, "properties.rows.GroupBy(r => r.ServiceName).Select(g => Properties.rows.Count())")).Message);
+    }
+
+    // A calculation retypes figures from several earlier calls, since nothing is stored between calls; the live sessions
+    // that failed at 4,000 characters combined 4,581 to 7,099 characters of figures.
+    [Fact]
+    public void ALongCombinedCalculationIsAcceptedAndALimitRemains()
+    {
+        var figures = string.Join(", ", Enumerable.Range(1, 400).Select(i => $"new {{ m = {i % 12 + 1}, c = {i}.12345 }}"));
+        var calculation = $"new[] {{ {figures} }}.GroupBy(x => x.m).Select(g => new {{ month = g.Key, cost = Math.Round(g.Sum(x => x.c), 2) }}).OrderBy(x => x.month).Take(2)";
+        Assert.InRange(calculation.Length, 7_000, JsonQuery.MaxExpressionLength);
+
+        Assert.StartsWith("""[{"month":1,""", JsonQuery.Evaluate(new System.Text.Json.Nodes.JsonObject(), calculation, 48 * 1024, CancellationToken.None).Json);
+        var tooLong = Assert.Throws<ArgumentException>(() => JsonQuery.Evaluate(new System.Text.Json.Nodes.JsonObject(), new string(' ', JsonQuery.MaxExpressionLength + 1), 48 * 1024, CancellationToken.None));
+        Assert.Contains($"longer than {JsonQuery.MaxExpressionLength} characters", tooLong.Message);
+    }
+
     // Each case is a first-call query that failed in the live evaluations against a response of this shape.
     [Fact]
     public void ReadsAreAsForgivingAsJson()

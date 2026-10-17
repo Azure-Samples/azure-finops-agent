@@ -172,7 +172,7 @@ Open [http://localhost:5000](http://localhost:5000). Build the frontend before s
 
 ## For maintainers
 
-- [`/investigate-ai-sessions`](.github/skills/investigate-ai-sessions/SKILL.md) audits 100 real conversations end to end, finds recurring reasons answers fall short, and implements regression-tested local fixes. It never impersonates users, commits customer transcripts or deploys on its own.
+- [`/evaluate-sessions`](.github/skills/evaluate-sessions/SKILL.md) exports the last 30 days of real conversations, rates each one from 0 to 10, finds the ten most important issues and their root causes in the code, and asks which to fix before implementing regression-tested local fixes. It never impersonates users, commits customer transcripts or deploys on its own.
 - [`/investigate-logs`](.github/skills/investigate-logs/SKILL.md) triages exceptions in Application Insights.
 - `npm run og-image` in `src/Dashboard/frontend` re-renders the social sharing card from [its HTML source](src/Dashboard/frontend/social/og-image.html).
 

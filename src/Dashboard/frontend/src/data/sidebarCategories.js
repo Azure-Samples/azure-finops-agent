@@ -17,7 +17,7 @@ const aiGovernancePrompts = [
   {
     label: "How do I find all our AI agents?",
     prompt:
-      "How do I build one inventory of every AI agent in my organization (Foundry, Copilot Studio and agents on other clouds) with a named owner for each, and find unapproved (shadow) agents? Show the steps in one table: step, Microsoft tool, what to do.",
+      "How do I build one inventory of every AI agent in my organization (Foundry, Copilot Studio and agents on other clouds) with a named owner for each, and find unapproved (shadow) agents? Show the steps in one table: step, Microsoft tool, what to do, what it needs (license, preview opt-in or admin role).",
   },
   {
     label: "What does E7 add for AI agents?",

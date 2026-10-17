@@ -70,8 +70,16 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("For Azure cost, budget, inventory, tag and pricing answers, quote the reported retrieval time")]
     [InlineData("Documentation answers carry no retrieval time")]
     [InlineData("when they are not in your tool list, search with QueryAzure GET https://learn.microsoft.com/api/search")]
+    // Thirty one-per-subscription cost queries made one session's first answer take 395 seconds.
+    [InlineData("never a query per subscription, which the host runs one at a time")]
+    [InlineData("Enterprise Agreement subscriptions only: for Microsoft Customer Agreement, CSP and other offers")]
+    [InlineData("{\"usage\":{\"name\":\"UsageQuantity\",\"function\":\"Sum\"}}")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
+
+    [Fact]
+    public void PromptNoLongerSuggestsOneCostQueryPerScope() =>
+        Assert.DoesNotContain("one cost query per scope", Prompt);
 
     [Fact]
     public void WebSearchIsOnByDefaultAndScopedToPublicNews()
@@ -215,6 +223,8 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("learn.microsoft.com/kusto", azure.Description);
         Assert.Contains("learn.microsoft.com/rest/api/storageservices", azure.Description);
         Assert.Contains("azure.status.microsoft", azure.Description);
+        // Azure's pricing pages fill their tables in the browser, so five sessions read pages that held no prices.
+        Assert.Contains("a GET returns placeholders ($-) instead of prices: take Azure prices from the Retail Prices API and pricing terms (what a price includes, how a meter bills) from Microsoft Learn, never from those pages", azure.Description);
         // Learn's own search stays the fallback when its MCP tools are not available.
         Assert.Contains("only when those tools are not available, search https://learn.microsoft.com/api/search", azure.Description);
     }
