@@ -66,7 +66,26 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("never send the user to App registrations to add permissions to this app")]
     [InlineData("microsoft_docs_search")]
     [InlineData("never tenant, resource, user or customer names, IDs or values")]
-    [InlineData("never a round of its own for what the fetching query could compute")]
+    [InlineData("never a round of its own for what the fetching call could compute")]
+    // Calculation rounds that retyped figures from several calls were 17% of model time in production (October 2026).
+    [InlineData("with combine when the answer totals, merges or compares their responses")]
+    [InlineData("one QueryAzure call with one url line per subscription, the shared body and combine for the totals")]
+    [InlineData("never whole tables, since repeating the request with query or combine recomputes many rows faster than retyping them")]
+    // Guidance answers searched or read pages one round at a time.
+    [InlineData("three products are three searches in the first response, never one now and another later")]
+    [InlineData("never a third round, a reworded search, a page reached through another page's links")]
+    // Unrequested data files cost about a minute of writing each.
+    [InlineData("offer the complete list as a file in a follow-up link")]
+    [InlineData("a breakdown such as per model or by subscription is a table, not a file")]
+    // A token-usage question spent four documentation rounds finding the Azure Monitor token metrics.
+    [InlineData("metricnames=InputTokens,OutputTokens,TotalTokens&aggregation=Total&interval=FULL")]
+    [InlineData("their dimensions are ApiName, Region, ModelDeploymentName, ModelName and ModelVersion, none per project")]
+    // The token metrics name their dimensions in lowercase (modelname), so a query comparing "ModelName" found no model and
+    // the agent re-read every account; per-project figures then took three rounds of Application Insights exploration.
+    [InlineData("so compare dimension names with ToLower()")]
+    [InlineData("the account's FoundryModelEstimatedCost metric (preview; estimated USD for Foundry models, not billed cost)")]
+    // A per-model token answer dropped an image model billed USD 296 and an audio model, so its rows missed the total.
+    [InlineData("A breakdown of a stated total accounts for all of it")]
     [InlineData("For Azure cost, budget, inventory, tag and pricing answers, quote the reported retrieval time")]
     [InlineData("Documentation answers carry no retrieval time")]
     [InlineData("when they are not in your tool list, search with QueryAzure GET https://learn.microsoft.com/api/search")]
@@ -202,7 +221,7 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("Write for someone new to Azure", Prompt);
         Assert.Contains("about 50-100 words outside the visual", Prompt);
         Assert.Contains("never two sentences", Prompt);
-        Assert.Contains("never reword a search or read more pages for detail the short answer will not show", Prompt);
+        Assert.Contains("or more pages for detail the short answer will not show", Prompt);
         Assert.Contains("at most six rows and four columns unless the question asks for more items or metrics", Prompt);
         Assert.Contains("never pairs such as 2 / 4 or short / long", Prompt);
         Assert.Contains("never 2,762.5M or fractional tokens", Prompt);
@@ -225,6 +244,13 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("azure.status.microsoft", azure.Description);
         // Azure's pricing pages fill their tables in the browser, so five sessions read pages that held no prices.
         Assert.Contains("a GET returns placeholders ($-) instead of prices: take Azure prices from the Retail Prices API and pricing terms (what a price includes, how a meter bills) from Microsoft Learn, never from those pages", azure.Description);
+        // An audited SQL estimate left out the log storage; the corrected agent then spent two rounds looking it up, and an
+        // answer that applied the rule without a source was judged ungrounded, so one search goes with the first prices.
+        Assert.Contains("bill the configured maximum data size plus 30 percent for the log file (500 GB of data bills 650 GB", azure.Description);
+        Assert.Contains("send one microsoft_docs_search for SQL Database vCore data and log storage in the same response as the first price request", azure.Description);
+        // Several url lines can be POSTs with one body, and combine totals their responses in the same call.
+        Assert.Contains("all GET, or all POST with one body sent to each", azure.Description);
+        Assert.Contains("combine instead runs once over all responses", azure.Description);
         // Learn's own search stays the fallback when its MCP tools are not available.
         Assert.Contains("only when those tools are not available, search https://learn.microsoft.com/api/search", azure.Description);
     }

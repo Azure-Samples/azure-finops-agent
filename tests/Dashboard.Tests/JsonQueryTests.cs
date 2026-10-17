@@ -278,6 +278,37 @@ public sealed class JsonQueryTests
         Assert.Equal("""["eastus","westus"]""", Run("""{"eastus":{"price":1},"westus":{"price":2}}""", "it.Select(p => p.Key)"));
     }
 
+    // A combine over responses where one request failed (null) used SelectMany(r => r.value) and threw a
+    // NullReferenceException: a selector's inner list was the one LINQ source not read as empty when missing.
+    [Fact]
+    public void AMissingInnerListEnumeratesAsEmptyInSelectMany()
+    {
+        const string body = """{"responses":[{"value":[{"cost":3},{"cost":2}]},null,{"other":1},{"value":null}]}""";
+
+        Assert.Equal("5", Run(body, "responses.SelectMany(r => r.value).Sum(x => x.cost ?? 0)"));
+        Assert.Equal("2", Run(body, "responses.SelectMany(r => r.value).Count()"));
+        Assert.Equal("[\"eastus\",\"eastus\"]", Run(Vms, "value.Where(x => x.location == \"eastus\").SelectMany(x => new[] { x.location }).ToList()"));
+    }
+
+    // An Azure Monitor account with no traffic returns empty timeseries. The root value.Select(...) made the never-seen
+    // d.name.value a list, so the query that worked for the busy accounts failed on the idle ones ("Operator '=='
+    // incompatible with operand types 'List`1' and 'String'"). A never-seen member is a list only where it is iterated.
+    [Fact]
+    public void AnEmptyMetricsResponseRunsTheQueryOfABusyOne()
+    {
+        const string query = "value.Select(m => new { metric = m.name.value, models = m.timeseries.GroupBy(t => t.metadatavalues.FirstOrDefault(d => d.name.value.ToLower() == \"modelname\").value).Select(g => new { model = g.Key, tokens = g.Sum(t => t.data.Sum(p => p.total ?? 0)) }), tokens = m.timeseries.Sum(t => t.data.Sum(p => p.total ?? 0)) })";
+        const string idle = """{"cost":129597,"value":[{"name":{"value":"InputTokens"},"unit":"Count","timeseries":[]},{"name":{"value":"OutputTokens"},"unit":"Count","timeseries":[]}]}""";
+        const string busy = """{"value":[{"name":{"value":"InputTokens"},"timeseries":[{"metadatavalues":[{"name":{"value":"modelname"},"value":"model-a"}],"data":[{"total":5},{"total":7}]},{"metadatavalues":[{"name":{"value":"modelname"},"value":"model-b"}],"data":[{"total":1}]}]}]}""";
+
+        Assert.Equal("""[{"metric":"InputTokens","models":[],"tokens":0},{"metric":"OutputTokens","models":[],"tokens":0}]""", Run(idle, query));
+        // The query exactly as the agent wrote it, comparing the documented name.
+        Assert.Equal("""[{"metric":"InputTokens","models":[],"tokens":0},{"metric":"OutputTokens","models":[],"tokens":0}]""",
+            Run(idle, query.Replace("d.name.value.ToLower() == \"modelname\"", "d.name.value == \"ModelName\"")));
+        Assert.Equal("""[{"metric":"InputTokens","models":[{"model":"model-a","tokens":12},{"model":"model-b","tokens":1}],"tokens":13}]""", Run(busy, query));
+        // A never-seen member iterated through its own parent is still a list of unknown items.
+        Assert.Equal("[0,0]", Run(idle, "value.Select(m => m.timeseries.Sum(t => t.data.Count()))"));
+    }
+
     [Fact]
     public void AParseErrorShowsWhereInTheQueryItFailed()
     {

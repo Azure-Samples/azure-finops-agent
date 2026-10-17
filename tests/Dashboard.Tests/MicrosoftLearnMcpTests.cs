@@ -20,6 +20,22 @@ public sealed class MicrosoftLearnMcpTests
         Assert.Equal("https://learn.microsoft.com/api/mcp", MicrosoftLearnMcp.Endpoint.AbsoluteUri);
     }
 
+    // A Learn page read hung until the HTTP client's 60-second timeout and failed without a retry. A call now has its own
+    // deadline, which surfaces as a TimeoutException the invoker retries on a new connection; the user's Stop still cancels.
+    [Fact]
+    public async Task ACallThatRunsOutOfTimeTimesOutButStopStillCancels()
+    {
+        var hung = AIFunctionFactory.Create(async (CancellationToken token) => { await Task.Delay(TimeSpan.FromSeconds(30), token); return "late"; }, "microsoft_docs_fetch");
+        var quick = AIFunctionFactory.Create(() => "# Page", "microsoft_docs_fetch");
+
+        var timedOut = await Assert.ThrowsAsync<TimeoutException>(() => MicrosoftLearnMcp.InvokeAsync(hung, [], CancellationToken.None, TimeSpan.FromMilliseconds(100)));
+        Assert.StartsWith("Microsoft Learn did not answer within", timedOut.Message);
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => MicrosoftLearnMcp.InvokeAsync(hung, [], stop.Token, TimeSpan.FromSeconds(10)));
+        Assert.Equal("# Page", (await MicrosoftLearnMcp.InvokeAsync(quick, [], CancellationToken.None))?.ToString());
+        Assert.Equal(TimeSpan.FromSeconds(20), MicrosoftLearnMcp.CallTimeout);
+    }
+
     // The server rejected these links (copied from Learn pages) as invalid, and read the same pages without toc and bc.
     [Theory]
     [InlineData("https://learn.microsoft.com/en-us/microsoft-365/admin/manage/agent-registry?toc=/microsoft-agent-365/toc.json&bc=/microsoft-agent-365/breadcrumb/agent365/toc.json",

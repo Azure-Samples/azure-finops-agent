@@ -242,10 +242,12 @@ internal static partial class JsonQuery
         if (missing.Success && missing.Groups["type"].Value == "Char")
         {
             // A never-seen member the query iterates (b.properties.notifications.Select(p => p.Key)) is a list of unknown
-            // items, not a string of characters.
-            var iterated = Iterated().Matches(text).Select(match => match.Groups["m"].Value).ToHashSet(StringComparer.Ordinal);
+            // items, not a string of characters, but only where the query iterates it through that member's own parent: a
+            // root value.Select(...) must not make the never-seen d.name.value of an empty Azure Monitor timeseries a list.
+            var iterated = IteratedReads().Matches(text).Select(match => (Host: match.Groups["host"].Value, Member: match.Groups["m"].Value)).ToList();
             foreach (var (node, path) in Walk(shape, "it").ToList())
-                if (node.Unknown && !node.ForceList && node.Properties.Count == 0 && Segment(path) is { } name && iterated.Contains(name))
+                if (node.Unknown && !node.ForceList && node.Properties.Count == 0 && Segment(path) is { } name
+                    && iterated.Any(read => read.Member == name && IteratedThrough(shape, path, read.Host)))
                 {
                     node.ForceList = true;
                     changed = true;
@@ -297,6 +299,18 @@ internal static partial class JsonQuery
     // The member name a path ends with; null for a list item or map value.
     private static string? Segment(string path) => path.EndsWith(']') ? null : path[(path.LastIndexOf('.') + 1)..];
 
+    // Whether an iterating read host.member (host empty for a bare name, ")" or "]" for an expression's result) can reach
+    // the member at path: a named parent is the host itself; a root member is read bare or through it or root; a list item
+    // or map value through a lambda parameter or an expression, or bare when the root has no member of that name.
+    private static bool IteratedThrough(Node root, string path, string host)
+    {
+        var parent = path[..path.LastIndexOf('.')];
+        if (parent == "it") return host is "" or "it" or "root";
+        if (parent.EndsWith(']'))
+            return host is not ("it" or "root") && (host.Length > 0 || root.Members?.Values.Any(member => member.Identifier == Segment(path)) != true);
+        return Segment(parent) == host;
+    }
+
     private static readonly HashSet<string> CollectionMethods = [.. typeof(Enumerable).GetMethods().Select(method => method.Name)];
 
     /// <summary>
@@ -331,6 +345,11 @@ internal static partial class JsonQuery
     // Members the query enumerates with a lambda or a LINQ operator.
     [System.Text.RegularExpressions.GeneratedRegex(@"\b(?<m>\w+)\s*\??\.\s*(?:Select|SelectMany|Where|Any|All|Count|Sum|Average|Min|Max|OrderBy|OrderByDescending|GroupBy|First|FirstOrDefault|Last|LastOrDefault|Take|Skip|Distinct|ToList|ToArray)\s*\(", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex Iterated();
+
+    // The same enumerations with the name or expression each member is read through (t.metadatavalues.FirstOrDefault(...)
+    // yields t and metadatavalues; a bare value.Select(...) has an empty host).
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?:(?<host>\b\w+|[)\]])\s*\??\.\s*)?\b(?<m>\w+)\s*\??\.\s*(?:Select|SelectMany|Where|Any|All|Count|Sum|Average|Min|Max|OrderBy|OrderByDescending|GroupBy|First|FirstOrDefault|Last|LastOrDefault|Take|Skip|Distinct|ToList|ToArray)\s*\(", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex IteratedReads();
 
     // Members the query reads with a string key: parameters["effect"].
     [System.Text.RegularExpressions.GeneratedRegex(@"\b(?<m>\w+)\s*\??\[\s*""", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
@@ -846,9 +865,21 @@ internal static partial class JsonQuery
                 throw new InvalidOperationException($"{method.DeclaringType?.Name}.{method.Name} is not available in this form in a query.");
             var visited = (MethodCallExpression)base.VisitMethodCall(node);
             var parameters = method.GetParameters();
-            var arguments = visited.Arguments.Select((argument, index) => Watch(argument, parameters[index].ParameterType)).ToArray();
+            var arguments = visited.Arguments.Select((argument, index) => argument is LambdaExpression lambda ? WatchResult(lambda, parameters[index].ParameterType) : Watch(argument, parameters[index].ParameterType)).ToArray();
             var call = arguments.SequenceEqual(visited.Arguments) ? visited : visited.Update(visited.Object, arguments);
             return call.Type == typeof(string) ? Expression.Call(Expression.Constant(budget), nameof(Budget.Text), null, call) : call;
+        }
+
+        // A selector the method reads as a sequence (SelectMany's Func<T, IEnumerable<U>>) is a LINQ source too: a missing
+        // inner list, such as the list read through a failed response or an item without it, enumerates as empty instead
+        // of failing. Dynamic LINQ types the lambda by its body (Func<T, List<U>>), so it takes the method's delegate type.
+        private LambdaExpression WatchResult(LambdaExpression lambda, Type parameterType)
+        {
+            if (!typeof(Delegate).IsAssignableFrom(parameterType) || parameterType.GetMethod("Invoke") is not { } invoke
+                || !invoke.GetParameters().Select(parameter => parameter.ParameterType).SequenceEqual(lambda.Parameters.Select(parameter => parameter.Type)))
+                return lambda;
+            var body = Watch(lambda.Body, invoke.ReturnType);
+            return ReferenceEquals(body, lambda.Body) ? lambda : Expression.Lambda(parameterType, body, lambda.Parameters);
         }
 
         // Every sequence handed to a method is enumerated through the step budget. A string is a sequence only as a LINQ

@@ -28,8 +28,8 @@ public class QueryFanOutTests
         }, probe);
     }
 
-    private static Task<string> FanOut(string url, Func<string, CancellationToken, Task<string>> send, string method = "GET", string? body = null, string query = "") =>
-        AzureQueryTools.FanOutAsync(AzureQueryTools.Urls(url), method, body is null ? null : JsonDocument.Parse(body).RootElement.Clone(), query, send, CancellationToken.None);
+    private static Task<string> FanOut(string url, Func<string, CancellationToken, Task<string>> send, string method = "GET", string? body = null, string query = "", string combine = "") =>
+        AzureQueryTools.FanOutAsync(AzureQueryTools.Urls(url), method, body is null ? null : JsonDocument.Parse(body).RootElement.Clone(), query, send, CancellationToken.None, combine);
 
     [Fact]
     public async Task SeveralUrlLinesAreOneCallWithBoundedConcurrencyAndUrlOrder()
@@ -125,10 +125,10 @@ public class QueryFanOutTests
     }
 
     [Theory]
-    [InlineData("POST", null, 2)]
+    [InlineData("DELETE", null, 2)]
     [InlineData("GET", "{\"query\":\"x\"}", 2)]
     [InlineData("GET", null, AzureQueryTools.MaxUrls + 1)]
-    public async Task SeveralUrlsAreGetOnlyAndBounded(string method, string? body, int count)
+    public async Task SeveralUrlsAreGetOrPostWithOneBodyAndBounded(string method, string? body, int count)
     {
         var (send, probe) = Create();
         var urls = Enumerable.Range(0, count).Select(index => $"/r{index}");
@@ -138,5 +138,80 @@ public class QueryFanOutTests
         Assert.StartsWith("HTTP 400 BadRequest\n", output);
         Assert.EndsWith("No request was sent.", output);
         Assert.Empty(probe.Calls);
+    }
+
+    // Per-subscription cost queries were separate calls whose figures the model then retyped into a calculation round
+    // (one session: 30 queries and five calculation rounds). One call now sends the shared body to every url line.
+    [Fact]
+    public async Task SeveralPostUrlsShareOneBodyAndRunQueryOnEach()
+    {
+        var (send, probe) = Create(url => $"HTTP 200 OK\n{{\"properties\":{{\"columns\":[{{\"name\":\"PreTaxCost\"}},{{\"name\":\"ServiceName\"}}],\"rows\":[[{(url.Contains("/a/") ? 10 : 5)},\"Storage\"]]}}}}");
+
+        var output = await FanOut("/subscriptions/a/providers/Microsoft.CostManagement/query\n/subscriptions/b/providers/Microsoft.CostManagement/query",
+            send, "POST", "{\"type\":\"ActualCost\"}", query: "properties.rows.Sum(r => r.PreTaxCost)");
+
+        Assert.Equal(2, probe.Calls.Count);
+        Assert.StartsWith("2 requests succeeded; results follow in url order.\n", output);
+        Assert.Contains("Query result:\n10", output);
+        Assert.Contains("Query result:\n5", output);
+    }
+
+    [Fact]
+    public async Task CombineRunsOnceOverAllResponsesInUrlOrder()
+    {
+        var (send, _) = Create(url => url switch
+        {
+            "/a" => "HTTP 200 OK\nCurrent UTC time: 2026-10-17 09:00:00\n{\"properties\":{\"columns\":[{\"name\":\"PreTaxCost\"},{\"name\":\"ServiceName\"}],\"rows\":[[10.5,\"Storage\"],[4,\"Compute\"]]}}",
+            _ => "HTTP 200 OK\nCurrent UTC time: 2026-10-17 09:00:01\n{\"properties\":{\"columns\":[{\"name\":\"PreTaxCost\"},{\"name\":\"ServiceName\"}],\"rows\":[[1.25,\"Storage\"]]},\"complete\":true}",
+        });
+
+        var output = await FanOut("/a\n/b", send, combine:
+            "new { total = Math.Round(responses.SelectMany(r => r.properties.rows).Sum(x => x.PreTaxCost ?? 0), 2), byService = responses.SelectMany(r => r.properties.rows).GroupBy(x => x.ServiceName).Select(g => new { service = g.Key, cost = g.Sum(x => x.PreTaxCost ?? 0) }).OrderByDescending(x => x.cost), first = responses[0].properties.rows.Count() }");
+
+        Assert.StartsWith("2 requests succeeded; combine ran once over all of them.\n[1] /a\nHTTP 200 OK\nCurrent UTC time: 2026-10-17 09:00:00\n\n[2] /b\nHTTP 200 OK\n", output);
+        Assert.Contains("Coverage: {\"complete\":true}", output);
+        Assert.EndsWith("Combined result:\n{\"total\":15.75,\"byService\":[{\"service\":\"Storage\",\"cost\":11.75},{\"service\":\"Compute\",\"cost\":4}],\"first\":2}", output);
+        Assert.DoesNotContain("\"rows\"", output);
+        Assert.True(EvidenceInspector.Inspect(output) is { Success: true, Partial: false });
+    }
+
+    [Fact]
+    public async Task CombineOverPartOfTheResponsesIsPartialAndKeepsTheFailure()
+    {
+        var missing = AzureFinOps.Dashboard.Infrastructure.HttpHelper.TokenMissing("LogAnalyticsToken", null, "test");
+        var (send, _) = Create(url => url switch
+        {
+            "/a" => "HTTP 200 OK\n{\"value\":[{\"cost\":3}]}",
+            "/b" => "HTTP 403 Forbidden\n{\"error\":{\"code\":\"AuthorizationFailed\",\"message\":\"synthetic\"}}",
+            _ => missing,
+        });
+
+        var output = await FanOut("/a\n/b\n/c", send, combine: "new { total = responses.SelectMany(r => r.value).Sum(x => x.cost ?? 0), failed = responses.Count(r => r == null) }");
+
+        Assert.StartsWith("PARTIAL RESULT: 2 of 3 requests failed; a failed request is unknown, not empty, and combine ran over the other 1 only.\n", output);
+        Assert.Contains("[2] /b\nHTTP 403 Forbidden", output);
+        Assert.EndsWith("Combined result:\n{\"total\":3,\"failed\":2}", output);
+        Assert.True(EvidenceInspector.Inspect(output) is { Success: true, Partial: true });
+        // The consent button a failed url asked for is still offered.
+        Assert.Single(AzureFinOps.Dashboard.Infrastructure.HttpHelper.ConsentActions(output));
+    }
+
+    [Fact]
+    public async Task CombineFailsLikeAQueryAndNeverHidesFailures()
+    {
+        var (okSend, _) = Create(url => "HTTP 200 OK\n{\"value\":[{\"cost\":3}]}");
+        var (failedSend, _) = Create(url => "HTTP 503 ServiceUnavailable\n{}");
+
+        var broken = await FanOut("/a\n/b", okSend, combine: "responses.Sum(r => r.missing.cost");
+        var both = await FanOut("/a\n/b", okSend, query: "value.Count()", combine: "responses.Count()");
+        var allFailed = await FanOut("/a\n/b", failedSend, combine: "responses.Count()");
+
+        Assert.StartsWith("Error: the combine query failed: ", broken);
+        Assert.Contains("Correct combine against this schema and repeat the request.", broken);
+        Assert.Contains("Schema:\nit: ", broken);
+        Assert.False(EvidenceInspector.Inspect(broken).Success);
+        Assert.StartsWith("HTTP 400 BadRequest\nUse query (run on each response) or combine", both);
+        Assert.StartsWith("Error: all 2 requests failed.\n[1] /a\nHTTP 503", allFailed);
+        Assert.DoesNotContain("Combined result", allFailed);
     }
 }

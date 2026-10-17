@@ -30,9 +30,19 @@ public sealed class QueryAzureRoutingTests
         var tools = new AzureQueryTools(Tokens).Create().ToArray();
         Assert.Equal(["QueryAzure", "ApplyAzureChange"], tools.Select(tool => tool.Name));
         Assert.False(tools[0].JsonSchema.TryGetProperty("required", out var required) && required.GetArrayLength() > 0);
-        foreach (var parameter in new[] { "url", "method", "body", "query" })
+        foreach (var parameter in new[] { "url", "method", "body", "query", "combine" })
             Assert.True(tools[0].JsonSchema.GetProperty("properties").TryGetProperty(parameter, out _), parameter);
         Assert.IsType<ApprovalRequiredAIFunction>(tools[1]);
+    }
+
+    // combine is optional and needs url lines; a combine without them sends nothing and says what to do.
+    [Fact]
+    public async Task CombineWithoutUrlLinesSendsNothing()
+    {
+        var output = await InvokeAsync(new AIFunctionArguments { ["combine"] = "responses.Count()" });
+        Assert.StartsWith("HTTP 400 BadRequest\ncombine runs over the responses of the url lines", output);
+        Assert.EndsWith("No request was sent.", output);
+        Assert.StartsWith(CalculationPrefix, await InvokeAsync(new AIFunctionArguments { ["query"] = "new { x = 1 + 2 }" }));
     }
 
     [Theory]

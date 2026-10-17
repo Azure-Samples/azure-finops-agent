@@ -21,6 +21,13 @@ internal sealed class MicrosoftLearnMcp : IAsyncDisposable
     /// <summary>The most a Learn result adds to the model context; a longer page is cut with a note.</summary>
     internal const int MaxResultCharacters = 48 * 1024;
 
+    /// <summary>
+    /// The most one Learn call may take before it is sent once more on a new connection. Production calls finish in about a
+    /// second (p99 1.3 s over 108 calls in October 2026), while a hung call otherwise held the answer for the HTTP client's
+    /// 60-second timeout and then failed.
+    /// </summary>
+    internal static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(20);
+
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(1);
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -39,6 +46,23 @@ internal sealed class MicrosoftLearnMcp : IAsyncDisposable
     }
 
     internal static bool IsLearnTool(string? name) => name is not null && ToolNames.Contains(name, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Invokes a Learn tool within <paramref name="timeout"/> (<see cref="CallTimeout"/> by default). A call that runs out
+    /// of time fails with a <see cref="TimeoutException"/>, which the caller treats like a dropped connection; the caller's
+    /// own cancellation (the user's Stop) still cancels.
+    /// </summary>
+    internal static async Task<object?> InvokeAsync(AIFunction function, AIFunctionArguments arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
+    {
+        var limit = timeout ?? CallTimeout;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(limit);
+        try { return await function.InvokeAsync(arguments, deadline.Token); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Microsoft Learn did not answer within {limit.TotalSeconds:0} seconds.");
+        }
+    }
 
     // Learn's table-of-contents and breadcrumb parameters only change a page's navigation, but the server rejects a link
     // carrying them as "not a valid Microsoft documentation webpage link" (Learn pages link to each other with them).
