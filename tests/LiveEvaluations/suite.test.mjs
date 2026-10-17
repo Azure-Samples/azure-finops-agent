@@ -555,6 +555,9 @@ test("up to two failed calls each corrected by a later call to the same tool pas
     const ok = { name: "QueryAzure", success: true };
     assert.deepEqual(validateResult(scenario, withTools([failed, ok]), 0, sha, suiteHash), []);
     assert.deepEqual(validateResult(scenario, withTools([failed, ok, failed, ok]), 0, sha, suiteHash), []);
+    // Tools are listed in completion order: a dropped hosted search closed at turn end is corrected by a search started later.
+    assert.deepEqual(validateResult(scenario, withTools([{ ...ok, startMs: 16107 }, { ...failed, startMs: 4857 }]), 0, sha, suiteHash), []);
+    assert.ok(validateResult(scenario, withTools([{ ...ok, startMs: 4857 }, { ...failed, startMs: 4857 }]), 0, sha, suiteHash).length > 0);
     for (const tools of [
         [ok, failed],
         [failed, ok, failed, ok, failed, ok],

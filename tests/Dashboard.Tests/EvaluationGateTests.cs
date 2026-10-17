@@ -70,6 +70,20 @@ public sealed class EvaluationGateTests
         Assert.True(EvaluationGate.Assess(Scenario, Success with { Tools = [failed, ok, failed, ok] }, Accepted).Accepted);
     }
 
+    // Tools are recorded in completion order. A hosted search the service dropped completed only when the turn ended,
+    // after a search the model started later; that later search is its correction.
+    [Fact]
+    public void ACorrectionIsTheCallStartedLaterNotTheOneListedLater()
+    {
+        ToolResult dropped = new("web_search", false, "", "The turn ended before this tool completed.", StartedMs: 4_857, CompletedMs: 52_000);
+        ToolResult searched = new("web_search", true, "Web search completed.", null, StartedMs: 16_107, CompletedMs: 19_776);
+        ToolResult evidence = Success.Tools[0];
+        Assert.True(EvaluationGate.Assess(Scenario, Success with { Tools = [evidence, searched, dropped] }, Accepted).Accepted);
+        // Concurrent calls started together do not correct each other, and an earlier start never corrects a later failure.
+        Assert.False(EvaluationGate.Assess(Scenario, Success with { Tools = [evidence, searched with { StartedMs = 4_857 }, dropped] }, Accepted).Accepted);
+        Assert.False(EvaluationGate.Assess(Scenario, Success with { Tools = [evidence, dropped with { StartedMs = 20_000 }, searched] }, Accepted).Accepted);
+    }
+
     [Theory]
     [InlineData("third-failure")]
     [InlineData("never-corrected")]

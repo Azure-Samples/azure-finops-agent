@@ -319,10 +319,16 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
             failures.push("A tool record is invalid.");
         else {
             const failed = result.tools.flatMap((tool, index) => (tool.success ? [] : [index]));
+            // Tools are listed in completion order; a correction is a call started after the failed one (list order
+            // decides when start offsets are missing).
+            const startedAfter = (later, laterIndex, failedIndex) => {
+                const [a, b] = [later.startMs, result.tools[failedIndex].startMs];
+                return Number.isFinite(a) && Number.isFinite(b) ? a > b : laterIndex > failedIndex;
+            };
             if (failed.length > ALLOWED_CORRECTED_TOOL_FAILURES)
                 failures.push(`${failed.length} tool calls failed; at most ${ALLOWED_CORRECTED_TOOL_FAILURES} corrected failures are allowed.`);
-            else if (failed.some((index) => !result.tools.slice(index + 1)
-                .some((later) => later.name === result.tools[index].name && later.success === true)))
+            else if (failed.some((index) => !result.tools
+                .some((later, laterIndex) => startedAfter(later, laterIndex, index) && later.name === result.tools[index].name && later.success === true)))
                 failures.push("A failed tool call was never corrected.");
         }
         for (const name of scenario.requiredTools)

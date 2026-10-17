@@ -99,6 +99,28 @@ public sealed class JsonQueryTests
     public void CSharpAnonymousObjectsAreRewrittenToDynamicLinq(string csharp, string dynamic) =>
         Assert.Equal(dynamic, JsonQuery.Projections(csharp));
 
+    // A Crawl maturity run failed twice on "(double?)null" in a ternary: Dynamic LINQ spells casts double?(null).
+    [Theory]
+    [InlineData("x.a > 0 ? 1.0 : (double?)null", "x.a > 0 ? 1.0 : double?(null)")]
+    [InlineData("(int) (x.a ?? 0) * 10", "int((x.a ?? 0)) * 10")]
+    [InlineData("(double)x.properties.rows.Sum(r => r.c) / 2", "double(x.properties.rows.Sum(r => r.c)) / 2")]
+    [InlineData("(decimal?)x?.a ?? 0", "decimal?(x?.a) ?? 0")]
+    [InlineData("(long)-x.a", "long(-x.a)")]
+    [InlineData("new { s = \"(double)x\", v = (double?)null }", "new ((\"(double)x\") as s, (double?(null)) as v)")]
+    [InlineData("(x.a) * (double)2.5", "(x.a) * double(2.5)")]
+    [InlineData("(name) == \"a\"", "(name) == \"a\"")]
+    public void CSharpNumericCastsAreRewrittenToDynamicLinq(string csharp, string dynamic) =>
+        Assert.Equal(dynamic, JsonQuery.Projections(csharp));
+
+    [Fact]
+    public void CSharpNumericCastsRun()
+    {
+        const string body = """{"value":[{"a":1.234},{"a":0}]}""";
+        Assert.Equal("[1.23,null]", Run(body, "value.Select(x => x.a > 0 ? Math.Round(x.a ?? 0, 2) : (double?)null)"));
+        Assert.Equal("[10,0]", Run(body, "value.Select(x => (int)(x.a ?? 0) * 10)"));
+        Assert.Equal("[100,0]", Run(body, "value.Select(x => x.a > 0 ? Math.Round((double)(x.a ?? 0) * 100 / root.value.Sum(y => y.a ?? 0), 2) : (double?)null ?? 0)"));
+    }
+
     [Fact]
     public void KeywordAliasesAndInvariantNumbersWork()
     {

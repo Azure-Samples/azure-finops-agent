@@ -379,13 +379,24 @@ internal static partial class JsonQuery
     [System.Text.RegularExpressions.GeneratedRegex(@"\.(?<m>\w+)\s*(?:\?\?\s*[-+]?\d|[*/%-]|<=?|>=?|[!=]=\s*[-+]?\d)|(?:[*/%-]|<=?|(?<![=-])>=?)\s*\w+(?:\.\w+)*\.(?<m>\w+)\b(?!\s*\()|(?:Sum|Average|Min|Max)\(\s*\w+\s*=>\s*\w+(?:\.\w+)*\.(?<m>\w+)\s*\)|Math\.\w+\(\s*\(?\s*\w+(?:\.\w+)*\.(?<m>\w+)", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex NumericMembers();
 
-    /// <summary>Dynamic LINQ spells projections <c>new (expr as name)</c>; C#'s <c>new { name = expr }</c> is accepted too.</summary>
+    /// <summary>
+    /// Dynamic LINQ spells projections <c>new (expr as name)</c>; C#'s <c>new { name = expr }</c> is accepted too. A C# cast
+    /// to a numeric type, <c>(double?)null</c> or <c>(int)(x.a ?? 0)</c>, becomes Dynamic LINQ's <c>double?(null)</c> form.
+    /// </summary>
     internal static string Projections(string expression)
     {
         var output = new StringBuilder(expression.Length + 16);
         for (var index = 0; index < expression.Length;)
         {
             if (Literal(expression, index) is var end && end > index) { output.Append(expression, index, end - index); index = end; continue; }
+            if (expression[index] == '(' && CastPattern().Match(expression, index) is { Success: true } cast
+                && Operand(expression, index + cast.Length) is var (from, to) && to > from)
+            {
+                output.Append(cast.Groups["type"].Value).Append(cast.Groups["nullable"].Success ? "?" : "")
+                    .Append('(').Append(Projections(expression[from..to])).Append(')');
+                index = to;
+                continue;
+            }
             if (string.CompareOrdinal(expression, index, "new", 0, 3) == 0 && (index == 0 || !IsWord(expression[index - 1])))
             {
                 var open = index + 3;
@@ -461,7 +472,43 @@ internal static partial class JsonQuery
             while (at < member.Length && char.IsWhiteSpace(member[at])) at++;
             return at < member.Length - 1 && member[at] == '=' && member[at + 1] is not ('=' or '>') ? at : -1;
         }
+
+        // The extent of a cast's operand starting at index (leading spaces skipped): an optional sign or !, then a
+        // parenthesized group, literal, number or name, followed by member reads, calls and indexers.
+        static (int From, int To) Operand(string text, int index)
+        {
+            while (index < text.Length && char.IsWhiteSpace(text[index])) index++;
+            var from = index;
+            while (index < text.Length && text[index] is '-' or '+' or '!') index++;
+            if (index >= text.Length) return (from, from);
+            if (text[index] == '(') { var close = Close(text, index); if (close < 0) return (from, from); index = close + 1; }
+            else if (Literal(text, index) is var end && end > index) index = end;
+            else if (IsWord(text[index])) while (index < text.Length && (IsWord(text[index]) || text[index] == '.' && index + 1 < text.Length && char.IsAsciiDigit(text[index + 1]))) index++;
+            else return (from, from);
+            while (index < text.Length)
+            {
+                var next = index;
+                while (next < text.Length && char.IsWhiteSpace(text[next])) next++;
+                if (next < text.Length && text[next] is '(' or '[')
+                {
+                    var close = Close(text, next);
+                    if (close < 0) break;
+                    index = close + 1;
+                    continue;
+                }
+                var dot = next < text.Length - 1 && text[next] == '?' && text[next + 1] == '.' ? next + 2 : next < text.Length && text[next] == '.' ? next + 1 : -1;
+                if (dot < 0) break;
+                while (dot < text.Length && char.IsWhiteSpace(text[dot])) dot++;
+                if (dot >= text.Length || !IsWord(text[dot])) break;
+                while (dot < text.Length && IsWord(text[dot])) dot++;
+                index = dot;
+            }
+            return (from, index);
+        }
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"\G\(\s*(?<type>sbyte|byte|short|ushort|int|uint|long|ulong|float|double|decimal)\s*(?<nullable>\?)?\s*\)(?=\s*[\w(""'!+-])", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex CastPattern();
 
     // ---- shape inference -------------------------------------------------------------------------------------------
 

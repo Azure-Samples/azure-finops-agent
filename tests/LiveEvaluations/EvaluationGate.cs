@@ -61,6 +61,12 @@ public static class EvaluationGate
         catch (JsonException) { return false; }
     }
 
+    // Tools are recorded in completion order, and a hosted search the service dropped completes only when the turn ends,
+    // after a search the model started later. A correction is a call started after the failed one; without start
+    // offsets, list order decides.
+    internal static bool StartedAfter(ToolResult later, int laterIndex, ToolResult failed, int failedIndex) =>
+        later.StartedMs >= 0 && failed.StartedMs >= 0 ? later.StartedMs > failed.StartedMs : laterIndex > failedIndex;
+
     public static bool ToolSucceeded(ToolResult tool)
     {
         if (!tool.Success || !string.IsNullOrWhiteSpace(tool.Error)) return false;
@@ -100,7 +106,8 @@ public static class EvaluationGate
         var failedCalls = run.Tools.Select((tool, index) => (tool, index)).Where(call => !ToolSucceeded(call.tool)).ToArray();
         if (failedCalls.Length > AllowedCorrectedToolFailures)
             reasons.Add($"{failedCalls.Length} tool calls failed; at most {AllowedCorrectedToolFailures} corrected failures are allowed.");
-        else if (failedCalls.Any(call => !run.Tools.Skip(call.index + 1).Any(later => later.Name == call.tool.Name && ToolSucceeded(later))))
+        else if (failedCalls.Any(call => !run.Tools.Where((later, index) => StartedAfter(later, index, call.tool, call.index))
+                     .Any(later => later.Name == call.tool.Name && ToolSucceeded(later))))
             reasons.Add("A failed tool call was never corrected by a later successful call to that tool.");
         if (run.Tools.Any(tool => tool.Result.Contains("Output too large to read at once", StringComparison.OrdinalIgnoreCase)))
             reasons.Add("Required tool evidence was offloaded and unavailable to the model.");

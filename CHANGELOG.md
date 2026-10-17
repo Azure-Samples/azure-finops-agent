@@ -128,6 +128,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Accept C# casts to numeric types in `query` and `combine`. Dynamic LINQ spells a cast `double?(null)`, so the model's natural `(double?)null` and `(int)(x.a ?? 0)` failed to parse; a Crawl maturity evaluation lost two of its three allowed tool failures to them on 17 October 2026. `JsonQuery.Projections` now rewrites a cast to `sbyte` through `decimal` (nullable or not) into that form, skipping string literals and taking the operand's full extent (member reads, calls, indexers and a leading sign).
+- The live-evaluation gate counts a failed call as corrected by a successful call to the same tool that *started* after it, as the judge's rubric already says. Tools are recorded in completion order, so a hosted web search the service dropped, which closes only when the turn ends, was listed after a search the model started 11 seconds later and was reported as never corrected, failing an answer the judge had accepted.
+
 - Resend a model request once when its stream fails with the service's `server_error` ("The model deployment encountered an error processing your request. You can retry your request") before it produced answer text or a function call. The SDK retries HTTP 5xx but not an error reported inside an open response stream, so twice on 17 October 2026 a live-evaluation case ended with no answer after every tool round had succeeded, and the production deployment was blocked. `ServerErrorRetryChatClient` wraps the Responses client beneath Agent Framework's function invocation (`clientFactory`), so only the failed model request is resent, never a tool; a second failure, an error after answer text or a call, a rate limit and a content filter are still reported as before.
 
 - Fix the eight causes the first `evaluate-sessions` run traced in 82 real conversations of the last 30 days (mean score 8.6 of 10):
