@@ -162,6 +162,8 @@ public sealed class ConversationStoreTests : IAsyncLifetime
         Assert.NotNull(invoker);
         Assert.True(invoker.IncludeDetailedErrors);
         Assert.NotNull(invoker.FunctionInvoker);
+        // The server-error retry wraps each model request beneath function invocation, so it never re-runs a tool.
+        Assert.NotNull(invoker.GetService<ServerErrorRetryChatClient>());
     }
 
     [Fact]

@@ -176,7 +176,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
                 Name = "azure-finops-agent",
                 ChatOptions = AgentChatOptions(deployment, reasoningEffort, webSearch),
                 AllowConcurrentInvocation = true,
-            }, loggerFactory: loggerFactory)
+            }, clientFactory: inner => new ServerErrorRetryChatClient(inner, _logger), loggerFactory: loggerFactory)
             .AsBuilder()
             .UseOpenTelemetry(AiTelemetry.AgentSourceName)
             .Build();
