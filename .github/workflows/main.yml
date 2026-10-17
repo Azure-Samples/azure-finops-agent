@@ -35,12 +35,8 @@ jobs:
       contents: read
     uses: ./.github/workflows/validate.yml
 
-  # Starts only after the regressions pass, so a run stops at its first failure:
-  # failed regressions skip the live suite (no model or Cost Management quota is
-  # spent on code that fails its tests), and fail-fast stops the suite at its
-  # first failed case. Deploy requires both.
+  # Starts with the regressions instead of after them; deploy still requires both.
   live-evaluations:
-    needs: regressions
     permissions:
       contents: read
       id-token: write

@@ -1112,7 +1112,7 @@ test("a lane's Azure CLI profile reaches only its own case process and renewal",
     }
 });
 
-test("live evaluations start only after the regressions pass and deploy still needs both", async () => {
+test("live evaluations start with the regressions and deploy still needs both", async () => {
     for (const name of ["main", "feature"]) {
         const workflow = await readFile(
             new URL(`../../.github/workflows/${name}.yml`, import.meta.url),
@@ -1120,7 +1120,7 @@ test("live evaluations start only after the regressions pass and deploy still ne
         );
         const job = workflow.match(/^  live-evaluations:\r?\n((?:    .*\r?\n|\s*\r?\n)+)/m)?.[1];
         assert.ok(job, `${name}.yml defines the live-evaluations job`);
-        assert.match(job, /^    needs: regressions\r?$/m);
+        assert.doesNotMatch(job, /needs:/);
         assert.match(workflow, /needs: \[regressions, live-evaluations\]/);
         if (name === "feature")
             assert.match(job, /if: github\.event_name != 'workflow_dispatch' \|\| !inputs\.preflight/);
