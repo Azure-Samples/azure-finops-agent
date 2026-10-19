@@ -11,7 +11,7 @@
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.6.0" />
-    <PackageReference Include="Azure.Monitor.OpenTelemetry.Exporter" Version="1.9.0" />
+    <PackageReference Include="Azure.Monitor.OpenTelemetry.Exporter" Version="1.10.0" />
     <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.22.0-preview.260918.1" />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
     <PackageReference Include="System.Linq.Dynamic.Core" Version="1.7.4" />
@@ -20,10 +20,10 @@
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.23.0" />
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.23.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="OpenTelemetry" Version="1.19.1" />
-    <PackageReference Include="OpenTelemetry.Api" Version="1.19.1" />
-    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.19.0" />
-    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.19.0" />
+    <PackageReference Include="OpenTelemetry" Version="1.20.0" />
+    <PackageReference Include="OpenTelemetry.Api" Version="1.20.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.20.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.20.0" />
   </ItemGroup>
 
   <!-- Embed Python script templates as resources (loaded at runtime by tools) -->
