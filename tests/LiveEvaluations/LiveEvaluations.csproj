@@ -7,7 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.12" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.13" />
     <ProjectReference Include="../../src/Dashboard/Dashboard.csproj" />
   </ItemGroup>
 </Project>
