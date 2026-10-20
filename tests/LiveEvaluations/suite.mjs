@@ -15,8 +15,18 @@ import {
     maturityCategories,
     pricingCategory,
 } from "../../src/Dashboard/frontend/src/data/sidebarCategories.js";
+import {
+    INEFFICIENT_FAILURE,
+    STATUS,
+    escapeHtml,
+    renderAnnotations,
+    renderBoardMarkdown,
+    renderHtml,
+    renderLogLine,
+    statusOf,
+} from "./report.mjs";
 
-const rubric =
+export const rubric =
     "Fulfil the actual question in its language using the returned source evidence. Keep scopes, dates, currencies, units, source freshness and partial coverage explicit. Never invent availability, costs, savings, usage or actions. If the question genuinely lacks required user inputs, ask a concise clarification instead of inventing values. An answer that rests on missing access, a failed call or a broken query is not successful fulfilment of a fully specified evidence request; a failed call the agent corrected with a later successful call is fine. Do not execute writes or purchases; requested changes require the existing application approval flow. Do not claim a chart or generated file unless the corresponding tool actually returned it.";
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const captureRoot = resolve(repositoryRoot, "tests", "LiveEvaluations", "obj");
@@ -34,7 +44,7 @@ const THROTTLE_MARGIN_MS = 5000;
 // Cost Management's per-tenant Query API quotas are 12 QPU per 10 s, 60 QPU per minute and
 // 600 QPU per hour. A retry-after covers only the exhausted window; a rerun inside the same
 // minute replays the same burst into the same refusal.
-const COST_QUOTA_WINDOW_MS = 60 * 1000;
+export const COST_QUOTA_WINDOW_MS = 60 * 1000;
 // The app waits at most five minutes for a cost retry; allow a bounded margin beyond it.
 const MAX_THROTTLE_WAIT_MS = 6 * 60 * 1000;
 const CURATED_CASE_IDS = Object.freeze([
@@ -364,7 +374,7 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
         !result.judge.efficient ||
         result.judge.efficiencyScore < MINIMUM_EFFICIENCY_SCORE
     )
-        failures.push("Structured judge rated the session inefficient.");
+        failures.push(INEFFICIENT_FAILURE);
     return failures;
 }
 
@@ -425,18 +435,29 @@ export function evaluateSuite(cases, results, sha, suiteHash) {
     };
 }
 
-const html = (value) =>
-    String(value ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
+const html = escapeHtml;
 const cell = (value) =>
     html(value)
         .replaceAll("|", "&#124;")
         .replaceAll("\r", "")
         .replaceAll("\n", " ");
+
+// What distinguishes a tier's report from another's; the deployment gate's values are the defaults.
+export const GATE_PRESENTATION = Object.freeze({
+    title: "Live AI Deployment Gate",
+    tierNote: "",
+    threshold: null,
+    required: LIVE_SUITE_SIZE,
+    intro: Object.freeze([
+        `Curated representative live suite: exactly ${LIVE_SUITE_SIZE} question types, not a verified usage-frequency ranking. Every selected case must pass its original checks.`,
+        "",
+        "Real model calls through the candidate chat handler and tools, with a separate structured judge. Test-host authentication is not a browser sign-in test. Job templates here test answer/tool routing, not scheduler execution.",
+    ]),
+});
+
+// GitHub rejects a step summary above 1 MiB. Large suites list details only for scenarios that need attention.
+const COMPACT_ABOVE = 40;
+const SUMMARY_BYTE_BUDGET = 900 * 1024;
 
 export function renderSummary(
     cases,
@@ -444,63 +465,77 @@ export function renderSummary(
     verdict,
     sha,
     publishAnswers = true,
+    presentation = GATE_PRESENTATION,
 ) {
     results = results.map((row) => ({
         ...row,
         result: publishableResult(row.result, publishAnswers),
     }));
-    const preview = (value, maximum) => {
-        const escaped = html(value);
-        return escaped.length <= maximum
-            ? escaped
-            : escaped.slice(0, maximum) +
-                  " [Preview shortened; full answer in results artifact.]";
-    };
-    const lines = [
-        "## Live AI Deployment Gate",
-        "",
-        `**${verdict.accepted ? "PASS" : "FAIL"}** · ${results.filter((row) => row.failures.length === 0).length}/${LIVE_SUITE_SIZE} accepted · Revision \`${sha}\``,
-        "",
-        `Curated representative live suite: exactly ${LIVE_SUITE_SIZE} question types, not a verified usage-frequency ranking. Every selected case must pass its original checks.`,
-        "",
-        "Real model calls through the candidate chat handler and tools, with a separate structured judge. Test-host authentication is not a browser sign-in test. Job templates here test answer/tool routing, not scheduler execution.",
-        ...(publishAnswers
-            ? []
-            : [
-                  "",
-                  "Answers and judge rationale are withheld because this run used internal tenant data; only verdicts and deterministic checks are published.",
-              ]),
-        "",
-        "| Question | Tools | Seconds | Result | Reason |",
-        "|---|---:|---:|---|---|",
-    ];
-    for (const scenario of cases) {
-        const row = results.find((result) => result.id === scenario.id);
-        lines.push(
-            `| ${cell(scenario.question)} | ${row?.result?.toolCount ?? "-"} | ${Number.isFinite(row?.result?.durationMs) ? (row.result.durationMs / 1000).toFixed(1) : "-"} | ${row && !row.failures.length ? "PASS" : "FAIL"} | ${cell(row?.failures.join(" ") || (row ? "Accepted" : "Missing result"))} |`,
-        );
-    }
-    for (const row of results) {
-        const scenario = cases.find((item) => item.id === row.id);
-        lines.push(
+    const build = (compact) => {
+        const preview = (value, maximum) => {
+            const escaped = html(value);
+            const limit = compact ? Math.min(maximum, 600) : maximum;
+            return escaped.length <= limit
+                ? escaped
+                : escaped.slice(0, limit) +
+                      " [Preview shortened; full answer in results artifact.]";
+        };
+        const lines = [
+            renderBoardMarkdown(cases, results, {
+                title: presentation.title,
+                accepted: verdict.accepted,
+                sha,
+                tierNote: presentation.tierNote,
+                threshold: presentation.threshold,
+                verdictLine: `**${verdict.accepted ? "PASS" : "FAIL"}** · ${results.filter((row) => row.failures.length === 0).length}/${presentation.required} accepted · Revision \`${sha}\``,
+            }).trimEnd(),
             "",
-            `<details><summary>${cell(scenario?.label ?? row.id)}: ${row.failures.length ? "FAIL" : "PASS"}</summary>`,
-            "",
-            `<p><strong>Question:</strong> ${html(scenario?.question)}</p>`,
-            `<p><strong>Tools:</strong> ${preview(Array.isArray(row.result?.tools) ? row.result.tools.map((tool) => `${tool?.name ?? "unknown"}: ${tool?.success ? "ok" : "failed"}`).join(", ") : "Not recorded", 2000)}</p>`,
-            `<p><strong>First token:</strong> ${html(row.result?.firstTokenMs ?? "not observed")} ms</p>`,
+            ...presentation.intro,
             ...(publishAnswers
-                ? [
-                      `<p><strong>Judge:</strong> ${preview(row.result?.judge?.reason ?? "No verdict", 1200)}</p>`,
-                      `<pre>${preview(row.result?.answer ?? "No final answer.", 2400)}</pre>`,
-                  ]
+                ? []
                 : [
-                      `<p><strong>Checks:</strong> ${html(row.failures.join(" ") || "All deterministic checks and the judge accepted the answer.")}</p>`,
+                      "",
+                      "Answers and judge rationale are withheld because this run used internal tenant data; only verdicts and deterministic checks are published.",
                   ]),
-            "</details>",
-        );
-    }
-    return lines.join("\n") + "\n";
+            "",
+            `<details${cases.length > COMPACT_ABOVE ? "" : " open"}><summary><b>Questions, tools, seconds and reasons</b></summary>`,
+            "",
+            "| Question | Tools | Seconds | Result | Reason |",
+            "|---|---:|---:|---|---|",
+        ];
+        for (const scenario of cases) {
+            const row = results.find((result) => result.id === scenario.id);
+            lines.push(
+                `| ${cell(scenario.question)} | ${row?.result?.toolCount ?? "-"} | ${Number.isFinite(row?.result?.durationMs) ? (row.result.durationMs / 1000).toFixed(1) : "-"} | ${STATUS[statusOf(scenario, row)].word} | ${cell(row?.failures.join(" ") || (row ? "Accepted" : "Missing result"))} |`,
+            );
+        }
+        lines.push("", "</details>");
+        for (const row of results) {
+            const scenario = cases.find((item) => item.id === row.id);
+            const status = statusOf(scenario, row);
+            if (compact && status === "pass") continue;
+            lines.push(
+                "",
+                `<details><summary>${STATUS[status].dot} ${cell(scenario?.label ?? row.id)}: ${STATUS[status].word}</summary>`,
+                "",
+                `<p><strong>Question:</strong> ${html(scenario?.question)}</p>`,
+                `<p><strong>Tools:</strong> ${preview(Array.isArray(row.result?.tools) ? row.result.tools.map((tool) => `${tool?.name ?? "unknown"}: ${tool?.success ? "ok" : "failed"}`).join(", ") : "Not recorded", 2000)}</p>`,
+                `<p><strong>First token:</strong> ${html(row.result?.firstTokenMs ?? "not observed")} ms</p>`,
+                ...(publishAnswers
+                    ? [
+                          `<p><strong>Judge:</strong> ${preview(row.result?.judge?.reason ?? "No verdict", 1200)}</p>`,
+                          `<pre>${preview(row.result?.answer ?? "No final answer.", 2400)}</pre>`,
+                      ]
+                    : [
+                          `<p><strong>Checks:</strong> ${html(row.failures.join(" ") || "All deterministic checks and the judge accepted the answer.")}</p>`,
+                      ]),
+                "</details>",
+            );
+        }
+        return lines.join("\n") + "\n";
+    };
+    const text = build(cases.length > COMPACT_ABOVE);
+    return Buffer.byteLength(text) <= SUMMARY_BYTE_BUDGET ? text : build(true);
 }
 
 export function publishableResult(result, publishAnswers) {
@@ -704,6 +739,13 @@ export async function runCases(
         laneOf = () => COST_MANAGEMENT_LANE,
         throttleRetryQuietMs = 0,
         encryptDiagnosticsTo = null,
+        // Another tier supplies its own verdict and report wording; the defaults are the deployment gate's.
+        evaluate = evaluateSuite,
+        presentation = GATE_PRESENTATION,
+        // Called once with the final results, for example to print GitHub annotations.
+        onFinish = () => {},
+        // Awaited before every case starts, for example to wait while something more important is running.
+        beforeCase = async () => {},
     } = {},
 ) {
     const results = [];
@@ -743,7 +785,7 @@ export async function runCases(
     signals.on("SIGTERM", terminate);
     const writeReport = async () => {
         const failure = runFailure;
-        const verdict = evaluateSuite(cases, results, sha, suiteHash);
+        const verdict = evaluate(cases, results, sha, suiteHash);
         if (failure) {
             verdict.accepted = false;
             verdict.failures.push(failure.message);
@@ -771,8 +813,21 @@ export async function runCases(
         await writeFile(
             resolve(output, "summary.md"),
             renderSummary(
-                cases, results, verdict, sha, publishAnswers,
+                cases, results, verdict, sha, publishAnswers, presentation,
             ) + (failure ? `\n**Suite failure:** ${html(failure.message)}\n` : ""),
+        );
+        // A standalone dashboard to download and open; rewritten after every case, so a cancelled run still has one.
+        await writeFile(
+            resolve(output, "ai-quality-report.html"),
+            renderHtml(cases, publishedResults, {
+                title: presentation.title,
+                accepted: verdict.accepted,
+                sha,
+                publishAnswers,
+                tierNote: presentation.tierNote,
+                threshold: presentation.threshold,
+                generatedAt: new Date().toISOString(),
+            }),
         );
         if (runFailure !== failure) return writeReport();
         return verdict;
@@ -828,6 +883,9 @@ export async function runCases(
                 controller.signal.throwIfAborted();
                 // Spaces a lane's cases so the suite does not throttle tenant-wide Cost Management quota itself.
                 await waitForCooldown(position > 0 ? pauseMs : 0);
+                controller.signal.throwIfAborted();
+                if (failedFast) return;
+                await beforeCase(scenario, controller.signal);
                 controller.signal.throwIfAborted();
                 if (failedFast) return;
                 await renewLane();
@@ -898,9 +956,13 @@ export async function runCases(
                 await report();
                 controller.signal.throwIfAborted();
                 const published = publishableResult(result, publishAnswers);
-                console.log(
-                    `[${index + 1}/${cases.length}] ${scenario.id} ${failures.length ? "FAIL" : "PASS"} tools=${published?.toolCount ?? "?"} durationMs=${published?.durationMs ?? "?"} ${scenario.label}`,
-                );
+                console.log(renderLogLine({
+                    index,
+                    total: cases.length,
+                    scenario,
+                    row: { failures, result: published },
+                    color: environment.GITHUB_ACTIONS === "true" || Boolean(environment.FORCE_COLOR),
+                }));
                 // The gate already failed; fail-fast starts no further case in any lane.
                 if (failFast && failures.length > 0) {
                     failedFast ??= scenario.id;
@@ -987,6 +1049,11 @@ export async function runCases(
         }
         try {
             finalVerdict = await report();
+            onFinish(
+                [...results].sort((left, right) => plannedOrder.get(left.id) - plannedOrder.get(right.id))
+                    .map((row) => ({ ...row, result: publishableResult(row.result, publishAnswers) })),
+                finalVerdict,
+            );
         } finally {
             signals.removeListener("SIGINT", interrupt);
             signals.removeListener("SIGTERM", terminate);
@@ -1193,6 +1260,14 @@ async function main() {
             laneOf: evaluationLane,
             throttleRetryQuietMs: COST_QUOTA_WINDOW_MS,
             encryptDiagnosticsTo,
+            onFinish: (finished, finalVerdict) => {
+                if (process.env.GITHUB_ACTIONS !== "true") return;
+                for (const line of renderAnnotations(planned, finished, {
+                    title: GATE_PRESENTATION.title,
+                    accepted: finalVerdict.accepted,
+                }))
+                    console.log(line);
+            },
         },
     );
     if (!verdict.accepted) process.exitCode = 1;

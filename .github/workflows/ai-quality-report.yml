@@ -1,0 +1,149 @@
+name: AI quality report
+
+# The extended evaluation tier. The deployment gate (live-evaluations.yml) stays at its 23 curated scenarios and decides
+# whether a build ships; this workflow runs every other scenario, red or green, and never blocks a deployment. It lives in
+# its own workflow so a failing scenario cannot stop a release and the gate keeps its single, unconditional contract.
+# Run it on demand from the Actions tab (optionally for chosen groups) or let the weekly schedule do it.
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # Mondays, 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      groups:
+        description: "Scenario groups to run, comma-separated (empty runs all): start-page, ai-spend, resources, docs, pricing, security, cost, reports, scripts, safety, multilingual, crawl, walk, run, playbook, enterprise, jobs, incidents"
+        type: string
+        default: ""
+      threshold:
+        description: "Quality bar: percent of scored scenarios that must pass (empty uses the EVAL_QUALITY_THRESHOLD variable, then 80)"
+        type: string
+        default: ""
+
+run-name: AI quality report · ${{ inputs.groups || 'all groups' }}
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+# A separate group from the gate: the report waits for running gates itself (below) instead of queueing them behind it.
+concurrency:
+  group: ai-quality-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Red or green for every extended scenario
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: ai-evaluation
+    env:
+      EVAL_CLIENT_ID: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
+      EVAL_LOGIN_SUBSCRIPTION: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
+      EVAL_MODEL_ENDPOINT: ${{ secrets.EVAL_MODEL_ENDPOINT }}
+      EVAL_MODEL: ${{ vars.EVAL_MODEL }}
+      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+      EVAL_REASONING_EFFORT: ${{ vars.EVAL_REASONING_EFFORT || 'medium' }}
+      EVAL_TENANT_ID: ${{ secrets.AZURE_EVAL_TENANT_ID }}
+      EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}
+      EVAL_DATA_CLASSIFICATION: ${{ vars.EVAL_DATA_CLASSIFICATION }}
+      EVAL_TOKEN_RESOURCES: ${{ vars.EVAL_TOKEN_RESOURCES }}
+      EVAL_DIAGNOSTICS_CERT: ${{ vars.EVAL_DIAGNOSTICS_CERT }}
+      EVAL_GROUPS: ${{ inputs.groups }}
+      EVAL_QUALITY_THRESHOLD: ${{ inputs.threshold || vars.EVAL_QUALITY_THRESHOLD }}
+      EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
+      EVAL_RUNNER_DLL: tests/LiveEvaluations/bin/Release/net10.0/LiveEvaluations.dll
+      FINOPS_PYTHON: /usr/bin/python3
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate required evaluation configuration
+        run: |
+          missing=0
+          for name in EVAL_CLIENT_ID EVAL_TENANT_ID EVAL_LOGIN_SUBSCRIPTION EVAL_SUBSCRIPTION_IDS EVAL_MODEL_ENDPOINT EVAL_MODEL EVAL_JUDGE_MODEL; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required live evaluation configuration: $name"
+              missing=1
+            fi
+          done
+          if [[ "$EVAL_DATA_CLASSIFICATION" != "synthetic" && "$EVAL_DATA_CLASSIFICATION" != "internal-test" ]]; then
+            echo "::error::Set EVAL_DATA_CLASSIFICATION to synthetic (answers published) or internal-test (verdicts only). Customer responses must not be published."
+            missing=1
+          fi
+          if [[ "$missing" == 1 ]]; then
+            exit 1
+          fi
+
+      # Both share the tenant's Cost Management quota, which the gate cannot tolerate being throttled. The report does not
+      # start while a deployment workflow is running (at most 30 minutes), and quality.mjs pauses before every case while
+      # one runs, so a release that starts mid-report is not throttled by the report's next case. Budget: 30 minutes of
+      # waiting, about 10 of setup and 300 for the run, under the 360-minute job limit; a run that pauses for long
+      # finishes partial and is reported as not accepted rather than cancelled mid-case.
+      - name: Wait for running deployment gates
+        run: |
+          deadline=$((SECONDS + 1800))
+          while true; do
+            busy=0
+            for status in in_progress queued; do
+              count=$(gh run list --repo "$GITHUB_REPOSITORY" --status "$status" --limit 50 --json workflowName \
+                --jq '[.[] | select(.workflowName == "Deploy main to production" or .workflowName == "Deploy feature branch to test slot" or .workflowName == "Live AI evaluation gate")] | length')
+              busy=$((busy + count))
+            done
+            if [[ "$busy" == 0 ]]; then
+              break
+            fi
+            if (( SECONDS > deadline )); then
+              echo "::warning::A deployment gate was still running after 30 minutes; starting anyway."
+              break
+            fi
+            echo "Waiting for $busy running deployment workflow(s)."
+            sleep 60
+          done
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Azure evaluation login (read-only OIDC identity)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_EVAL_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
+
+      - name: Install report helper prerequisites
+        run: |
+          sudo -n apt-get update -qq
+          sudo -n apt-get install -y --no-install-recommends python3-pandas python3-openpyxl
+
+      - name: Build candidate evaluator and validate the evaluation tiers
+        run: |
+          dotnet build tests/LiveEvaluations/LiveEvaluations.csproj --configuration Release --nologo
+          node --test tests/LiveEvaluations/*.test.mjs
+
+      - name: Run every extended scenario
+        timeout-minutes: 300
+        run: node tests/LiveEvaluations/quality.mjs
+
+      - name: Publish the red/green scoreboard
+        if: always()
+        run: |
+          if [[ -f TestResults/live-evaluations/summary.md ]]; then
+            cat TestResults/live-evaluations/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '# 🔴 AI Quality Report\n\n**The evaluations did not complete setup.** See the failed step above.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Retain the dashboard and structured results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ai-quality-report-${{ github.sha }}-${{ github.run_attempt }}
+          path: TestResults/live-evaluations/
+          if-no-files-found: warn
+          retention-days: 30
