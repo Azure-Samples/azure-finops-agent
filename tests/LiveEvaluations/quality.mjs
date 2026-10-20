@@ -121,12 +121,20 @@ export function evaluateQuality(cases, results, sha, suiteHash, { expected, thre
     };
 }
 
-export function selectScenarios(all, groupsText = "") {
-    const groups = groupsText.split(",").map((group) => group.trim()).filter(Boolean);
+// Groups and scenario ids both come from workflow inputs; either narrows the run, and both together intersect.
+export function selectScenarios(all, groupsText = "", idsText = "") {
+    const list = (text) => String(text ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+    const groups = list(groupsText);
+    const ids = list(idsText);
+    const quoted = (items) => items.map((item) => JSON.stringify(oneLine(item).slice(0, 40))).join(", ");
     const unknown = groups.filter((group) => !GROUP_META[group]);
     // Names come from a workflow input: quoted and stripped of control characters, never echoed raw.
-    if (unknown.length) throw new Error(`Unknown scenario group: ${unknown.map((group) => JSON.stringify(oneLine(group).slice(0, 40))).join(", ")}.`);
-    return groups.length ? all.filter((scenario) => groups.includes(scenario.group)) : all;
+    if (unknown.length) throw new Error(`Unknown scenario group: ${quoted(unknown)}.`);
+    const known = new Set(all.map((scenario) => scenario.id));
+    const strangers = ids.filter((id) => !known.has(id));
+    if (strangers.length) throw new Error(`Unknown scenario id: ${quoted(strangers)}.`);
+    return all.filter((scenario) =>
+        (!groups.length || groups.includes(scenario.group)) && (!ids.length || ids.includes(scenario.id)));
 }
 
 export function parseThreshold(text) {
@@ -151,46 +159,40 @@ export function presentationFor(cases, threshold, partial) {
     };
 }
 
-// One matrix job per group: its own red or green box on the run graph and in the commit's checks, its own summary with
-// every scenario explained, and "Re-run failed jobs" re-runs only the groups that failed. A group is green only when
-// none of its scenarios is red (known limitations stay amber); the scoreboard job applies the overall quality bar.
-export const GROUP_LAYOUT = "group";
+// One matrix job per scenario: each eval is its own green or red entry on the run page, in the run graph and in the
+// commit's checks, with its own summary card (what it checks, what happened, what the judge scored and why), and
+// "Re-run failed jobs" re-runs exactly the failed evals. A known limitation keeps its job green and shows amber in the
+// card and the scoreboard; the scoreboard job applies the overall quality bar.
+export const SCENARIO_LAYOUT = "scenario";
 
-export function groupTitle(key) {
-    const meta = GROUP_META[key];
-    if (!meta) throw new Error(`Unknown scenario group: ${JSON.stringify(oneLine(key).slice(0, 40))}.`);
-    return `${meta.icon} ${meta.label}`;
+// The job name: the group's icon and the scenario's label. Labels are our own text and unique (a test checks both).
+export function scenarioTitle(scenario) {
+    const meta = GROUP_META[scenario?.group];
+    if (!meta) throw new Error(`Unknown scenario group: ${JSON.stringify(oneLine(scenario?.group ?? "").slice(0, 40))}.`);
+    return oneLine(`${meta.icon} ${scenario.label ?? scenario.id}`);
 }
 
-export function groupPresentationFor(key, cases) {
+export function scenarioPresentationFor(scenario) {
     return {
-        title: groupTitle(key),
-        tierNote: `AI quality report · ${cases.length} scenario${cases.length === 1 ? "" : "s"} in this group`,
+        title: scenarioTitle(scenario),
+        single: true,
+        tierNote: `${GROUP_META[scenario.group].label} · one eval of the AI quality report`,
         threshold: null,
-        required: cases.length,
+        required: 1,
         heatmap: false,
-        intro: [
-            "One group of the AI quality report. This job is green only when every scenario in the group passes; a known limitation stays amber and does not fail it. Each scenario below says what it checks, what the agent did, what the judge scored and why, and which hard checks passed. The 🏁 Scoreboard job combines every group.",
-        ],
+        intro: [],
     };
 }
 
-// Splits the planned groups into those that never call Cost Management, which run side by side, and those that do,
-// which run one at a time because the tenant-wide Cost Management quota is shared (the same rule as the lanes).
-export function planGroups(cases) {
-    const groups = new Map();
-    for (const scenario of cases) {
-        if (!groups.has(scenario.group)) groups.set(scenario.group, []);
-        groups.get(scenario.group).push(scenario);
-    }
-    const entries = [...groups.entries()]
-        .sort(([left], [right]) => GROUP_META[left].order - GROUP_META[right].order)
-        .map(([key, items]) => ({
-            key,
-            title: groupTitle(key),
-            count: items.length,
-            paced: items.some((scenario) => (scenario.lane ?? extendedLane(scenario)) === COST_MANAGEMENT_LANE),
-        }));
+// Splits the planned evals into those that never call Cost Management, which run side by side, and those that do,
+// which run one at a time because the tenant-wide Cost Management quota is shared (the same rule as the lanes). Both
+// keep the extended suite's group order, so the run page lists evals group by group.
+export function planScenarios(cases) {
+    const entries = cases.map((scenario) => ({
+        id: scenario.id,
+        title: scenarioTitle(scenario),
+        paced: (scenario.lane ?? extendedLane(scenario)) === COST_MANAGEMENT_LANE,
+    }));
     const strip = ({ paced, ...entry }) => entry;
     return {
         parallel: entries.filter((entry) => !entry.paced).map(strip),
@@ -199,11 +201,11 @@ export function planGroups(cases) {
     };
 }
 
-// Group artifacts are named ai-quality-group-<group>-<attempt>; a re-run of a failed group uploads a new attempt and
-// the newest attempt of each group wins.
-export const GROUP_ARTIFACT = /^ai-quality-group-([a-z0-9-]+)-(\d+)$/;
+// Eval artifacts are named ai-quality-eval-<scenario id>-<attempt>; a re-run of a failed eval uploads a new attempt and
+// the newest attempt of each eval wins.
+export const EVAL_ARTIFACT = /^ai-quality-eval-([0-9a-f]{16})-(\d+)$/;
 
-export async function readGroupReports(directory) {
+export async function readEvalReports(directory) {
     const latest = new Map();
     let names = [];
     try {
@@ -212,31 +214,31 @@ export async function readGroupReports(directory) {
         return latest;
     }
     for (const entry of names) {
-        const match = entry.isDirectory() ? GROUP_ARTIFACT.exec(entry.name) : null;
-        if (!match || !GROUP_META[match[1]]) continue;
+        const match = entry.isDirectory() ? EVAL_ARTIFACT.exec(entry.name) : null;
+        if (!match) continue;
         const attempt = Number(match[2]);
         if (latest.has(match[1]) && latest.get(match[1]).attempt >= attempt) continue;
         try {
             const report = JSON.parse(await readFile(join(directory, entry.name, "results.json"), "utf8"));
             latest.set(match[1], { attempt, report });
         } catch {
-            // A group whose job ended before writing results leaves its scenarios "not run".
+            // An eval whose job ended before writing results stays "not run".
         }
     }
     return latest;
 }
 
-// The overall picture from every group's results: only rows for planned scenarios of this revision count, and answers
-// are published only when every group published them.
-export function combineGroups(cases, reports, sha) {
+// The overall picture from every eval's results: only rows for planned scenarios of this revision count, an artifact
+// counts only for the eval it is named after, and answers are published only when every eval published them.
+export function combineReports(cases, reports, sha) {
     const planned = new Set(cases.map((scenario) => scenario.id));
     const results = [];
     let publishAnswers = reports.size > 0;
-    for (const { report } of reports.values()) {
+    for (const [id, { report }] of reports) {
         if (report?.sha !== sha || !Array.isArray(report.results)) continue;
         publishAnswers &&= report.publishAnswers === true;
         for (const row of report.results)
-            if (planned.has(row?.id) && Array.isArray(row.failures)) results.push(row);
+            if (row?.id === id && planned.has(row.id) && Array.isArray(row.failures)) results.push(row);
     }
     const order = new Map(cases.map((scenario, index) => [scenario.id, index]));
     results.sort((left, right) => order.get(left.id) - order.get(right.id));
@@ -244,13 +246,13 @@ export function combineGroups(cases, reports, sha) {
     return { results: results.filter((row) => !seen.has(row.id) && seen.add(row.id)), publishAnswers };
 }
 
-// Links each group in the scoreboard to the job page that ran it, from `gh api .../attempts/N/jobs`.
+// Links each eval in the scoreboard to the job page that ran it, from `gh api .../attempts/N/jobs`.
 export function jobLinks(jobs, cases) {
     const links = {};
     if (!Array.isArray(jobs)) return links;
-    for (const key of new Set(cases.map((scenario) => scenario.group))) {
-        const job = jobs.filter((item) => item?.name === groupTitle(key) && typeof item.url === "string").at(-1);
-        if (job && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+\/job\/\d+$/.test(job.url)) links[key] = job.url;
+    for (const scenario of cases) {
+        const job = jobs.filter((item) => item?.name === scenarioTitle(scenario) && typeof item.url === "string").at(-1);
+        if (job && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+\/job\/\d+$/.test(job.url)) links[scenario.id] = job.url;
     }
     return links;
 }
@@ -259,11 +261,11 @@ async function merge(directory, jobsFile) {
     const sha = process.env.GITHUB_SHA ?? process.env.EVAL_EXPECTED_SHA;
     if (!sha || !/^[a-f0-9]{40}$/i.test(sha)) throw new Error("The candidate commit SHA is required.");
     const expected = buildExtendedSuite();
-    const cases = selectScenarios(expected, process.env.EVAL_GROUPS);
+    const cases = selectScenarios(expected, process.env.EVAL_GROUPS, process.env.EVAL_SCENARIOS);
     const threshold = parseThreshold(process.env.EVAL_QUALITY_THRESHOLD);
     const output = resolve(process.env.EVAL_OUTPUT_DIRECTORY ?? "TestResults/live-evaluations");
-    const reports = await readGroupReports(resolve(directory));
-    const { results, publishAnswers } = combineGroups(cases, reports, sha);
+    const reports = await readEvalReports(resolve(directory));
+    const { results, publishAnswers } = combineReports(cases, reports, sha);
     let jobs = [];
     try {
         jobs = JSON.parse(await readFile(resolve(jobsFile), "utf8"));
@@ -288,16 +290,18 @@ async function merge(directory, jobsFile) {
 
 async function main() {
     if (process.argv[2] === "--plan") {
-        // Only the scoreboard applies the bar, after every group ran; a bad value must stop the run before any does.
+        // Only the scoreboard applies the bar, after every eval ran; a bad value must stop the run before any does.
         parseThreshold(process.env.EVAL_QUALITY_THRESHOLD);
-        const plan = planGroups(selectScenarios(buildExtendedSuite(), process.env.EVAL_GROUPS));
+        const cases = selectScenarios(buildExtendedSuite(), process.env.EVAL_GROUPS, process.env.EVAL_SCENARIOS);
+        if (!cases.length) throw new Error("No scenario matches the selection.");
+        const plan = planScenarios(cases);
         console.log(`parallel=${JSON.stringify(plan.parallel)}`);
         console.log(`paced=${JSON.stringify(plan.paced)}`);
         console.log(`count=${plan.count}`);
         return;
     }
     if (process.argv[2] === "--merge") {
-        await merge(process.argv[3] ?? "TestResults/groups", process.argv[4] ?? "TestResults/jobs.json");
+        await merge(process.argv[3] ?? "TestResults/evals", process.argv[4] ?? "TestResults/jobs.json");
         return;
     }
     const sha = process.env.GITHUB_SHA ?? process.env.EVAL_EXPECTED_SHA;
@@ -308,23 +312,23 @@ async function main() {
         throw new Error("EVAL_ONLY_IDS is a local diagnostic filter and cannot run in CI.");
     if (process.env.GITHUB_ACTIONS === "true" && process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY)
         throw new Error("Private evaluation diagnostics are local-only and cannot be configured in CI.");
-    const selected = selectScenarios(expected, process.env.EVAL_GROUPS);
+    const scenarioLayout = process.env.EVAL_REPORT_LAYOUT === SCENARIO_LAYOUT;
+    const selected = selectScenarios(expected, process.env.EVAL_GROUPS,
+        scenarioLayout ? process.env.EVAL_SCENARIO_ID : process.env.EVAL_SCENARIOS);
     const cases = only.length ? selected.filter((scenario) => only.includes(scenario.id)) : selected;
     if (!cases.length) throw new Error("No scenario matches the selection.");
-    const groupLayout = process.env.EVAL_REPORT_LAYOUT === GROUP_LAYOUT;
-    const groupKeys = [...new Set(cases.map((scenario) => scenario.group))];
-    if (groupLayout && groupKeys.length !== 1)
-        throw new Error("The group layout runs exactly one scenario group.");
-    // A group job is red when any of its scenarios is red; the overall bar belongs to the scoreboard.
-    const threshold = groupLayout ? 1 : parseThreshold(process.env.EVAL_QUALITY_THRESHOLD);
+    if (scenarioLayout && (cases.length !== 1 || cases[0].id !== process.env.EVAL_SCENARIO_ID?.trim()))
+        throw new Error("The scenario layout runs exactly one scenario, named by EVAL_SCENARIO_ID.");
+    // An eval job is red when its scenario is red; the overall bar belongs to the scoreboard.
+    const threshold = scenarioLayout ? 1 : parseThreshold(process.env.EVAL_QUALITY_THRESHOLD);
     const suiteHash = createHash("sha256").update(JSON.stringify(cases)).digest("hex");
     const output = resolve(process.env.EVAL_OUTPUT_DIRECTORY ?? "TestResults/live-evaluations");
     const classification = process.env.EVAL_DATA_CLASSIFICATION ?? "";
     const publishAnswers =
         classification === "synthetic" ||
         (classification !== "internal-test" && process.env.GITHUB_ACTIONS !== "true");
-    const presentation = groupLayout
-        ? groupPresentationFor(groupKeys[0], cases)
+    const presentation = scenarioLayout
+        ? scenarioPresentationFor(cases[0])
         : presentationFor(cases, threshold, cases.length !== expected.length);
     const evaluate = (planned, results, commit, hash) =>
         evaluateQuality(planned, results, commit, hash, { expected, threshold });
@@ -364,7 +368,7 @@ async function main() {
                 for (const line of renderAnnotations(cases, finished, {
                     title: presentation.title,
                     accepted: finalVerdict.accepted,
-                }))
+                }, 10, { notice: !scenarioLayout }))
                     console.log(line);
             },
         },

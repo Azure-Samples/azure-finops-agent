@@ -6,8 +6,8 @@ Decrypts a live-evaluation run's failed-case diagnostics with the maintainer cer
 .DESCRIPTION
 Pass -RunId to download that GitHub Actions run's artifacts for the current repository into a
 temporary folder, or -Path for an already downloaded private-diagnostics.enc.json. Works for the
-deployment gate (live-ai-evaluations-*) and the AI quality report, whose group jobs each keep their
-own diagnostics (ai-quality-group-*); every encrypted file in the run is decrypted. Prints each
+deployment gate (live-ai-evaluations-*) and the AI quality report, whose eval jobs each keep their
+own diagnostics (ai-quality-eval-*); every encrypted file in the run is decrypted. Prints each
 failed case's judge verdict, findings, rationale, gate failures and answer. -OutFile also saves the
 full decrypted JSON (including tool arguments and results; a JSON array when the run had several
 files); keep it in an access-restricted folder.
@@ -53,7 +53,7 @@ $download = $null
 try {
     if ($PSCmdlet.ParameterSetName -eq 'Run') {
         $download = Join-Path ([IO.Path]::GetTempPath()) "finops-eval-diagnostics-$RunId-$([guid]::NewGuid().ToString('n'))"
-        gh run download $RunId --dir $download --pattern 'live-ai-evaluations-*' --pattern 'ai-quality-group-*' --pattern 'ai-quality-report-*' | Out-Null
+        gh run download $RunId --dir $download --pattern 'live-ai-evaluations-*' --pattern 'ai-quality-eval-*' --pattern 'ai-quality-report-*' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Could not download the artifacts of run $RunId." }
         $files = @(Get-ChildItem $download -Recurse -Filter 'private-diagnostics.enc.json' | Sort-Object FullName)
         if (-not $files) { throw "Run $RunId has no encrypted diagnostics: every case passed, or EVAL_DIAGNOSTICS_CERT was not set." }

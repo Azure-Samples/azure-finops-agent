@@ -25,17 +25,17 @@ import {
 import {
     DEFAULT_QUALITY_THRESHOLD,
     GATE_WORKFLOWS,
-    combineGroups,
+    combineReports,
     countRunningGates,
     evaluateQuality,
-    groupPresentationFor,
-    groupTitle,
     jobLinks,
     oneLine,
     parseThreshold,
-    planGroups,
+    planScenarios,
     presentationFor,
-    readGroupReports,
+    readEvalReports,
+    scenarioPresentationFor,
+    scenarioTitle,
     selectScenarios,
     yieldToGates,
 } from "./quality.mjs";
@@ -447,7 +447,10 @@ test("group selection and the quality bar are validated", () => {
     assert.ok(safety.length >= 9 && safety.every((scenario) => scenario.group === "safety"));
     assert.equal(selectScenarios(extended, " safety , multilingual ").length,
         extended.filter((scenario) => ["safety", "multilingual"].includes(scenario.group)).length);
-    assert.equal(selectScenarios(extended, ""), extended);
+    assert.deepEqual(selectScenarios(extended, ""), extended);
+    assert.deepEqual(selectScenarios(extended, "", ` ${extended[3].id} ,${extended[1].id}`).map((scenario) => scenario.id), [extended[1].id, extended[3].id]);
+    assert.deepEqual(selectScenarios(extended, "safety", extended[0].id), [], "groups and ids intersect");
+    assert.throws(() => selectScenarios(extended, "", "nope\n::error::x"), /Unknown scenario id: "nope ::error::x"/);
     assert.throws(() => selectScenarios(extended, "safety,nope"), /Unknown scenario group: "nope"/);
     assert.equal(parseThreshold(undefined), DEFAULT_QUALITY_THRESHOLD);
     assert.equal(parseThreshold("90"), 0.9);
@@ -656,7 +659,7 @@ test("the quality workflow never gates a deployment and follows the repository's
     assert.match(quality, /environment: ai-evaluation/);
     assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs\n/);
     assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs --plan >> "\$GITHUB_OUTPUT"/);
-    assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs --merge TestResults\/groups TestResults\/jobs\.json/);
+    assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs --merge TestResults\/evals TestResults\/jobs\.json/);
     assert.match(quality, /if: always\(\)/);
     assert.match(quality, /group: ai-quality-report/);
     assert.match(quality, /cancel-in-progress: false/);
@@ -674,144 +677,190 @@ test("the quality workflow never gates a deployment and follows the repository's
     }
 });
 
-// The native layout: one job per group, so each group is its own green or red box on the run graph and in the checks.
-test("each group is its own job, Cost Management groups run one at a time, and a scoreboard combines them", async () => {
+// The native layout: one job per eval, so each eval is its own green or red entry on the run page and in the checks.
+test("each eval is its own job, Cost Management evals run one at a time, and a scoreboard combines them", async () => {
     const quality = (await readFile(new URL("../../.github/workflows/ai-quality-report.yml", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
     const job = (name) => quality.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z]+:\\n|(?![\\s\\S]))`, "m"))?.[1] ?? "";
     const [plan, parallel, paced, board] = ["plan", "parallel", "paced", "scoreboard"].map(job);
     assert.ok(plan && parallel && paced && board, "plan, parallel, paced and scoreboard jobs exist");
     assert.doesNotMatch(plan, /environment:/, "planning needs no credentials");
-    for (const [group, parallelism] of [[parallel, 3], [paced, 1]]) {
-        assert.match(group, /name: \$\{\{ matrix\.group\.title \}\}/);
-        assert.match(group, /fail-fast: false/);
-        assert.match(group, new RegExp(`max-parallel: ${parallelism}\\n`));
-        assert.match(group, /environment: ai-evaluation/);
+    assert.match(plan, /EVAL_SCENARIOS: \$\{\{ inputs\.scenarios \}\}/);
+    for (const [lane, parallelism] of [[parallel, 3], [paced, 1]]) {
+        assert.match(lane, /name: \$\{\{ matrix\.eval\.title \}\}/);
+        assert.match(lane, /fail-fast: false/);
+        assert.match(lane, new RegExp(`max-parallel: ${parallelism}\\n`));
+        assert.match(lane, /environment: ai-evaluation/);
     }
-    assert.match(parallel, /group: \$\{\{ fromJSON\(needs\.plan\.outputs\.parallel\) \}\}/);
-    assert.match(paced, /group: \$\{\{ fromJSON\(needs\.plan\.outputs\.paced\) \}\}/);
-    assert.match(parallel, /env: &group-env/);
-    assert.match(parallel, /steps: &group-steps/);
-    assert.match(paced, /env: \*group-env\n/);
-    assert.match(paced, /steps: \*group-steps\n/);
-    assert.match(parallel, /EVAL_GROUPS: \$\{\{ matrix\.group\.key \}\}/);
-    assert.match(parallel, /EVAL_REPORT_LAYOUT: group/);
-    assert.match(parallel, /name: ai-quality-group-\$\{\{ matrix\.group\.key \}\}-\$\{\{ github\.run_attempt \}\}/);
+    assert.match(parallel, /eval: \$\{\{ fromJSON\(needs\.plan\.outputs\.parallel\) \}\}/);
+    assert.match(paced, /eval: \$\{\{ fromJSON\(needs\.plan\.outputs\.paced\) \}\}/);
+    assert.match(parallel, /env: &eval-env/);
+    assert.match(parallel, /steps: &eval-steps/);
+    assert.match(paced, /env: \*eval-env\n/);
+    assert.match(paced, /steps: \*eval-steps\n/);
+    assert.match(parallel, /EVAL_SCENARIO_ID: \$\{\{ matrix\.eval\.id \}\}/);
+    assert.match(parallel, /EVAL_REPORT_LAYOUT: scenario/);
+    assert.match(parallel, /name: ai-quality-eval-\$\{\{ matrix\.eval\.id \}\}-\$\{\{ github\.run_attempt \}\}/);
     assert.match(board, /needs: \[plan, parallel, paced\]/);
     assert.match(board, /if: always\(\) && needs\.plan\.result == 'success'/);
-    assert.match(board, /pattern: ai-quality-group-\*/);
+    assert.match(board, /pattern: ai-quality-eval-\*/);
+    assert.match(board, /gh api --paginate "repos\/\$GITHUB_REPOSITORY\/actions\/runs\/\$GITHUB_RUN_ID\/jobs\?filter=latest&per_page=100"/);
+    assert.match(board, /EVAL_SCENARIOS: \$\{\{ inputs\.scenarios \}\}/);
     assert.doesNotMatch(board, /environment:/);
-    // Every group job fits its limit after setup, and the run step leaves time for publishing.
-    const groupLimit = Number(parallel.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
-    const runLimit = Number(parallel.match(/- name: Run this group's scenarios\n\s+timeout-minutes: (\d+)/)?.[1]);
-    assert.ok(runLimit + 10 <= groupLimit && groupLimit <= 360, `${runLimit} + 10 must fit ${groupLimit}`);
-    // Job names come from planned group titles, never from an input.
-    const plannedTitles = new Set(Object.keys(GROUP_META).filter((key) => key !== "other").map(groupTitle));
-    for (const entry of [...planGroups(extended).parallel, ...planGroups(extended).paced])
-        assert.ok(plannedTitles.has(entry.title));
+    // Every eval job fits its limit after setup, and the run step leaves time for publishing.
+    const evalLimit = Number(parallel.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
+    const runLimit = Number(parallel.match(/- name: Run this eval\n\s+timeout-minutes: (\d+)/)?.[1]);
+    assert.ok(runLimit + 10 <= evalLimit && evalLimit <= 360, `${runLimit} + 10 must fit ${evalLimit}`);
+    // GitHub runs at most 256 jobs per matrix.
+    const plan256 = planScenarios(extended);
+    assert.ok(plan256.parallel.length <= 256 && plan256.paced.length <= 256);
 });
 
-test("the plan splits groups by whether any of their scenarios calls Cost Management and covers every scenario", () => {
-    const plan = planGroups(extended);
-    const byKey = new Map(extended.map((scenario) => [scenario.group, []]));
-    for (const scenario of extended) byKey.get(scenario.group).push(scenario);
-    for (const entry of plan.parallel)
-        assert.ok(byKey.get(entry.key).every((scenario) => scenario.lane !== COST_MANAGEMENT_LANE), entry.key);
-    for (const entry of plan.paced)
-        assert.ok(byKey.get(entry.key).some((scenario) => scenario.lane === COST_MANAGEMENT_LANE), entry.key);
-    assert.equal([...plan.parallel, ...plan.paced].reduce((sum, entry) => sum + entry.count, 0), extended.length);
+test("the plan splits evals by whether they call Cost Management, keeps group order and names each job uniquely", () => {
+    const plan = planScenarios(extended);
+    const byId = new Map(extended.map((scenario) => [scenario.id, scenario]));
+    for (const entry of plan.parallel) assert.notEqual(byId.get(entry.id).lane, COST_MANAGEMENT_LANE, entry.id);
+    for (const entry of plan.paced) assert.equal(byId.get(entry.id).lane, COST_MANAGEMENT_LANE, entry.id);
+    const all = [...plan.parallel, ...plan.paced];
+    assert.equal(all.length, extended.length);
     assert.equal(plan.count, extended.length);
-    assert.deepEqual(new Set([...plan.parallel, ...plan.paced].map((entry) => entry.key)), new Set(byKey.keys()));
-    const orders = (entries) => entries.map((entry) => GROUP_META[entry.key].order);
-    assert.deepEqual(orders(plan.paced), [...orders(plan.paced)].sort((a, b) => a - b));
-    const lines = spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--plan"], {
-        encoding: "utf8", env: { ...process.env, EVAL_GROUPS: "safety,docs" },
-    }).stdout.trim().split("\n");
+    assert.deepEqual(new Set(all.map((entry) => entry.id)), new Set(byId.keys()));
+    // Job names are the scoreboard's link keys and the run page's labels: unique, single-line, from our own text.
+    assert.equal(new Set(all.map((entry) => entry.title)).size, all.length, "every eval has a distinct job name");
+    for (const entry of all) {
+        assert.equal(entry.title, scenarioTitle(byId.get(entry.id)));
+        assert.ok(entry.title.startsWith(GROUP_META[byId.get(entry.id).group].icon));
+        assert.doesNotMatch(entry.title, /[\u0000-\u001f]/);
+        assert.deepEqual(Object.keys(entry).sort(), ["id", "title"]);
+    }
+    const orders = (entries) => entries.map((entry) => GROUP_META[byId.get(entry.id).group].order);
+    for (const lane of [plan.parallel, plan.paced]) assert.deepEqual(orders(lane), [...orders(lane)].sort((a, b) => a - b));
+    const script = fileURLToPath(new URL("./quality.mjs", import.meta.url));
+    const planned = (env) => spawnSync(process.execPath, [script, "--plan"], { encoding: "utf8", env: { ...process.env, EVAL_GROUPS: "", EVAL_SCENARIOS: "", ...env } });
+    const lines = planned({ EVAL_GROUPS: "safety,docs" }).stdout.trim().split("\n");
     assert.deepEqual(lines.map((line) => line.split("=")[0]), ["parallel", "paced", "count"]);
-    assert.deepEqual(JSON.parse(lines[0].slice("parallel=".length)).map((entry) => entry.key), ["docs"]);
-    assert.deepEqual(JSON.parse(lines[1].slice("paced=".length)).map((entry) => entry.key), ["safety"]);
-    // Only the scoreboard applies the bar, so the plan rejects a bad one before any group spends a live case.
-    const bad = spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--plan"], {
-        encoding: "utf8", env: { ...process.env, EVAL_GROUPS: "safety", EVAL_QUALITY_THRESHOLD: "80%" },
-    });
+    const ids = (line, key) => JSON.parse(line.slice(`${key}=`.length)).map((entry) => entry.id);
+    const expectedIds = (group) => extended.filter((scenario) => scenario.group === group).map((scenario) => scenario.id);
+    assert.deepEqual(new Set([...ids(lines[0], "parallel"), ...ids(lines[1], "paced")]), new Set([...expectedIds("safety"), ...expectedIds("docs")]));
+    // Chosen evals run alone: the way to re-test a fix without the whole report.
+    const chosen = [extended[0].id, extended.find((scenario) => scenario.lane === COST_MANAGEMENT_LANE).id];
+    const only = planned({ EVAL_SCENARIOS: chosen.join(",") }).stdout.trim().split("\n");
+    assert.deepEqual(new Set([...ids(only[0], "parallel"), ...ids(only[1], "paced")]), new Set(chosen));
+    assert.equal(only[2], "count=2");
+    const stranger = planned({ EVAL_SCENARIOS: "0123456789abcdef" });
+    assert.notEqual(stranger.status, 0);
+    assert.match(stranger.stderr, /Unknown scenario id: "0123456789abcdef"/);
+    const empty = planned({ EVAL_GROUPS: "safety", EVAL_SCENARIOS: expectedIds("docs")[0] });
+    assert.notEqual(empty.status, 0, "a selection that matches nothing stops the run");
+    // Only the scoreboard applies the bar, so the plan rejects a bad one before any eval spends a live case.
+    const bad = planned({ EVAL_GROUPS: "safety", EVAL_QUALITY_THRESHOLD: "80%" });
     assert.notEqual(bad.status, 0);
     assert.match(bad.stderr, /percentage from 0 to 100/);
     assert.equal(bad.stdout, "");
 });
 
-test("a group job runs exactly one group and is red whenever one of its scenarios is red", async () => {
-    const result = spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url))], {
+test("an eval job runs exactly the named eval, and its summary is one card whose headline matches the job", async () => {
+    const script = fileURLToPath(new URL("./quality.mjs", import.meta.url));
+    const start = (env) => spawnSync(process.execPath, [script], {
         encoding: "utf8",
-        env: { ...process.env, EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: "safety,docs", EVAL_REPORT_LAYOUT: "group",
-            EVAL_OUTPUT_DIRECTORY: join(repositoryRoot, "tests", "LiveEvaluations", "obj", ".never-written") },
+        env: { ...process.env, EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: "", EVAL_SCENARIOS: "", EVAL_REPORT_LAYOUT: "scenario",
+            EVAL_OUTPUT_DIRECTORY: join(repositoryRoot, "tests", "LiveEvaluations", "obj", ".never-written"), ...env },
     });
-    assert.match(result.stderr, /The group layout runs exactly one scenario group/);
-    const safety = extended.filter((scenario) => scenario.group === "safety");
-    const presentation = groupPresentationFor("safety", safety);
-    assert.equal(presentation.title, "🛡️ Safety and guardrails");
-    assert.equal(presentation.heatmap, false);
-    // The group bar is every scored scenario: one red fails the group, an amber does not.
-    const oneRed = safety.map((scenario, index) => (index === 0 ? failRow(scenario) : passRow(scenario)));
-    assert.equal(evaluateQuality(safety, oneRed, sha, suiteHash, { expected: extended, threshold: 1 }).accepted, false);
-    assert.equal(evaluateQuality(safety, safety.map(passRow), sha, suiteHash, { expected: extended, threshold: 1 }).accepted, true);
-    const summary = renderSummary(safety, oneRed, { accepted: false }, sha, false, presentation);
-    assert.match(summary, /^# 🔴 🛡️ Safety and guardrails · 1 of \d+ scenarios? failed/);
-    assert.doesNotMatch(summary, /### Heatmap/);
+    assert.match(start({ EVAL_SCENARIO_ID: "" }).stderr, /The scenario layout runs exactly one scenario, named by EVAL_SCENARIO_ID/);
+    assert.match(start({ EVAL_SCENARIO_ID: "0123456789abcdef" }).stderr, /Unknown scenario id/);
+    const scenario = NEW_SCENARIOS.find((item) => item.label === "Refuses to delete a resource group");
+    const presentation = scenarioPresentationFor(scenario);
+    assert.equal(presentation.title, "🛡️ Refuses to delete a resource group");
+    assert.equal(presentation.single, true);
+    // One eval: red when it is red, green when it passes or fails only for its known limitation.
+    assert.equal(evaluateQuality([scenario], [failRow(scenario)], sha, suiteHash, { expected: extended, threshold: 1 }).accepted, false);
+    assert.equal(evaluateQuality([scenario], [passRow(scenario)], sha, suiteHash, { expected: extended, threshold: 1 }).accepted, true);
+    const flagged = extended.find((item) => item.knownIssue);
+    assert.equal(evaluateQuality([flagged], [failRow(flagged, [INEFFICIENT_FAILURE])], sha, suiteHash, { expected: extended, threshold: 1 }).accepted, true);
+    const red = renderSummary([scenario], [failRow(scenario)], { accepted: false, failures: ["0% of scored scenarios passed."] }, sha, false, presentation);
+    assert.match(red, /^# 🔴 FAIL · 🛡️ Refuses to delete a resource group\n\n\*\*Failed: the reasons are below\.\*\*/);
+    assert.match(red, /<details open><summary>🔴 <b>Refuses to delete a resource group<\/b>/);
+    assert.match(red, /\*\*What this eval checks\.\*\*[\s\S]*\*\*What happened\.\*\*[\s\S]*\*\*What the judge scored\.\*\*[\s\S]*\*\*Why:\*\*[\s\S]*\*\*Checks\.\*\*/);
+    assert.match(red, /Safety and guardrails · one eval of the AI quality report · revision `aaaaaaa`/);
+    assert.doesNotMatch(red, /### Heatmap|Needs attention|Questions, tools, seconds/);
+    const green = renderSummary([scenario], [passRow(scenario)], { accepted: true, failures: [] }, sha, false, presentation);
+    assert.match(green, /^# 🟢 PASS · 🛡️ Refuses to delete a resource group\n\n\*\*Passed every hard check and the judge accepted the answer\.\*\*/);
+    assert.match(green, /<details open>/, "a passing eval's own card is open too");
+    const amber = renderSummary([flagged], [failRow(flagged, [INEFFICIENT_FAILURE])], { accepted: true, failures: [] }, sha, false, scenarioPresentationFor(flagged));
+    assert.match(amber, /^# 🟠 KNOWN LIMIT · .*\n\n\*\*Failed only for its documented known limitation, so this job stays green\.\*\*/);
+    const none = renderSummary([scenario], [], { accepted: false, failures: ["Missing or extra scenario results."] }, sha, false, presentation);
+    assert.match(none, /^# ⚪ NOT RUN · .*\n\n\*\*No result: the eval did not finish\. See the failed step of this job\.\*\*/);
+    // A pass the run did not accept is never shown green, and says why.
+    const refused = renderSummary([scenario], [passRow(scenario)], { accepted: false, failures: ["Result belongs to another revision or suite."] }, sha, false, presentation);
+    assert.match(refused, /^# 🔴 FAIL/);
+    assert.match(refused, /The run was not accepted: Result belongs to another revision or suite\./);
+    // A single eval's job annotates its failure but adds no scoreboard notice.
+    const lines = renderAnnotations([scenario], [failRow(scenario)], { title: presentation.title, accepted: false }, 10, { notice: false });
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /^::error title=🔴 Refuses to delete a resource group::The judge /);
 });
 
-test("the scoreboard combines the newest attempt of each group, ignores other revisions and links each group's job", async () => {
+test("the scoreboard combines the newest attempt of each eval, ignores other revisions and links each failing eval to its job", async () => {
     const directory = await createDirectory();
     try {
-        const safety = extended.filter((scenario) => scenario.group === "safety");
-        const docs = extended.filter((scenario) => scenario.group === "docs");
+        const [first, second, third] = extended.filter((scenario) => scenario.group === "safety");
         const write = async (name, report) => {
             await mkdir(join(directory, name), { recursive: true });
             await writeFile(join(directory, name, "results.json"), JSON.stringify(report));
         };
         const published = (rows) => rows.map((row) => ({ ...row, result: publishableResult(row.result, false) }));
-        await write("ai-quality-group-safety-1", { sha, publishAnswers: false, results: published(safety.map((scenario) => failRow(scenario))) });
-        await write("ai-quality-group-safety-2", { sha, publishAnswers: false, results: published(safety.map(passRow)) });
-        await write("ai-quality-group-docs-1", { sha: "c".repeat(40), publishAnswers: false, results: published(docs.map(passRow)) });
-        await write("not-a-group", { sha, results: [] });
-        const reports = await readGroupReports(directory);
-        assert.deepEqual([...reports.keys()].sort(), ["docs", "safety"]);
-        assert.equal(reports.get("safety").attempt, 2);
-        const { results, publishAnswers } = combineGroups([...safety, ...docs], reports, sha);
-        assert.equal(results.length, safety.length, "the other revision's docs results are ignored");
-        assert.ok(results.every((row) => row.failures.length === 0), "the re-run attempt wins");
+        await write(`ai-quality-eval-${first.id}-1`, { sha, publishAnswers: false, results: published([failRow(first)]) });
+        await write(`ai-quality-eval-${first.id}-2`, { sha, publishAnswers: false, results: published([passRow(first)]) });
+        await write(`ai-quality-eval-${second.id}-1`, { sha: "c".repeat(40), publishAnswers: false, results: published([passRow(second)]) });
+        // An artifact counts only for the eval it is named after.
+        await write(`ai-quality-eval-${third.id}-1`, { sha, publishAnswers: false, results: published([passRow(second)]) });
+        await write("not-an-eval", { sha, results: [] });
+        await write("ai-quality-eval-safety-1", { sha, results: published([passRow(second)]) });
+        const reports = await readEvalReports(directory);
+        assert.deepEqual([...reports.keys()].sort(), [first.id, second.id, third.id].sort());
+        assert.equal(reports.get(first.id).attempt, 2);
+        const { results, publishAnswers } = combineReports([first, second, third], reports, sha);
+        assert.deepEqual(results.map((row) => row.id), [first.id], "other revisions and misnamed rows are ignored");
+        assert.equal(results[0].failures.length, 0, "the re-run attempt wins");
         assert.equal(publishAnswers, false);
-        assert.equal((await readGroupReports(join(directory, "missing"))).size, 0);
+        assert.equal((await readEvalReports(join(directory, "missing"))).size, 0);
         const links = jobLinks([
-            { name: "🛡️ Safety and guardrails", url: `https://github.com/owner/repo/actions/runs/1/job/2` },
-            { name: "📚 How-to and concepts", url: "javascript:alert(1)" },
-        ], [...safety, ...docs]);
-        assert.deepEqual(links, { safety: "https://github.com/owner/repo/actions/runs/1/job/2" });
-        const board = renderBoardMarkdown([...safety, ...docs], results, { ...context, links });
-        assert.match(board, /\[🛡️ Safety and guardrails\]\(https:\/\/github\.com\/owner\/repo\/actions\/runs\/1\/job\/2\)/);
+            { name: scenarioTitle(first), url: "https://github.com/owner/repo/actions/runs/1/job/2" },
+            { name: scenarioTitle(second), url: "javascript:alert(1)" },
+        ], [first, second, third]);
+        assert.deepEqual(links, { [first.id]: "https://github.com/owner/repo/actions/runs/1/job/2" });
+        const failing = [failRow(first), passRow(second), passRow(third)];
+        const board = renderBoardMarkdown([first, second, third], failing, { ...context, links });
+        assert.match(board, new RegExp(`\\| \\[${first.label}\\]\\(https://github\\.com/owner/repo/actions/runs/1/job/2\\) \\|`), "the failing eval links to its job");
         assert.doesNotMatch(board, /javascript:/);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
 });
 
-test("the real merge writes the scoreboard, the dashboard and results, and is red when a group produced nothing", async () => {
+test("the real merge writes the scoreboard, the dashboard and results, and is red when an eval produced nothing", async () => {
     const directory = await createDirectory();
     try {
         const safety = extended.filter((scenario) => scenario.group === "safety");
-        const groups = join(directory, "groups");
-        await mkdir(join(groups, "ai-quality-group-safety-1"), { recursive: true });
-        await writeFile(join(groups, "ai-quality-group-safety-1", "results.json"), JSON.stringify({
-            sha, publishAnswers: false, results: safety.map((scenario) => ({ ...passRow(scenario), result: publishableResult(pass(scenario), false) })),
-        }));
+        const evals = join(directory, "evals");
+        for (const scenario of safety) {
+            await mkdir(join(evals, `ai-quality-eval-${scenario.id}-1`), { recursive: true });
+            await writeFile(join(evals, `ai-quality-eval-${scenario.id}-1`, "results.json"), JSON.stringify({
+                sha, publishAnswers: false, results: [{ ...passRow(scenario), result: publishableResult(pass(scenario), false) }],
+            }));
+        }
         const output = join(directory, "out");
-        const run = (groupsText) => spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--merge", groups, join(directory, "no-jobs.json")], {
-            encoding: "utf8", env: { ...process.env, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: groupsText, EVAL_OUTPUT_DIRECTORY: output, EVAL_QUALITY_THRESHOLD: "" },
+        const run = (env) => spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--merge", evals, join(directory, "no-jobs.json")], {
+            encoding: "utf8", env: { ...process.env, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: "", EVAL_SCENARIOS: "", EVAL_OUTPUT_DIRECTORY: output, EVAL_QUALITY_THRESHOLD: "", ...env },
         });
-        const green = run("safety");
+        const green = run({ EVAL_GROUPS: "safety" });
         assert.equal(green.status, 0, green.stderr);
         assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All \d+ scenarios green/);
         assert.match(await readFile(join(output, "ai-quality-report.html"), "utf8"), /What the judge scored/);
         assert.equal(JSON.parse(await readFile(join(output, "results.json"), "utf8")).results.length, safety.length);
-        const red = run("safety,docs");
+        const chosen = run({ EVAL_SCENARIOS: safety[0].id });
+        assert.equal(chosen.status, 0, chosen.stderr);
+        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All 1 scenario green/);
+        const red = run({ EVAL_GROUPS: "safety,docs" });
         assert.equal(red.status, 1, "docs produced no results");
         assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🔴 AI Quality Report · Not accepted: \d+ of \d+ ran/);
     } finally {

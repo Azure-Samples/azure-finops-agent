@@ -209,7 +209,7 @@ export function explain(scenario, row, publishAnswers = false) {
     ];
     return {
         question: scenario?.question ?? "",
-        expectation: marker >= 0 ? rubric.slice(marker + "Case expectation:".length).trim() : "",
+        expectation: marker >= 0 ? rubric.slice(marker + "Case expectation:".length).trim().replace(/^[a-z]/, (letter) => letter.toUpperCase()) : "",
         knownIssue: scenario?.knownIssue ?? "",
         requiredTools: scenario?.requiredTools ?? [],
         forbiddenTools: scenario?.forbiddenTools ?? [],
@@ -269,12 +269,12 @@ export function judgeSentence(info) {
 
 // One scenario as a collapsible GitHub-markdown block: headline, then what it checks, what happened, the judge's
 // scores and reasons, and every hard check. Failures and known limitations open by default.
-export function explainMarkdown(scenario, row, publishAnswers = false, { previewAnswer = (text) => cell(text) } = {}) {
+export function explainMarkdown(scenario, row, publishAnswers = false, { previewAnswer = (text) => cell(text), open = false } = {}) {
     const status = statusOf(scenario, row);
     const info = explain(scenario, row, publishAnswers);
     const result = row?.result;
     const lines = [
-        `<details${status === "fail" || status === "known" ? " open" : ""}><summary>${STATUS[status].dot} <b>${escapeHtml(scenario?.label ?? row?.id)}</b> · ${STATUS[status].word} · ${seconds(result?.durationMs)} · ${toolsLabel(result?.toolCount)} · ${stars(result?.judge?.efficiencyScore)}</summary>`,
+        `<details${open || status === "fail" || status === "known" ? " open" : ""}><summary>${STATUS[status].dot} <b>${escapeHtml(scenario?.label ?? row?.id)}</b> · ${STATUS[status].word} · ${seconds(result?.durationMs)} · ${toolsLabel(result?.toolCount)} · ${stars(result?.judge?.efficiencyScore)}</summary>`,
         "",
         `**What this eval checks.** ${cell(info.question)}`,
     ];
@@ -304,11 +304,42 @@ export function explainMarkdown(scenario, row, publishAnswers = false, { preview
     }
     if (info.answer) lines.push("", "**Answer:**", "", `<pre>${previewAnswer(info.answer, 2400)}</pre>`);
     else if (info.answerWithheld) lines.push("", "_The answer and the judge's written reasoning are withheld because this run used internal tenant data; the scores, the reasons above and the checks below are published._");
-    lines.push("", `**Checks.** ${info.checks.map((check) => `${check.ok === null ? "⚪" : check.ok ? "✅" : "❌"} ${cell(check.label)}`).join(" · ")}`);
+    const mark = (check) => `${check.ok === null ? "⚪" : check.ok ? "✅" : "❌"} ${cell(check.label)}`;
+    // An eval's own card has room for one check per line; a board of many cards keeps them on one line.
+    if (open) lines.push("", "**Checks.**", "", ...info.checks.map((check) => `- ${mark(check)}`));
+    else lines.push("", `**Checks.** ${info.checks.map(mark).join(" · ")}`);
     const unexplained = info.failures.filter((failure) => !/^(Required tool missing|Forbidden tool called)/.test(failure));
     if (unexplained.length) lines.push("", `Failed because: ${unexplained.map(cell).join(" ")}`);
     lines.push("", "</details>");
     return lines.join("\n");
+}
+
+// The summary of one eval's own job: a headline that matches the job's green or red status, then the explanation open.
+export function renderEvalMarkdown(scenario, row, { title, tierNote = "", sha, accepted, runFailures = [], publishAnswers = false, previewAnswer } = {}) {
+    let status = statusOf(scenario, row);
+    // A job that ended without a result, or whose result the run did not accept, is never shown green.
+    if (status === "pass" && accepted === false) status = "fail";
+    const meta = STATUS[status];
+    const verdict = {
+        pass: "Passed every hard check and the judge accepted the answer.",
+        fail: "Failed: the reasons are below.",
+        known: "Failed only for its documented known limitation, so this job stays green.",
+        missing: "No result: the eval did not finish. See the failed step of this job.",
+    }[status];
+    const popular = popularity(scenario);
+    return [
+        `# ${meta.dot} ${meta.word} · ${escapeHtml(title ?? scenario?.label ?? scenario?.id)}`,
+        "",
+        `**${escapeHtml(verdict)}**`,
+        "",
+        [tierNote ? escapeHtml(tierNote) : "", popular ? `🔥 ${escapeHtml(popular)}` : "", sha ? `revision \`${escapeHtml(String(sha).slice(0, 7))}\`` : ""].filter(Boolean).join(" · "),
+        ...(accepted === false && runFailures.length ? ["", `The run was not accepted: ${runFailures.map(cell).join(" ")}`] : []),
+        "",
+        explainMarkdown(scenario, row, publishAnswers, { ...(previewAnswer ? { previewAnswer } : {}), open: true }),
+        "",
+        "_The 🏁 Scoreboard job combines every eval of this run into one board and dashboard._",
+        "",
+    ].join("\n");
 }
 
 // The verdict is authoritative: a run that was not accepted is red whatever its scoreboard shows, so a setup failure, a
@@ -328,7 +359,7 @@ export function headline(board, accepted) {
         return { icon: "🟠", text: `Incomplete: ${board.total - board.missing} of ${board.total} ran`, state: "known" };
     if (board.known > 0)
         return { icon: "🟢", text: `${board.passed} green, ${board.known} known limitation${board.known === 1 ? "" : "s"}`, state: "pass" };
-    return { icon: "🟢", text: `All ${board.total} scenarios green`, state: "pass" };
+    return { icon: "🟢", text: `All ${board.total} scenario${board.total === 1 ? "" : "s"} green`, state: "pass" };
 }
 
 // Twenty squares, proportional to what passed, failed or is a known limitation.
@@ -344,10 +375,12 @@ export function renderBoardMarkdown(cases, results, context) {
     const { title, accepted, sha, tierNote = "", threshold = null, verdictLine = "", heatmap = true, links = {} } = context;
     const board = scoreboard(cases, results);
     const state = headline(board, accepted);
-    // A group links to the job that ran it when the caller knows that job's page.
-    const groupName = (group) => {
-        const url = typeof links[group.key] === "string" && /^https:\/\/github\.com\//.test(links[group.key]) ? links[group.key] : "";
-        return url ? `[${cell(groupTitle(group))}](${encodeURI(url)})` : cell(groupTitle(group));
+    // An eval links to the job that ran it when the caller knows that job's page.
+    const groupName = (group) => cell(groupTitle(group));
+    const scenarioName = (scenario) => {
+        const url = typeof links[scenario.id] === "string" && /^https:\/\/github\.com\//.test(links[scenario.id]) ? links[scenario.id] : "";
+        const label = cell(scenario.label ?? scenario.id);
+        return url ? `[${label}](${encodeURI(url)})` : label;
     };
     const lines = [
         `# ${state.icon} ${escapeHtml(title)} · ${escapeHtml(state.text)}`,
@@ -373,7 +406,7 @@ export function renderBoardMarkdown(cases, results, context) {
             "",
             "| Scenario | Group | Judge | Why |",
             "|---|---|:-:|---|",
-            ...failing.map((item) => `| ${cell(item.scenario.label ?? item.scenario.id)} | ${groupName({ ...GROUP_META[item.group], key: item.group })} | ${judgeBadge(item.row?.result?.judge)} | ${cell(whyOf(item))} |`),
+            ...failing.map((item) => `| ${scenarioName(item.scenario)} | ${groupName({ ...GROUP_META[item.group], key: item.group })} | ${judgeBadge(item.row?.result?.judge)} | ${cell(whyOf(item))} |`),
         );
     const known = board.items.filter((item) => item.status === "known");
     if (known.length) {
@@ -409,7 +442,7 @@ export function renderBoardMarkdown(cases, results, context) {
             ...group.items.map((item) => {
                 const result = item.row?.result;
                 const flame = popularity(item.scenario) ? " 🔥" : "";
-                return `| ${STATUS[item.status].dot} | ${cell(item.scenario.label ?? item.scenario.id)}${flame} | ${seconds(result?.durationMs)} | ${Number.isFinite(result?.toolCount) ? result.toolCount : "-"} | ${stars(result?.judge?.efficiencyScore)} |`;
+                return `| ${STATUS[item.status].dot} | ${scenarioName(item.scenario)}${flame} | ${seconds(result?.durationMs)} | ${Number.isFinite(result?.toolCount) ? result.toolCount : "-"} | ${stars(result?.judge?.efficiencyScore)} |`;
             }),
             "",
             "</details>",
@@ -443,8 +476,9 @@ const commandProperty = (value) =>
     commandData(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
 
 // GitHub shows at most ten annotations of each level per step: failures first, then one scoreboard notice. A job that
-// combines groups whose own jobs already annotated their failures passes failures: false.
-export function renderAnnotations(cases, results, context, maximum = 10, { failures = true } = {}) {
+// combines evals whose own jobs already annotated their failures passes failures: false; a single eval's job, whose
+// status already says it all, passes notice: false.
+export function renderAnnotations(cases, results, context, maximum = 10, { failures = true, notice = true } = {}) {
     const board = scoreboard(cases, results);
     const command = (level, title, message) =>
         `::${level} title=${commandProperty(title)}::${commandData(String(message).slice(0, 600))}`;
@@ -456,6 +490,7 @@ export function renderAnnotations(cases, results, context, maximum = 10, { failu
     }
     for (const item of board.items.filter((entry) => entry.status === "known").slice(0, maximum))
         lines.push(command("warning", `🟠 ${item.scenario.label ?? item.scenario.id}`, item.scenario.knownIssue));
+    if (!notice) return lines;
     lines.push(command(
         state.state === "fail" ? "error" : "notice",
         `${state.icon} ${context.title}: ${percent(board.total ? board.passed / board.total : 0)} green`,
