@@ -31,20 +31,22 @@ import {
     jobLinks,
     oneLine,
     parseThreshold,
-    planScenarios,
     presentationFor,
-    readEvalReports,
-    scenarioPresentationFor,
-    scenarioTitle,
+    readStageReports,
     selectScenarios,
+    stagePresentationFor,
+    suiteFor,
     yieldToGates,
 } from "./quality.mjs";
 import {
     ASKED_BY,
+    CORE_STAGES,
     KNOWN_LIMITATION,
     NEW_SCENARIOS,
+    buildCoreSuite,
     buildExtendedSuite,
     extendedLane,
+    stageTitle,
 } from "./scenarios.mjs";
 import {
     COST_MANAGEMENT_LANE,
@@ -455,7 +457,8 @@ test("group selection and the quality bar are validated", () => {
     assert.equal(parseThreshold(undefined), DEFAULT_QUALITY_THRESHOLD);
     assert.equal(parseThreshold("90"), 0.9);
     for (const bad of ["abc", "-1", "101"]) assert.throws(() => parseThreshold(bad), /percentage from 0 to 100/);
-    assert.match(presentationFor(safety, 0.8, true).tierNote, /selected groups/);
+    assert.match(presentationFor(safety, 0.8, true).tierNote, /chosen evals/);
+    assert.match(presentationFor(buildCoreSuite(), 0.8, false).tierNote, /the 10 most important evals/);
 });
 
 test("the extended run writes the board, the structured results and the dashboard, and runs every scenario", async () => {
@@ -499,7 +502,7 @@ test("the extended run writes the board, the structured results and the dashboar
         const summary = await readFile(join(directory, "summary.md"), "utf8");
         assert.match(summary, /^# 🔴 AI Quality Report · 1 of 12 scenarios failed/);
         assert.match(summary, /\*\*PASS\*\* · 11\/12 accepted/);
-        assert.match(summary, /extended tier \(selected groups\)/);
+        assert.match(summary, /12 chosen evals beyond the deployment gate/);
         const html = await readFile(join(directory, "ai-quality-report.html"), "utf8");
         assert.match(html, /AI Quality Report/);
         assert.match(html, /class="chip fail">FAIL</);
@@ -541,7 +544,7 @@ test("the real extended entry point fails closed on missing configuration and wr
         const summary = await readFile(join(directory, "summary.md"), "utf8");
         assert.match(summary, /\*\*FAIL\*\*/);
         assert.match(summary, /Answers and judge rationale are withheld/);
-        assert.match(summary, /selected groups/);
+        assert.match(summary, /3 chosen evals beyond the deployment gate/);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
@@ -659,7 +662,7 @@ test("the quality workflow never gates a deployment and follows the repository's
     assert.match(quality, /environment: ai-evaluation/);
     assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs\n/);
     assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs --plan >> "\$GITHUB_OUTPUT"/);
-    assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs --merge TestResults\/evals TestResults\/jobs\.json/);
+    assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs --merge TestResults\/stages TestResults\/jobs\.json/);
     assert.match(quality, /if: always\(\)/);
     assert.match(quality, /group: ai-quality-report/);
     assert.match(quality, /cancel-in-progress: false/);
@@ -677,192 +680,188 @@ test("the quality workflow never gates a deployment and follows the repository's
     }
 });
 
-// The native layout: one job per eval, so each eval is its own green or red entry on the run page and in the checks.
-test("each eval is its own job, Cost Management evals run one at a time, and a scoreboard combines them", async () => {
+// The native layout: one pipeline whose graph is the picture, 🧭 plan → one box per stage → 🏁 scoreboard.
+test("the report is one pipeline: a plan, one job per stage of the core evals, and a scoreboard", async () => {
     const quality = (await readFile(new URL("../../.github/workflows/ai-quality-report.yml", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
-    const job = (name) => quality.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z]+:\\n|(?![\\s\\S]))`, "m"))?.[1] ?? "";
-    const [plan, parallel, paced, board] = ["plan", "parallel", "paced", "scoreboard"].map(job);
-    assert.ok(plan && parallel && paced && board, "plan, parallel, paced and scoreboard jobs exist");
+    const job = (name) => quality.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z-]+:\\n|(?![\\s\\S]))`, "m"))?.[1] ?? "";
+    const jobsBlock = quality.slice(quality.indexOf("\njobs:\n"));
+    const jobIds = [...jobsBlock.matchAll(/^  ([a-z-]+):\n/gm)].map((match) => match[1]);
+    const stages = CORE_STAGES.map((stage) => stage.group);
+    assert.deepEqual(jobIds, ["plan", ...stages, "scoreboard"], "exactly one job per stage between the plan and the scoreboard");
+    const [plan, board] = ["plan", "scoreboard"].map(job);
     assert.doesNotMatch(plan, /environment:/, "planning needs no credentials");
     assert.match(plan, /EVAL_SCENARIOS: \$\{\{ inputs\.scenarios \}\}/);
-    for (const [lane, parallelism] of [[parallel, 3], [paced, 1]]) {
-        assert.match(lane, /name: \$\{\{ matrix\.eval\.title \}\}/);
-        assert.match(lane, /fail-fast: false/);
-        assert.match(lane, new RegExp(`max-parallel: ${parallelism}\\n`));
-        assert.match(lane, /environment: ai-evaluation/);
+    assert.match(plan, /stages: \$\{\{ steps\.plan\.outputs\.stages \}\}/);
+    for (const [index, group] of stages.entries()) {
+        const stage = job(group);
+        assert.match(stage, new RegExp(`^    name: ${stageTitle(group).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"), "the job is named after its stage");
+        assert.match(stage, /needs: plan\n/);
+        assert.match(stage, new RegExp(`if: contains\\(fromJSON\\(needs\\.plan\\.outputs\\.stages\\), '${group}'\\)`));
+        assert.match(stage, /environment: ai-evaluation/);
+        assert.match(stage, index === 0 ? /env: &stage-env/ : /env: \*stage-env\n/);
+        assert.match(stage, index === 0 ? /steps: &stage-steps/ : /steps: \*stage-steps\n/);
     }
-    assert.match(parallel, /eval: \$\{\{ fromJSON\(needs\.plan\.outputs\.parallel\) \}\}/);
-    assert.match(paced, /eval: \$\{\{ fromJSON\(needs\.plan\.outputs\.paced\) \}\}/);
-    assert.match(parallel, /env: &eval-env/);
-    assert.match(parallel, /steps: &eval-steps/);
-    assert.match(paced, /env: \*eval-env\n/);
-    assert.match(paced, /steps: \*eval-steps\n/);
-    assert.match(parallel, /EVAL_SCENARIO_ID: \$\{\{ matrix\.eval\.id \}\}/);
-    assert.match(parallel, /EVAL_REPORT_LAYOUT: scenario/);
-    assert.match(parallel, /name: ai-quality-eval-\$\{\{ matrix\.eval\.id \}\}-\$\{\{ github\.run_attempt \}\}/);
-    assert.match(board, /needs: \[plan, parallel, paced\]/);
+    const first = job(stages[0]);
+    assert.match(first, /EVAL_STAGE: \$\{\{ github\.job \}\}/);
+    assert.match(first, /EVAL_REPORT_LAYOUT: stage/);
+    assert.match(first, /name: ai-quality-stage-\$\{\{ github\.job \}\}-\$\{\{ github\.run_attempt \}\}/);
+    assert.match(board, new RegExp(`needs: \\[plan, ${stages.join(", ")}\\]`));
     assert.match(board, /if: always\(\) && needs\.plan\.result == 'success'/);
-    assert.match(board, /pattern: ai-quality-eval-\*/);
-    assert.match(board, /gh api --paginate "repos\/\$GITHUB_REPOSITORY\/actions\/runs\/\$GITHUB_RUN_ID\/jobs\?filter=latest&per_page=100"/);
+    assert.match(board, /pattern: ai-quality-stage-\*/);
     assert.match(board, /EVAL_SCENARIOS: \$\{\{ inputs\.scenarios \}\}/);
     assert.doesNotMatch(board, /environment:/);
-    // Every eval job fits its limit after setup, and the run step leaves time for publishing.
-    const evalLimit = Number(parallel.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
-    const runLimit = Number(parallel.match(/- name: Run this eval\n\s+timeout-minutes: (\d+)/)?.[1]);
-    assert.ok(runLimit + 10 <= evalLimit && evalLimit <= 360, `${runLimit} + 10 must fit ${evalLimit}`);
-    // GitHub runs at most 256 jobs per matrix.
-    const plan256 = planScenarios(extended);
-    assert.ok(plan256.parallel.length <= 256 && plan256.paced.length <= 256);
+    // A pinned image: the ubuntu-latest label adds a migration notice to every job's annotations.
+    assert.doesNotMatch(quality, /ubuntu-latest/);
+    // Every stage fits its limit after setup, and the run step leaves time for publishing.
+    const stageLimit = Number(first.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
+    const runLimit = Number(first.match(/- name: Run this stage's evals\n\s+timeout-minutes: (\d+)/)?.[1]);
+    assert.ok(runLimit + 10 <= stageLimit && stageLimit <= 360, `${runLimit} + 10 must fit ${stageLimit}`);
 });
 
-test("the plan splits evals by whether they call Cost Management, keeps group order and names each job uniquely", () => {
-    const plan = planScenarios(extended);
+test("the core is the ten most important evals in four stages, and the plan names the stages that have evals", () => {
+    const core = buildCoreSuite();
+    assert.equal(core.length, 10);
+    assert.equal(new Set(core.map((scenario) => scenario.id)).size, 10);
+    assert.deepEqual(suiteFor(""), core);
+    assert.equal(suiteFor("all").length, extended.length);
+    assert.throws(() => suiteFor("most"), /EVAL_SCOPE must be core or all/);
+    // Each core eval is an extended scenario, unchanged except for the stage it is shown in.
     const byId = new Map(extended.map((scenario) => [scenario.id, scenario]));
-    for (const entry of plan.parallel) assert.notEqual(byId.get(entry.id).lane, COST_MANAGEMENT_LANE, entry.id);
-    for (const entry of plan.paced) assert.equal(byId.get(entry.id).lane, COST_MANAGEMENT_LANE, entry.id);
-    const all = [...plan.parallel, ...plan.paced];
-    assert.equal(all.length, extended.length);
-    assert.equal(plan.count, extended.length);
-    assert.deepEqual(new Set(all.map((entry) => entry.id)), new Set(byId.keys()));
-    // Job names are the scoreboard's link keys and the run page's labels: unique, single-line, from our own text.
-    assert.equal(new Set(all.map((entry) => entry.title)).size, all.length, "every eval has a distinct job name");
-    for (const entry of all) {
-        assert.equal(entry.title, scenarioTitle(byId.get(entry.id)));
-        assert.ok(entry.title.startsWith(GROUP_META[byId.get(entry.id).group].icon));
-        assert.doesNotMatch(entry.title, /[\u0000-\u001f]/);
-        assert.deepEqual(Object.keys(entry).sort(), ["id", "title"]);
-    }
-    const orders = (entries) => entries.map((entry) => GROUP_META[byId.get(entry.id).group].order);
-    for (const lane of [plan.parallel, plan.paced]) assert.deepEqual(orders(lane), [...orders(lane)].sort((a, b) => a - b));
+    for (const scenario of core) assert.deepEqual({ ...scenario, group: byId.get(scenario.id).group }, byId.get(scenario.id));
+    for (const stage of CORE_STAGES) assert.ok(GROUP_META[stage.group] && stage.labels.length, stage.group);
+    // Importance: the four start-page cards customers asked most are all in, and the trust stage covers deletion,
+    // hidden instructions and tokens.
+    const mostAsked = Object.entries(ASKED_BY).filter(([label]) => extended.some((scenario) => scenario.label === label))
+        .sort((left, right) => right[1] - left[1]).slice(0, 4).map(([label]) => label);
+    for (const label of mostAsked) assert.ok(core.some((scenario) => scenario.label === label), label);
+    assert.equal(core.filter((scenario) => scenario.group === "safety").length, 3);
+    // Only the cost stage may query Cost Management, so the stages can run side by side.
+    for (const scenario of core.filter((item) => item.lane === COST_MANAGEMENT_LANE)) assert.equal(scenario.group, "cost", scenario.label);
     const script = fileURLToPath(new URL("./quality.mjs", import.meta.url));
-    const planned = (env) => spawnSync(process.execPath, [script, "--plan"], { encoding: "utf8", env: { ...process.env, EVAL_GROUPS: "", EVAL_SCENARIOS: "", ...env } });
-    const lines = planned({ EVAL_GROUPS: "safety,docs" }).stdout.trim().split("\n");
-    assert.deepEqual(lines.map((line) => line.split("=")[0]), ["parallel", "paced", "count"]);
-    const ids = (line, key) => JSON.parse(line.slice(`${key}=`.length)).map((entry) => entry.id);
-    const expectedIds = (group) => extended.filter((scenario) => scenario.group === group).map((scenario) => scenario.id);
-    assert.deepEqual(new Set([...ids(lines[0], "parallel"), ...ids(lines[1], "paced")]), new Set([...expectedIds("safety"), ...expectedIds("docs")]));
-    // Chosen evals run alone: the way to re-test a fix without the whole report.
-    const chosen = [extended[0].id, extended.find((scenario) => scenario.lane === COST_MANAGEMENT_LANE).id];
-    const only = planned({ EVAL_SCENARIOS: chosen.join(",") }).stdout.trim().split("\n");
-    assert.deepEqual(new Set([...ids(only[0], "parallel"), ...ids(only[1], "paced")]), new Set(chosen));
-    assert.equal(only[2], "count=2");
+    const planned = (env) => spawnSync(process.execPath, [script, "--plan"], { encoding: "utf8", env: { ...process.env, EVAL_GROUPS: "", EVAL_SCENARIOS: "", EVAL_QUALITY_THRESHOLD: "", ...env } });
+    const lines = planned({}).stdout.trim().split("\n");
+    assert.deepEqual(lines, [`stages=${JSON.stringify(CORE_STAGES.map((stage) => stage.group))}`, "count=10"]);
+    // Chosen evals run in their own stages only: the way to re-test a fix without the whole report.
+    const chosen = core.filter((scenario) => scenario.group === "safety").slice(0, 1).map((scenario) => scenario.id);
+    assert.deepEqual(planned({ EVAL_SCENARIOS: chosen.join(",") }).stdout.trim().split("\n"), ['stages=["safety"]', "count=1"]);
     const stranger = planned({ EVAL_SCENARIOS: "0123456789abcdef" });
     assert.notEqual(stranger.status, 0);
     assert.match(stranger.stderr, /Unknown scenario id: "0123456789abcdef"/);
-    const empty = planned({ EVAL_GROUPS: "safety", EVAL_SCENARIOS: expectedIds("docs")[0] });
-    assert.notEqual(empty.status, 0, "a selection that matches nothing stops the run");
-    // Only the scoreboard applies the bar, so the plan rejects a bad one before any eval spends a live case.
-    const bad = planned({ EVAL_GROUPS: "safety", EVAL_QUALITY_THRESHOLD: "80%" });
+    // An extended scenario outside the core is not part of the report.
+    const outside = extended.find((scenario) => !core.some((item) => item.id === scenario.id));
+    assert.match(planned({ EVAL_SCENARIOS: outside.id }).stderr, /Unknown scenario id/);
+    // Only the scoreboard applies the bar, so the plan rejects a bad one before any stage spends a live case.
+    const bad = planned({ EVAL_QUALITY_THRESHOLD: "80%" });
     assert.notEqual(bad.status, 0);
     assert.match(bad.stderr, /percentage from 0 to 100/);
     assert.equal(bad.stdout, "");
 });
 
-test("an eval job runs exactly the named eval, and its summary is one card whose headline matches the job", async () => {
+test("a stage job runs exactly its stage's evals, and is red whenever one of them is red", async () => {
     const script = fileURLToPath(new URL("./quality.mjs", import.meta.url));
     const start = (env) => spawnSync(process.execPath, [script], {
         encoding: "utf8",
-        env: { ...process.env, EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: "", EVAL_SCENARIOS: "", EVAL_REPORT_LAYOUT: "scenario",
+        env: { ...process.env, EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: "", EVAL_SCENARIOS: "", EVAL_REPORT_LAYOUT: "stage",
             EVAL_OUTPUT_DIRECTORY: join(repositoryRoot, "tests", "LiveEvaluations", "obj", ".never-written"), ...env },
     });
-    assert.match(start({ EVAL_SCENARIO_ID: "" }).stderr, /The scenario layout runs exactly one scenario, named by EVAL_SCENARIO_ID/);
-    assert.match(start({ EVAL_SCENARIO_ID: "0123456789abcdef" }).stderr, /Unknown scenario id/);
-    const scenario = NEW_SCENARIOS.find((item) => item.label === "Refuses to delete a resource group");
-    const presentation = scenarioPresentationFor(scenario);
-    assert.equal(presentation.title, "🛡️ Refuses to delete a resource group");
-    assert.equal(presentation.single, true);
-    // One eval: red when it is red, green when it passes or fails only for its known limitation.
-    assert.equal(evaluateQuality([scenario], [failRow(scenario)], sha, suiteHash, { expected: extended, threshold: 1 }).accepted, false);
-    assert.equal(evaluateQuality([scenario], [passRow(scenario)], sha, suiteHash, { expected: extended, threshold: 1 }).accepted, true);
-    const flagged = extended.find((item) => item.knownIssue);
-    assert.equal(evaluateQuality([flagged], [failRow(flagged, [INEFFICIENT_FAILURE])], sha, suiteHash, { expected: extended, threshold: 1 }).accepted, true);
-    const red = renderSummary([scenario], [failRow(scenario)], { accepted: false, failures: ["0% of scored scenarios passed."] }, sha, false, presentation);
-    assert.match(red, /^# 🔴 FAIL · 🛡️ Refuses to delete a resource group\n\n\*\*Failed: the reasons are below\.\*\*/);
-    assert.match(red, /<details open><summary>🔴 <b>Refuses to delete a resource group<\/b>/);
-    assert.match(red, /\*\*What this eval checks\.\*\*[\s\S]*\*\*What happened\.\*\*[\s\S]*\*\*What the judge scored\.\*\*[\s\S]*\*\*Why:\*\*[\s\S]*\*\*Checks\.\*\*/);
-    assert.match(red, /Safety and guardrails · one eval of the AI quality report · revision `aaaaaaa`/);
-    assert.doesNotMatch(red, /### Heatmap|Needs attention|Questions, tools, seconds/);
-    const green = renderSummary([scenario], [passRow(scenario)], { accepted: true, failures: [] }, sha, false, presentation);
-    assert.match(green, /^# 🟢 PASS · 🛡️ Refuses to delete a resource group\n\n\*\*Passed every hard check and the judge accepted the answer\.\*\*/);
-    assert.match(green, /<details open>/, "a passing eval's own card is open too");
-    const amber = renderSummary([flagged], [failRow(flagged, [INEFFICIENT_FAILURE])], { accepted: true, failures: [] }, sha, false, scenarioPresentationFor(flagged));
-    assert.match(amber, /^# 🟠 KNOWN LIMIT · .*\n\n\*\*Failed only for its documented known limitation, so this job stays green\.\*\*/);
-    const none = renderSummary([scenario], [], { accepted: false, failures: ["Missing or extra scenario results."] }, sha, false, presentation);
-    assert.match(none, /^# ⚪ NOT RUN · .*\n\n\*\*No result: the eval did not finish\. See the failed step of this job\.\*\*/);
-    // A pass the run did not accept is never shown green, and says why.
-    const refused = renderSummary([scenario], [passRow(scenario)], { accepted: false, failures: ["Result belongs to another revision or suite."] }, sha, false, presentation);
-    assert.match(refused, /^# 🔴 FAIL/);
-    assert.match(refused, /The run was not accepted: Result belongs to another revision or suite\./);
-    // A single eval's job annotates its failure but adds no scoreboard notice.
-    const lines = renderAnnotations([scenario], [failRow(scenario)], { title: presentation.title, accepted: false }, 10, { notice: false });
+    for (const stage of ["", "docs", "x\n::error::forged"]) {
+        const result = start({ EVAL_STAGE: stage });
+        assert.match(result.stderr, /The stage layout runs exactly one core stage, named by EVAL_STAGE/);
+        for (const line of result.stderr.split(/\r?\n/)) assert.ok(!line.startsWith("::"), line);
+    }
+    const core = buildCoreSuite();
+    const safety = core.filter((scenario) => scenario.group === "safety");
+    const presentation = stagePresentationFor("safety", safety);
+    assert.equal(presentation.title, "🛡️ Safety and guardrails");
+    assert.equal(presentation.heatmap, false);
+    // The stage bar is every scored eval: one red fails the stage, an amber does not.
+    const oneRed = safety.map((scenario, index) => (index === 0 ? failRow(scenario) : passRow(scenario)));
+    assert.equal(evaluateQuality(safety, oneRed, sha, suiteHash, { expected: core, threshold: 1 }).accepted, false);
+    assert.equal(evaluateQuality(safety, safety.map(passRow), sha, suiteHash, { expected: core, threshold: 1 }).accepted, true);
+    const flagged = core.find((scenario) => scenario.knownIssue);
+    const stage = core.filter((scenario) => scenario.group === flagged.group);
+    const amber = stage.map((scenario) => (scenario === flagged ? failRow(scenario, [INEFFICIENT_FAILURE]) : passRow(scenario)));
+    assert.equal(evaluateQuality(stage, amber, sha, suiteHash, { expected: core, threshold: 1 }).accepted, true);
+    const summary = renderSummary(safety, oneRed, { accepted: false }, sha, false, presentation);
+    assert.match(summary, /^# 🔴 🛡️ Safety and guardrails · 1 of 3 scenarios failed/);
+    assert.match(summary, /AI quality report · 3 evals in this stage/);
+    assert.doesNotMatch(summary, /### Heatmap/);
+    assert.equal((summary.match(/<details[^>]*><summary>[🟢🔴🟠⚪]/gu) ?? []).length, 3, "one card per eval");
+    // A stage's job annotates its own failures but leaves the overall notice to the scoreboard.
+    const lines = renderAnnotations(safety, oneRed, { title: presentation.title, accepted: false }, 10, { notice: false });
     assert.equal(lines.length, 1);
-    assert.match(lines[0], /^::error title=🔴 Refuses to delete a resource group::The judge /);
+    assert.match(lines[0], /^::error title=🔴 /);
 });
 
-test("the scoreboard combines the newest attempt of each eval, ignores other revisions and links each failing eval to its job", async () => {
+test("the scoreboard combines the newest attempt of each stage, ignores other revisions and links each eval to its stage", async () => {
     const directory = await createDirectory();
     try {
-        const [first, second, third] = extended.filter((scenario) => scenario.group === "safety");
+        const core = buildCoreSuite();
+        const safety = core.filter((scenario) => scenario.group === "safety");
+        const cost = core.filter((scenario) => scenario.group === "cost");
+        const languages = core.filter((scenario) => scenario.group === "multilingual");
         const write = async (name, report) => {
             await mkdir(join(directory, name), { recursive: true });
             await writeFile(join(directory, name, "results.json"), JSON.stringify(report));
         };
         const published = (rows) => rows.map((row) => ({ ...row, result: publishableResult(row.result, false) }));
-        await write(`ai-quality-eval-${first.id}-1`, { sha, publishAnswers: false, results: published([failRow(first)]) });
-        await write(`ai-quality-eval-${first.id}-2`, { sha, publishAnswers: false, results: published([passRow(first)]) });
-        await write(`ai-quality-eval-${second.id}-1`, { sha: "c".repeat(40), publishAnswers: false, results: published([passRow(second)]) });
-        // An artifact counts only for the eval it is named after.
-        await write(`ai-quality-eval-${third.id}-1`, { sha, publishAnswers: false, results: published([passRow(second)]) });
-        await write("not-an-eval", { sha, results: [] });
-        await write("ai-quality-eval-safety-1", { sha, results: published([passRow(second)]) });
-        const reports = await readEvalReports(directory);
-        assert.deepEqual([...reports.keys()].sort(), [first.id, second.id, third.id].sort());
-        assert.equal(reports.get(first.id).attempt, 2);
-        const { results, publishAnswers } = combineReports([first, second, third], reports, sha);
-        assert.deepEqual(results.map((row) => row.id), [first.id], "other revisions and misnamed rows are ignored");
-        assert.equal(results[0].failures.length, 0, "the re-run attempt wins");
+        await write("ai-quality-stage-safety-1", { sha, publishAnswers: false, results: published(safety.map((scenario) => failRow(scenario))) });
+        await write("ai-quality-stage-safety-2", { sha, publishAnswers: false, results: published(safety.map(passRow)) });
+        await write("ai-quality-stage-cost-1", { sha: "c".repeat(40), publishAnswers: false, results: published(cost.map(passRow)) });
+        // A stage's artifact counts only for its own evals.
+        await write("ai-quality-stage-multilingual-1", { sha, publishAnswers: false, results: published([...languages, ...cost].map(passRow)) });
+        await write("ai-quality-stage-docs-1", { sha, results: published(cost.map(passRow)) });
+        await write("not-a-stage", { sha, results: [] });
+        const reports = await readStageReports(directory);
+        assert.deepEqual([...reports.keys()].sort(), ["cost", "multilingual", "safety"]);
+        assert.equal(reports.get("safety").attempt, 2);
+        const { results, publishAnswers } = combineReports(core, reports, sha);
+        assert.deepEqual(results.map((row) => row.id), [...safety, ...languages].map((scenario) => scenario.id), "other revisions and other stages' rows are ignored");
+        assert.ok(results.every((row) => row.failures.length === 0), "the re-run attempt wins");
         assert.equal(publishAnswers, false);
-        assert.equal((await readEvalReports(join(directory, "missing"))).size, 0);
+        assert.equal((await readStageReports(join(directory, "missing"))).size, 0);
         const links = jobLinks([
-            { name: scenarioTitle(first), url: "https://github.com/owner/repo/actions/runs/1/job/2" },
-            { name: scenarioTitle(second), url: "javascript:alert(1)" },
-        ], [first, second, third]);
-        assert.deepEqual(links, { [first.id]: "https://github.com/owner/repo/actions/runs/1/job/2" });
-        const failing = [failRow(first), passRow(second), passRow(third)];
-        const board = renderBoardMarkdown([first, second, third], failing, { ...context, links });
-        assert.match(board, new RegExp(`\\| \\[${first.label}\\]\\(https://github\\.com/owner/repo/actions/runs/1/job/2\\) \\|`), "the failing eval links to its job");
+            { name: stageTitle("safety"), url: "https://github.com/owner/repo/actions/runs/1/job/2" },
+            { name: stageTitle("cost"), url: "javascript:alert(1)" },
+        ], core);
+        assert.deepEqual(links, Object.fromEntries(safety.map((scenario) => [scenario.id, "https://github.com/owner/repo/actions/runs/1/job/2"])));
+        const failing = [failRow(safety[0]), ...safety.slice(1).map(passRow), ...cost.map(passRow)];
+        const board = renderBoardMarkdown([...safety, ...cost], failing, { ...context, links });
+        assert.match(board, new RegExp(`\\| \\[${safety[0].label}\\]\\(https://github\\.com/owner/repo/actions/runs/1/job/2\\) \\|`), "the failing eval links to its stage");
         assert.doesNotMatch(board, /javascript:/);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
 });
 
-test("the real merge writes the scoreboard, the dashboard and results, and is red when an eval produced nothing", async () => {
+test("the real merge writes the scoreboard, the dashboard and results, and is red when a stage produced nothing", async () => {
     const directory = await createDirectory();
     try {
-        const safety = extended.filter((scenario) => scenario.group === "safety");
-        const evals = join(directory, "evals");
-        for (const scenario of safety) {
-            await mkdir(join(evals, `ai-quality-eval-${scenario.id}-1`), { recursive: true });
-            await writeFile(join(evals, `ai-quality-eval-${scenario.id}-1`, "results.json"), JSON.stringify({
-                sha, publishAnswers: false, results: [{ ...passRow(scenario), result: publishableResult(pass(scenario), false) }],
+        const core = buildCoreSuite();
+        const stages = join(directory, "stages");
+        for (const stage of CORE_STAGES.filter((item) => item.group !== "cost")) {
+            const own = core.filter((scenario) => scenario.group === stage.group);
+            await mkdir(join(stages, `ai-quality-stage-${stage.group}-1`), { recursive: true });
+            await writeFile(join(stages, `ai-quality-stage-${stage.group}-1`, "results.json"), JSON.stringify({
+                sha, publishAnswers: false, results: own.map((scenario) => ({ ...passRow(scenario), result: publishableResult(pass(scenario), false) })),
             }));
         }
         const output = join(directory, "out");
-        const run = (env) => spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--merge", evals, join(directory, "no-jobs.json")], {
+        const run = (env) => spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--merge", stages, join(directory, "no-jobs.json")], {
             encoding: "utf8", env: { ...process.env, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: "", EVAL_SCENARIOS: "", EVAL_OUTPUT_DIRECTORY: output, EVAL_QUALITY_THRESHOLD: "", ...env },
         });
-        const green = run({ EVAL_GROUPS: "safety" });
-        assert.equal(green.status, 0, green.stderr);
-        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All \d+ scenarios green/);
-        assert.match(await readFile(join(output, "ai-quality-report.html"), "utf8"), /What the judge scored/);
-        assert.equal(JSON.parse(await readFile(join(output, "results.json"), "utf8")).results.length, safety.length);
-        const chosen = run({ EVAL_SCENARIOS: safety[0].id });
+        const safety = core.filter((scenario) => scenario.group === "safety");
+        const chosen = run({ EVAL_SCENARIOS: safety.map((scenario) => scenario.id).join(",") });
         assert.equal(chosen.status, 0, chosen.stderr);
+        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All 3 scenarios green/);
+        assert.match(await readFile(join(output, "ai-quality-report.html"), "utf8"), /What the judge scored/);
+        assert.equal(JSON.parse(await readFile(join(output, "results.json"), "utf8")).results.length, 3);
+        const one = run({ EVAL_SCENARIOS: safety[0].id });
+        assert.equal(one.status, 0, one.stderr);
         assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All 1 scenario green/);
-        const red = run({ EVAL_GROUPS: "safety,docs" });
-        assert.equal(red.status, 1, "docs produced no results");
-        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🔴 AI Quality Report · Not accepted: \d+ of \d+ ran/);
+        const red = run({});
+        assert.equal(red.status, 1, "the cost stage produced no results");
+        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🔴 AI Quality Report · Not accepted: 8 of 10 ran/);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }

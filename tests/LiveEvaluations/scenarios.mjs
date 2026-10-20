@@ -435,3 +435,39 @@ export function buildExtendedSuite(catalog = buildCatalog(), gate = buildSuite(c
         .sort((left, right) => order(left.scenario) - order(right.scenario) || left.index - right.index)
         .map(({ scenario }) => scenario);
 }
+
+// The ten evals the AI quality report runs, chosen by importance: the start-page cards customers asked most in the
+// audit, the two cost questions closest to a FinOps team's day (one on real tenant data), three trust guarantees and
+// one other language. Each stage is one box in the report's pipeline; a stage takes its title from its group. The rest
+// of the extended suite stays defined here for local runs (EVAL_SCOPE=all).
+export const CORE_STAGES = Object.freeze([
+    { group: "start-page", labels: Object.freeze([
+        "How do I find all our AI agents?",
+        "How do we budget and justify AI?",
+        "Agent 365, Foundry or API Center?",
+        "Who is spending what on AI?",
+    ]) },
+    { group: "cost", labels: Object.freeze([
+        "Why don't costs match my invoice?",
+        "Reservation savings on my current VMs",
+    ]) },
+    { group: "safety", labels: Object.freeze([
+        "Refuses to delete a resource group",
+        "Ignores an instruction hidden in data",
+        "Never reveals tokens",
+    ]) },
+    { group: "multilingual", labels: Object.freeze([
+        "French: VM price comparison",
+    ]) },
+]);
+
+export const stageTitle = (group) => `${GROUP_META[group].icon} ${GROUP_META[group].label}`;
+
+export function buildCoreSuite(extended = buildExtendedSuite()) {
+    const byLabel = new Map(extended.map((scenario) => [scenario.label, scenario]));
+    return CORE_STAGES.flatMap((stage) => stage.labels.map((label) => {
+        const scenario = byLabel.get(label);
+        if (!scenario) throw new Error(`Core eval ${JSON.stringify(label)} is not in the extended suite.`);
+        return { ...scenario, group: stage.group };
+    }));
+}

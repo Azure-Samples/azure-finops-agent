@@ -23,7 +23,6 @@ import {
     explainMarkdown,
     renderAnnotations,
     renderBoardMarkdown,
-    renderEvalMarkdown,
     renderHtml,
     renderLogLine,
     statusOf,
@@ -487,19 +486,6 @@ export function renderSummary(
         ...row,
         result: publishableResult(row.result, publishAnswers),
     }));
-    if (presentation.single && cases.length === 1)
-        return renderEvalMarkdown(cases[0], results.find((row) => row.id === cases[0].id), {
-            title: presentation.title,
-            tierNote: presentation.tierNote,
-            sha,
-            accepted: verdict.accepted,
-            runFailures: verdict.failures ?? [],
-            publishAnswers,
-            previewAnswer: (value, maximum) => {
-                const escaped = html(value);
-                return escaped.length <= maximum ? escaped : escaped.slice(0, maximum) + " [Preview shortened; full answer in results artifact.]";
-            },
-        });
     const build = (compact) => {
         const preview = (value, maximum) => {
             const escaped = html(value);

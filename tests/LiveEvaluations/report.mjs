@@ -134,11 +134,24 @@ const groupState = (group) =>
             : group.items.some((item) => item.status === "missing") ? "missing" : "pass";
 const reasonOf = (item) =>
     item.row ? item.row.failures.join(" ") || "Accepted" : "No result: the run ended before this scenario.";
+// When the run completed and the judge returned a verdict, the runner's exit code, acceptance flag and reason count only
+// restate that verdict; they explain something only when the run itself broke (a crash, a timeout, a failed replay).
+const RESTATED = Object.freeze([
+    "Evaluation process failed or timed out.",
+    "Execution, replay, or judge did not accept the result.",
+    "Judge or deterministic checks rejected the answer.",
+]);
+const completedWithVerdict = (result) =>
+    result?.terminal === true && result?.transcriptVerified === true && typeof result?.judge?.accepted === "boolean";
+export function specificFailures(row) {
+    const failures = row?.failures ?? [];
+    return completedWithVerdict(row?.result) ? failures.filter((failure) => !RESTATED.includes(failure)) : failures;
+}
 // The hard-check failures plus the judge's reasons in plain words, for tables and annotations.
 const whyOf = (item) => {
     if (!item.row) return reasonOf(item);
     const findings = (item.row.result?.judge?.findings ?? []).filter((code) => FINDINGS[code]).map((code) => FINDINGS[code].text);
-    const checks = item.row.failures.filter((failure) => !/^Structured judge (rejected|rated)/.test(failure));
+    const checks = specificFailures(item.row).filter((failure) => !/^Structured judge (rejected|rated)/.test(failure));
     return [...findings, ...checks].join(". ").replace(/\.\./g, ".") || reasonOf(item);
 };
 const judgeBadge = (judge) =>
@@ -180,7 +193,7 @@ const yesNo = (value) => (value === true ? "✅" : value === false ? "❌" : "�
 // finding codes; the free-text rationale only when answers are published), and each hard check.
 export function explain(scenario, row, publishAnswers = false) {
     const result = row?.result ?? null;
-    const failures = row?.failures ?? [];
+    const failures = specificFailures(row);
     const rubric = String(scenario?.rubric ?? "");
     const marker = rubric.indexOf("Case expectation:");
     const tools = Array.isArray(result?.tools) ? [...result.tools] : [];
@@ -269,12 +282,12 @@ export function judgeSentence(info) {
 
 // One scenario as a collapsible GitHub-markdown block: headline, then what it checks, what happened, the judge's
 // scores and reasons, and every hard check. Failures and known limitations open by default.
-export function explainMarkdown(scenario, row, publishAnswers = false, { previewAnswer = (text) => cell(text), open = false } = {}) {
+export function explainMarkdown(scenario, row, publishAnswers = false, { previewAnswer = (text) => cell(text) } = {}) {
     const status = statusOf(scenario, row);
     const info = explain(scenario, row, publishAnswers);
     const result = row?.result;
     const lines = [
-        `<details${open || status === "fail" || status === "known" ? " open" : ""}><summary>${STATUS[status].dot} <b>${escapeHtml(scenario?.label ?? row?.id)}</b> · ${STATUS[status].word} · ${seconds(result?.durationMs)} · ${toolsLabel(result?.toolCount)} · ${stars(result?.judge?.efficiencyScore)}</summary>`,
+        `<details${status === "fail" || status === "known" ? " open" : ""}><summary>${STATUS[status].dot} <b>${escapeHtml(scenario?.label ?? row?.id)}</b> · ${STATUS[status].word} · ${seconds(result?.durationMs)} · ${toolsLabel(result?.toolCount)} · ${stars(result?.judge?.efficiencyScore)}</summary>`,
         "",
         `**What this eval checks.** ${cell(info.question)}`,
     ];
@@ -304,42 +317,11 @@ export function explainMarkdown(scenario, row, publishAnswers = false, { preview
     }
     if (info.answer) lines.push("", "**Answer:**", "", `<pre>${previewAnswer(info.answer, 2400)}</pre>`);
     else if (info.answerWithheld) lines.push("", "_The answer and the judge's written reasoning are withheld because this run used internal tenant data; the scores, the reasons above and the checks below are published._");
-    const mark = (check) => `${check.ok === null ? "⚪" : check.ok ? "✅" : "❌"} ${cell(check.label)}`;
-    // An eval's own card has room for one check per line; a board of many cards keeps them on one line.
-    if (open) lines.push("", "**Checks.**", "", ...info.checks.map((check) => `- ${mark(check)}`));
-    else lines.push("", `**Checks.** ${info.checks.map(mark).join(" · ")}`);
+    lines.push("", `**Checks.** ${info.checks.map((check) => `${check.ok === null ? "⚪" : check.ok ? "✅" : "❌"} ${cell(check.label)}`).join(" · ")}`);
     const unexplained = info.failures.filter((failure) => !/^(Required tool missing|Forbidden tool called)/.test(failure));
     if (unexplained.length) lines.push("", `Failed because: ${unexplained.map(cell).join(" ")}`);
     lines.push("", "</details>");
     return lines.join("\n");
-}
-
-// The summary of one eval's own job: a headline that matches the job's green or red status, then the explanation open.
-export function renderEvalMarkdown(scenario, row, { title, tierNote = "", sha, accepted, runFailures = [], publishAnswers = false, previewAnswer } = {}) {
-    let status = statusOf(scenario, row);
-    // A job that ended without a result, or whose result the run did not accept, is never shown green.
-    if (status === "pass" && accepted === false) status = "fail";
-    const meta = STATUS[status];
-    const verdict = {
-        pass: "Passed every hard check and the judge accepted the answer.",
-        fail: "Failed: the reasons are below.",
-        known: "Failed only for its documented known limitation, so this job stays green.",
-        missing: "No result: the eval did not finish. See the failed step of this job.",
-    }[status];
-    const popular = popularity(scenario);
-    return [
-        `# ${meta.dot} ${meta.word} · ${escapeHtml(title ?? scenario?.label ?? scenario?.id)}`,
-        "",
-        `**${escapeHtml(verdict)}**`,
-        "",
-        [tierNote ? escapeHtml(tierNote) : "", popular ? `🔥 ${escapeHtml(popular)}` : "", sha ? `revision \`${escapeHtml(String(sha).slice(0, 7))}\`` : ""].filter(Boolean).join(" · "),
-        ...(accepted === false && runFailures.length ? ["", `The run was not accepted: ${runFailures.map(cell).join(" ")}`] : []),
-        "",
-        explainMarkdown(scenario, row, publishAnswers, { ...(previewAnswer ? { previewAnswer } : {}), open: true }),
-        "",
-        "_The 🏁 Scoreboard job combines every eval of this run into one board and dashboard._",
-        "",
-    ].join("\n");
 }
 
 // The verdict is authoritative: a run that was not accepted is red whatever its scoreboard shows, so a setup failure, a
