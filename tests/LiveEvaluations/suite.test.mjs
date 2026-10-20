@@ -32,6 +32,7 @@ import {
     preparePrivateDiagnostics,
     publishableResult,
     refreshEvaluationIdentity,
+    IDENTITY_RENEWAL_RETRY_MS,
     renderSummary,
     runCases,
     terminateProcessTree,
@@ -881,14 +882,57 @@ test("CI obtains a new scoped OIDC login for each case without exposing tokens",
     assert.equal(commands.length, 2);
     assert.equal(commands[0][1][0], "login");
     assert.ok(commands[0][1].includes("--federated-token"));
+    const pauses = [];
+    const pause = async (milliseconds) => { pauses.push(milliseconds); };
+    let requests = 0;
     await assert.rejects(
         refreshEvaluationIdentity(environment, async () => {
+            requests++;
             throw new Error("secret-must-not-escape");
-        }),
+        }, async () => {}, pause),
         (error) =>
             !error.message.includes("secret-must-not-escape") &&
             error.message.includes("OIDC renewal failed"),
     );
+    assert.equal(requests, 2, "a failed renewal is retried once, then stops the suite");
+    assert.deepEqual(pauses, [IDENTITY_RENEWAL_RETRY_MS]);
+    // One transient failure no longer ends the suite.
+    let attempts = 0;
+    commands.length = 0;
+    await refreshEvaluationIdentity(environment, async (url) => {
+        if (++attempts === 1) throw new Error("transient");
+        return request(url);
+    }, async (command, args) => commands.push([command, args]), pause);
+    assert.equal(attempts, 2);
+    assert.equal(commands.length, 2);
+});
+
+// Run 39459732793 stopped a stage after two passing cases with only "Evaluation execution failed": the failure now names
+// the step that broke, still without the error's own text.
+test("a lane that breaks names the step it was in, never the error text", async () => {
+    const directory = await createDirectory();
+    try {
+        let renewals = 0;
+        await assert.rejects(
+            runCases(
+                cases.slice(0, 3), directory, sha, suiteHash,
+                async (scenario, path) => { await writeFile(path, JSON.stringify(pass(scenario))); return 0; },
+                async () => {
+                    if (++renewals === 2) throw new Error("tenant-renewal-detail-must-not-publish");
+                },
+                false,
+                0,
+                { environment: {} },
+            ),
+            (error) => error.message === "Evaluation execution failed while renewing the evaluation sign-in; no remaining cases will run.",
+        );
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        assert.equal(report.results.length, 1);
+        assert.doesNotMatch(JSON.stringify(report), /tenant-renewal-detail/);
+        assert.match(await readFile(join(directory, "summary.md"), "utf8"), /\*\*FAIL\*\*/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
 });
 
 test("fail-fast stops after the first failed case and never accepts the partial suite", async () => {
@@ -1045,7 +1089,7 @@ test("a failing lane stops every other lane's owned case and starts no more", as
                 0,
                 { laneOf, environment: {} },
             ),
-            /Evaluation execution failed/,
+            /^Error: Evaluation execution failed while running a case; no remaining cases will run\.$/,
         );
         assert.equal(started, 2);
         assert.equal(aborted, 1);
@@ -1704,7 +1748,7 @@ test("executor crashes cannot publish private captures or leave their temporary 
                 async () => {},
                 false,
             ),
-            /^Error: Evaluation execution failed/,
+            /^Error: Evaluation execution failed while running a case; no remaining cases will run\.$/,
         );
         assert.equal(executed, 2);
         const report = JSON.parse(await readFile(join(output, "results.json"), "utf8"));

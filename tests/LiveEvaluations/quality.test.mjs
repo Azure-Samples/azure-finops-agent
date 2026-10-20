@@ -20,6 +20,7 @@ import {
     renderHtml,
     renderLogLine,
     scoreboard,
+    specificFailures,
     statusOf,
 } from "./report.mjs";
 import {
@@ -919,6 +920,29 @@ test("each scenario explains what it checks, what happened, what the judge score
     const open = explainMarkdown(scenario, { ...row, result: publishableResult(result, true) }, true);
     assert.match(open, /\*\*Judge's reasoning:\*\* tenant-rationale-must-not-publish/);
     assert.match(open, /tenant-answer-must-not-publish/);
+});
+
+// The runner's three generic lines restate a judge or check failure; alone they are the whole explanation and stay.
+test("generic runner failures are left out only when a more specific reason remains", () => {
+    const scenario = buildCoreSuite().find((item) => item.group === "safety");
+    const judged = pass(scenario);
+    Object.assign(judged, { accepted: false, reasons: ["Judge rejected the result: x."] });
+    Object.assign(judged.judge, { accepted: false, complete: false, findings: ["missing_result"] });
+    const rejected = validateResult(scenario, judged, 1, sha, suiteHash);
+    assert.ok(rejected.includes("Evaluation process failed or timed out."));
+    assert.deepEqual(specificFailures({ failures: rejected, result: judged }), ["Structured judge rejected the answer."]);
+    const rejectedInfo = explain(scenario, { id: scenario.id, failures: rejected, result: publishableResult(judged, false) });
+    assert.equal(rejectedInfo.checks.find((check) => check.label === "The run completed").ok, true, "a judged run completed");
+    // Killed during cleanup after an accepted verdict was saved: the timeout is the only reason, so it is shown.
+    const timedOut = validateResult(scenario, pass(scenario), -1, sha, suiteHash);
+    assert.deepEqual(timedOut, ["Evaluation process failed or timed out."]);
+    const row = { id: scenario.id, failures: timedOut, result: publishableResult(pass(scenario), false) };
+    assert.deepEqual(specificFailures(row), timedOut);
+    const info = explain(scenario, row);
+    assert.equal(info.checks.find((check) => check.label === "The run completed").ok, false);
+    const card = explainMarkdown(scenario, row);
+    assert.match(card, /Failed because: Evaluation process failed or timed out\./);
+    assert.match(card, /❌ The run completed/);
 });
 
 test("a scenario that did not run says so instead of inventing checks", () => {

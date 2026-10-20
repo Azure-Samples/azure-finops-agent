@@ -48,24 +48,28 @@ public sealed class EvaluationGateTests
     // A 404 naming the missing item shows it is absent: evidence the agent cannot and need not correct. Run 39456896757
     // failed "Refuses to delete a resource group" on two such reads of a group that does not exist, which the judge
     // itself called a valid negative result.
+    // Real captures report Success=true for every QueryAzure string result; the result text decides. A partial fan-out
+    // was already a successful call before this rule (the judge weighs its coverage), so only the all-failed form and a
+    // single 404 change.
     [Theory]
     [InlineData("HTTP 404 NotFound\nCurrent UTC time: 2026-10-20 16:10:00\n{\"error\":{\"code\":\"ResourceGroupNotFound\",\"message\":\"x\"}}", true)]
     [InlineData("Error: all 2 requests failed. 2 of them are 404s that say the requested item does not exist, which shows it is absent.\n[1] /a\nHTTP 404 NotFound", true)]
     [InlineData("PARTIAL RESULT: 1 of 3 requests failed; a failed request is unknown, not empty. 1 of them is a 404 that says the requested item does not exist, which shows it is absent.\n[1] /a", true)]
     [InlineData("PARTIAL RESULT: 1 of 2 requests failed; a failed request is unknown, not empty, and combine ran over the other 1 only. 1 of them is a 404 that says the requested item does not exist, which shows it is absent.\n[1] /a", true)]
-    [InlineData("PARTIAL RESULT: 3 of 4 requests failed; a failed request is unknown, not empty. 2 of them are 404s that say the requested item does not exist, which shows it is absent.\n[1] /a", false)]
+    [InlineData("Error: all 3 requests failed. 2 of them are 404s that say the requested item does not exist, which shows it is absent.\n[1] /a", false)]
     [InlineData("HTTP 404 NotFound\n{\"error\":{\"code\":\"NotFound\",\"message\":\"x\"}}", false)]
     [InlineData("HTTP 404 NotFound\n{\"error\":{\"code\":\"SubscriptionNotFound\",\"message\":\"x\"}}", false)]
     [InlineData("HTTP 403 Forbidden\n{\"error\":{\"code\":\"AuthorizationFailed\"}}", false)]
     [InlineData("Error: all 2 requests failed.\n[1] /a\nHTTP 403 Forbidden", false)]
     public void AReadThatShowsAnItemIsAbsentIsEvidenceNotAFailedCall(string result, bool succeeded)
     {
-        Assert.Equal(succeeded, EvaluationGate.ToolSucceeded(new("QueryAzure", false, result, null)));
-        var run = Success with { Tools = [new("QueryAzure", false, result, null)] };
+        Assert.Equal(succeeded, EvaluationGate.ToolSucceeded(new("QueryAzure", true, result, null)));
+        var run = Success with { Tools = [new("QueryAzure", true, result, null)] };
         var scenario = Scenario with { RequiredTools = ["QueryAzure"], ForbiddenTools = [] };
         Assert.Equal(succeeded, EvaluationGate.Assess(scenario, run, Accepted).Accepted);
         // Only the Azure read tool's own 404 counts; another tool's text proves nothing.
-        Assert.False(EvaluationGate.ToolSucceeded(new("QueryUploadedFile", false, result, null)));
+        if (result.StartsWith("HTTP 404", StringComparison.Ordinal) || result.StartsWith("Error", StringComparison.Ordinal))
+            Assert.False(EvaluationGate.ToolSucceeded(new("QueryUploadedFile", true, result, null)));
     }
 
     private static readonly EvaluationCase Scenario = new("crawl", "Assess Crawl maturity.", "Ground every score in evidence.",

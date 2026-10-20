@@ -135,7 +135,8 @@ const groupState = (group) =>
 const reasonOf = (item) =>
     item.row ? item.row.failures.join(" ") || "Accepted" : "No result: the run ended before this scenario.";
 // When the run completed and the judge returned a verdict, the runner's exit code, acceptance flag and reason count only
-// restate that verdict; they explain something only when the run itself broke (a crash, a timeout, a failed replay).
+// restate a more specific failure; they explain something only when nothing more specific remains (a crash, a timeout
+// after the verdict was saved, or a host check that has no line of its own), and then they stay.
 const RESTATED = Object.freeze([
     "Evaluation process failed or timed out.",
     "Execution, replay, or judge did not accept the result.",
@@ -145,7 +146,9 @@ const completedWithVerdict = (result) =>
     result?.terminal === true && result?.transcriptVerified === true && typeof result?.judge?.accepted === "boolean";
 export function specificFailures(row) {
     const failures = row?.failures ?? [];
-    return completedWithVerdict(row?.result) ? failures.filter((failure) => !RESTATED.includes(failure)) : failures;
+    if (!completedWithVerdict(row?.result)) return failures;
+    const specific = failures.filter((failure) => !RESTATED.includes(failure));
+    return specific.length ? specific : failures;
 }
 // The hard-check failures plus the judge's reasons in plain words, for tables and annotations.
 const whyOf = (item) => {
