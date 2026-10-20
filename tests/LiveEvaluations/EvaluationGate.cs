@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AzureFinOps.Dashboard.AI.Tools;
 
 namespace LiveEvaluations;
@@ -69,6 +70,7 @@ public static class EvaluationGate
 
     public static bool ToolSucceeded(ToolResult tool)
     {
+        if (ShowsAbsence(tool)) return true;
         if (!tool.Success || !string.IsNullOrWhiteSpace(tool.Error)) return false;
         var text = tool.Result.TrimStart();
         if (!EvidenceInspector.Inspect(text).Success
@@ -80,6 +82,22 @@ public static class EvaluationGate
             return !Failed(document.RootElement);
         }
         catch (JsonException) { return true; }
+    }
+
+    // A 404 whose error code names the missing item (AzureQueryTools.IsAbsent) shows the item is absent: a successful
+    // read, not a failed one, which the agent cannot and need not correct. So is a multi-url QueryAzure call whose every
+    // failed url is such a 404, as its own banner counts them. A bare NotFound, a 403 or any other failure still fails.
+    private static readonly Regex AbsenceBanner = new(
+        @"^(?:Error: all (?<failed>\d+) requests failed\.|PARTIAL RESULT: (?<failed>\d+) of \d+ requests failed;[^\n]*?) (?<absent>\d+) of them (?:is a 404|are 404s) that say",
+        RegexOptions.CultureInvariant);
+
+    internal static bool ShowsAbsence(ToolResult tool)
+    {
+        if (tool.Name != "QueryAzure") return false;
+        var text = tool.Result.TrimStart();
+        if (AzureQueryTools.IsAbsent(text)) return true;
+        var banner = AbsenceBanner.Match(text);
+        return banner.Success && banner.Groups["failed"].Value == banner.Groups["absent"].Value;
     }
 
     private static bool Failed(JsonElement value)

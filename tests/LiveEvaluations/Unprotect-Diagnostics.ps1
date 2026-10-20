@@ -6,8 +6,9 @@ Decrypts a live-evaluation run's failed-case diagnostics with the maintainer cer
 .DESCRIPTION
 Pass -RunId to download that GitHub Actions run's artifacts for the current repository into a
 temporary folder, or -Path for an already downloaded private-diagnostics.enc.json. Works for the
-deployment gate (live-ai-evaluations-*) and the AI quality report, whose eval jobs each keep their
-own diagnostics (ai-quality-eval-*); every encrypted file in the run is decrypted. Prints each
+deployment gate (live-ai-evaluations-*) and the AI quality report, whose stage jobs each keep their
+own diagnostics (ai-quality-stage-*), including a stage that finished while the run still goes on;
+every encrypted file in the run is decrypted. Prints each
 failed case's judge verdict, findings, rationale, gate failures and answer. -OutFile also saves the
 full decrypted JSON (including tool arguments and results; a JSON array when the run had several
 files); keep it in an access-restricted folder.
@@ -53,8 +54,24 @@ $download = $null
 try {
     if ($PSCmdlet.ParameterSetName -eq 'Run') {
         $download = Join-Path ([IO.Path]::GetTempPath()) "finops-eval-diagnostics-$RunId-$([guid]::NewGuid().ToString('n'))"
-        gh run download $RunId --dir $download --pattern 'live-ai-evaluations-*' --pattern 'ai-quality-eval-*' --pattern 'ai-quality-report-*' | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Could not download the artifacts of run $RunId." }
+        New-Item -ItemType Directory -Path $download | Out-Null
+        # The artifacts API serves a finished stage's artifact while the rest of the run is still going (gh run download
+        # waits for the whole run).
+        $repository = gh repo view --json nameWithOwner --jq .nameWithOwner
+        if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the current repository.' }
+        $artifacts = @(gh api --paginate "repos/$repository/actions/runs/$RunId/artifacts" --jq '.artifacts[] | select(.expired | not) | "\(.id) \(.name)"' |
+            Where-Object { $_ -match '^\d+ (live-ai-evaluations|ai-quality-stage|ai-quality-report)-' })
+        if ($LASTEXITCODE -ne 0) { throw "Could not list the artifacts of run $RunId." }
+        $token = gh auth token
+        if ($LASTEXITCODE -ne 0) { throw 'Sign in with gh auth login first.' }
+        foreach ($artifact in $artifacts) {
+            $id, $name = $artifact -split ' ', 2
+            $zip = Join-Path $download "$name.zip"
+            Invoke-WebRequest -Uri "https://api.github.com/repos/$repository/actions/artifacts/$id/zip" -OutFile $zip `
+                -Headers @{ Authorization = "Bearer $token"; Accept = 'application/vnd.github+json' } | Out-Null
+            Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $download $name)
+        }
+        $token = $null
         $files = @(Get-ChildItem $download -Recurse -Filter 'private-diagnostics.enc.json' | Sort-Object FullName)
         if (-not $files) { throw "Run $RunId has no encrypted diagnostics: every case passed, or EVAL_DIAGNOSTICS_CERT was not set." }
     } else {
