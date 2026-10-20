@@ -9,7 +9,7 @@ import { GROUP_META, groupOf } from "./report.mjs";
 import { buildCatalog, buildSuite, COST_MANAGEMENT_LANE, rubric } from "./suite.mjs";
 
 export const KNOWN_LIMITATION =
-    "On this model a hosted web search often accompanies Microsoft Learn reads, which the judge scores as waste (docs/agent-reliability.md, Known Limitations).";
+    "On this model a hosted web search often follows a Microsoft Learn read or a Retail Prices lookup that already answered, which the judge scores as waste (docs/agent-reliability.md, Known Limitations).";
 
 // Conversations of the 95 audited in which each start-page card was asked, by catalog label. Only the cards asked
 // three or more times carry a flame; the rest document the ranking.
@@ -375,6 +375,9 @@ export const NEW_SCENARIOS = Object.freeze([
         question: "Compare le coût mensuel d'une VM D4s_v5 Linux à East US et à West Europe.",
         label: "French: VM price comparison", group: "multilingual", lane: "public", requiredTools: ["QueryAzure"],
         expectation: language("French", "Both prices come from the Retail Prices API this turn and the monthly figure is calculated."),
+        // Observed in report runs 39459732793 and 39462480550: correct and grounded, then a hosted web search reopened
+        // the Retail Prices URL the first call had read.
+        knownIssue: KNOWN_LIMITATION,
     }),
     define({
         question: "¿Cuánto cuesta al mes una base de datos Azure SQL de 4 vCores con 250 GB en East US 2?",
@@ -395,6 +398,8 @@ export const NEW_SCENARIOS = Object.freeze([
         question: "ค่าบริการ Azure Blob Storage ขนาด 5 TB ระดับ Hot และ Cool ในภูมิภาค Southeast Asia ต่อเดือนเท่าไร",
         label: "Thai: blob storage price", group: "multilingual", lane: "public", requiredTools: ["QueryAzure"],
         expectation: language("Thai", "Both tiers are priced from the Retail Prices API this turn and the monthly figures are calculated."),
+        // Observed in report run 39420198371 and in local runs: a hosted web search after the price lookup had answered.
+        knownIssue: KNOWN_LIMITATION,
     }),
     define({
         question: "Wie finde ich in Azure ungenutzte Ressourcen, die unnötig Kosten verursachen? Prüfe meine Umgebung.",

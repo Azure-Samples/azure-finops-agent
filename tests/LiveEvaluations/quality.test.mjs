@@ -176,11 +176,13 @@ test("the most-asked markers refer to real catalog labels", () => {
     assert.ok(extended.find((scenario) => scenario.label === "How do I find all our AI agents?").askedBy === 10);
 });
 
-test("only documentation scenarios carry the known limitation", () => {
+test("only documentation scenarios and the two observed price lookups carry the known limitation", () => {
     const known = extended.filter((scenario) => scenario.knownIssue);
     assert.ok(known.length >= 10);
     assert.ok(known.every((scenario) => scenario.knownIssue === KNOWN_LIMITATION));
-    assert.ok(known.every((scenario) => scenario.requiredTools.every((name) => name === "microsoft_docs_search") || scenario.group === "start-page"));
+    const priceLookups = ["French: VM price comparison", "Thai: blob storage price"];
+    assert.ok(known.every((scenario) => scenario.requiredTools.every((name) => name === "microsoft_docs_search") || scenario.group === "start-page" || priceLookups.includes(scenario.label)));
+    assert.deepEqual(known.filter((scenario) => priceLookups.includes(scenario.label)).map((scenario) => scenario.label).sort(), [...priceLookups].sort());
 });
 
 // ── Status and scoreboard ───────────────────────────────────────────────────
