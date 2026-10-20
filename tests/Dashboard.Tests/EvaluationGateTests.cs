@@ -49,7 +49,7 @@ public sealed class EvaluationGateTests
         ["GetCrawlMaturityEvidence"], ["QueryAzure"]);
     private static readonly RunCapture Success = new("Evidence-backed answer", [new("GetCrawlMaturityEvidence", true, "{}", null)],
         true, [], 1000, 100);
-    private const string Accepted = """{"accepted":true,"grounded":true,"complete":true,"avoidableCalls":0,"avoidableRounds":0,"avoidableSeconds":0,"reason":"Supported by the supplied evidence."}""";
+    private const string Accepted = """{"accepted":true,"grounded":true,"complete":true,"avoidableCalls":0,"avoidableRounds":0,"avoidableSeconds":0,"findings":[],"reason":"Supported by the supplied evidence."}""";
 
     [Fact]
     public void CompleteRunWithValidJudgeVerdictPasses() => Assert.True(EvaluationGate.Assess(Scenario, Success, Accepted).Accepted);
@@ -182,9 +182,13 @@ public sealed class EvaluationGateTests
         Assert.Contains("The host derives the 1-5 efficiency score from these counts", efficiency);
         Assert.Contains("a search plus reading one of its results is one lookup", efficiency);
         var schema = root.GetProperty("text").GetProperty("format").GetProperty("schema");
-        Assert.Equal(["accepted", "grounded", "complete", "avoidableCalls", "avoidableRounds", "avoidableSeconds", "reason"],
+        Assert.Equal(["accepted", "grounded", "complete", "avoidableCalls", "avoidableRounds", "avoidableSeconds", "findings", "reason"],
             schema.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
         Assert.False(schema.GetProperty("properties").TryGetProperty("efficiencyScore", out _));
+        // The why behind a verdict is a closed vocabulary, so it can be published even when the rationale cannot.
+        Assert.Equal(JudgeClient.FindingCodes,
+            schema.GetProperty("properties").GetProperty("findings").GetProperty("items").GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("findings lists, from its fixed vocabulary, every reason the verdict is not a clean pass", efficiency);
 
         using var evidence = JsonDocument.Parse(root.GetProperty("input")[2].GetProperty("content").GetString()!);
         var session = evidence.RootElement.GetProperty("session");
@@ -252,8 +256,9 @@ public sealed class EvaluationGateTests
     public void TheHostScoresTheJudgesCountedWasteWithTheRubricAnchors(int calls, int rounds, double seconds, int score)
     {
         var verdict = EvaluationGate.Assess(Scenario, TwelveCalls,
-            $$"""{"accepted":true,"grounded":true,"complete":true,"avoidableCalls":{{calls}},"avoidableRounds":{{rounds}},"avoidableSeconds":{{seconds}},"reason":"Calls 9-12 repeated a lookup."}""");
+            $$"""{"accepted":true,"grounded":true,"complete":true,"avoidableCalls":{{calls}},"avoidableRounds":{{rounds}},"avoidableSeconds":{{seconds}},"findings":["redundant_calls"],"reason":"Calls 9-12 repeated a lookup."}""");
         Assert.Equal(score, verdict.Judge!.EfficiencyScore);
+        Assert.Equal(["redundant_calls"], verdict.Judge.Findings);
         Assert.Equal(score >= EvaluationGate.MinimumEfficiencyScore, verdict.Judge.Efficient);
         Assert.Equal(score >= EvaluationGate.MinimumEfficiencyScore, verdict.Accepted);
         if (!verdict.Accepted)
@@ -406,17 +411,20 @@ public sealed class EvaluationGateTests
     [InlineData("not json")]
     [InlineData("{}")]
     [InlineData("{\"accepted\":true}")]
-    [InlineData("{\"accepted\":true,\"grounded\":false,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Missing evidence\"}")]
-    [InlineData("{\"accepted\":\"true\",\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Invalid type\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":false,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":[\"unsupported_claim\"],\"reason\":\"Missing evidence\"}")]
+    [InlineData("{\"accepted\":\"true\",\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":[],\"reason\":\"Invalid type\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":[],\"reason\":\"\"}")]
     [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"reason\":\"Legacy verdict without efficiency\"}")]
     [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"efficient\":true,\"efficiencyScore\":5,\"reason\":\"Judge-authored score\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":\"0\",\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Invalid type\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":-1,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Negative\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0.5,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Not an integer\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":2,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"More calls than were made\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":-1,\"reason\":\"Negative seconds\"}")]
-    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"efficiencyScore\":5,\"reason\":\"Extra field\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":\"0\",\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":[],\"reason\":\"Invalid type\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":-1,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":[],\"reason\":\"Negative\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0.5,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":[],\"reason\":\"Not an integer\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":2,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":[],\"reason\":\"More calls than were made\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":-1,\"findings\":[],\"reason\":\"Negative seconds\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":[],\"efficiencyScore\":5,\"reason\":\"Extra field\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"reason\":\"Missing findings\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":[\"tenant name\"],\"reason\":\"Free text in findings\"}")]
+    [InlineData("{\"accepted\":true,\"grounded\":true,\"complete\":true,\"avoidableCalls\":0,\"avoidableRounds\":0,\"avoidableSeconds\":0,\"findings\":\"wrong_figure\",\"reason\":\"Findings not a list\"}")]
     public void MissingMalformedOrNegativeJudgeFailsClosed(string judge) => Assert.False(EvaluationGate.Assess(Scenario, Success, judge).Accepted);
 
     [Fact]

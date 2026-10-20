@@ -3,6 +3,9 @@ name: AI quality report
 # The extended evaluation tier. The deployment gate (live-evaluations.yml) stays at its 23 curated scenarios and decides
 # whether a build ships; this workflow runs every other scenario, red or green, and never blocks a deployment. It lives in
 # its own workflow so a failing scenario cannot stop a release and the gate keeps its single, unconditional contract.
+# Each scenario group is its own job, so the run graph and the commit's checks show a green or red box per group, each
+# group's summary explains every scenario (what it checks, what happened, what the judge scored and why), and
+# "Re-run failed jobs" re-runs only the red groups. The 🏁 Scoreboard job combines them.
 # Run it on demand from the Actions tab (optionally for chosen groups) or let the weekly schedule do it.
 
 on:
@@ -32,54 +35,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  report:
-    name: Red or green for every extended scenario
+  # Credential-free: validates the evaluation code, decides which groups run side by side and which one at a time, and
+  # waits for running deployment gates once before any group starts.
+  plan:
+    name: 🧭 Plan the scenario groups
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-    environment: ai-evaluation
+    timeout-minutes: 45
+    outputs:
+      parallel: ${{ steps.plan.outputs.parallel }}
+      paced: ${{ steps.plan.outputs.paced }}
+      count: ${{ steps.plan.outputs.count }}
     env:
-      EVAL_CLIENT_ID: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
-      EVAL_LOGIN_SUBSCRIPTION: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
-      EVAL_MODEL_ENDPOINT: ${{ secrets.EVAL_MODEL_ENDPOINT }}
-      EVAL_MODEL: ${{ vars.EVAL_MODEL }}
-      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
-      EVAL_REASONING_EFFORT: ${{ vars.EVAL_REASONING_EFFORT || 'medium' }}
-      EVAL_TENANT_ID: ${{ secrets.AZURE_EVAL_TENANT_ID }}
-      EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}
-      EVAL_DATA_CLASSIFICATION: ${{ vars.EVAL_DATA_CLASSIFICATION }}
-      EVAL_TOKEN_RESOURCES: ${{ vars.EVAL_TOKEN_RESOURCES }}
-      EVAL_DIAGNOSTICS_CERT: ${{ vars.EVAL_DIAGNOSTICS_CERT }}
       EVAL_GROUPS: ${{ inputs.groups }}
       EVAL_QUALITY_THRESHOLD: ${{ inputs.threshold || vars.EVAL_QUALITY_THRESHOLD }}
-      EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
-      EVAL_RUNNER_DLL: tests/LiveEvaluations/bin/Release/net10.0/LiveEvaluations.dll
-      FINOPS_PYTHON: /usr/bin/python3
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Validate required evaluation configuration
-        run: |
-          missing=0
-          for name in EVAL_CLIENT_ID EVAL_TENANT_ID EVAL_LOGIN_SUBSCRIPTION EVAL_SUBSCRIPTION_IDS EVAL_MODEL_ENDPOINT EVAL_MODEL EVAL_JUDGE_MODEL; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Missing required live evaluation configuration: $name"
-              missing=1
-            fi
-          done
-          if [[ "$EVAL_DATA_CLASSIFICATION" != "synthetic" && "$EVAL_DATA_CLASSIFICATION" != "internal-test" ]]; then
-            echo "::error::Set EVAL_DATA_CLASSIFICATION to synthetic (answers published) or internal-test (verdicts only). Customer responses must not be published."
-            missing=1
-          fi
-          if [[ "$missing" == 1 ]]; then
-            exit 1
-          fi
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Validate the evaluation tiers
+        run: node --test tests/LiveEvaluations/*.test.mjs
+
+      - name: Choose the scenario groups
+        id: plan
+        run: node tests/LiveEvaluations/quality.mjs --plan >> "$GITHUB_OUTPUT"
 
       # Both share the tenant's Cost Management quota, which the gate cannot tolerate being throttled. The report does not
       # start while a deployment workflow is running (at most 30 minutes), and quality.mjs pauses before every case while
-      # one runs, so a release that starts mid-report is not throttled by the report's next case. Budget: 30 minutes of
-      # waiting, about 10 of setup and 300 for the run, under the 360-minute job limit; a run that pauses for long
-      # finishes partial and is reported as not accepted rather than cancelled mid-case.
+      # one runs, so a release that starts mid-report is not throttled by the report's next case.
       - name: Wait for running deployment gates
         run: |
           deadline=$((SECONDS + 1800))
@@ -101,6 +87,59 @@ jobs:
             sleep 60
           done
 
+  # One job per group: a red or green box of its own on the run graph and in the commit's checks, its own summary with
+  # every scenario explained, and "Re-run failed jobs" re-runs only the groups that failed. Groups that never call Cost
+  # Management run three at a time; the others share the tenant-wide quota and run one at a time (job "paced" below).
+  parallel:
+    name: ${{ matrix.group.title }}
+    needs: plan
+    if: needs.plan.outputs.parallel != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: ai-evaluation
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        group: ${{ fromJSON(needs.plan.outputs.parallel) }}
+    env: &group-env
+      EVAL_CLIENT_ID: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
+      EVAL_LOGIN_SUBSCRIPTION: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
+      EVAL_MODEL_ENDPOINT: ${{ secrets.EVAL_MODEL_ENDPOINT }}
+      EVAL_MODEL: ${{ vars.EVAL_MODEL }}
+      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+      EVAL_REASONING_EFFORT: ${{ vars.EVAL_REASONING_EFFORT || 'medium' }}
+      EVAL_TENANT_ID: ${{ secrets.AZURE_EVAL_TENANT_ID }}
+      EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}
+      EVAL_DATA_CLASSIFICATION: ${{ vars.EVAL_DATA_CLASSIFICATION }}
+      EVAL_TOKEN_RESOURCES: ${{ vars.EVAL_TOKEN_RESOURCES }}
+      EVAL_DIAGNOSTICS_CERT: ${{ vars.EVAL_DIAGNOSTICS_CERT }}
+      EVAL_GROUPS: ${{ matrix.group.key }}
+      EVAL_REPORT_LAYOUT: group
+      EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
+      EVAL_RUNNER_DLL: tests/LiveEvaluations/bin/Release/net10.0/LiveEvaluations.dll
+      FINOPS_PYTHON: /usr/bin/python3
+      GH_TOKEN: ${{ github.token }}
+    steps: &group-steps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate required evaluation configuration
+        run: |
+          missing=0
+          for name in EVAL_CLIENT_ID EVAL_TENANT_ID EVAL_LOGIN_SUBSCRIPTION EVAL_SUBSCRIPTION_IDS EVAL_MODEL_ENDPOINT EVAL_MODEL EVAL_JUDGE_MODEL; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required live evaluation configuration: $name"
+              missing=1
+            fi
+          done
+          if [[ "$EVAL_DATA_CLASSIFICATION" != "synthetic" && "$EVAL_DATA_CLASSIFICATION" != "internal-test" ]]; then
+            echo "::error::Set EVAL_DATA_CLASSIFICATION to synthetic (answers published) or internal-test (verdicts only). Customer responses must not be published."
+            missing=1
+          fi
+          if [[ "$missing" == 1 ]]; then
+            exit 1
+          fi
+
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
@@ -121,14 +160,83 @@ jobs:
           sudo -n apt-get update -qq
           sudo -n apt-get install -y --no-install-recommends python3-pandas python3-openpyxl
 
-      - name: Build candidate evaluator and validate the evaluation tiers
-        run: |
-          dotnet build tests/LiveEvaluations/LiveEvaluations.csproj --configuration Release --nologo
-          node --test tests/LiveEvaluations/*.test.mjs
+      - name: Build the candidate evaluator
+        run: dotnet build tests/LiveEvaluations/LiveEvaluations.csproj --configuration Release --nologo
 
-      - name: Run every extended scenario
-        timeout-minutes: 300
+      # A pause for a deployment workflow counts against this limit; a group that pauses long ends partial, reported as not
+      # accepted, rather than holding the runner past the job limit.
+      - name: Run this group's scenarios
+        timeout-minutes: 140
         run: node tests/LiveEvaluations/quality.mjs
+
+      - name: Publish this group's scenarios
+        if: always()
+        run: |
+          if [[ -f TestResults/live-evaluations/summary.md ]]; then
+            cat TestResults/live-evaluations/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '# 🔴 %s\n\n**This group did not complete setup.** See the failed step above.\n' "$GROUP_TITLE" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        env:
+          GROUP_TITLE: ${{ matrix.group.title }}
+
+      - name: Retain this group's results for the scoreboard
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ai-quality-group-${{ matrix.group.key }}-${{ github.run_attempt }}
+          path: TestResults/live-evaluations/
+          if-no-files-found: warn
+          retention-days: 30
+
+  paced:
+    name: ${{ matrix.group.title }}
+    needs: plan
+    if: needs.plan.outputs.paced != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: ai-evaluation
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        group: ${{ fromJSON(needs.plan.outputs.paced) }}
+    env: *group-env
+    steps: *group-steps
+
+  # The overall picture: every group's results combined into one scoreboard and dashboard, each group linked to its job.
+  # Red when fewer scored scenarios pass than the quality bar, or when a group produced no results.
+  scoreboard:
+    name: 🏁 Scoreboard
+    needs: [plan, parallel, paced]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EVAL_GROUPS: ${{ inputs.groups }}
+      EVAL_QUALITY_THRESHOLD: ${{ inputs.threshold || vars.EVAL_QUALITY_THRESHOLD }}
+      EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Collect every group's results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ai-quality-group-*
+          path: TestResults/groups
+
+      - name: Find each group's job page
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            --jq '[.jobs[] | {name, url: .html_url}]' > TestResults/jobs.json || echo '[]' > TestResults/jobs.json
+
+      - name: Combine the groups into one scoreboard
+        run: node tests/LiveEvaluations/quality.mjs --merge TestResults/groups TestResults/jobs.json
 
       - name: Publish the red/green scoreboard
         if: always()
@@ -136,7 +244,7 @@ jobs:
           if [[ -f TestResults/live-evaluations/summary.md ]]; then
             cat TestResults/live-evaluations/summary.md >> "$GITHUB_STEP_SUMMARY"
           else
-            printf '# 🔴 AI Quality Report\n\n**The evaluations did not complete setup.** See the failed step above.\n' >> "$GITHUB_STEP_SUMMARY"
+            printf '# 🔴 AI Quality Report\n\n**The scoreboard could not be built.** See the failed step above.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Retain the dashboard and structured results

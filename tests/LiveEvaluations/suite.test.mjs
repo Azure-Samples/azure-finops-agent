@@ -1765,7 +1765,7 @@ test("internal-test publication rejects malformed raw values and retains only sa
     assert.equal(synthetic.answer, result.answer);
     assert.deepEqual(synthetic.errors, result.errors);
     assert.deepEqual(synthetic.reasons, result.reasons);
-    assert.deepEqual(synthetic.judge, result.judge);
+    assert.deepEqual(synthetic.judge, { ...result.judge, findings: [] });
     assert.ok(!("failedToolDetails" in synthetic));
     assert.ok(!("toolDetails" in synthetic));
     assert.ok(!("failure" in synthetic));

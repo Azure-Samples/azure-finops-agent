@@ -6,10 +6,15 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
     AUDIT,
+    FINDINGS,
     GROUP_META,
     INEFFICIENT_FAILURE,
     escapeHtml,
+    explain,
+    explainMarkdown,
     groupOf,
+    happenedSentence,
+    judgeSentence,
     renderAnnotations,
     renderBoardMarkdown,
     renderHtml,
@@ -20,11 +25,17 @@ import {
 import {
     DEFAULT_QUALITY_THRESHOLD,
     GATE_WORKFLOWS,
+    combineGroups,
     countRunningGates,
     evaluateQuality,
+    groupPresentationFor,
+    groupTitle,
+    jobLinks,
     oneLine,
     parseThreshold,
+    planGroups,
     presentationFor,
+    readGroupReports,
     selectScenarios,
     yieldToGates,
 } from "./quality.mjs";
@@ -185,6 +196,36 @@ test("a failure caused only by the documented inefficiency is amber, every other
     assert.ok(validateResult(plain, result, 0, sha, suiteHash).includes(INEFFICIENT_FAILURE));
 });
 
+test("a real runner rejection for inefficiency alone is amber, and any other cause beside it stays red", () => {
+    const flagged = extended.find((scenario) => scenario.knownIssue);
+    // The shape Program.cs writes when the judge accepts a grounded, complete answer but rates the session inefficient:
+    // exit code 1, not accepted, and that one reason (which carries the judge's private rationale).
+    const runner = (reasons, judge = {}) => {
+        const result = pass(flagged);
+        Object.assign(result, { accepted: false, reasons, failure: null });
+        Object.assign(result.judge, { efficient: false, efficiencyScore: 2, avoidableCalls: 2 }, judge);
+        return result;
+    };
+    const inefficient = "Judge rated the session inefficient (2/5): two documentation searches.";
+    const only = validateResult(flagged, runner([inefficient]), 1, sha, suiteHash);
+    assert.deepEqual(only, [INEFFICIENT_FAILURE]);
+    assert.equal(statusOf(flagged, { id: flagged.id, failures: only }), "known");
+    for (const [reasons, judge, extra] of [
+        [[inefficient, "The run emitted errors."], {}, {}],
+        [["Judge rejected the result: wrong figure.", "Judge rated the session inefficient (2/5)."], { complete: false }, {}],
+        [["Live evaluation did not complete."], {}, {}],
+        [[inefficient], {}, { transcriptVerified: false }],
+        [[inefficient], {}, { failure: { phase: "judge" } }],
+    ]) {
+        const result = Object.assign(runner(reasons, judge), extra);
+        const failures = validateResult(flagged, result, 1, sha, suiteHash);
+        assert.ok(failures.length > 1 || !failures.includes(INEFFICIENT_FAILURE), JSON.stringify(reasons));
+        assert.equal(statusOf(flagged, { id: flagged.id, failures }), "fail", JSON.stringify(reasons));
+    }
+    // A timeout or crash exit code is never folded into the efficiency verdict.
+    assert.ok(validateResult(flagged, runner([inefficient]), 137, sha, suiteHash).includes("Evaluation process failed or timed out."));
+});
+
 test("the scoreboard counts each status and scores only what ran and is not a known limitation", () => {
     const sample = extended.slice(0, 10);
     const flagged = sample.find((scenario) => scenario.knownIssue) ?? extended.find((scenario) => scenario.knownIssue);
@@ -291,7 +332,7 @@ test("the dashboard marks failures red and known limitations amber with accessib
     assert.match(html, /class="chip fail">FAIL</);
     assert.match(html, /class="chip known">KNOWN LIMIT</);
     assert.match(html, /class="sq fail"/);
-    assert.match(html, /Documented limitation/);
+    assert.match(html, /Known limitation/);
     assert.match(html, /aria-pressed="true"/);
 });
 
@@ -312,7 +353,7 @@ test("annotations escape workflow-command syntax, are capped, and always end wit
     const hostile = { ...extended[0], label: "50%: a, b\nline" };
     const results = [failRow(hostile, ["Reason with\nnewline, comma: and %."])];
     const [error, notice] = renderAnnotations([hostile], results, { title: "AI Quality Report", accepted: false });
-    assert.match(error, /^::error title=🔴 50%25%3A a%2C b%0Aline::Reason with%0Anewline, comma: and %25\.$/);
+    assert.match(error, /^::error title=🔴 50%25%3A a%2C b%0Aline::The judge accepted the answer: grounded ✅, complete ✅, efficiency ★★★★★ 5\/5 \(no waste\)\. Why: Reason with%0Anewline, comma: and %25\.$/);
     assert.ok(![error, notice].some((line) => /[\r\n]/.test(line)));
     assert.match(notice, /^::error title=🔴 AI Quality Report%3A 0%25 green::/);
     const many = extended.slice(0, 30);
@@ -331,8 +372,8 @@ test("a full extended run with huge answers stays under the GitHub summary limit
     results[2] = failRow(extended[2]);
     const summary = renderSummary(extended, results, { accepted: false }, sha, true, presentationFor(extended, 0.8, false));
     assert.ok(Buffer.byteLength(summary) < 1024 * 1024);
-    assert.equal((summary.match(/<details><summary>🔴 (?!<b>)/g) ?? []).length, 1, "only the failure has a details block");
-    assert.doesNotMatch(summary, /<details><summary>🟢 (?!<b>)/);
+    assert.equal((summary.match(/<summary>🔴 <b>[^<]*<\/b> · FAIL · /g) ?? []).length, 1, "only the failure has a details block");
+    assert.doesNotMatch(summary, /<summary>🟢 <b>[^<]*<\/b> · PASS · /);
     assert.match(summary, /\| Question \| Tools \| Seconds \| Result \| Reason \|/);
     assert.match(summary, /KNOWN LIMIT|PASS/);
     const worst = extended.map((scenario) => {
@@ -380,6 +421,15 @@ test("known limitations and scenarios that did not run are not scored", () => {
     const partial = evaluateQuality(extended, results.slice(0, -1), sha, suiteHash, { expected: extended, threshold: 0.8 });
     assert.equal(partial.accepted, false);
     assert.ok(partial.failures.includes("Missing or extra scenario results."));
+    // A group made only of known limitations has nothing to score and is not red for that alone.
+    const docs = extended.filter((scenario) => scenario.group === "docs");
+    assert.ok(docs.length && docs.every((scenario) => scenario.knownIssue));
+    const amber = evaluateQuality(docs, docs.map((scenario) => failRow(scenario, [INEFFICIENT_FAILURE])), sha, suiteHash, { expected: extended, threshold: 1 });
+    assert.deepEqual([amber.accepted, amber.knownLimitations, amber.failures], [true, docs.length, []]);
+    const red = evaluateQuality(docs, [failRow(docs[0]), ...docs.slice(1).map((scenario) => failRow(scenario, [INEFFICIENT_FAILURE]))], sha, suiteHash, { expected: extended, threshold: 1 });
+    assert.equal(red.accepted, false);
+    assert.ok(evaluateQuality(docs, docs.slice(1).map((scenario) => failRow(scenario, [INEFFICIENT_FAILURE])), sha, suiteHash, { expected: extended, threshold: 1 })
+        .failures.includes("Missing or extra scenario results."));
 });
 
 test("a run with duplicated, unplanned or altered scenarios is rejected", () => {
@@ -599,35 +649,249 @@ test("runCases awaits the beforeCase hook before every case and the gate's defau
 
 test("the quality workflow never gates a deployment and follows the repository's workflow rules", async () => {
     const workflows = new URL("../../.github/workflows/", import.meta.url);
-    const quality = await readFile(new URL("ai-quality-report.yml", workflows), "utf8");
+    const quality = (await readFile(new URL("ai-quality-report.yml", workflows), "utf8")).replace(/\r\n/g, "\n");
     assert.doesNotMatch(quality, /continue-on-error/);
     assert.match(quality, /^  schedule:\s*\n\s+- cron: "0 3 \* \* 1"/m);
     assert.match(quality, /^  workflow_dispatch:/m);
     assert.match(quality, /environment: ai-evaluation/);
-    assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs/);
+    assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs\n/);
+    assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs --plan >> "\$GITHUB_OUTPUT"/);
+    assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs --merge TestResults\/groups TestResults\/jobs\.json/);
     assert.match(quality, /if: always\(\)/);
     assert.match(quality, /group: ai-quality-report/);
     assert.match(quality, /cancel-in-progress: false/);
     assert.match(quality, /Wait for running deployment gates/);
     assert.doesNotMatch(quality, /EVAL_FAIL_FAST/);
-    // Waiting (30 min), setup (about 10) and the run step must fit the job limit, or the job timeout would cancel
-    // the run mid-case after a long wait.
-    const minutes = (pattern) => Number(quality.match(pattern)?.[1]);
-    const jobLimit = minutes(/^    timeout-minutes: (\d+)$/m);
-    const runLimit = minutes(/- name: Run every extended scenario\r?\n\s+timeout-minutes: (\d+)/);
-    const waitLimit = minutes(/deadline=\$\(\(SECONDS \+ (\d+)\)\)/) / 60;
-    assert.ok(jobLimit <= 360, "GitHub-hosted jobs stop at 360 minutes");
-    assert.ok(waitLimit + 10 + runLimit <= jobLimit, `${waitLimit} + 10 + ${runLimit} must fit ${jobLimit}`);
     for (const match of quality.matchAll(/uses: (?!\.\/)([^\n]+)/g))
         assert.match(match[1], /@[a-f0-9]{40} # v\d/);
     // Inputs reach the program through the environment, never interpolated into a shell command.
-    for (const run of quality.matchAll(/run: \|?\n?([\s\S]*?)(?=\n      - |\n    \S|$)/g))
-        assert.doesNotMatch(run[1], /\$\{\{\s*inputs\./);
+    for (const run of quality.matchAll(/run: \|?\n?([\s\S]*?)(?=\n      - |\n        [a-z-]+:|\n    \S|$)/g))
+        assert.doesNotMatch(run[1], /\$\{\{\s*(inputs|matrix)\./);
     // A deployment never waits for, or depends on, this report.
     for (const name of ["main", "feature", "live-evaluations"]) {
         const workflow = await readFile(new URL(`${name}.yml`, workflows), "utf8");
         assert.doesNotMatch(workflow, /ai-quality-report|quality\.mjs/);
     }
+});
+
+// The native layout: one job per group, so each group is its own green or red box on the run graph and in the checks.
+test("each group is its own job, Cost Management groups run one at a time, and a scoreboard combines them", async () => {
+    const quality = (await readFile(new URL("../../.github/workflows/ai-quality-report.yml", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+    const job = (name) => quality.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z]+:\\n|(?![\\s\\S]))`, "m"))?.[1] ?? "";
+    const [plan, parallel, paced, board] = ["plan", "parallel", "paced", "scoreboard"].map(job);
+    assert.ok(plan && parallel && paced && board, "plan, parallel, paced and scoreboard jobs exist");
+    assert.doesNotMatch(plan, /environment:/, "planning needs no credentials");
+    for (const [group, parallelism] of [[parallel, 3], [paced, 1]]) {
+        assert.match(group, /name: \$\{\{ matrix\.group\.title \}\}/);
+        assert.match(group, /fail-fast: false/);
+        assert.match(group, new RegExp(`max-parallel: ${parallelism}\\n`));
+        assert.match(group, /environment: ai-evaluation/);
+    }
+    assert.match(parallel, /group: \$\{\{ fromJSON\(needs\.plan\.outputs\.parallel\) \}\}/);
+    assert.match(paced, /group: \$\{\{ fromJSON\(needs\.plan\.outputs\.paced\) \}\}/);
+    assert.match(parallel, /env: &group-env/);
+    assert.match(parallel, /steps: &group-steps/);
+    assert.match(paced, /env: \*group-env\n/);
+    assert.match(paced, /steps: \*group-steps\n/);
+    assert.match(parallel, /EVAL_GROUPS: \$\{\{ matrix\.group\.key \}\}/);
+    assert.match(parallel, /EVAL_REPORT_LAYOUT: group/);
+    assert.match(parallel, /name: ai-quality-group-\$\{\{ matrix\.group\.key \}\}-\$\{\{ github\.run_attempt \}\}/);
+    assert.match(board, /needs: \[plan, parallel, paced\]/);
+    assert.match(board, /if: always\(\) && needs\.plan\.result == 'success'/);
+    assert.match(board, /pattern: ai-quality-group-\*/);
+    assert.doesNotMatch(board, /environment:/);
+    // Every group job fits its limit after setup, and the run step leaves time for publishing.
+    const groupLimit = Number(parallel.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
+    const runLimit = Number(parallel.match(/- name: Run this group's scenarios\n\s+timeout-minutes: (\d+)/)?.[1]);
+    assert.ok(runLimit + 10 <= groupLimit && groupLimit <= 360, `${runLimit} + 10 must fit ${groupLimit}`);
+    // Job names come from planned group titles, never from an input.
+    const plannedTitles = new Set(Object.keys(GROUP_META).filter((key) => key !== "other").map(groupTitle));
+    for (const entry of [...planGroups(extended).parallel, ...planGroups(extended).paced])
+        assert.ok(plannedTitles.has(entry.title));
+});
+
+test("the plan splits groups by whether any of their scenarios calls Cost Management and covers every scenario", () => {
+    const plan = planGroups(extended);
+    const byKey = new Map(extended.map((scenario) => [scenario.group, []]));
+    for (const scenario of extended) byKey.get(scenario.group).push(scenario);
+    for (const entry of plan.parallel)
+        assert.ok(byKey.get(entry.key).every((scenario) => scenario.lane !== COST_MANAGEMENT_LANE), entry.key);
+    for (const entry of plan.paced)
+        assert.ok(byKey.get(entry.key).some((scenario) => scenario.lane === COST_MANAGEMENT_LANE), entry.key);
+    assert.equal([...plan.parallel, ...plan.paced].reduce((sum, entry) => sum + entry.count, 0), extended.length);
+    assert.equal(plan.count, extended.length);
+    assert.deepEqual(new Set([...plan.parallel, ...plan.paced].map((entry) => entry.key)), new Set(byKey.keys()));
+    const orders = (entries) => entries.map((entry) => GROUP_META[entry.key].order);
+    assert.deepEqual(orders(plan.paced), [...orders(plan.paced)].sort((a, b) => a - b));
+    const lines = spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--plan"], {
+        encoding: "utf8", env: { ...process.env, EVAL_GROUPS: "safety,docs" },
+    }).stdout.trim().split("\n");
+    assert.deepEqual(lines.map((line) => line.split("=")[0]), ["parallel", "paced", "count"]);
+    assert.deepEqual(JSON.parse(lines[0].slice("parallel=".length)).map((entry) => entry.key), ["docs"]);
+    assert.deepEqual(JSON.parse(lines[1].slice("paced=".length)).map((entry) => entry.key), ["safety"]);
+    // Only the scoreboard applies the bar, so the plan rejects a bad one before any group spends a live case.
+    const bad = spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--plan"], {
+        encoding: "utf8", env: { ...process.env, EVAL_GROUPS: "safety", EVAL_QUALITY_THRESHOLD: "80%" },
+    });
+    assert.notEqual(bad.status, 0);
+    assert.match(bad.stderr, /percentage from 0 to 100/);
+    assert.equal(bad.stdout, "");
+});
+
+test("a group job runs exactly one group and is red whenever one of its scenarios is red", async () => {
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url))], {
+        encoding: "utf8",
+        env: { ...process.env, EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: "safety,docs", EVAL_REPORT_LAYOUT: "group",
+            EVAL_OUTPUT_DIRECTORY: join(repositoryRoot, "tests", "LiveEvaluations", "obj", ".never-written") },
+    });
+    assert.match(result.stderr, /The group layout runs exactly one scenario group/);
+    const safety = extended.filter((scenario) => scenario.group === "safety");
+    const presentation = groupPresentationFor("safety", safety);
+    assert.equal(presentation.title, "🛡️ Safety and guardrails");
+    assert.equal(presentation.heatmap, false);
+    // The group bar is every scored scenario: one red fails the group, an amber does not.
+    const oneRed = safety.map((scenario, index) => (index === 0 ? failRow(scenario) : passRow(scenario)));
+    assert.equal(evaluateQuality(safety, oneRed, sha, suiteHash, { expected: extended, threshold: 1 }).accepted, false);
+    assert.equal(evaluateQuality(safety, safety.map(passRow), sha, suiteHash, { expected: extended, threshold: 1 }).accepted, true);
+    const summary = renderSummary(safety, oneRed, { accepted: false }, sha, false, presentation);
+    assert.match(summary, /^# 🔴 🛡️ Safety and guardrails · 1 of \d+ scenarios? failed/);
+    assert.doesNotMatch(summary, /### Heatmap/);
+});
+
+test("the scoreboard combines the newest attempt of each group, ignores other revisions and links each group's job", async () => {
+    const directory = await createDirectory();
+    try {
+        const safety = extended.filter((scenario) => scenario.group === "safety");
+        const docs = extended.filter((scenario) => scenario.group === "docs");
+        const write = async (name, report) => {
+            await mkdir(join(directory, name), { recursive: true });
+            await writeFile(join(directory, name, "results.json"), JSON.stringify(report));
+        };
+        const published = (rows) => rows.map((row) => ({ ...row, result: publishableResult(row.result, false) }));
+        await write("ai-quality-group-safety-1", { sha, publishAnswers: false, results: published(safety.map((scenario) => failRow(scenario))) });
+        await write("ai-quality-group-safety-2", { sha, publishAnswers: false, results: published(safety.map(passRow)) });
+        await write("ai-quality-group-docs-1", { sha: "c".repeat(40), publishAnswers: false, results: published(docs.map(passRow)) });
+        await write("not-a-group", { sha, results: [] });
+        const reports = await readGroupReports(directory);
+        assert.deepEqual([...reports.keys()].sort(), ["docs", "safety"]);
+        assert.equal(reports.get("safety").attempt, 2);
+        const { results, publishAnswers } = combineGroups([...safety, ...docs], reports, sha);
+        assert.equal(results.length, safety.length, "the other revision's docs results are ignored");
+        assert.ok(results.every((row) => row.failures.length === 0), "the re-run attempt wins");
+        assert.equal(publishAnswers, false);
+        assert.equal((await readGroupReports(join(directory, "missing"))).size, 0);
+        const links = jobLinks([
+            { name: "🛡️ Safety and guardrails", url: `https://github.com/owner/repo/actions/runs/1/job/2` },
+            { name: "📚 How-to and concepts", url: "javascript:alert(1)" },
+        ], [...safety, ...docs]);
+        assert.deepEqual(links, { safety: "https://github.com/owner/repo/actions/runs/1/job/2" });
+        const board = renderBoardMarkdown([...safety, ...docs], results, { ...context, links });
+        assert.match(board, /\[🛡️ Safety and guardrails\]\(https:\/\/github\.com\/owner\/repo\/actions\/runs\/1\/job\/2\)/);
+        assert.doesNotMatch(board, /javascript:/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("the real merge writes the scoreboard, the dashboard and results, and is red when a group produced nothing", async () => {
+    const directory = await createDirectory();
+    try {
+        const safety = extended.filter((scenario) => scenario.group === "safety");
+        const groups = join(directory, "groups");
+        await mkdir(join(groups, "ai-quality-group-safety-1"), { recursive: true });
+        await writeFile(join(groups, "ai-quality-group-safety-1", "results.json"), JSON.stringify({
+            sha, publishAnswers: false, results: safety.map((scenario) => ({ ...passRow(scenario), result: publishableResult(pass(scenario), false) })),
+        }));
+        const output = join(directory, "out");
+        const run = (groupsText) => spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--merge", groups, join(directory, "no-jobs.json")], {
+            encoding: "utf8", env: { ...process.env, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: groupsText, EVAL_OUTPUT_DIRECTORY: output, EVAL_QUALITY_THRESHOLD: "" },
+        });
+        const green = run("safety");
+        assert.equal(green.status, 0, green.stderr);
+        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All \d+ scenarios green/);
+        assert.match(await readFile(join(output, "ai-quality-report.html"), "utf8"), /What the judge scored/);
+        assert.equal(JSON.parse(await readFile(join(output, "results.json"), "utf8")).results.length, safety.length);
+        const red = run("safety,docs");
+        assert.equal(red.status, 1, "docs produced no results");
+        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🔴 AI Quality Report · Not accepted: \d+ of \d+ ran/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+// ── What each scenario explains ─────────────────────────────────────────────
+
+test("the judge's finding codes match the evaluator's closed vocabulary", async () => {
+    const judge = await readFile(new URL("./JudgeClient.cs", import.meta.url), "utf8");
+    const declared = judge.match(/FindingCodes =\s*\[([\s\S]*?)\];/)[1].match(/"([a-z_]+)"/g).map((code) => code.slice(1, -1));
+    assert.deepEqual(Object.keys(FINDINGS), declared);
+    assert.ok(Object.values(FINDINGS).every((finding) => ["quality", "efficiency"].includes(finding.kind) && finding.text.length > 10));
+});
+
+test("finding codes are published in every classification and unknown codes are dropped", () => {
+    const result = pass(extended[0]);
+    result.judge.findings = ["missing_result", "sequential_rounds", "tenant-secret-name", "missing_result"];
+    for (const publishAnswers of [true, false])
+        assert.deepEqual(publishableResult(result, publishAnswers).judge.findings, ["missing_result", "sequential_rounds"]);
+    assert.ok(!("reason" in publishableResult(result, false).judge));
+});
+
+test("each scenario explains what it checks, what happened, what the judge scored and why", () => {
+    const scenario = NEW_SCENARIOS.find((item) => item.label === "Refuses to delete a resource group");
+    const result = pass(scenario);
+    result.tools = [{ name: "QueryAzure", success: false, startMs: 1500, durationMs: 400 }, { name: "QueryAzure", success: true, startMs: 0, durationMs: 300 }];
+    result.toolCount = 2;
+    result.timeline = { rounds: 2, maxConcurrentTools: 1, toolWallMs: 700, modelMs: 11300 };
+    Object.assign(result.judge, { complete: false, accepted: false, efficiencyScore: 4, avoidableCalls: 1, avoidableRounds: 1, avoidableSeconds: 3, findings: ["missing_result", "sequential_rounds"], reason: "tenant-rationale-must-not-publish" });
+    result.answer = "tenant-answer-must-not-publish";
+    const row = { id: scenario.id, exitCode: 0, result: publishableResult(result, false), failures: ["Structured judge rejected the answer."] };
+    const info = explain(scenario, row, false);
+    assert.match(info.expectation, /never deletes Azure resources/);
+    assert.deepEqual(info.calls.map((call) => call.startMs), [0, 1500], "calls are listed in start order");
+    assert.equal(info.judge.reason, null);
+    assert.equal(info.answer, null);
+    assert.ok(info.answerWithheld);
+    assert.deepEqual(info.judge.findings.map((finding) => finding.code), ["missing_result", "sequential_rounds"]);
+    assert.equal(info.checks.find((check) => check.label === "Never called ApplyAzureChange").ok, true);
+    assert.equal(info.checks.find((check) => check.label.startsWith("The judge accepted")).ok, false);
+    assert.match(happenedSentence(info), /^Answered in 12\.0 s \(first text after 0\.9 s\); 2 tool calls in 2 rounds, 1 failed; tools ran 0\.7 s, the model 11\.3 s\.$/);
+    assert.match(judgeSentence(info), /^The judge rejected the answer: grounded ✅, complete ❌, efficiency ★★★★☆ 4\/5 \(1 avoidable call, 1 extra round, about 3 s of waste\)\.$/);
+    const markdown = explainMarkdown(scenario, row, false);
+    for (const heading of ["**What this eval checks.**", "**What happened.**", "**What the judge scored.**", "**Why:**", "**Checks.**"])
+        assert.ok(markdown.includes(heading), heading);
+    assert.match(markdown, /❌ A core part of the request was not answered · ⚠️ Independent reads ran one after another instead of together/);
+    assert.match(markdown, /must never call `ApplyAzureChange`/);
+    assert.match(markdown, /^<details open><summary>🔴 <b>Refuses to delete a resource group<\/b> · FAIL · /);
+    assert.doesNotMatch(markdown, /tenant-(answer|rationale)-must-not-publish/);
+    const html = renderHtml([scenario], [row], { ...context, publishAnswers: false });
+    for (const heading of ["What this eval checks", "What happened", "What the judge scored", "Checks"])
+        assert.ok(html.includes(`<h4>${heading}</h4>`), heading);
+    assert.doesNotMatch(html, /tenant-(answer|rationale)-must-not-publish/);
+    // With synthetic data the reasoning and the answer are part of the explanation.
+    const open = explainMarkdown(scenario, { ...row, result: publishableResult(result, true) }, true);
+    assert.match(open, /\*\*Judge's reasoning:\*\* tenant-rationale-must-not-publish/);
+    assert.match(open, /tenant-answer-must-not-publish/);
+});
+
+test("a scenario that did not run says so instead of inventing checks", () => {
+    const info = explain(extended[0], undefined);
+    assert.equal(happenedSentence(info), "It did not run: the suite ended before this scenario.");
+    assert.equal(judgeSentence(info), "Not judged.");
+    assert.ok(info.checks.every((check) => check.ok === null));
+    assert.match(explainMarkdown(extended[0], undefined), /^<details><summary>⚪ <b>[^<]+<\/b> · NOT RUN · /);
+});
+
+test("the needs-attention table and annotations give the judge's reasons in plain words", () => {
+    const scenario = extended.find((item) => !item.knownIssue);
+    const row = failRow(scenario, ["Structured judge rejected the answer."]);
+    row.result.judge = { ...row.result.judge, accepted: false, complete: false, findings: ["missing_output"] };
+    const board = renderBoardMarkdown([scenario], [row], { ...context, accepted: false });
+    assert.match(board, /\| Scenario \| Group \| Judge \| Why \|/);
+    assert.match(board, /\| ❌ ★★★★★ \| A requested chart, file, script or deck was not produced \|/);
+    const [annotation] = renderAnnotations([scenario], [row], { title: "T", accepted: false });
+    assert.match(annotation, /The judge rejected the answer: grounded ✅, complete ❌.*Why: A requested chart, file, script or deck was not produced/);
+    const combined = renderAnnotations([scenario], [row], { title: "T", accepted: false }, 10, { failures: false });
+    assert.equal(combined.length, 1, "a combining job adds only its scoreboard notice");
 });
 
 test("the audit the most-asked markers come from is stated", () => {

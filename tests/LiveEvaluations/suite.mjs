@@ -16,9 +16,11 @@ import {
     pricingCategory,
 } from "../../src/Dashboard/frontend/src/data/sidebarCategories.js";
 import {
+    FINDINGS,
     INEFFICIENT_FAILURE,
     STATUS,
     escapeHtml,
+    explainMarkdown,
     renderAnnotations,
     renderBoardMarkdown,
     renderHtml,
@@ -289,18 +291,28 @@ export function buildSuite(catalog = buildCatalog()) {
 
 export function validateResult(scenario, result, exitCode, sha, suiteHash) {
     const failures = [];
-    if (exitCode !== 0)
+    const isObject = result && typeof result === "object" && !Array.isArray(result);
+    // When the judge's efficiency verdict is the runner's only reason, its exit code, acceptance flag and reason all
+    // restate that one cause; listing them again would hide it (the case still fails on INEFFICIENT_FAILURE below).
+    const onlyInefficient = isObject && exitCode === 1
+        && result.terminal === true && result.transcriptVerified === true && result.failure == null
+        && result.judge?.accepted === true && result.judge?.grounded === true && result.judge?.complete === true
+        && (result.judge?.efficient === false || result.judge?.efficiencyScore < MINIMUM_EFFICIENCY_SCORE)
+        && Array.isArray(result.reasons) && result.reasons.length > 0
+        && result.reasons.every((reason) => typeof reason === "string" && reason.startsWith(INEFFICIENT_REASON_PREFIX));
+    if (exitCode !== 0 && !onlyInefficient)
         failures.push("Evaluation process failed or timed out.");
-    if (!result || typeof result !== "object" || Array.isArray(result))
+    if (!isObject)
         return ["No structured evaluation result."];
     if (result.id !== scenario.id || result.question !== scenario.question)
         failures.push("Result does not match the planned case.");
     if (result.sha !== sha || result.suiteHash !== suiteHash)
         failures.push("Result belongs to another revision or suite.");
     if (
-        result.accepted !== true ||
-        result.terminal !== true ||
-        result.transcriptVerified !== true
+        !onlyInefficient && (
+            result.accepted !== true ||
+            result.terminal !== true ||
+            result.transcriptVerified !== true)
     )
         failures.push("Execution, replay, or judge did not accept the result.");
     if (
@@ -350,7 +362,7 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
     }
     if (!Array.isArray(result.errors) || result.errors.length)
         failures.push("Run contains errors.");
-    if (!Array.isArray(result.reasons) || result.reasons.length)
+    if (!Array.isArray(result.reasons) || (result.reasons.length && !onlyInefficient))
         failures.push("Judge or deterministic checks rejected the answer.");
     if (
         typeof result.judge?.accepted !== "boolean" ||
@@ -380,6 +392,9 @@ export function validateResult(scenario, result, exitCode, sha, suiteHash) {
 
 // Judge scores 1-2 mean clear waste; they fail the gate even when the efficient flag disagrees.
 export const MINIMUM_EFFICIENCY_SCORE = 3;
+
+// How EvaluationGate.Evaluate begins the reason it records when the judge rates a session inefficient.
+export const INEFFICIENT_REASON_PREFIX = "Judge rated the session inefficient (";
 
 // The agent researches: one failed call is fine when a later call to the same tool succeeds.
 export const ALLOWED_CORRECTED_TOOL_FAILURES = 2;
@@ -487,6 +502,8 @@ export function renderSummary(
                 sha,
                 tierNote: presentation.tierNote,
                 threshold: presentation.threshold,
+                heatmap: presentation.heatmap !== false,
+                links: presentation.links ?? {},
                 verdictLine: `**${verdict.accepted ? "PASS" : "FAIL"}** · ${results.filter((row) => row.failures.length === 0).length}/${presentation.required} accepted · Revision \`${sha}\``,
             }).trimEnd(),
             "",
@@ -509,28 +526,12 @@ export function renderSummary(
                 `| ${cell(scenario.question)} | ${row?.result?.toolCount ?? "-"} | ${Number.isFinite(row?.result?.durationMs) ? (row.result.durationMs / 1000).toFixed(1) : "-"} | ${STATUS[statusOf(scenario, row)].word} | ${cell(row?.failures.join(" ") || (row ? "Accepted" : "Missing result"))} |`,
             );
         }
-        lines.push("", "</details>");
+        lines.push("", "</details>", "", "### Every scenario: what it checks, what happened, what the judge scored and why");
         for (const row of results) {
             const scenario = cases.find((item) => item.id === row.id);
             const status = statusOf(scenario, row);
             if (compact && status === "pass") continue;
-            lines.push(
-                "",
-                `<details><summary>${STATUS[status].dot} ${cell(scenario?.label ?? row.id)}: ${STATUS[status].word}</summary>`,
-                "",
-                `<p><strong>Question:</strong> ${html(scenario?.question)}</p>`,
-                `<p><strong>Tools:</strong> ${preview(Array.isArray(row.result?.tools) ? row.result.tools.map((tool) => `${tool?.name ?? "unknown"}: ${tool?.success ? "ok" : "failed"}`).join(", ") : "Not recorded", 2000)}</p>`,
-                `<p><strong>First token:</strong> ${html(row.result?.firstTokenMs ?? "not observed")} ms</p>`,
-                ...(publishAnswers
-                    ? [
-                          `<p><strong>Judge:</strong> ${preview(row.result?.judge?.reason ?? "No verdict", 1200)}</p>`,
-                          `<pre>${preview(row.result?.answer ?? "No final answer.", 2400)}</pre>`,
-                      ]
-                    : [
-                          `<p><strong>Checks:</strong> ${html(row.failures.join(" ") || "All deterministic checks and the judge accepted the answer.")}</p>`,
-                      ]),
-                "</details>",
-            );
+            lines.push("", explainMarkdown(scenario ?? { id: row.id, label: row.id }, row, publishAnswers, { previewAnswer: preview }));
         }
         return lines.join("\n") + "\n";
     };
@@ -561,6 +562,7 @@ export function publishableResult(result, publishAnswers) {
             ? result.tools.map((tool) => ({
                   name: typeof tool?.name === "string" ? tool.name : "unknown",
                   success: tool?.success === true,
+                  startMs: Number.isFinite(tool?.startMs) ? tool.startMs : null,
                   durationMs: Number.isFinite(tool?.durationMs) ? tool.durationMs : null,
               }))
             : [],
@@ -583,6 +585,10 @@ export function publishableResult(result, publishAnswers) {
                   avoidableCalls: Number.isInteger(judge.avoidableCalls) ? judge.avoidableCalls : null,
                   avoidableRounds: Number.isInteger(judge.avoidableRounds) ? judge.avoidableRounds : null,
                   avoidableSeconds: Number.isFinite(judge.avoidableSeconds) ? judge.avoidableSeconds : null,
+                  // Codes from a closed vocabulary carry no tenant data, so they are public in every classification.
+                  findings: Array.isArray(judge.findings)
+                      ? [...new Set(judge.findings.filter((code) => Object.hasOwn(FINDINGS, code)))]
+                      : [],
               }
             : null,
         attempts: Number.isInteger(result.attempts) ? result.attempts : 1,
@@ -805,6 +811,8 @@ export async function runCases(
                     cases,
                     results: publishedResults,
                     verdict,
+                    // A combined report publishes answers only when every part did.
+                    publishAnswers,
                 },
                 null,
                 2,

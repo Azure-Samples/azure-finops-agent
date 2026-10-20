@@ -293,6 +293,7 @@ internal static class Program
                 avoidableCalls = judge.AvoidableCalls,
                 avoidableRounds = judge.AvoidableRounds,
                 avoidableSeconds = judge.AvoidableSeconds,
+                findings = judge.Findings ?? [],
                 reason = Redact(judge.Reason, subscriptions)
             } : null,
             answer = Redact(capture.Answer, subscriptions),

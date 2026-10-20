@@ -14,7 +14,7 @@ public sealed record RunCapture(string Answer, ToolResult[] Tools, bool Terminal
     int ThrottleNotices = 0, string AgentProfile = "");
 
 public sealed record JudgeVerdict(bool Accepted, bool Grounded, bool Complete, bool Efficient, int EfficiencyScore, string Reason,
-    int AvoidableCalls = 0, int AvoidableRounds = 0, double AvoidableSeconds = 0);
+    int AvoidableCalls = 0, int AvoidableRounds = 0, double AvoidableSeconds = 0, string[]? Findings = null);
 
 public sealed record Verdict(bool Accepted, string[] Reasons, JudgeVerdict? Judge = null);
 
@@ -124,7 +124,7 @@ public static class EvaluationGate
             var verdict = document.RootElement;
             int avoidableCalls = 0, avoidableRounds = 0;
             double avoidableSeconds = 0;
-            if (verdict.ValueKind != JsonValueKind.Object || verdict.EnumerateObject().Count() != 7
+            if (verdict.ValueKind != JsonValueKind.Object || verdict.EnumerateObject().Count() != 8
                 || !verdict.TryGetProperty("accepted", out var accepted) || accepted.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
                 || !verdict.TryGetProperty("grounded", out var grounded) || grounded.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
                 || !verdict.TryGetProperty("complete", out var complete) || complete.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
@@ -134,6 +134,10 @@ public static class EvaluationGate
                 || !rounds.TryGetInt32(out avoidableRounds) || avoidableRounds < 0 || avoidableRounds > run.Tools.Length
                 || !verdict.TryGetProperty("avoidableSeconds", out var seconds) || seconds.ValueKind != JsonValueKind.Number
                 || !seconds.TryGetDouble(out avoidableSeconds) || !double.IsFinite(avoidableSeconds) || avoidableSeconds < 0
+                || !verdict.TryGetProperty("findings", out var findingsElement) || findingsElement.ValueKind != JsonValueKind.Array
+                || findingsElement.GetArrayLength() > JudgeClient.FindingCodes.Length
+                || findingsElement.EnumerateArray().Any(code => code.ValueKind != JsonValueKind.String
+                    || !JudgeClient.FindingCodes.Contains(code.GetString(), StringComparer.Ordinal))
                 || !verdict.TryGetProperty("reason", out var reason) || reason.ValueKind != JsonValueKind.String
                 || string.IsNullOrWhiteSpace(reason.GetString())) reasons.Add("Judge response did not satisfy the verdict schema.");
             else
@@ -142,7 +146,8 @@ public static class EvaluationGate
                     run.Tools.Length, Math.Max(run.DurationMs, 0) / 1000.0);
                 judge = new(accepted.GetBoolean(), grounded.GetBoolean(), complete.GetBoolean(),
                     efficiencyScore >= MinimumEfficiencyScore, efficiencyScore, reason.GetString()!,
-                    avoidableCalls, avoidableRounds, avoidableSeconds);
+                    avoidableCalls, avoidableRounds, avoidableSeconds,
+                    [.. findingsElement.EnumerateArray().Select(code => code.GetString()!).Distinct(StringComparer.Ordinal)]);
                 var qualityRejected = !judge.Accepted || !judge.Grounded || !judge.Complete;
                 if (qualityRejected) reasons.Add("Judge rejected the result: " + judge.Reason);
                 if (!judge.Efficient)

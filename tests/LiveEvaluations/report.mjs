@@ -134,10 +134,182 @@ const groupState = (group) =>
             : group.items.some((item) => item.status === "missing") ? "missing" : "pass";
 const reasonOf = (item) =>
     item.row ? item.row.failures.join(" ") || "Accepted" : "No result: the run ended before this scenario.";
+// The hard-check failures plus the judge's reasons in plain words, for tables and annotations.
+const whyOf = (item) => {
+    if (!item.row) return reasonOf(item);
+    const findings = (item.row.result?.judge?.findings ?? []).filter((code) => FINDINGS[code]).map((code) => FINDINGS[code].text);
+    const checks = item.row.failures.filter((failure) => !/^Structured judge (rejected|rated)/.test(failure));
+    return [...findings, ...checks].join(". ").replace(/\.\./g, ".") || reasonOf(item);
+};
+const judgeBadge = (judge) =>
+    judge ? `${judge.accepted && judge.grounded && judge.complete ? "✅" : "❌"} ${stars(judge.efficiencyScore)}` : "–";
 const popularity = (scenario) =>
     Number.isInteger(scenario?.askedBy) && scenario.askedBy > 0
         ? `Asked in ${scenario.askedBy} of the ${AUDIT.conversations} conversations audited in ${AUDIT.month}`
         : "";
+
+// The judge's closed vocabulary for why a verdict is not a clean pass (JudgeClient.FindingCodes, kept in step by a
+// test). Codes carry no tenant data, so they are published even when the rationale and answer are withheld.
+export const FINDINGS = Object.freeze({
+    wrong_figure: { kind: "quality", text: "A figure, price or calculation did not match the evidence" },
+    unsupported_claim: { kind: "quality", text: "A material claim had no supporting evidence" },
+    invented_data: { kind: "quality", text: "It presented data that no tool returned" },
+    missing_result: { kind: "quality", text: "A core part of the request was not answered" },
+    missing_output: { kind: "quality", text: "A requested chart, file, script or deck was not produced" },
+    case_expectation_unmet: { kind: "quality", text: "The scenario's stated expectation was not met" },
+    wrong_scope: { kind: "quality", text: "It used the wrong subscription, period, region or filter" },
+    failed_evidence: { kind: "quality", text: "The answer relied on a failed, denied or missing read" },
+    unknown_as_zero: { kind: "quality", text: "An unknown value was reported as zero or absent" },
+    wrong_language: { kind: "quality", text: "It answered in a different language" },
+    needless_clarification: { kind: "quality", text: "It asked for input it did not need instead of answering" },
+    refused_possible_task: { kind: "quality", text: "It said it could not do something its tools can" },
+    unsafe_action: { kind: "quality", text: "It claimed or attempted a change it must not make" },
+    redundant_calls: { kind: "efficiency", text: "It repeated calls whose results it already had" },
+    sequential_rounds: { kind: "efficiency", text: "Independent reads ran one after another instead of together" },
+    extra_lookups: { kind: "efficiency", text: "It looked up documentation more than needed" },
+    unfiltered_paging: { kind: "efficiency", text: "It paged raw data the API could filter or aggregate" },
+    unrelated_reads: { kind: "efficiency", text: "It read data unrelated to the question" },
+    uncorrected_failures: { kind: "efficiency", text: "Failed calls were not corrected" },
+});
+
+const MIN_EFFICIENCY = 3;
+const yesNo = (value) => (value === true ? "✅" : value === false ? "❌" : "–");
+
+// Everything a reader needs to understand one scenario's verdict, built from published fields only: what the scenario
+// checks (our own text), what the agent did (tools and timing), what the judge scored and why (flags, waste counts and
+// finding codes; the free-text rationale only when answers are published), and each hard check.
+export function explain(scenario, row, publishAnswers = false) {
+    const result = row?.result ?? null;
+    const failures = row?.failures ?? [];
+    const rubric = String(scenario?.rubric ?? "");
+    const marker = rubric.indexOf("Case expectation:");
+    const tools = Array.isArray(result?.tools) ? [...result.tools] : [];
+    const ordered = tools.every((tool) => Number.isFinite(tool.startMs))
+        ? tools.sort((left, right) => left.startMs - right.startMs) : tools;
+    const judge = result?.judge ?? null;
+    const findings = (judge?.findings ?? []).filter((code) => FINDINGS[code]);
+    const has = (text) => failures.some((failure) => failure.includes(text));
+    const ran = Boolean(result);
+    const checks = [
+        { label: "The run completed", ok: ran ? result.terminal === true && !has("Evaluation process failed") : null },
+        { label: "The transcript replayed the question and answer", ok: ran ? result.transcriptVerified === true : null },
+        { label: "An answer was produced", ok: ran ? !has("Final answer is empty") : null },
+        ...(scenario?.requiredTools ?? []).map((name) => ({
+            label: `Called ${name}`, ok: ran ? !has(`Required tool missing: ${name}.`) : null,
+        })),
+        ...(scenario?.forbiddenTools ?? []).map((name) => ({
+            label: `Never called ${name}`, ok: ran ? !has(`Forbidden tool called: ${name}.`) : null,
+        })),
+        { label: "Every failed tool call was corrected", ok: ran ? !failures.some((failure) => /tool calls failed|never corrected/.test(failure)) : null },
+        { label: `At most ${scenario?.maxToolCalls ?? "?"} tool calls`, ok: ran ? !has("Tool count is invalid or over budget") : null },
+        { label: `Finished within ${scenario?.maxDurationSeconds ?? "?"} s`, ok: ran ? !has("over-budget run duration") : null },
+        { label: "No run errors", ok: ran ? !has("Run contains errors") : null },
+        { label: "The judge accepted the answer (accepted, grounded and complete)", ok: ran ? judge ? judge.accepted && judge.grounded && judge.complete : false : null },
+        { label: `Efficiency at least ${MIN_EFFICIENCY} of 5`, ok: ran ? judge ? judge.efficient && judge.efficiencyScore >= MIN_EFFICIENCY : false : null },
+    ];
+    return {
+        question: scenario?.question ?? "",
+        expectation: marker >= 0 ? rubric.slice(marker + "Case expectation:".length).trim() : "",
+        knownIssue: scenario?.knownIssue ?? "",
+        requiredTools: scenario?.requiredTools ?? [],
+        forbiddenTools: scenario?.forbiddenTools ?? [],
+        maxToolCalls: scenario?.maxToolCalls ?? null,
+        maxDurationSeconds: scenario?.maxDurationSeconds ?? null,
+        ran,
+        durationMs: result?.durationMs ?? null,
+        firstTokenMs: result?.firstTokenMs ?? null,
+        rounds: result?.timeline?.rounds ?? null,
+        maxConcurrent: result?.timeline?.maxConcurrentTools ?? null,
+        toolWallMs: result?.timeline?.toolWallMs ?? null,
+        modelMs: result?.timeline?.modelMs ?? null,
+        throttleNotices: result?.throttle?.notices ?? 0,
+        attempts: result?.attempts ?? 1,
+        calls: ordered.map((tool) => ({ name: tool.name, ok: tool.success === true, startMs: tool.startMs ?? null, durationMs: tool.durationMs ?? null })),
+        judge: judge ? {
+            accepted: judge.accepted, grounded: judge.grounded, complete: judge.complete,
+            efficiencyScore: judge.efficiencyScore, efficient: judge.efficient,
+            avoidableCalls: judge.avoidableCalls, avoidableRounds: judge.avoidableRounds, avoidableSeconds: judge.avoidableSeconds,
+            findings: findings.map((code) => ({ code, ...FINDINGS[code] })),
+            reason: publishAnswers && typeof judge.reason === "string" ? judge.reason : null,
+        } : null,
+        answer: publishAnswers && typeof result?.answer === "string" ? result.answer : null,
+        answerWithheld: !publishAnswers && ran,
+        checks,
+        failures,
+    };
+}
+
+const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+export function happenedSentence(info) {
+    if (!info.ran) return "It did not run: the suite ended before this scenario.";
+    const parts = [`Answered in ${seconds(info.durationMs)}`];
+    if (Number.isFinite(info.firstTokenMs)) parts[0] += ` (first text after ${seconds(info.firstTokenMs)})`;
+    const calls = info.calls.length;
+    const failed = info.calls.filter((call) => !call.ok).length;
+    parts.push(calls
+        ? `${plural(calls, "tool call")}${Number.isInteger(info.rounds) ? ` in ${plural(info.rounds, "round")}` : ""}${Number.isInteger(info.maxConcurrent) && info.maxConcurrent > 1 ? `, up to ${info.maxConcurrent} at once` : ""}${failed ? `, ${failed} failed` : ""}`
+        : "no tool calls");
+    if (Number.isFinite(info.toolWallMs) && Number.isFinite(info.modelMs))
+        parts.push(`tools ran ${seconds(info.toolWallMs)}, the model ${seconds(info.modelMs)}`);
+    if (info.throttleNotices) parts.push(`${plural(info.throttleNotices, "service throttle notice")}`);
+    if (info.attempts > 1) parts.push(`run ${info.attempts} times after a service throttle`);
+    return parts.join("; ") + ".";
+}
+
+export function judgeSentence(info) {
+    if (!info.ran) return "Not judged.";
+    const judge = info.judge;
+    if (!judge) return "No valid judge verdict was returned, which fails the scenario.";
+    const verdict = judge.accepted && judge.grounded && judge.complete ? "accepted the answer" : "rejected the answer";
+    const waste = [judge.avoidableCalls ? plural(judge.avoidableCalls, "avoidable call") : "", judge.avoidableRounds ? plural(judge.avoidableRounds, "extra round") : "",
+        Number.isFinite(judge.avoidableSeconds) && judge.avoidableSeconds > 0 ? `about ${judge.avoidableSeconds.toFixed(0)} s` : ""].filter(Boolean);
+    return `The judge ${verdict}: grounded ${yesNo(judge.grounded)}, complete ${yesNo(judge.complete)}, efficiency ${stars(judge.efficiencyScore)} ${judge.efficiencyScore ?? "?"}/5${waste.length ? ` (${waste.join(", ")} of waste)` : " (no waste)"}.`;
+}
+
+// One scenario as a collapsible GitHub-markdown block: headline, then what it checks, what happened, the judge's
+// scores and reasons, and every hard check. Failures and known limitations open by default.
+export function explainMarkdown(scenario, row, publishAnswers = false, { previewAnswer = (text) => cell(text) } = {}) {
+    const status = statusOf(scenario, row);
+    const info = explain(scenario, row, publishAnswers);
+    const result = row?.result;
+    const lines = [
+        `<details${status === "fail" || status === "known" ? " open" : ""}><summary>${STATUS[status].dot} <b>${escapeHtml(scenario?.label ?? row?.id)}</b> · ${STATUS[status].word} · ${seconds(result?.durationMs)} · ${toolsLabel(result?.toolCount)} · ${stars(result?.judge?.efficiencyScore)}</summary>`,
+        "",
+        `**What this eval checks.** ${cell(info.question)}`,
+    ];
+    if (info.expectation) lines.push("", `> ${cell(info.expectation)}`);
+    const hard = [
+        info.requiredTools.length ? `must call ${info.requiredTools.map((name) => `\`${cell(name)}\``).join(", ")}` : "",
+        info.forbiddenTools.length ? `must never call ${info.forbiddenTools.map((name) => `\`${cell(name)}\``).join(", ")}` : "",
+        `at most ${info.maxToolCalls} tool calls and ${info.maxDurationSeconds} s`,
+    ].filter(Boolean);
+    lines.push("", `Hard rules: ${hard.join("; ")}. A separate judge model then grades the answer against the question, the tool evidence and the expectation.`);
+    if (info.knownIssue) lines.push("", `🟠 Known limitation: ${cell(info.knownIssue)}`);
+    lines.push("", `**What happened.** ${cell(happenedSentence(info))}`);
+    if (info.calls.length) {
+        lines.push("", "| # | Start | Tool | OK | Time |", "|--:|--:|---|:-:|--:|");
+        for (const [index, call] of info.calls.slice(0, 40).entries())
+            lines.push(`| ${index + 1} | ${Number.isFinite(call.startMs) ? `+${seconds(call.startMs)}` : "-"} | ${cell(call.name)} | ${call.ok ? "✅" : "❌"} | ${seconds(call.durationMs)} |`);
+        if (info.calls.length > 40) lines.push(`| | | … ${info.calls.length - 40} more | | |`);
+    }
+    lines.push("", `**What the judge scored.** ${cell(judgeSentence(info))}`);
+    if (info.judge) {
+        lines.push("", "| Accepted | Grounded | Complete | Efficiency |", "|:-:|:-:|:-:|:-:|",
+            `| ${yesNo(info.judge.accepted)} | ${yesNo(info.judge.grounded)} | ${yesNo(info.judge.complete)} | ${stars(info.judge.efficiencyScore)} ${info.judge.efficiencyScore ?? "?"}/5 |`);
+        lines.push("", info.judge.findings.length
+            ? `**Why:** ${info.judge.findings.map((finding) => `${finding.kind === "quality" ? "❌" : "⚠️"} ${cell(finding.text)}`).join(" · ")}`
+            : "**Why:** no issues found.");
+        if (info.judge.reason) lines.push("", `**Judge's reasoning:** ${previewAnswer(info.judge.reason, 1200)}`);
+    }
+    if (info.answer) lines.push("", "**Answer:**", "", `<pre>${previewAnswer(info.answer, 2400)}</pre>`);
+    else if (info.answerWithheld) lines.push("", "_The answer and the judge's written reasoning are withheld because this run used internal tenant data; the scores, the reasons above and the checks below are published._");
+    lines.push("", `**Checks.** ${info.checks.map((check) => `${check.ok === null ? "⚪" : check.ok ? "✅" : "❌"} ${cell(check.label)}`).join(" · ")}`);
+    const unexplained = info.failures.filter((failure) => !/^(Required tool missing|Forbidden tool called)/.test(failure));
+    if (unexplained.length) lines.push("", `Failed because: ${unexplained.map(cell).join(" ")}`);
+    lines.push("", "</details>");
+    return lines.join("\n");
+}
 
 // The verdict is authoritative: a run that was not accepted is red whatever its scoreboard shows, so a setup failure, a
 // timeout or a cancelled run (nothing failed, most scenarios not run) can never look amber or green.
@@ -169,9 +341,14 @@ export function progressBar(board, width = 20) {
 }
 
 export function renderBoardMarkdown(cases, results, context) {
-    const { title, accepted, sha, tierNote = "", threshold = null, verdictLine = "" } = context;
+    const { title, accepted, sha, tierNote = "", threshold = null, verdictLine = "", heatmap = true, links = {} } = context;
     const board = scoreboard(cases, results);
     const state = headline(board, accepted);
+    // A group links to the job that ran it when the caller knows that job's page.
+    const groupName = (group) => {
+        const url = typeof links[group.key] === "string" && /^https:\/\/github\.com\//.test(links[group.key]) ? links[group.key] : "";
+        return url ? `[${cell(groupTitle(group))}](${encodeURI(url)})` : cell(groupTitle(group));
+    };
     const lines = [
         `# ${state.icon} ${escapeHtml(title)} · ${escapeHtml(state.text)}`,
         "",
@@ -194,9 +371,9 @@ export function renderBoardMarkdown(cases, results, context) {
             "",
             `### 🔴 Needs attention (${failing.length})`,
             "",
-            "| Scenario | Group | Why it failed |",
-            "|---|---|---|",
-            ...failing.map((item) => `| ${cell(item.scenario.label ?? item.scenario.id)} | ${cell(GROUP_META[item.group].label)} | ${cell(reasonOf(item))} |`),
+            "| Scenario | Group | Judge | Why |",
+            "|---|---|:-:|---|",
+            ...failing.map((item) => `| ${cell(item.scenario.label ?? item.scenario.id)} | ${groupName({ ...GROUP_META[item.group], key: item.group })} | ${judgeBadge(item.row?.result?.judge)} | ${cell(whyOf(item))} |`),
         );
     const known = board.items.filter((item) => item.status === "known");
     if (known.length) {
@@ -210,6 +387,7 @@ export function renderBoardMarkdown(cases, results, context) {
         for (const [limitation, labels] of byLimitation)
             lines.push("", `${cell(limitation)}`, "", labels.map((label) => `- ${cell(label)}`).join("\n"));
     }
+    if (!heatmap) return lines.join("\n") + "\n";
     lines.push(
         "",
         "### Heatmap",
@@ -218,7 +396,7 @@ export function renderBoardMarkdown(cases, results, context) {
         "",
         "| Group | Scenarios | Green |",
         "|---|---|---:|",
-        ...board.groups.map((group) => `| ${cell(groupTitle(group))}${group.share ? ` · ≈${group.share}% of audited chats` : ""} | ${squares(group.items)} | ${groupCount(group)} |`),
+        ...board.groups.map((group) => `| ${groupName(group)}${group.share ? ` · ≈${group.share}% of audited chats` : ""} | ${squares(group.items)} | ${groupCount(group)} |`),
     );
     for (const group of board.groups) {
         const open = groupState(group) === "fail" ? " open" : "";
@@ -264,15 +442,18 @@ const commandData = (value) =>
 const commandProperty = (value) =>
     commandData(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
 
-// GitHub shows at most ten annotations of each level per step: failures first, then one scoreboard notice.
-export function renderAnnotations(cases, results, context, maximum = 10) {
+// GitHub shows at most ten annotations of each level per step: failures first, then one scoreboard notice. A job that
+// combines groups whose own jobs already annotated their failures passes failures: false.
+export function renderAnnotations(cases, results, context, maximum = 10, { failures = true } = {}) {
     const board = scoreboard(cases, results);
     const command = (level, title, message) =>
         `::${level} title=${commandProperty(title)}::${commandData(String(message).slice(0, 600))}`;
     const state = headline(board, context.accepted);
     const lines = [];
-    for (const item of board.items.filter((entry) => entry.status === "fail").slice(0, maximum))
-        lines.push(command("error", `🔴 ${item.scenario.label ?? item.scenario.id}`, reasonOf(item)));
+    for (const item of failures ? board.items.filter((entry) => entry.status === "fail").slice(0, maximum) : []) {
+        const info = explain(item.scenario, item.row);
+        lines.push(command("error", `🔴 ${item.scenario.label ?? item.scenario.id}`, `${judgeSentence(info)} Why: ${whyOf(item)}`));
+    }
     for (const item of board.items.filter((entry) => entry.status === "known").slice(0, maximum))
         lines.push(command("warning", `🟠 ${item.scenario.label ?? item.scenario.id}`, item.scenario.knownIssue));
     lines.push(command(
@@ -316,6 +497,13 @@ details.group>summary::-webkit-details-marker{display:none}.dot{width:12px;heigh
 .body{padding:4px 18px 18px 126px;color:var(--muted)}.body p{margin:.4em 0}.body b{color:var(--text)}pre{white-space:pre-wrap;word-break:break-word;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;color:var(--text);max-height:340px;overflow:auto}
 .tools{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}.tool{font-size:12px;border-radius:6px;padding:1px 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text)}.tool.bad{border-color:var(--red);color:#fca5a5}
 .why{color:#fca5a5}.hidden{display:none!important}footer{margin-top:40px;color:var(--muted);font-size:13px}
+.body section{margin:10px 0 14px}.body h4{margin:0 0 6px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+blockquote{margin:8px 0;padding:8px 12px;border-left:3px solid var(--accent2);background:var(--panel2);border-radius:0 8px 8px 0;color:var(--text)}
+table.calls{border-collapse:collapse;font-size:13px;margin:6px 0;font-variant-numeric:tabular-nums}table.calls th,table.calls td{padding:3px 10px;border-bottom:1px solid var(--line);text-align:left}table.calls th{color:var(--muted);font-weight:600}table.calls tr.bad td{color:#fca5a5}
+.scores{display:flex;flex-wrap:wrap;gap:10px;margin:6px 0}.score{min-width:110px;border:1px solid var(--line);border-radius:12px;padding:8px 12px;background:var(--panel2)}.score b{display:block;font-size:20px}.score span{font-size:12px;color:var(--muted)}.score.pass{border-color:var(--green)}.score.fail{border-color:var(--red)}
+ul.findings,ul.checks{margin:6px 0;padding-left:0;list-style:none}ul.findings li,ul.checks li{margin:3px 0}ul.findings li.quality{color:#fca5a5}ul.findings li.efficiency{color:#fcd34d}ul.findings li.ok{color:#86efac}
+@media (prefers-color-scheme:light){ul.findings li.quality,table.calls tr.bad td,.why{color:#991b1b}ul.findings li.efficiency{color:#92400e}ul.findings li.ok{color:#166534}}
+.withheld,.knownnote{font-style:italic}
 @media (max-width:760px){.hero{grid-template-columns:1fr}.heat .row{grid-template-columns:1fr}.case>summary{grid-template-columns:84px 1fr}.case>summary .meta{grid-column:1/-1}.body{padding-left:18px}}
 @media print{body{background:#fff;color:#000}.controls{display:none}details.group:not([open])>*:not(summary){display:block}}
 `;
@@ -344,19 +532,33 @@ export function renderHtml(cases, results, context) {
         const open = groupState(group) === "fail" ? " open" : "";
         const cards = group.items.map((item) => {
             const result = item.row?.result;
-            const tools = Array.isArray(result?.tools)
-                ? result.tools.map((tool) => `<span class="tool${tool?.success ? "" : " bad"}">${escapeHtml(tool?.name ?? "unknown")}${tool?.success ? "" : " ✗"}</span>`).join("")
-                : "";
+            const info = explain(item.scenario, item.row, publishAnswers);
             const flame = popularity(item.scenario)
                 ? ` <span title="${escapeHtml(popularity(item.scenario))}">🔥</span>` : "";
+            const mark = (ok) => (ok === null ? "⚪" : ok ? "✅" : "❌");
+            const hard = [
+                info.requiredTools.length ? `must call ${info.requiredTools.map((name) => `<code>${escapeHtml(name)}</code>`).join(", ")}` : "",
+                info.forbiddenTools.length ? `must never call ${info.forbiddenTools.map((name) => `<code>${escapeHtml(name)}</code>`).join(", ")}` : "",
+                `at most ${escapeHtml(info.maxToolCalls)} tool calls and ${escapeHtml(info.maxDurationSeconds)} s`,
+            ].filter(Boolean).join("; ");
+            const calls = info.calls.length
+                ? `<table class="calls"><thead><tr><th>#</th><th>Start</th><th>Tool</th><th>OK</th><th>Time</th></tr></thead><tbody>${info.calls.slice(0, 40).map((call, index) =>
+                    `<tr class="${call.ok ? "" : "bad"}"><td>${index + 1}</td><td>${Number.isFinite(call.startMs) ? `+${seconds(call.startMs)}` : "-"}</td><td>${escapeHtml(call.name)}</td><td>${call.ok ? "✅" : "❌"}</td><td>${seconds(call.durationMs)}</td></tr>`).join("")}</tbody></table>`
+                : "";
+            const judgeBlock = info.judge
+                ? `<div class="scores">${[["Accepted", info.judge.accepted], ["Grounded", info.judge.grounded], ["Complete", info.judge.complete]].map(([name, ok]) =>
+                    `<div class="score ${ok ? "pass" : "fail"}"><b>${ok ? "✅" : "❌"}</b><span>${name}</span></div>`).join("")}<div class="score ${info.judge.efficient ? "pass" : "fail"}"><b class="star">${stars(info.judge.efficiencyScore)}</b><span>Efficiency ${escapeHtml(info.judge.efficiencyScore ?? "?")}/5</span></div></div>
+<p>${escapeHtml(judgeSentence(info))}</p>
+<ul class="findings">${info.judge.findings.length ? info.judge.findings.map((finding) => `<li class="${finding.kind}">${finding.kind === "quality" ? "❌" : "⚠️"} ${escapeHtml(finding.text)}</li>`).join("") : "<li class=\"ok\">✅ No issues found.</li>"}</ul>
+${info.judge.reason ? `<p><b>Judge's reasoning</b><br>${escapeHtml(info.judge.reason)}</p>` : ""}`
+                : `<p>${escapeHtml(judgeSentence(info))}</p>`;
             const details = [
-                `<p><b>Question</b><br>${escapeHtml(item.scenario.question)}</p>`,
-                item.scenario.knownIssue ? `<p><b>Documented limitation</b><br>${escapeHtml(item.scenario.knownIssue)}</p>` : "",
-                tools ? `<div class="tools">${tools}</div>` : "",
-                item.status !== "pass" ? `<p class="why"><b>Why</b> ${escapeHtml(reasonOf(item))}</p>` : "",
-                publishAnswers && result?.judge?.reason ? `<p><b>Judge</b><br>${escapeHtml(result.judge.reason)}</p>` : "",
-                publishAnswers && result?.answer ? `<pre>${escapeHtml(String(result.answer).slice(0, 6000))}</pre>` : "",
-                !publishAnswers ? "<p>Answers and judge rationale are withheld because this run used internal tenant data.</p>" : "",
+                `<section><h4>What this eval checks</h4><p>${escapeHtml(info.question)}</p>${info.expectation ? `<blockquote>${escapeHtml(info.expectation)}</blockquote>` : ""}<p>Hard rules: ${hard}. A separate judge model then grades the answer against the question, the tool evidence and the expectation.</p>${info.knownIssue ? `<p class="knownnote">🟠 Known limitation: ${escapeHtml(info.knownIssue)}</p>` : ""}</section>`,
+                `<section><h4>What happened</h4><p>${escapeHtml(happenedSentence(info))}</p>${calls}</section>`,
+                `<section><h4>What the judge scored</h4>${judgeBlock}</section>`,
+                info.answer ? `<section><h4>Answer</h4><pre>${escapeHtml(String(info.answer).slice(0, 6000))}</pre></section>` : "",
+                info.answerWithheld ? "<p class=\"withheld\">The answer and the judge's written reasoning are withheld because this run used internal tenant data; the scores, the reasons and the checks are published.</p>" : "",
+                `<section><h4>Checks</h4><ul class="checks">${info.checks.map((check) => `<li>${mark(check.ok)} ${escapeHtml(check.label)}</li>`).join("")}</ul>${item.status !== "pass" ? `<p class="why"><b>Failed because</b> ${escapeHtml(reasonOf(item))}</p>` : ""}</section>`,
             ].join("");
             return `
 <details class="case" id="case-${escapeHtml(item.scenario.id)}" data-status="${item.status}" data-text="${escapeHtml(`${item.scenario.label ?? ""} ${item.scenario.question}`.toLowerCase())}">
