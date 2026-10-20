@@ -111,7 +111,7 @@ const connectedPricingPrompts = [
   {
     label: "Re-price my top 5 VMs in cheaper regions",
     prompt:
-      "List my top 5 most expensive VMs by monthly cost. For each, look up the retail price in 3 cheaper Azure regions (e.g. North Europe, Sweden Central, West US 3) and show a comparison table with the potential monthly savings if I migrated.",
+      "List my top 5 most expensive VMs by monthly cost. For each, find the 3 Azure regions with the lowest retail price for the same VM size and OS that are cheaper than its current region, and show a comparison table with the potential monthly savings if I migrated.",
   },
   {
     label: "Reservation savings on my current VMs",

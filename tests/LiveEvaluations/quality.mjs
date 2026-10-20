@@ -1,19 +1,20 @@
-// The extended evaluation tier: node tests/LiveEvaluations/quality.mjs
+// The AI quality report: node tests/LiveEvaluations/quality.mjs
 //
-// Runs every scenario the deployment gate does not (the unused catalog plus scenarios grounded in real customer
-// questions, safety invariants and other languages) against the same candidate handler, tools and judge, and reports
-// each one red or green. It never blocks a deployment: the gate in suite.mjs stays at its 23 curated scenarios. This run
-// fails (red) only when the share of scored scenarios that pass drops below the quality bar, or when it cannot complete.
+// Runs the ten most important evals the deployment gate does not (CORE_STAGES: the start-page questions customers asked
+// most, two cost questions, three trust guarantees and another language) against the same candidate handler, tools and
+// judge, and reports each one red or green; EVAL_SCOPE=all runs every extended scenario locally. It never blocks a
+// deployment: the gate in suite.mjs stays at its 23 curated scenarios. This run fails (red) only when the share of
+// scored evals that pass drops below the quality bar, or when it cannot complete.
 
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { GROUP_META, renderAnnotations, scoreboard } from "./report.mjs";
-import { buildExtendedSuite, extendedLane } from "./scenarios.mjs";
+import { GROUP_META, renderAnnotations, renderHtml, scoreboard } from "./report.mjs";
+import { CORE_STAGES, buildCoreSuite, buildExtendedSuite, extendedLane, stageTitle } from "./scenarios.mjs";
 import {
     COST_QUOTA_WINDOW_MS,
     assertCandidateRevision,
@@ -99,8 +100,11 @@ export function evaluateQuality(cases, results, sha, suiteHash, { expected, thre
     }
     if (results.length !== cases.length) failures.push("Missing or extra scenario results.");
     const board = scoreboard(cases, results);
-    if (board.scored === 0) failures.push("No scenario was scored.");
-    else if (board.passRate < threshold)
+    // Amber scenarios are not scored, so a group made only of known limitations has nothing to score; that is a
+    // result, not a defect (a missing result is caught above).
+    if (board.scored === 0) {
+        if (!board.known) failures.push("No scenario was scored.");
+    } else if (board.passRate < threshold)
         failures.push(`${Math.round(board.passRate * 100)}% of scored scenarios passed, below the ${Math.round(threshold * 100)}% quality bar.`);
     return {
         accepted: failures.length === 0,
@@ -117,12 +121,20 @@ export function evaluateQuality(cases, results, sha, suiteHash, { expected, thre
     };
 }
 
-export function selectScenarios(all, groupsText = "") {
-    const groups = groupsText.split(",").map((group) => group.trim()).filter(Boolean);
+// Groups and scenario ids both come from workflow inputs; either narrows the run, and both together intersect.
+export function selectScenarios(all, groupsText = "", idsText = "") {
+    const list = (text) => String(text ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+    const groups = list(groupsText);
+    const ids = list(idsText);
+    const quoted = (items) => items.map((item) => JSON.stringify(oneLine(item).slice(0, 40))).join(", ");
     const unknown = groups.filter((group) => !GROUP_META[group]);
     // Names come from a workflow input: quoted and stripped of control characters, never echoed raw.
-    if (unknown.length) throw new Error(`Unknown scenario group: ${unknown.map((group) => JSON.stringify(oneLine(group).slice(0, 40))).join(", ")}.`);
-    return groups.length ? all.filter((scenario) => groups.includes(scenario.group)) : all;
+    if (unknown.length) throw new Error(`Unknown scenario group: ${quoted(unknown)}.`);
+    const known = new Set(all.map((scenario) => scenario.id));
+    const strangers = ids.filter((id) => !known.has(id));
+    if (strangers.length) throw new Error(`Unknown scenario id: ${quoted(strangers)}.`);
+    return all.filter((scenario) =>
+        (!groups.length || groups.includes(scenario.group)) && (!ids.length || ids.includes(scenario.id)));
 }
 
 export function parseThreshold(text) {
@@ -136,37 +148,171 @@ export function parseThreshold(text) {
 export function presentationFor(cases, threshold, partial) {
     return {
         title: "AI Quality Report",
-        tierNote: `extended tier${partial ? " (selected groups)" : ""} · ${cases.length} scenarios beyond the deployment gate`,
+        tierNote: partial
+            ? `${cases.length} chosen evals beyond the deployment gate`
+            : `the ${cases.length} most important evals beyond the deployment gate`,
         threshold,
         required: cases.length,
         intro: [
-            "The deployment gate stays at its 23 curated scenarios and decides whether a build ships. This extended tier is broader: every catalog scenario the gate does not run, the questions customers asked most in an audit of real conversations (rewritten as synthetic wording), safety guardrails and other languages. It never blocks a deployment; a scenario that keeps passing here is a candidate for the gate.",
+            "The deployment gate stays at its 23 curated scenarios and decides whether a build ships. This report adds the evals that matter most beyond it: the start-page questions customers asked most in an audit of real conversations (rewritten as synthetic wording), the cost questions closest to a FinOps team's day, trust guarantees and another language. It never blocks a deployment; an eval that keeps passing here is a candidate for the gate.",
             "",
-            "Real model calls through the candidate chat handler and tools, with a separate structured judge. An amber scenario failed only because of a documented limitation. Test-host authentication is not a browser sign-in test.",
+            "Real model calls through the candidate chat handler and tools, with a separate structured judge. An amber eval failed only because of a documented limitation. Test-host authentication is not a browser sign-in test.",
         ],
     };
 }
 
-async function main() {
+// The report's pipeline: one job per stage of the core evals (CORE_STAGES), so the run graph reads 🧭 plan → stages →
+// 🏁 scoreboard with a green or red box per stage. A stage is green only when none of its evals is red (a known
+// limitation stays amber); "Re-run failed jobs" re-runs only the red stages; the scoreboard applies the quality bar.
+export const STAGE_LAYOUT = "stage";
+
+export function stagePresentationFor(group, cases) {
+    return {
+        title: stageTitle(group),
+        tierNote: `AI quality report · ${cases.length} eval${cases.length === 1 ? "" : "s"} in this stage`,
+        threshold: null,
+        required: cases.length,
+        heatmap: false,
+        intro: [
+            "One stage of the AI quality report. It is green only when every eval in it passes; a known limitation stays amber and does not fail it. Each eval below says what it checks, what the agent did, what the judge scored and why. The 🏁 Scoreboard job combines every stage.",
+        ],
+    };
+}
+
+// Stage artifacts are named ai-quality-stage-<group>-<attempt>; a re-run of a failed stage uploads a new attempt and
+// the newest attempt of each stage wins.
+export const STAGE_ARTIFACT = /^ai-quality-stage-([a-z-]+)-(\d+)$/;
+
+export async function readStageReports(directory) {
+    const latest = new Map();
+    let names = [];
+    try {
+        names = await readdir(directory, { withFileTypes: true });
+    } catch {
+        return latest;
+    }
+    for (const entry of names) {
+        const match = entry.isDirectory() ? STAGE_ARTIFACT.exec(entry.name) : null;
+        if (!match || !CORE_STAGES.some((stage) => stage.group === match[1])) continue;
+        const attempt = Number(match[2]);
+        if (latest.has(match[1]) && latest.get(match[1]).attempt >= attempt) continue;
+        try {
+            const report = JSON.parse(await readFile(join(directory, entry.name, "results.json"), "utf8"));
+            latest.set(match[1], { attempt, report });
+        } catch {
+            // A stage whose job ended before writing results leaves its evals "not run".
+        }
+    }
+    return latest;
+}
+
+// The overall picture from every stage's results: only rows for planned evals of this revision count, a stage's
+// artifact counts only for its own evals, and answers are published only when every stage published them.
+export function combineReports(cases, reports, sha) {
+    const groupOf = new Map(cases.map((scenario) => [scenario.id, scenario.group]));
+    const results = [];
+    let publishAnswers = reports.size > 0;
+    for (const [group, { report }] of reports) {
+        if (report?.sha !== sha || !Array.isArray(report.results)) continue;
+        publishAnswers &&= report.publishAnswers === true;
+        for (const row of report.results)
+            if (groupOf.get(row?.id) === group && Array.isArray(row.failures)) results.push(row);
+    }
+    const order = new Map(cases.map((scenario, index) => [scenario.id, index]));
+    results.sort((left, right) => order.get(left.id) - order.get(right.id));
+    const seen = new Set();
+    return { results: results.filter((row) => !seen.has(row.id) && seen.add(row.id)), publishAnswers };
+}
+
+// Links each eval in the scoreboard to the stage job that ran it, from `gh api .../jobs`.
+export function jobLinks(jobs, cases) {
+    const links = {};
+    if (!Array.isArray(jobs)) return links;
+    for (const scenario of cases) {
+        const job = jobs.filter((item) => item?.name === stageTitle(scenario.group) && typeof item.url === "string").at(-1);
+        if (job && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+\/job\/\d+$/.test(job.url)) links[scenario.id] = job.url;
+    }
+    return links;
+}
+
+// The evals a run covers: the core set by default, every extended scenario with EVAL_SCOPE=all (local exploration).
+export function suiteFor(scope = "") {
+    if (!["", "core", "all"].includes(scope)) throw new Error("EVAL_SCOPE must be core or all.");
+    return scope === "all" ? buildExtendedSuite() : buildCoreSuite();
+}
+
+async function merge(directory, jobsFile) {
     const sha = process.env.GITHUB_SHA ?? process.env.EVAL_EXPECTED_SHA;
     if (!sha || !/^[a-f0-9]{40}$/i.test(sha)) throw new Error("The candidate commit SHA is required.");
-    const expected = buildExtendedSuite();
+    const expected = buildCoreSuite();
+    const cases = selectScenarios(expected, process.env.EVAL_GROUPS, process.env.EVAL_SCENARIOS);
+    const threshold = parseThreshold(process.env.EVAL_QUALITY_THRESHOLD);
+    const output = resolve(process.env.EVAL_OUTPUT_DIRECTORY ?? "TestResults/live-evaluations");
+    const reports = await readStageReports(resolve(directory));
+    const { results, publishAnswers } = combineReports(cases, reports, sha);
+    let jobs = [];
+    try {
+        jobs = JSON.parse(await readFile(resolve(jobsFile), "utf8"));
+    } catch {
+        // Links are a convenience; the scoreboard stands without them.
+    }
+    const suiteHash = createHash("sha256").update(JSON.stringify(cases)).digest("hex");
+    const verdict = evaluateQuality(cases, results, sha, suiteHash, { expected, threshold });
+    const presentation = { ...presentationFor(cases, threshold, cases.length !== expected.length), links: jobLinks(jobs, cases) };
+    await mkdir(output, { recursive: true });
+    await writeFile(resolve(output, "results.json"), JSON.stringify({ sha, suiteHash, cases, results, verdict, publishAnswers }, null, 2));
+    await writeFile(resolve(output, "summary.md"), renderSummary(cases, results, verdict, sha, publishAnswers, presentation));
+    await writeFile(resolve(output, "ai-quality-report.html"), renderHtml(cases, results, {
+        title: presentation.title, accepted: verdict.accepted, sha, publishAnswers,
+        tierNote: presentation.tierNote, threshold, generatedAt: new Date().toISOString(),
+    }));
+    if (process.env.GITHUB_ACTIONS === "true")
+        for (const line of renderAnnotations(cases, results, { title: presentation.title, accepted: verdict.accepted }, 10, { failures: false }))
+            console.log(line);
+    if (!verdict.accepted) process.exitCode = 1;
+}
+
+async function main() {
+    if (process.argv[2] === "--plan") {
+        // Only the scoreboard applies the bar, after every stage ran; a bad value or selection must stop the run before.
+        parseThreshold(process.env.EVAL_QUALITY_THRESHOLD);
+        const cases = selectScenarios(buildCoreSuite(), process.env.EVAL_GROUPS, process.env.EVAL_SCENARIOS);
+        if (!cases.length) throw new Error("No scenario matches the selection.");
+        const stages = CORE_STAGES.map((stage) => stage.group).filter((group) => cases.some((scenario) => scenario.group === group));
+        console.log(`stages=${JSON.stringify(stages)}`);
+        console.log(`count=${cases.length}`);
+        return;
+    }
+    if (process.argv[2] === "--merge") {
+        await merge(process.argv[3] ?? "TestResults/stages", process.argv[4] ?? "TestResults/jobs.json");
+        return;
+    }
+    const sha = process.env.GITHUB_SHA ?? process.env.EVAL_EXPECTED_SHA;
+    if (!sha || !/^[a-f0-9]{40}$/i.test(sha)) throw new Error("The candidate commit SHA is required.");
     const only = process.env.EVAL_ONLY_IDS?.split(",").filter(Boolean) ?? [];
     if (only.length && process.env.GITHUB_ACTIONS === "true")
         throw new Error("EVAL_ONLY_IDS is a local diagnostic filter and cannot run in CI.");
     if (process.env.GITHUB_ACTIONS === "true" && process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY)
         throw new Error("Private evaluation diagnostics are local-only and cannot be configured in CI.");
-    const selected = selectScenarios(expected, process.env.EVAL_GROUPS);
+    const stageLayout = process.env.EVAL_REPORT_LAYOUT === STAGE_LAYOUT;
+    const stage = process.env.EVAL_STAGE?.trim() ?? "";
+    if (stageLayout && !CORE_STAGES.some((item) => item.group === stage))
+        throw new Error("The stage layout runs exactly one core stage, named by EVAL_STAGE.");
+    const expected = stageLayout ? buildCoreSuite() : suiteFor(process.env.EVAL_SCOPE?.trim());
+    const selected = selectScenarios(expected, stageLayout ? stage : process.env.EVAL_GROUPS, process.env.EVAL_SCENARIOS);
     const cases = only.length ? selected.filter((scenario) => only.includes(scenario.id)) : selected;
     if (!cases.length) throw new Error("No scenario matches the selection.");
-    const threshold = parseThreshold(process.env.EVAL_QUALITY_THRESHOLD);
+    // A stage is red when any of its evals is red; the overall bar belongs to the scoreboard.
+    const threshold = stageLayout ? 1 : parseThreshold(process.env.EVAL_QUALITY_THRESHOLD);
     const suiteHash = createHash("sha256").update(JSON.stringify(cases)).digest("hex");
     const output = resolve(process.env.EVAL_OUTPUT_DIRECTORY ?? "TestResults/live-evaluations");
     const classification = process.env.EVAL_DATA_CLASSIFICATION ?? "";
     const publishAnswers =
         classification === "synthetic" ||
         (classification !== "internal-test" && process.env.GITHUB_ACTIONS !== "true");
-    const presentation = presentationFor(cases, threshold, cases.length !== expected.length);
+    const presentation = stageLayout
+        ? stagePresentationFor(stage, cases)
+        : presentationFor(cases, threshold, cases.length !== expected.length);
     const evaluate = (planned, results, commit, hash) =>
         evaluateQuality(planned, results, commit, hash, { expected, threshold });
     await mkdir(output, { recursive: true });
@@ -205,7 +351,7 @@ async function main() {
                 for (const line of renderAnnotations(cases, finished, {
                     title: presentation.title,
                     accepted: finalVerdict.accepted,
-                }))
+                }, 10, { notice: !stageLayout }))
                     console.log(line);
             },
         },

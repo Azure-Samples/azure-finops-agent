@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AzureFinOps.Dashboard.AI.Tools;
 
 namespace LiveEvaluations;
@@ -14,7 +15,7 @@ public sealed record RunCapture(string Answer, ToolResult[] Tools, bool Terminal
     int ThrottleNotices = 0, string AgentProfile = "");
 
 public sealed record JudgeVerdict(bool Accepted, bool Grounded, bool Complete, bool Efficient, int EfficiencyScore, string Reason,
-    int AvoidableCalls = 0, int AvoidableRounds = 0, double AvoidableSeconds = 0);
+    int AvoidableCalls = 0, int AvoidableRounds = 0, double AvoidableSeconds = 0, string[]? Findings = null);
 
 public sealed record Verdict(bool Accepted, string[] Reasons, JudgeVerdict? Judge = null);
 
@@ -69,6 +70,7 @@ public static class EvaluationGate
 
     public static bool ToolSucceeded(ToolResult tool)
     {
+        if (ShowsAbsence(tool)) return true;
         if (!tool.Success || !string.IsNullOrWhiteSpace(tool.Error)) return false;
         var text = tool.Result.TrimStart();
         if (!EvidenceInspector.Inspect(text).Success
@@ -80,6 +82,22 @@ public static class EvaluationGate
             return !Failed(document.RootElement);
         }
         catch (JsonException) { return true; }
+    }
+
+    // A 404 whose error code names the missing item (AzureQueryTools.IsAbsent) shows the item is absent: a successful
+    // read, not a failed one, which the agent cannot and need not correct. So is a multi-url QueryAzure call whose every
+    // failed url is such a 404, as its own banner counts them. A bare NotFound, a 403 or any other failure still fails.
+    private static readonly Regex AbsenceBanner = new(
+        @"^(?:Error: all (?<failed>\d+) requests failed\.|PARTIAL RESULT: (?<failed>\d+) of \d+ requests failed;[^\n]*?) (?<absent>\d+) of them (?:is a 404|are 404s) that say",
+        RegexOptions.CultureInvariant);
+
+    internal static bool ShowsAbsence(ToolResult tool)
+    {
+        if (tool.Name != "QueryAzure") return false;
+        var text = tool.Result.TrimStart();
+        if (AzureQueryTools.IsAbsent(text)) return true;
+        var banner = AbsenceBanner.Match(text);
+        return banner.Success && banner.Groups["failed"].Value == banner.Groups["absent"].Value;
     }
 
     private static bool Failed(JsonElement value)
@@ -124,7 +142,7 @@ public static class EvaluationGate
             var verdict = document.RootElement;
             int avoidableCalls = 0, avoidableRounds = 0;
             double avoidableSeconds = 0;
-            if (verdict.ValueKind != JsonValueKind.Object || verdict.EnumerateObject().Count() != 7
+            if (verdict.ValueKind != JsonValueKind.Object || verdict.EnumerateObject().Count() != 8
                 || !verdict.TryGetProperty("accepted", out var accepted) || accepted.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
                 || !verdict.TryGetProperty("grounded", out var grounded) || grounded.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
                 || !verdict.TryGetProperty("complete", out var complete) || complete.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
@@ -134,6 +152,10 @@ public static class EvaluationGate
                 || !rounds.TryGetInt32(out avoidableRounds) || avoidableRounds < 0 || avoidableRounds > run.Tools.Length
                 || !verdict.TryGetProperty("avoidableSeconds", out var seconds) || seconds.ValueKind != JsonValueKind.Number
                 || !seconds.TryGetDouble(out avoidableSeconds) || !double.IsFinite(avoidableSeconds) || avoidableSeconds < 0
+                || !verdict.TryGetProperty("findings", out var findingsElement) || findingsElement.ValueKind != JsonValueKind.Array
+                || findingsElement.GetArrayLength() > JudgeClient.FindingCodes.Length
+                || findingsElement.EnumerateArray().Any(code => code.ValueKind != JsonValueKind.String
+                    || !JudgeClient.FindingCodes.Contains(code.GetString(), StringComparer.Ordinal))
                 || !verdict.TryGetProperty("reason", out var reason) || reason.ValueKind != JsonValueKind.String
                 || string.IsNullOrWhiteSpace(reason.GetString())) reasons.Add("Judge response did not satisfy the verdict schema.");
             else
@@ -142,7 +164,8 @@ public static class EvaluationGate
                     run.Tools.Length, Math.Max(run.DurationMs, 0) / 1000.0);
                 judge = new(accepted.GetBoolean(), grounded.GetBoolean(), complete.GetBoolean(),
                     efficiencyScore >= MinimumEfficiencyScore, efficiencyScore, reason.GetString()!,
-                    avoidableCalls, avoidableRounds, avoidableSeconds);
+                    avoidableCalls, avoidableRounds, avoidableSeconds,
+                    [.. findingsElement.EnumerateArray().Select(code => code.GetString()!).Distinct(StringComparer.Ordinal)]);
                 var qualityRejected = !judge.Accepted || !judge.Grounded || !judge.Complete;
                 if (qualityRejected) reasons.Add("Judge rejected the result: " + judge.Reason);
                 if (!judge.Efficient)

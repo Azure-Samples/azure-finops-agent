@@ -1,25 +1,28 @@
 name: AI quality report
 
-# The extended evaluation tier. The deployment gate (live-evaluations.yml) stays at its 23 curated scenarios and decides
-# whether a build ships; this workflow runs every other scenario, red or green, and never blocks a deployment. It lives in
-# its own workflow so a failing scenario cannot stop a release and the gate keeps its single, unconditional contract.
-# Run it on demand from the Actions tab (optionally for chosen groups) or let the weekly schedule do it.
+# The AI quality report. The deployment gate (live-evaluations.yml) stays at its 23 curated scenarios and decides
+# whether a build ships; this workflow runs the ten most important evals beyond it, red or green, and never blocks a
+# deployment. It lives in its own workflow so a failing eval cannot stop a release and the gate keeps its single,
+# unconditional contract. The run graph is the picture: 🧭 Plan → one green or red box per stage → 🏁 Scoreboard. Each
+# stage's summary explains every eval in it (what it checks, what happened, what the judge scored and why), failing
+# evals are annotated on the run page, and "Re-run failed jobs" re-runs only the red stages.
+# Run it on demand from the Actions tab (optionally for chosen evals) or let the weekly schedule do it.
 
 on:
   schedule:
     - cron: "0 3 * * 1" # Mondays, 03:00 UTC
   workflow_dispatch:
     inputs:
-      groups:
-        description: "Scenario groups to run, comma-separated (empty runs all): start-page, ai-spend, resources, docs, pricing, security, cost, reports, scripts, safety, multilingual, crawl, walk, run, playbook, enterprise, jobs, incidents"
+      scenarios:
+        description: "Eval ids to run, comma-separated (empty runs all ten); each eval's id is in results.json"
         type: string
         default: ""
       threshold:
-        description: "Quality bar: percent of scored scenarios that must pass (empty uses the EVAL_QUALITY_THRESHOLD variable, then 80)"
+        description: "Quality bar: percent of scored evals that must pass (empty uses the EVAL_QUALITY_THRESHOLD variable, then 80)"
         type: string
         default: ""
 
-run-name: AI quality report · ${{ inputs.groups || 'all groups' }}
+run-name: AI quality report · ${{ inputs.scenarios && 'chosen evals' || 'core evals' }}
 
 permissions:
   contents: read
@@ -32,54 +35,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  report:
-    name: Red or green for every extended scenario
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    environment: ai-evaluation
+  # Credential-free: validates the evaluation code and the inputs, decides which stages have evals to run, and waits
+  # for running deployment gates once before any stage starts.
+  plan:
+    name: 🧭 Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      stages: ${{ steps.plan.outputs.stages }}
+      count: ${{ steps.plan.outputs.count }}
     env:
-      EVAL_CLIENT_ID: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
-      EVAL_LOGIN_SUBSCRIPTION: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
-      EVAL_MODEL_ENDPOINT: ${{ secrets.EVAL_MODEL_ENDPOINT }}
-      EVAL_MODEL: ${{ vars.EVAL_MODEL }}
-      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
-      EVAL_REASONING_EFFORT: ${{ vars.EVAL_REASONING_EFFORT || 'medium' }}
-      EVAL_TENANT_ID: ${{ secrets.AZURE_EVAL_TENANT_ID }}
-      EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}
-      EVAL_DATA_CLASSIFICATION: ${{ vars.EVAL_DATA_CLASSIFICATION }}
-      EVAL_TOKEN_RESOURCES: ${{ vars.EVAL_TOKEN_RESOURCES }}
-      EVAL_DIAGNOSTICS_CERT: ${{ vars.EVAL_DIAGNOSTICS_CERT }}
-      EVAL_GROUPS: ${{ inputs.groups }}
+      EVAL_SCENARIOS: ${{ inputs.scenarios }}
       EVAL_QUALITY_THRESHOLD: ${{ inputs.threshold || vars.EVAL_QUALITY_THRESHOLD }}
-      EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
-      EVAL_RUNNER_DLL: tests/LiveEvaluations/bin/Release/net10.0/LiveEvaluations.dll
-      FINOPS_PYTHON: /usr/bin/python3
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Validate required evaluation configuration
-        run: |
-          missing=0
-          for name in EVAL_CLIENT_ID EVAL_TENANT_ID EVAL_LOGIN_SUBSCRIPTION EVAL_SUBSCRIPTION_IDS EVAL_MODEL_ENDPOINT EVAL_MODEL EVAL_JUDGE_MODEL; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Missing required live evaluation configuration: $name"
-              missing=1
-            fi
-          done
-          if [[ "$EVAL_DATA_CLASSIFICATION" != "synthetic" && "$EVAL_DATA_CLASSIFICATION" != "internal-test" ]]; then
-            echo "::error::Set EVAL_DATA_CLASSIFICATION to synthetic (answers published) or internal-test (verdicts only). Customer responses must not be published."
-            missing=1
-          fi
-          if [[ "$missing" == 1 ]]; then
-            exit 1
-          fi
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Validate the evaluation tiers
+        run: node --test tests/LiveEvaluations/*.test.mjs
+
+      - name: Choose the evals
+        id: plan
+        run: node tests/LiveEvaluations/quality.mjs --plan >> "$GITHUB_OUTPUT"
 
       # Both share the tenant's Cost Management quota, which the gate cannot tolerate being throttled. The report does not
-      # start while a deployment workflow is running (at most 30 minutes), and quality.mjs pauses before every case while
-      # one runs, so a release that starts mid-report is not throttled by the report's next case. Budget: 30 minutes of
-      # waiting, about 10 of setup and 300 for the run, under the 360-minute job limit; a run that pauses for long
-      # finishes partial and is reported as not accepted rather than cancelled mid-case.
+      # start while a deployment workflow is running (at most 30 minutes), and quality.mjs pauses before every eval while
+      # one runs, so a release that starts mid-report is not throttled by the report's next eval.
       - name: Wait for running deployment gates
         run: |
           deadline=$((SECONDS + 1800))
@@ -101,6 +86,55 @@ jobs:
             sleep 60
           done
 
+  # One job per stage (CORE_STAGES in scenarios.mjs); the job id is the stage's group, which the shared steps read from
+  # github.job. A stage is green only when none of its evals is red; a known limitation stays amber and does not fail it.
+  # Only the cost stage queries Cost Management (a test keeps it that way), so the stages run side by side.
+  start-page:
+    name: 🔥 Start-page cards (most asked)
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.stages), 'start-page')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: ai-evaluation
+    env: &stage-env
+      EVAL_CLIENT_ID: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
+      EVAL_LOGIN_SUBSCRIPTION: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
+      EVAL_MODEL_ENDPOINT: ${{ secrets.EVAL_MODEL_ENDPOINT }}
+      EVAL_MODEL: ${{ vars.EVAL_MODEL }}
+      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+      EVAL_REASONING_EFFORT: ${{ vars.EVAL_REASONING_EFFORT || 'medium' }}
+      EVAL_TENANT_ID: ${{ secrets.AZURE_EVAL_TENANT_ID }}
+      EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}
+      EVAL_DATA_CLASSIFICATION: ${{ vars.EVAL_DATA_CLASSIFICATION }}
+      EVAL_TOKEN_RESOURCES: ${{ vars.EVAL_TOKEN_RESOURCES }}
+      EVAL_DIAGNOSTICS_CERT: ${{ vars.EVAL_DIAGNOSTICS_CERT }}
+      EVAL_SCENARIOS: ${{ inputs.scenarios }}
+      EVAL_STAGE: ${{ github.job }}
+      EVAL_REPORT_LAYOUT: stage
+      EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
+      EVAL_RUNNER_DLL: tests/LiveEvaluations/bin/Release/net10.0/LiveEvaluations.dll
+      FINOPS_PYTHON: /usr/bin/python3
+      GH_TOKEN: ${{ github.token }}
+    steps: &stage-steps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate required evaluation configuration
+        run: |
+          missing=0
+          for name in EVAL_CLIENT_ID EVAL_TENANT_ID EVAL_LOGIN_SUBSCRIPTION EVAL_SUBSCRIPTION_IDS EVAL_MODEL_ENDPOINT EVAL_MODEL EVAL_JUDGE_MODEL; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required live evaluation configuration: $name"
+              missing=1
+            fi
+          done
+          if [[ "$EVAL_DATA_CLASSIFICATION" != "synthetic" && "$EVAL_DATA_CLASSIFICATION" != "internal-test" ]]; then
+            echo "::error::Set EVAL_DATA_CLASSIFICATION to synthetic (answers published) or internal-test (verdicts only). Customer responses must not be published."
+            missing=1
+          fi
+          if [[ "$missing" == 1 ]]; then
+            exit 1
+          fi
+
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
@@ -121,14 +155,96 @@ jobs:
           sudo -n apt-get update -qq
           sudo -n apt-get install -y --no-install-recommends python3-pandas python3-openpyxl
 
-      - name: Build candidate evaluator and validate the evaluation tiers
-        run: |
-          dotnet build tests/LiveEvaluations/LiveEvaluations.csproj --configuration Release --nologo
-          node --test tests/LiveEvaluations/*.test.mjs
+      - name: Build the candidate evaluator
+        run: dotnet build tests/LiveEvaluations/LiveEvaluations.csproj --configuration Release --nologo
 
-      - name: Run every extended scenario
-        timeout-minutes: 300
+      # A pause for a deployment workflow counts against this limit; a stage that pauses long ends partial, reported as
+      # not accepted, rather than holding the runner past the job limit.
+      - name: Run this stage's evals
+        timeout-minutes: 80
         run: node tests/LiveEvaluations/quality.mjs
+
+      - name: Publish this stage's evals
+        if: always()
+        run: |
+          if [[ -f TestResults/live-evaluations/summary.md ]]; then
+            cat TestResults/live-evaluations/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '# 🔴 Stage %s did not complete setup\n\nSee the failed step above.\n' "$GITHUB_JOB" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Retain this stage's results for the scoreboard
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ai-quality-stage-${{ github.job }}-${{ github.run_attempt }}
+          path: TestResults/live-evaluations/
+          if-no-files-found: warn
+          retention-days: 30
+
+  cost:
+    name: 📊 Cost analysis
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.stages), 'cost')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: ai-evaluation
+    env: *stage-env
+    steps: *stage-steps
+
+  safety:
+    name: 🛡️ Safety and guardrails
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.stages), 'safety')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: ai-evaluation
+    env: *stage-env
+    steps: *stage-steps
+
+  multilingual:
+    name: 🌍 Other languages
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.stages), 'multilingual')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: ai-evaluation
+    env: *stage-env
+    steps: *stage-steps
+
+  # The overall picture: every stage's results combined into one scoreboard and dashboard, each eval linked to its stage.
+  # Red when fewer scored evals pass than the quality bar, or when a stage produced no results.
+  scoreboard:
+    name: 🏁 Scoreboard
+    needs: [plan, start-page, cost, safety, multilingual]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EVAL_SCENARIOS: ${{ inputs.scenarios }}
+      EVAL_QUALITY_THRESHOLD: ${{ inputs.threshold || vars.EVAL_QUALITY_THRESHOLD }}
+      EVAL_OUTPUT_DIRECTORY: TestResults/live-evaluations
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Collect every stage's results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ai-quality-stage-*
+          path: TestResults/stages
+
+      - name: Find each stage's job page
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | {name, url: .html_url}' | jq -s . > TestResults/jobs.json || echo '[]' > TestResults/jobs.json
+
+      - name: Combine the stages into one scoreboard
+        run: node tests/LiveEvaluations/quality.mjs --merge TestResults/stages TestResults/jobs.json
 
       - name: Publish the red/green scoreboard
         if: always()
@@ -136,7 +252,7 @@ jobs:
           if [[ -f TestResults/live-evaluations/summary.md ]]; then
             cat TestResults/live-evaluations/summary.md >> "$GITHUB_STEP_SUMMARY"
           else
-            printf '# 🔴 AI Quality Report\n\n**The evaluations did not complete setup.** See the failed step above.\n' >> "$GITHUB_STEP_SUMMARY"
+            printf '# 🔴 AI Quality Report\n\n**The scoreboard could not be built.** See the failed step above.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Retain the dashboard and structured results
