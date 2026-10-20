@@ -49,7 +49,7 @@ def render(request):
             raise ValueError(f"Reports support at most 5000 total rows; {where} brings the total to {total}")
         declared = int(sheet.get("sourceRowCount", len(rows)))
         if declared != len(rows):
-            raise ValueError(f"{where}: {len(rows)} rows were supplied but sourceRowCount says {declared}")
+            raise ValueError(f"{where}: {len(rows)} rows were supplied but sourceRowCount says {declared}. If the sheet is text you wrote, leave sourceRowCount out; if it holds query results, supply every one of the {declared} rows")
         for index, row in enumerate(rows, 1):
             for value in row:
                 try:

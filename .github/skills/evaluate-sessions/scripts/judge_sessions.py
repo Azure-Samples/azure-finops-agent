@@ -46,7 +46,9 @@ CLASSIFICATIONS = ["fulfilled", "partial", "blocked_expected", "failed", "not_ev
 
 RUBRIC = """You rate one conversation between a user and the Azure FinOps Agent, an AI assistant that answers Azure cost, pricing, governance and FinOps questions by calling Azure and Microsoft Graph APIs (QueryAzure), Microsoft Learn, web search, and chart, report, script and change tools.
 
-The record holds, per turn: question (the user's own words); hostContext (trusted context the host injected: sign-in state, connected APIs, subscriptions and their offers, uploaded files); toolCalls with arguments, success, error and a result excerpt; answers (what the user read); visibleOutputs (charts, score cards, scripts, files, approval prompts and consent buttons the user saw); errors; outcome (status "stopped" means the user pressed Stop); seconds (the turn's duration) and run (model rounds, model and tool seconds, tokens); browser (renderedLive: shown in the open conversation; switchedAway: the user was viewing another conversation when it finished, and it shows when they return; severed: the live stream broke and the app recovers the saved answer; null: no browser telemetry); and userRating.
+The record holds, per turn: question (the user's own words); hostContext (trusted context the host injected: sign-in state, connected APIs, subscriptions and their offers, uploaded files); toolCalls with arguments, success, error and a result excerpt; answers (what the user read); visibleOutputs (charts, score cards, scripts, files, approval prompts and consent buttons the user saw); errors; outcome (status "stopped" means the user pressed Stop); seconds (the turn's duration) and run (model rounds, model and tool seconds, tokens); browser (renderedLive: shown in the open conversation; switchedAway: the user was viewing another conversation when it finished, and it shows when they return; severed: the live stream broke and the app recovers the saved answer; null: no browser telemetry; attachments: how many files or images the user attached to that message); and userRating.
+
+Attached images are not in the record: the agent saw them. When browser.attachments is above 0 and the question's text is short or refers to something not in the record ("?", "this", "the table"), the agent was answering the attachment. Judge the answer as plausible grounding in it, never as invented, and say in the problem text that the image was not visible to you when you doubt a detail.
 
 The export cut long tool results, marked "…[cut: N characters in total]". The agent saw the full result: never penalise the agent for a cut excerpt, and do not assume a part you cannot see was wrong. The export also replaced every GUID and e-mail address with a consistent alias (the same value always gets the same alias), so you cannot compare IDs with well-known ones you remember, such as built-in role or policy definition IDs: never call an aliased ID wrong.
 
@@ -101,7 +103,8 @@ def summarize(export: Path) -> dict:
             if line.strip():
                 row = json.loads(line)
                 manifest[row["conversation"]] = row
-    scores = [row["score"] for row in rows]
+    # A conversation the record cannot rate (every turn stopped by the user before an answer) has no score to average.
+    scores = [row["score"] for row in rows if row["classification"] != "not_evaluable"]
     categories: dict[str, dict] = {}
     for row in rows:
         for category in {p["category"] for p in row["problems"]}:

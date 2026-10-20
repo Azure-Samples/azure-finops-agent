@@ -592,7 +592,8 @@ union
         for event in (browser or {}).get("events", []):
             name, properties = event["name"], event["properties"]
             if name == "chat.stream.start":
-                streams.append({"start": parse_time(event["at"]), "firstTextSeconds": None, "done": None, "severed": False})
+                streams.append({"start": parse_time(event["at"]), "firstTextSeconds": None, "done": None, "severed": False,
+                                "attachments": int(properties["attachments"]) if str(properties.get("attachments", "")).isdigit() else None})
             elif streams and name == "chat.stream.firstDelta" and str(properties.get("ms", "")).isdigit():
                 streams[-1]["firstTextSeconds"] = round(int(properties["ms"]) / 1000, 1)
             elif streams and name == "chat.stream.done":
@@ -690,7 +691,9 @@ union
                 "seconds": round((last - at).total_seconds(), 1),
                 # renderedLive: shown in the open conversation; switchedAway: the user was viewing another conversation
                 # when it finished (it shows when they return); severed: the live stream broke and the app recovers the saved answer.
+                # attachments: files or images the user attached to this message; attached images are not in the record.
                 "browser": {"firstTextSeconds": stream["firstTextSeconds"], "severed": stream["severed"],
+                            "attachments": stream["attachments"],
                             "renderedLive": done.get("committedToView") == "true" and done.get("renderable") == "true" if done else None,
                             "switchedAway": done.get("committedToView") == "false" if done else None}
                 if stream else None,

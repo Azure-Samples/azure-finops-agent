@@ -314,7 +314,6 @@ Examples:
 
     internal static async Task<string> RunPythonAsync(string requestJson, CancellationToken cancellationToken = default)
     {
-        var script = LoadEmbeddedScript("file_inspect.py");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken,
             ToolExecutionContext.Current?.CancellationToken ?? CancellationToken.None);
         timeout.CancelAfter(TimeSpan.FromSeconds(TimeoutSeconds));
@@ -328,8 +327,7 @@ Examples:
             UseShellExecute = false,
             CreateNoWindow = true
         };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(script);
+        psi.ArgumentList.Add(HelperScript.Value);
 
         // The helper refuses to open anything outside this root, and fails closed
         // when the variable is missing.
@@ -388,6 +386,30 @@ Examples:
 
     private static string Truncate(string s, int max) =>
         string.IsNullOrEmpty(s) || s.Length <= max ? s : s[..max] + "...(truncated)";
+
+    /// <summary>
+    /// The helper runs from a file, not as `python -c script`: Windows caps a command line at 32,767 characters and the
+    /// helper had grown past it (31,240 characters, 34,485 with the PDF text cache), so uploads failed to start there. The
+    /// file is named by the script's hash, so a changed helper is a new file and a name never holds two versions.
+    /// </summary>
+    private static readonly Lazy<string> HelperScript = new(() => WriteHelperScript("file_inspect.py"), LazyThreadSafetyMode.PublicationOnly);
+
+    private static string WriteHelperScript(string filename)
+    {
+        var script = LoadEmbeddedScript(filename);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(script)))[..12].ToLowerInvariant();
+        var directory = Path.Combine(Path.GetTempPath(), "finops-helpers");
+        if (OperatingSystem.IsWindows())
+            Directory.CreateDirectory(directory);
+        else
+            Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var path = Path.Combine(directory, $"{Path.GetFileNameWithoutExtension(filename)}.{hash}.py");
+        if (new FileInfo(path).LinkTarget is null && File.Exists(path) && File.ReadAllText(path) == script) return path;
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllText(temporary, script, new UTF8Encoding(false));
+        File.Move(temporary, path, true);
+        return path;
+    }
 
     private static string LoadEmbeddedScript(string filename)
     {

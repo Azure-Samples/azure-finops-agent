@@ -40,6 +40,17 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"Sheet 1 \(Costs\): 2 rows were supplied but sourceRowCount says 113"):
             REPORT.render(request)
 
+    def test_mismatch_tells_the_model_how_to_resolve_it(self):
+        request = self.request("html")
+        request["data"]["sheets"][0]["sourceRowCount"] = 3
+        with self.assertRaisesRegex(ValueError, r"leave sourceRowCount out.*supply every one of the 3 rows"):
+            REPORT.render(request)
+
+    def test_authored_text_needs_no_source_row_count(self):
+        request = self.request("html")
+        del request["data"]["sheets"][0]["sourceRowCount"]
+        self.assertEqual(REPORT.render(request)["rows"], 2)
+
     def test_errors_name_the_sheet_and_row_to_fix(self):
         request = self.request("xlsx")
         request["data"]["sheets"].append({"name": "Disks", "columns": ["name", "size", "tier"], "rows": [["a", 1, "P10"], ["b", 2]], "sourceRowCount": 2})

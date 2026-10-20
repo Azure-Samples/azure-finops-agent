@@ -23,12 +23,14 @@ All responses cap payload size (rows, characters) so the model never sees more
 than a small chunk per call. The model is expected to make multiple calls.
 """
 from __future__ import annotations
+import contextlib
 import io
 import json
 import math
 import os
 import re
 import sys
+import time
 import traceback
 import warnings
 from collections import deque
@@ -47,6 +49,11 @@ PREVIEW_TEXT_CHARS = 5000
 PREVIEW_JSON_ITEMS = 10
 SCHEMA_MAX_KEYS = 200
 SCHEMA_MAX_DEPTH = 6
+# Files kept beside an upload; UploadCatalog.Cleanup deletes them with it (keep the suffixes in step).
+PDF_TEXT_SUFFIX = ".text"
+PDF_LOCK_SUFFIX = ".lock"
+# Shorter than the host's 30-second process timeout, so a waiter can still extract for itself.
+PDF_LOCK_WAIT_SECONDS = 20.0
 
 
 def _ok(**payload: Any) -> dict:
@@ -630,12 +637,89 @@ def _tabular_response(df, req: dict, kind: str) -> dict:
     return _err(f"mode '{mode}' not supported for {kind}")
 
 
-def _handle_pdf(req: dict, path: str) -> dict:
+def _pdf_text(path: str) -> str:
+    """The PDF's text, extracted once per upload. pdfminer parses the whole file on every call and takes seconds for a large
+    document, and the model reads a long one in 8,000-character ranges, often several at once, so each call used to repeat
+    the extraction (24 s on average, with 30 s timeouts). The text is kept beside the upload (inside the upload root, so
+    the host's cleanup of the upload removes it) and one process extracts at a time while the others wait for its result."""
+    cache = path + PDF_TEXT_SUFFIX
+    cached = _read_pdf_cache(path, cache)
+    if cached is not None:
+        return cached
     try:
         from pdfminer.high_level import extract_text
     except Exception as e:
-        return _err(f"pdfminer not available: {e}")
-    text = extract_text(path) or ""
+        raise RuntimeError(f"pdfminer not available: {e}") from None
+    try:
+        with _file_lock(path + PDF_LOCK_SUFFIX, PDF_LOCK_WAIT_SECONDS):
+            cached = _read_pdf_cache(path, cache)
+            if cached is not None:
+                return cached
+            text = extract_text(path) or ""
+            _write_pdf_cache(cache, text)
+            return text
+    except TimeoutError:
+        return extract_text(path) or ""
+
+
+def _read_pdf_cache(path: str, cache: str) -> str | None:
+    try:
+        if os.path.islink(cache) or not os.path.isfile(cache) or os.stat(cache).st_mtime_ns < os.stat(path).st_mtime_ns:
+            return None
+        with open(cache, "rb") as handle:
+            return handle.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _write_pdf_cache(cache: str, text: str) -> None:
+    temporary = f"{cache}.{os.getpid()}.tmp"
+    try:
+        if os.path.islink(cache):
+            return
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(text.encode("utf-8", errors="replace"))
+        os.replace(temporary, cache)
+    except OSError:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+
+
+@contextlib.contextmanager
+def _file_lock(lock_path: str, wait_seconds: float):
+    """An exclusive advisory lock the operating system releases when the process ends, so a killed extraction never
+    leaves the lock held."""
+    if os.path.islink(lock_path):
+        raise TimeoutError
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError from None
+                time.sleep(0.1)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _handle_pdf(req: dict, path: str) -> dict:
+    try:
+        text = _pdf_text(path)
+    except RuntimeError as e:
+        return _err(str(e))
     # piggyback on text handler semantics
     raw = text.encode("utf-8")
     return _handle_text(req, raw) | {"kind": "pdf"}

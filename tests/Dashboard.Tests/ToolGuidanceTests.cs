@@ -148,4 +148,17 @@ public sealed class ToolGuidanceTests
         var parameter = tool.JsonSchema.GetProperty("properties").GetProperty(parameterName);
         Assert.Contains(guidance, parameter.GetProperty("description").GetString()!, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void ReportToolNeedsNoSourceRowCountForTextTheModelWrote()
+    {
+        // A proposal written as report rows was rejected whole because the model miscounted its own paragraphs, and the
+        // 16,000-token document had to be written again (142 s).
+        var tool = new ReportTools(101).Create().Single(candidate => candidate.Name == "GenerateDataReport");
+        Assert.Contains("leave sourceRowCount out", tool.Description);
+        Assert.Contains("must be written again", tool.Description);
+        var data = tool.JsonSchema.GetProperty("properties").GetProperty("dataJson").GetProperty("description").GetString()!;
+        Assert.Contains("sourceRowCount:number (optional)", data);
+        Assert.Contains("left out for authored text", data);
+    }
 }

@@ -55,6 +55,9 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("never compute a score total, maximum, percentage or average")]
     [InlineData("Sponsored_2016-01-01 (Microsoft Azure Sponsorship)")]
     [InlineData("the offer is unsupported, not zero spend or ingestion lag")]
+    // Users on an unsupported offer (4 of 95 conversations) were told their spend was unknown and left there.
+    [InlineData("offer once, in one short sentence, to analyze a cost or usage file the user uploads from any source")]
+    [InlineData("name no portal or export for it that you have not verified")]
     [InlineData("The user's stated goal and constraints come first")]
     [InlineData("use its exact values and give a better practice as one note, never as a change")]
     [InlineData("Take names, regions, codes and values from the user or from a read, never from an example")]

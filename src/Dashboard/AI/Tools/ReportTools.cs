@@ -12,12 +12,12 @@ public sealed class ReportTools(long owner)
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateDataReport, "GenerateDataReport",
-            "Generate a downloadable CSV, XLSX workbook or filterable HTML report from verified data. Filter and aggregate at the source, then supply only the requested columns, rows and sheets in dataJson; this formatter does not query or recover omitted data. Maximum 5000 total rows, 50 columns and 10 sheets. Include every requested output row and reconcile sourceRowCount and totals. A top-N preview is not a full report. If the requested output exceeds limits, disclose the gap and agree a narrower or aggregated output instead of silently dropping rows or changing sourceRowCount.");
+            "Generate a downloadable CSV, XLSX workbook or filterable HTML report from verified data. Filter and aggregate at the source, then supply only the requested columns, rows and sheets in dataJson; this formatter does not query or recover omitted data. Maximum 5000 total rows, 50 columns and 10 sheets. Include every requested output row. For rows that came from a query, give that query's row count as sourceRowCount: a payload whose rows do not match it is rejected whole and must be written again, so never adjust it to hide missing rows. For text you wrote yourself (a proposal, narrative or notes) there is no source count: leave sourceRowCount out. A top-N preview is not a full report. If the requested output exceeds limits, disclose the gap and agree a narrower or aggregated output instead of silently dropping rows or changing sourceRowCount.");
     }
 
     private async Task<string> GenerateDataReport(
         [Description("csv, xlsx, or html")] string format,
-        [Description("JSON object: {title, source, sheets:[{name, columns:[string], rows:[[scalar]], sourceRowCount:number}]}. Select only requested columns after source filtering/aggregation. Each row must match those columns; sourceRowCount is the intended output row count for that sheet, not a value adjusted to hide missing rows. Retain evidence and timestamp, or state timestamp unknown.")] string dataJson,
+        [Description("JSON object: {title, source, sheets:[{name, columns:[string], rows:[[scalar]], sourceRowCount:number (optional)}]}. Select only requested columns after source filtering/aggregation. Each row must match those columns; sourceRowCount is the row count the source query returned for that sheet, not a value adjusted to hide missing rows, and is left out for authored text. Retain evidence and timestamp, or state timestamp unknown.")] string dataJson,
         [Description("Display filename without extension.")] string? filename = null,
         CancellationToken cancellationToken = default)
     {

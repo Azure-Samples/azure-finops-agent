@@ -5,7 +5,11 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import types
 import unittest
+from unittest import mock
 
 import pandas as pd
 from openpyxl import Workbook
@@ -113,6 +117,73 @@ class FileQueryTests(unittest.TestCase):
             self.assertEqual(projected["rows"], [{"cost": 10}])
             self.assertEqual(projected["source_rows"], 4)
             self.assertFalse(projected["complete"])
+
+    def fake_pdfminer(self, calls, delay=0.0):
+        high_level = types.ModuleType("pdfminer.high_level")
+
+        def extract_text(path):
+            calls.append(path)
+            time.sleep(delay)
+            return "Clause text. " * 2000
+
+        high_level.extract_text = extract_text
+        package = types.ModuleType("pdfminer")
+        package.high_level = high_level
+        return mock.patch.dict(sys.modules, {"pdfminer": package, "pdfminer.high_level": high_level})
+
+    def test_pdf_text_is_extracted_once_for_every_range_read(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory, self.fake_pdfminer(calls):
+            path = Path(directory) / "0123456789ab_spec.pdf"
+            path.write_bytes(b"%PDF-1.4 synthetic")
+            first = HELPER._handle_pdf({"mode": "preview"}, str(path))
+            later = HELPER._handle_pdf({"mode": "text_range", "start": 8000, "length": 8000}, str(path))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(first["total_chars"], later["total_chars"])
+            self.assertEqual(later["chunk"], ("Clause text. " * 2000)[8000:16000])
+            self.assertTrue((Path(directory) / "0123456789ab_spec.pdf.text").is_file())
+
+    def test_parallel_pdf_reads_share_one_extraction(self):
+        calls = []
+        results = []
+        with tempfile.TemporaryDirectory() as directory, self.fake_pdfminer(calls, delay=0.4):
+            path = Path(directory) / "0123456789ab_spec.pdf"
+            path.write_bytes(b"%PDF-1.4 synthetic")
+            threads = [threading.Thread(target=lambda start=start: results.append(
+                HELPER._handle_pdf({"mode": "text_range", "start": start, "length": 100}, str(path)))) for start in range(0, 800, 100)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(results), 8)
+        self.assertTrue(all(result["ok"] and len(result["chunk"]) == 100 for result in results))
+
+    def test_changed_pdf_is_extracted_again(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory, self.fake_pdfminer(calls):
+            path = Path(directory) / "0123456789ab_spec.pdf"
+            path.write_bytes(b"%PDF-1.4 synthetic")
+            HELPER._handle_pdf({"mode": "preview"}, str(path))
+            newer = os.stat(str(path) + ".text").st_mtime + 5
+            os.utime(path, (newer, newer))
+            HELPER._handle_pdf({"mode": "preview"}, str(path))
+            self.assertEqual(len(calls), 2)
+
+    def test_pdf_cache_is_not_followed_through_a_symlink(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory, self.fake_pdfminer(calls):
+            path = Path(directory) / "0123456789ab_spec.pdf"
+            path.write_bytes(b"%PDF-1.4 synthetic")
+            outside = Path(directory) / "outside.txt"
+            outside.write_text("planted text outside the upload", encoding="utf-8")
+            try:
+                os.symlink(outside, str(path) + ".text")
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are not available")
+            result = HELPER._handle_pdf({"mode": "preview"}, str(path))
+            self.assertTrue(result["chunk"].startswith("Clause text."))
+            self.assertEqual(outside.read_text(encoding="utf-8"), "planted text outside the upload")
 
     def test_outside_root_and_missing_root_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:

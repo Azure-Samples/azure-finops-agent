@@ -11,6 +11,11 @@ internal sealed class UploadCatalog
     private readonly Dictionary<string, UploadedFileTools.UploadEntry> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _leases = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Files file_inspect.py keeps beside an upload (its extracted PDF text and the lock that serializes the extraction),
+    /// named with the upload's path plus one of these suffixes (PDF_TEXT_SUFFIX and PDF_LOCK_SUFFIX in that script).
+    /// </summary>
+    internal static readonly string[] SidecarSuffixes = [".text", ".lock"];
     internal UploadCatalog(string root)
     {
         _root = Path.GetFullPath(root);
@@ -104,6 +109,7 @@ internal sealed class UploadCatalog
                 try
                 {
                     File.Delete(entry.Path);
+                    foreach (var suffix in SidecarSuffixes) File.Delete(entry.Path + suffix);
                     File.Delete(MetadataPath(entry.FileId));
                     _entries.Remove(entry.FileId);
                 }

@@ -172,11 +172,22 @@ public sealed class AgentConversation : IAsyncDisposable
     internal const int RecapCharacters = 24_000;
     internal const int RecapMessageCharacters = 4_000;
     internal const int RecapScriptCharacters = 6_000;
+    internal const int RecapEvidenceCharacters = 32_000;
+    internal const int RecapEvidenceResultCharacters = 8_000;
+    private const int RecapCallCharacters = 300;
+
+    // Documentation, web search and the control results of generated files are not evidence a follow-up needs again.
+    private static readonly HashSet<string> RecapEvidenceTools = new(StringComparer.Ordinal) { "QueryAzure", "QueryUploadedFile" };
+
+    // A failed read still returns as a successful tool call: QueryAzure's "Error: ..." and "HTTP 4xx/5xx" results, and
+    // QueryUploadedFile's {"ok":false,...} (a PDF read answered "mode 'query' not supported" reached a recap as its last result).
+    private static readonly Regex FailedEvidence = new(@"^(Error|HTTP [45]\d\d|\{\s*""ok""\s*:\s*false)", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// The visible exchanges a compacted turn carries into its fresh model context: user questions without host-injected
     /// context and the assistant's answers, newest kept first within <see cref="RecapCharacters"/>, followed by the files
-    /// earlier turns produced or attached, with the latest generated script's code. Tool results are left out.
+    /// earlier turns produced or attached, with the latest generated script's code, and what the last turn's evidence
+    /// tools returned (<see cref="RecapEvidence"/>). Older tool results are left out.
     /// </summary>
     internal static string? Recap(IReadOnlyList<AgentEvent> events, IReadOnlyList<string>? attachments = null)
     {
@@ -204,15 +215,62 @@ public sealed class AgentConversation : IAsyncDisposable
             used += entry.Length;
         }
         var files = RecapFiles(events, attachments);
-        if (kept.Count == 0 && files is null) return null;
+        var evidence = RecapEvidence(events);
+        if (kept.Count == 0 && files is null && evidence is null) return null;
         kept.Reverse();
         var omitted = entries.Count - kept.Count;
         return "[CONVERSATION SO FAR: the earlier model context was reset to keep answers fast, so earlier tool results are no longer available. " +
-               "These are the messages already exchanged; use them for continuity and query again whenever the new message needs figures, rows or identifiers they do not show.]\n" +
+               "These are the messages already exchanged; use them for continuity, and read again whatever the new message needs that they do not show " +
+               "(figures, rows, rates, identifiers): a value missing here is not unavailable.]\n" +
                (omitted > 0 ? $"({omitted} earlier messages omitted)\n\n" : "") +
                string.Join("\n\n", kept) +
                (files is null ? "" : "\n\n" + files) +
+               (evidence is null ? "" : "\n\n" + evidence) +
                "\n[END OF CONVERSATION SO FAR. The user's new message follows.]";
+    }
+
+    /// <summary>
+    /// What the last turn's evidence tools returned (QueryAzure and QueryUploadedFile results, already cropped by the model's
+    /// own query, so each is bounded), the newest kept first within <see cref="RecapEvidenceCharacters"/> and each cut at
+    /// <see cref="RecapEvidenceResultCharacters"/> where marked. A follow-up that exports, charts or extends the answer
+    /// (the next-action links offered under it) otherwise had only the answer's text, and an export marked rates "unavailable"
+    /// that the turn before had read.
+    /// </summary>
+    private static string? RecapEvidence(IReadOnlyList<AgentEvent> events)
+    {
+        var lastTurn = -1;
+        for (var i = events.Count - 1; i >= 0; i--)
+            if (events[i] is UserMessageEvent) { lastTurn = i; break; }
+        var starts = new Dictionary<string, ToolStartEvent>(StringComparer.Ordinal);
+        var results = new List<(string Call, string Text)>();
+        for (var i = lastTurn + 1; i < events.Count; i++)
+        {
+            if (events[i] is ToolStartEvent start) starts[start.CallId] = start;
+            else if (events[i] is ToolCompleteEvent { Success: true, Result: { Length: > 0 } result } done
+                && starts.TryGetValue(done.CallId, out var call) && RecapEvidenceTools.Contains(call.ToolName)
+                && result.Trim() is { } text && !FailedEvidence.IsMatch(text))
+            {
+                var arguments = call.Arguments ?? "";
+                results.Add(($"{call.ToolName} {(arguments.Length > RecapCallCharacters ? arguments[..RecapCallCharacters] + "…" : arguments)}", text));
+            }
+        }
+        var kept = new List<string>();
+        var used = 0;
+        for (var i = results.Count - 1; i >= 0; i--)
+        {
+            var text = results[i].Text.Length > RecapEvidenceResultCharacters
+                ? results[i].Text[..RecapEvidenceResultCharacters] + "\n…[cut]"
+                : results[i].Text;
+            var entry = $"- {results[i].Call}\n{text}";
+            if (used + entry.Length > RecapEvidenceCharacters) break;
+            kept.Add(entry);
+            used += entry.Length;
+        }
+        if (kept.Count == 0) return null;
+        kept.Reverse();
+        var omitted = results.Count - kept.Count;
+        return "What the last turn's tool calls returned" + (omitted > 0 ? $" ({omitted} earlier calls omitted)" : "") +
+               ", oldest first, cut where marked; read again anything cut or missing:\n" + string.Join("\n\n", kept);
     }
 
     /// <summary>Generated files and attached images from earlier turns, with the code of the latest generated script.</summary>
