@@ -13,9 +13,9 @@
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
-    "@vitejs/plugin-vue": "^6.0.9",
-    "vite": "^8.3.1",
-    "vue": "^3.5.43"
+    "@vitejs/plugin-vue": "^6.0.10",
+    "vite": "^8.3.5",
+    "vue": "^3.5.44"
   },
   "dependencies": {
     "@microsoft/applicationinsights-web": "^3.4.4",
