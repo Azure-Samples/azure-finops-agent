@@ -91,17 +91,34 @@ public sealed class FeedbackTests
     }
 
     [Fact]
-    public void ThePrefilledGitHubLinkCarriesTheIssueAndStaysShort()
+    public void ThePrefilledGitHubLinkFillsTheFeedbackIssueFormAndStaysShort()
     {
         var issue = FeedbackReport.Compose(Read(new { kind = "idea", title = "Export to CSV & PDF", details = "Please." }), "main 2 (abc)");
         var url = FeedbackReport.NewIssueUrl(Repository, issue);
-        Assert.StartsWith($"https://github.com/{Repository}/issues/new?title=Idea%3A%20Export%20to%20CSV%20%26%20PDF&body=Please.", url);
-        Assert.EndsWith("&labels=feedback%2Cenhancement", url);
+        Assert.StartsWith($"https://github.com/{Repository}/issues/new?template=feedback.yml&title=Idea%3A%20Export%20to%20CSV%20%26%20PDF&feedback=Please.", url);
+        // GitHub answers 404 when the user may not set labels, so the form's own label applies instead.
+        Assert.DoesNotContain("labels=", url);
+        Assert.DoesNotContain("&body=", url);
 
         var long_ = FeedbackReport.Compose(Read(new { kind = "bug", title = "Long", details = new string('ü', FeedbackReport.MaxDetails) }), "b");
         var shortened = FeedbackReport.NewIssueUrl(Repository, long_);
         Assert.True(shortened.Length <= 7000, $"{shortened.Length} characters");
         Assert.Contains(Uri.EscapeDataString("Shortened to fit in a link"), shortened);
+    }
+
+    [Fact]
+    public void TheLinkedIssueFormExistsWithTheFeedbackLabelAndTheFilledField()
+    {
+        var form = File.ReadAllText(Path.Combine(RepositoryRoot(), ".github", "ISSUE_TEMPLATE", FeedbackReport.IssueForm));
+        Assert.Contains("labels: [\"" + FeedbackReport.FeedbackLabel + "\"]", form);
+        Assert.Contains("type: textarea\n    id: " + FeedbackReport.IssueFormField + "\n", form.Replace("\r\n", "\n"));
+    }
+
+    private static string RepositoryRoot([System.Runtime.CompilerServices.CallerFilePath] string source = "")
+    {
+        for (var directory = Path.GetDirectoryName(source); directory is not null; directory = Path.GetDirectoryName(directory))
+            if (Directory.Exists(Path.Combine(directory, ".github", "ISSUE_TEMPLATE"))) return directory;
+        throw new DirectoryNotFoundException("The repository root was not found above the test source.");
     }
 
     [Fact]
@@ -253,7 +270,7 @@ public sealed class FeedbackTests
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             var json = await Read(response);
             Assert.Equal("link", json.GetProperty("mode").GetString());
-            Assert.StartsWith($"https://github.com/{Repository}/issues/new?title=Idea%3A%20Dark%20mode", json.GetProperty("url").GetString());
+            Assert.StartsWith($"https://github.com/{Repository}/issues/new?template=feedback.yml&title=Idea%3A%20Dark%20mode", json.GetProperty("url").GetString());
         }
 
         // Refusals name the field and never reach GitHub.

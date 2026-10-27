@@ -118,8 +118,11 @@ public static partial class FeedbackReport
     }
 
     /// <summary>
-    /// GitHub's new-issue page with the issue filled in, for posting it with the user's own account.
-    /// A long body is shortened so the link stays within what browsers and GitHub accept.
+    /// GitHub's new-issue page with the issue filled in, for posting it with the user's own account. It opens the
+    /// repository's <see cref="IssueForm"/> issue form and fills its <see cref="IssueFormField"/> field: this
+    /// repository disables blank issues, and GitHub answers 404 when the user may not set a parameter such as
+    /// <c>labels</c>, so the form's own label applies instead. A long body is shortened so the link stays within
+    /// what browsers and GitHub accept.
     /// </summary>
     public static string NewIssueUrl(string repository, FeedbackIssue issue, int maxLength = 7000)
     {
@@ -134,9 +137,12 @@ public static partial class FeedbackReport
         return url;
 
         string Url(string text) =>
-            $"https://github.com/{repository}/issues/new?title={Uri.EscapeDataString(issue.Title)}" +
-            $"&body={Uri.EscapeDataString(text)}&labels={Uri.EscapeDataString(string.Join(',', issue.Labels))}";
+            $"https://github.com/{repository}/issues/new?template={IssueForm}&title={Uri.EscapeDataString(issue.Title)}" +
+            $"&{IssueFormField}={Uri.EscapeDataString(text)}";
     }
+
+    /// <summary>The issue form in <c>.github/ISSUE_TEMPLATE</c> that the link opens, and its text field's id.</summary>
+    public const string IssueForm = "feedback.yml", IssueFormField = "feedback";
 
     /// <summary>Names the first kind of private content found, or null.</summary>
     internal static string? FindSensitive(string text)

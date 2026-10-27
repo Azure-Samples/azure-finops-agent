@@ -1,0 +1,17 @@
+name: In-app feedback
+description: Feedback sent from the app's "Have feedback?" and answer Feedback buttons.
+title: "Feedback: "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The app filled this in from its feedback form. Check the text, then select **Create**.
+        Issues are public: leave out names, IDs, email addresses, costs and anything else private.
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Feedback
+      description: What happened and what you expected, or what you would like the agent to do.
+    validations:
+      required: true

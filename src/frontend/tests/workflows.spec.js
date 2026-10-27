@@ -852,7 +852,7 @@ test("every answer offers Feedback that can carry its question and rating", asyn
 test("without the GitHub App the form continues on GitHub with the feedback filled in", async ({
   page,
 }) => {
-  const prefilled = `https://github.com/${feedbackRepository}/issues/new?title=Idea%3A%20Dark%20mode&body=Please.&labels=feedback%2Cenhancement`;
+  const prefilled = `https://github.com/${feedbackRepository}/issues/new?template=feedback.yml&title=Idea%3A%20Dark%20mode&feedback=Please.`;
   const github = feedbackServer("link", (route) =>
     route.fulfill({ json: { mode: "link", url: prefilled } }),
   );

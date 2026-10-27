@@ -89,13 +89,15 @@ The [tool and prompt catalog](docs/tool-catalog.md) documents the agent's 16 too
 
 **Have feedback?** in the top bar, the link under the message box and the **Feedback** button under every answer open one form: a type (bug, idea, answer quality, other), a summary and optional details. Feedback about an answer can include the question it answered, and only when the user ticks the box. After a **Poor answer** rating the button asks what went wrong.
 
-The form posts a public GitHub issue labelled `feedback`, so it refuses secrets, IDs, email addresses and IP addresses before anything is sent, and it stops @mentions from notifying anyone. Each browser can create 3 issues in 10 minutes and 10 a day. The server creates issues through a GitHub App. It signs a short-lived token with the app's private key and exchanges it for an installation token limited to *Issues: write* on one repository. Neither the key nor a token reaches the browser. Without a GitHub App, the form opens GitHub's new-issue page with the feedback filled in, and users post it with their own GitHub account.
+The form posts a public GitHub issue labelled `feedback`, so it refuses secrets, IDs, email addresses and IP addresses before anything is sent, and it stops @mentions from notifying anyone. Each browser can create 3 issues in 10 minutes and 10 a day. The server creates issues through a GitHub App. It signs a short-lived token with the app's private key and exchanges it for an installation token limited to *Issues: write* on one repository. Neither the key nor a token reaches the browser. Without a GitHub App, the form opens the repository's [feedback issue form](.github/ISSUE_TEMPLATE/feedback.yml) with the feedback filled in, and users post it with their own GitHub account.
 
 To create issues directly in your deployment:
 
 1. [Register a GitHub App](https://docs.github.com/apps/creating-github-apps/registering-a-github-app/registering-a-github-app) with the repository permission **Issues: Read and write**, no webhook, and generate a private key.
 2. Install it on the repository that should receive the issues.
 3. Run `azd env set GITHUB_FEEDBACK_APP_ID <client-id>`, `azd env set GITHUB_FEEDBACK_PRIVATE_KEY <base64 of the .pem>` and, for a repository other than this sample, `azd env set GITHUB_FEEDBACK_REPOSITORY <owner/name>`, then run `azd provision`. Locally, set `GitHubFeedback:AppId`, `GitHubFeedback:PrivateKey` and `GitHubFeedback:Repository` with `dotnet user-secrets`.
+
+A repository other than this sample needs a copy of `.github/ISSUE_TEMPLATE/feedback.yml` and a `feedback` label, so the fallback link can fill in the form and label the issue.
 
 ## Graded before it ships
 
