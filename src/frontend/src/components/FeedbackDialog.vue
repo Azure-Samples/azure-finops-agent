@@ -23,7 +23,9 @@
               {{
                 mode === "link"
                   ? "GitHub opens with your feedback filled in, so you can post it with your GitHub account."
-                  : "Goes straight to the maintainers as a public GitHub issue. No GitHub account needed."
+                  : mode === "direct"
+                    ? "Goes straight to the maintainers as a public GitHub issue. No GitHub account needed."
+                    : "Your feedback becomes a public GitHub issue for the maintainers."
               }}
             </p>
           </div>
@@ -185,7 +187,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppIcon from "./AppIcon.vue";
 
 // `context` is set when the form is about one answer: { turn, question, rating }.
@@ -226,7 +228,9 @@ const dialogEl = ref(null);
 const summaryEl = ref(null);
 const detailsEl = ref(null);
 const resultLinkEl = ref(null);
-const mode = ref("direct");
+// "direct" or "link" once the server says; null until then, so the form never
+// promises a path it may not take.
+const mode = ref(null);
 const kind = ref("idea");
 const title = ref("");
 const details = ref("");
@@ -247,6 +251,7 @@ watch([kind, title, details, includeQuestion], () => {
 
 // Whether the server posts directly or hands back a GitHub link only changes
 // the wording; the answer to the submission decides what actually happens.
+// Asked when the page loads, so the form opens with the right wording.
 let configRequest = null;
 function loadMode() {
   configRequest ??= fetch("/api/feedback/config")
@@ -255,8 +260,12 @@ function loadMode() {
       configRequest = null;
       return {};
     });
-  return configRequest;
+  return configRequest.then((config) => {
+    if (config.mode === "link" || config.mode === "direct")
+      mode.value = config.mode;
+  });
 }
+onMounted(loadMode);
 
 watch(
   () => props.open,
@@ -284,10 +293,7 @@ watch(
     error.value = "";
     errorField.value = "";
     fallbackUrl.value = "";
-    loadMode().then((config) => {
-      if (config.mode === "link" || config.mode === "direct")
-        mode.value = config.mode;
-    });
+    loadMode();
     await nextTick();
     summaryEl.value?.focus();
   },

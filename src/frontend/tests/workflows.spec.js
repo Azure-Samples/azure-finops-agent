@@ -870,6 +870,29 @@ test("without the GitHub App the form continues on GitHub with the feedback fill
   expect(errors).toEqual([]);
 });
 
+test("the feedback form never promises a direct issue before the server says it can", async ({
+  page,
+}) => {
+  // Production showed "No GitHub account needed" in link mode until the mode arrived.
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const { errors } = await arrange(page, [], undefined, {
+    feedback: async (route) => {
+      await held;
+      return route.fulfill({ json: { mode: "link", repository: feedbackRepository } });
+    },
+  });
+  await page.locator(".portal-feedback").click();
+  const subtitle = page.getByRole("dialog", { name: "Send feedback" }).locator("#feedback-subtitle");
+  await expect(subtitle).toHaveText("Your feedback becomes a public GitHub issue for the maintainers.");
+  release();
+  await expect(subtitle).toHaveText(
+    "GitHub opens with your feedback filled in, so you can post it with your GitHub account.",
+  );
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Continue on GitHub" })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("feedback refusals keep the draft, and only GitHub links are offered", async ({
   page,
 }) => {
