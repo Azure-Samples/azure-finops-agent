@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAssistantMessageStream } from '../../src/Dashboard/frontend/src/assistantMessageStream.js';
+import { createAssistantMessageStream } from '../../src/frontend/src/lib/assistantMessageStream.js';
 
 test('authoritative completion replaces only its own deltas', () => {
   const stream = createAssistantMessageStream();

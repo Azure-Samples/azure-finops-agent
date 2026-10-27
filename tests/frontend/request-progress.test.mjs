@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createRequestProgress, describeRequestProgress, toolResultSucceeded } from '../../src/Dashboard/frontend/src/requestProgress.js';
+import { createRequestProgress, describeRequestProgress, toolResultSucceeded } from '../../src/frontend/src/lib/requestProgress.js';
 
 const now = Date.parse('2026-01-01T00:00:00Z');
 

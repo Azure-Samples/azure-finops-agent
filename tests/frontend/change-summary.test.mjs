@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeChange } from '../../src/Dashboard/frontend/src/changeSummary.js';
+import { describeChange } from '../../src/frontend/src/lib/changeSummary.js';
 
 test('a PATCH names the changed properties, the resource, its type and group', () => {
   assert.equal(

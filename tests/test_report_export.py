@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 from openpyxl import load_workbook
 
-SCRIPT = Path(__file__).resolve().parents[1] / "src/Dashboard/AI/Tools/Resources/report_export.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "src/backend/AI/Tools/Resources/report_export.py"
 SPEC = importlib.util.spec_from_file_location("report_export", SCRIPT)
 REPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(REPORT)

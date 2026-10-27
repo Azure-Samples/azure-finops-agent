@@ -11,11 +11,11 @@ import { dirname, join, relative, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { JOB_TEMPLATES } from "../../src/Dashboard/frontend/src/data/jobTemplates.js";
+import { JOB_TEMPLATES } from "../../src/frontend/src/data/jobTemplates.js";
 import {
     maturityCategories,
     pricingCategory,
-} from "../../src/Dashboard/frontend/src/data/sidebarCategories.js";
+} from "../../src/frontend/src/data/sidebarCategories.js";
 import {
     assertCandidateRevision,
     buildCatalog,
@@ -155,15 +155,12 @@ test("candidate preflight scopes tracked and untracked checks to evaluation sour
         "--untracked-files=no", "--ignore-submodules=none", "--",
     ]);
     const paths = commands[1][1].slice(5);
-    assert.deepEqual(paths.slice(0, 3), [
-        join("src", "Dashboard"), "tests", ".github",
-    ]);
-    for (const directory of ["", "src"])
-        for (const name of [
-            "global.json", ".editorconfig", "NuGet.Config",
-            "Directory.Build.*", "Directory.Packages.props",
-        ])
-            assert.ok(paths.includes(`:(icase)${join(directory, name)}`));
+    assert.deepEqual(paths.slice(0, 3), ["src", "tests", ".github"]);
+    for (const name of [
+        "global.json", ".editorconfig", "NuGet.Config",
+        "Directory.Build.*", "Directory.Packages.props",
+    ])
+        assert.ok(paths.includes(`:(icase)${name}`));
     assert.deepEqual(commands[2][1], [
         "ls-files", "--others", "--exclude-standard", "--", ...paths,
     ]);
@@ -181,7 +178,7 @@ test("candidate preflight rejects mismatched HEAD and staged or unstaged tracked
     for (const [head, status, message] of [
         ["c".repeat(40), "", /does not match/],
         [sha, " M tests/LiveEvaluations/suite.mjs\n", /uncommitted changes/],
-        [sha, "M  src/Dashboard/Program.cs\n", /uncommitted changes/],
+        [sha, "M  src/backend/Program.cs\n", /uncommitted changes/],
         [sha, "MM .github/workflows/live-evaluations.yml\n", /uncommitted changes/],
     ])
         await assert.rejects(
@@ -195,7 +192,7 @@ test("candidate preflight rejects mismatched HEAD and staged or unstaged tracked
 
 test("candidate preflight rejects untracked application, evaluation and workflow source", async () => {
     for (const source of [
-        "src/Dashboard/Untracked.cs",
+        "src/backend/Untracked.cs",
         "tests/LiveEvaluations/Untracked.cs",
         ".github/workflows/untracked.yml",
     ])
@@ -217,10 +214,10 @@ test("git source discovery ignores build outputs and unrelated tracked or untrac
         assert.equal(initialized.status, 0);
         await writeFile(
             join(directory, ".gitignore"),
-            "src/Dashboard/bin/\ntests/obj/\n",
+            "src/backend/bin/\ntests/obj/\n",
         );
         await Promise.all([
-            mkdir(join(directory, "src", "Dashboard", "bin"), { recursive: true }),
+            mkdir(join(directory, "src", "backend", "bin"), { recursive: true }),
             mkdir(join(directory, "tests", "obj"), { recursive: true }),
             mkdir(join(directory, ".github"), { recursive: true }),
         ]);
@@ -230,7 +227,7 @@ test("git source discovery ignores build outputs and unrelated tracked or untrac
             writeFile(preserved, "unrelated local notes"),
             writeFile(solution, "unrelated solution"),
             writeFile(join(directory, "README.md"), "unrelated documentation"),
-            writeFile(join(directory, "src", "Dashboard", "bin", "output.dll"), "ignored output"),
+            writeFile(join(directory, "src", "backend", "bin", "output.dll"), "ignored output"),
             writeFile(join(directory, "tests", "obj", "Generated.cs"), "ignored generated source"),
         ]);
         const staged = spawnSync("git", [
@@ -246,7 +243,7 @@ test("git source discovery ignores build outputs and unrelated tracked or untrac
         };
         await assertCandidateRevision(sha, execute);
         for (const path of [
-            join(directory, "src", "Dashboard", "Untracked.cs"),
+            join(directory, "src", "backend", "Untracked.cs"),
             join(directory, "tests", "Untracked.cs"),
             join(directory, ".github", "untracked.yml"),
             join(directory, "Directory.Build.props"),
@@ -264,7 +261,7 @@ test("git source discovery ignores build outputs and unrelated tracked or untrac
             await rm(path);
         }
         await assertCandidateRevision(sha, execute);
-        const relevant = join(directory, "src", "Dashboard", "Tracked.cs");
+        const relevant = join(directory, "src", "backend", "Tracked.cs");
         await writeFile(relevant, "tracked source");
         assert.equal(spawnSync("git", [
             "add", "--", relative(directory, relevant),

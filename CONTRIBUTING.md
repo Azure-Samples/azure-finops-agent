@@ -97,22 +97,21 @@ required protected identity, fixtures and exact-revision gate.
 
 ### Building & Running
 
-- **Backend**: .NET 10 minimal API in `src/Dashboard/`
-- **Frontend**: Vue 3 + Vite SPA in `src/Dashboard/frontend/`
+- **Backend**: .NET 10 minimal API in `src/backend/`
+- **Frontend**: Vue 3 + Vite SPA in `src/frontend/`
 
 ```powershell
-# One-time: Create Entra ID app registration
-cd src/Dashboard
-.\setup-entra-app.ps1
+# One-time: Create Entra ID app registration (from the repository root)
+./infra/scripts/setup-entra-app.ps1
 # Store the output ClientId/ClientSecret via dotnet user-secrets (see README → Running Locally)
 
-# Build the Vue frontend to wwwroot/
-cd frontend
+# Build the Vue frontend into src/backend/wwwroot/
+cd src/frontend
 npm ci
 npm run build
 
 # Start the .NET backend (must set Development environment)
-cd ..
+cd ../backend
 $env:ASPNETCORE_ENVIRONMENT="Development"
 dotnet run --urls "http://localhost:5000"
 
@@ -172,27 +171,35 @@ From the repository root:
 ```powershell
 dotnet test tests/Dashboard.Tests/Dashboard.Tests.csproj
 python -m unittest discover -s tests -p "test_*.py" -v
-npm --prefix src/Dashboard/frontend ci
-npm --prefix src/Dashboard/frontend run test
+npm --prefix src/frontend ci
+npm --prefix src/frontend run test
 ```
 
-From `src/Dashboard/frontend`, run `npx playwright install chromium`, then `npm run test:browser` and `npm run build`. The browser tests cover desktop and mobile with synthetic API fixtures; they do not grant consent or mutate Azure resources.
+From `src/frontend`, run `npx playwright install chromium`, then `npm run test:browser` and `npm run build`. The browser tests cover desktop and mobile with synthetic API fixtures; they do not grant consent or mutate Azure resources.
 
 The backend suite executes the package-supplied Copilot runtime against a local synthetic model provider, including images, cancellation, compaction and resume. Do not skip runtime acquisition to make the tests pass. The shared `validate.yml` workflow also builds and starts the Linux image as non-root and tests shutdown with an unavailable telemetry destination. Both deployment workflows depend on this validation job. Pushing `main` can deploy production automatically; local tests must pass first.
 
 ### Project Structure
 
 ```
-src/Dashboard/
-├── Program.cs              # App composition, middleware, endpoint mapping
-├── AI/                     # Agent Framework runtime, chat SSE endpoint, tools
-├── Auth/                   # Microsoft Entra ID OAuth, session token store, persistent identity
-├── Endpoints/              # Sessions, downloads, uploads, SEO/meta endpoints
-├── Infrastructure/         # HTTP helper, temp file helper
-├── Observability/          # OpenTelemetry sources/meters
-├── frontend/src/components/  # Vue 3 components (ChatView, Dashboard)
-├── Dockerfile              # Multi-stage build (frontend + .NET + Python + OTel)
-└── setup-entra-app.ps1     # Entra ID app registration setup (one-time)
+src/
+├── Dockerfile              # Multi-stage image: builds frontend/ and backend/ (context = src/)
+├── backend/                # .NET 10 minimal API (Dashboard.csproj)
+│   ├── Program.cs          # App composition, middleware, endpoint mapping
+│   ├── AI/                 # Agent Framework runtime, chat SSE endpoint, tools
+│   ├── Auth/               # Entra ID OAuth, session identity, token store, persistent identity
+│   ├── Endpoints/          # Sessions, downloads, uploads, SEO/meta endpoints
+│   ├── Infrastructure/     # HTTP helper, JSON query, artifact and upload stores
+│   ├── Jobs/               # Scheduled jobs: endpoints, scheduler, store, run outcomes
+│   └── Observability/      # OpenTelemetry sources/meters, live-session state
+└── frontend/               # Vue 3 + Vite SPA (builds into backend/wwwroot)
+    ├── src/components/     # Vue components (ChatView, Dashboard, ...)
+    ├── src/data/           # Prompt library and job templates
+    ├── src/lib/            # Plain JS helpers (markdown, stream assembly, time formatting, ...)
+    ├── social/             # Social sharing card source and upload script
+    └── tests/              # Playwright desktop/mobile browser tests
+infra/                      # Bicep and azd hooks (incl. scripts/setup-entra-app.ps1)
+tests/                      # Backend, Python, frontend unit and live-evaluation tests
 ```
 
 ### Code Conventions

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { pricingSections } from '../../src/Dashboard/frontend/src/data/sidebarCategories.js';
+import { pricingSections } from '../../src/frontend/src/data/sidebarCategories.js';
 
 const modelVersion =
   /\bgpt[- ]?\d|\b\d+(\.\d+)?-(sol|luna|astra|terra)\b|\b4o\b|\bgrok[- ]\d|\bdeepseek[- ]v?\d|\bllama[- ]\d|\bmistral[- ]\w+[- ]\d|\b(sol|luna|astra|terra)\b/i;

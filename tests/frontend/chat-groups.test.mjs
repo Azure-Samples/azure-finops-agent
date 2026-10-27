@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { groupChats, withQuestionTitle } from '../../src/Dashboard/frontend/src/chatGroups.js';
+import { groupChats, withQuestionTitle } from '../../src/frontend/src/lib/chatGroups.js';
 
 const now = new Date(2026, 9, 8, 15, 0, 0);
 const at = (days, hours = 0) =>

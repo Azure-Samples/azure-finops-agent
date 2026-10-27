@@ -10,11 +10,11 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { JOB_TEMPLATES } from "../../src/Dashboard/frontend/src/data/jobTemplates.js";
+import { JOB_TEMPLATES } from "../../src/frontend/src/data/jobTemplates.js";
 import {
     maturityCategories,
     pricingCategory,
-} from "../../src/Dashboard/frontend/src/data/sidebarCategories.js";
+} from "../../src/frontend/src/data/sidebarCategories.js";
 import {
     FINDINGS,
     INEFFICIENT_FAILURE,
@@ -33,13 +33,11 @@ export const rubric =
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const captureRoot = resolve(repositoryRoot, "tests", "LiveEvaluations", "obj");
 const evaluationSourcePaths = [
-    join("src", "Dashboard"), "tests", ".github",
-    ...["", "src"].flatMap((directory) =>
-        [
-            "global.json", ".editorconfig", "NuGet.Config",
-            "Directory.Build.*", "Directory.Packages.props",
-        ].map((name) => `:(icase)${join(directory, name)}`),
-    ),
+    "src", "tests", ".github",
+    ...[
+        "global.json", ".editorconfig", "NuGet.Config",
+        "Directory.Build.*", "Directory.Packages.props",
+    ].map((name) => `:(icase)${name}`),
 ];
 export const LIVE_SUITE_SIZE = 23;
 const THROTTLE_MARGIN_MS = 5000;

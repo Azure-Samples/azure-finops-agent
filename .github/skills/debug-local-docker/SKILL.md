@@ -14,11 +14,10 @@ description: "Build and run the Azure FinOps Agent locally with Docker for debug
 > You **must** mount it into the container (step 2) so the app has your local Microsoft Entra ID
 > and Azure OpenAI credentials.
 
-1. Build the Docker image from `src/Dashboard/`:
+1. Build the Docker image from the repository root (the build context is `src/`, which holds the Dockerfile, `backend/` and `frontend/`):
 
 ```bash
-cd src/Dashboard
-docker build -t azure-finops-agent-local .
+docker build -t azure-finops-agent-local src
 ```
 
 2. Run the container on local port 5000 (container listens on 8080), mounting the local secrets file:
@@ -26,7 +25,7 @@ docker build -t azure-finops-agent-local .
 ```bash
 docker run --rm -p 5000:8080 \
   -e ASPNETCORE_ENVIRONMENT=Development \
-  -v "$(pwd)/appsettings.Local.json:/app/appsettings.Local.json:ro" \
+  -v "$(pwd)/src/backend/appsettings.Local.json:/app/appsettings.Local.json:ro" \
   --name azure-finops-agent-local \
   azure-finops-agent-local
 ```

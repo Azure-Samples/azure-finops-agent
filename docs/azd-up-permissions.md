@@ -22,7 +22,7 @@ You also need available **quota** for:
 
 ## 2. Microsoft Entra ID (tenant)
 
-The preprovision hook ([infra/scripts/preprovision.ps1](../infra/scripts/preprovision.ps1)) calls [src/Dashboard/setup-entra-app.ps1](../src/Dashboard/setup-entra-app.ps1) to create a multi-tenant app registration and client secret. That requires one of:
+The preprovision hook ([infra/scripts/preprovision.ps1](../infra/scripts/preprovision.ps1)) calls [infra/scripts/setup-entra-app.ps1](../infra/scripts/setup-entra-app.ps1) to create a multi-tenant app registration and client secret. That requires one of:
 
 - The **Application Administrator** or **Cloud Application Administrator** directory role, **or**
 - The tenant setting **"Users can register applications" = Yes** (default in many tenants), in which case any user can register apps.

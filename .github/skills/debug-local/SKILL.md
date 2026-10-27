@@ -18,7 +18,7 @@ Use one harmless `run_playwright_code` call on the exact `pageId` from the user'
 Use absolute paths — the user's PowerShell profile may rewrite relative `cd` arguments and break a chained `cd ../../`:
 
 ```pwsh
-Set-Location C:\repos\azure-finops-agent-azsamples\src\Dashboard\frontend
+Set-Location C:\repos\azure-finops-agent-azsamples\src\frontend
 npm install
 npm run build
 ```
@@ -32,7 +32,7 @@ Before startup, verify Azure CLI can mint the provider token for the locally con
 Run as an **async** terminal (the server stays alive while you drive the browser):
 
 ```pwsh
-Set-Location C:\repos\azure-finops-agent-azsamples\src\Dashboard
+Set-Location C:\repos\azure-finops-agent-azsamples\src\backend
 $env:ASPNETCORE_ENVIRONMENT="Development"
 dotnet run --project Dashboard.csproj --urls "http://localhost:5000"
 ```

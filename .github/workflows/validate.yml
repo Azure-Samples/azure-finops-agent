@@ -4,7 +4,7 @@ on:
   workflow_call:
   pull_request:
     paths:
-      - "src/Dashboard/**"
+      - "src/**"
       - "tests/**"
       - "global.json"
       - ".github/workflows/**"
@@ -33,12 +33,12 @@ jobs:
 
       - name: Frontend and rendered desktop/mobile regressions
         run: |
-          docker run --rm --ipc=host -e CI=true -v "$PWD:/workspace" -w /workspace/src/Dashboard/frontend \
+          docker run --rm --ipc=host -e CI=true -v "$PWD:/workspace" -w /workspace/src/frontend \
             node:26-slim bash -ec '
               apt-get update -qq
               apt-get install -y --no-install-recommends git
               git config --global --add safe.directory /workspace
-              node --test ../../../tests/LiveEvaluations/*.test.mjs
+              node --test ../../tests/LiveEvaluations/*.test.mjs
               npm ci --no-audit --no-fund
               npm run test
               npx playwright install --with-deps chromium
@@ -47,7 +47,7 @@ jobs:
             '
 
       - name: Build the Linux application image
-        run: docker build -t finops-validation:local -f src/Dashboard/Dockerfile src/Dashboard
+        run: docker build -t finops-validation:local -f src/Dockerfile src
 
       - name: Non-root startup and offline telemetry shutdown
         run: |

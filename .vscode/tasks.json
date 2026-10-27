@@ -15,7 +15,7 @@
 				"http://localhost:5000"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}${pathSeparator}src${pathSeparator}Dashboard",
+				"cwd": "${workspaceFolder}${pathSeparator}src${pathSeparator}backend",
 				"env": {
 					"ASPNETCORE_ENVIRONMENT": "Development",
 					"BUILD_SHA": "local",

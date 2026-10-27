@@ -1,0 +1,8 @@
+.env
+bin/
+obj/
+wwwroot/
+appsettings.Local.json
+appsettings.Production.json
+publish/
+deploy.zip

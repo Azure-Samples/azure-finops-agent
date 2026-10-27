@@ -3,8 +3,8 @@
 
 # Infrastructure / deployment
 .github/workflows/    @alfarahn
-src/Dashboard/Dockerfile      @alfarahn
+src/Dockerfile                @alfarahn
 
 # Authentication & security-sensitive code
-src/Dashboard/Auth/   @alfarahn
-src/Dashboard/Infrastructure/HttpHelper.cs  @alfarahn
+src/backend/Auth/   @alfarahn
+src/backend/Infrastructure/HttpHelper.cs  @alfarahn

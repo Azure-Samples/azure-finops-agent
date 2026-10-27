@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mapFeatureNames, resolveCountryName } from '../../src/Dashboard/frontend/src/mapNames.js';
+import { mapFeatureNames, resolveCountryName } from '../../src/frontend/src/lib/mapNames.js';
 
 const feature = (name) => ({ type: 'Feature', properties: { name } });
 // The two spellings the app can meet: the ECharts 4.9 map and the world-atlas fallback.

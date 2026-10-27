@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isNumericCell, renderMarkdown } from '../../src/Dashboard/frontend/src/markdown.js';
+import { isNumericCell, renderMarkdown } from '../../src/frontend/src/lib/markdown.js';
 
 test('bold works without surrounding spaces and identifiers stay byte-for-byte', () => {
   assert.equal(renderMarkdown('**Total:**USD 12.34'), '<p><strong>Total:</strong>USD 12.34</p>');

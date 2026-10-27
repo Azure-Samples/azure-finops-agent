@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { stripCitationMarkers } from '../../src/Dashboard/frontend/src/modelText.js';
+import { stripCitationMarkers } from '../../src/frontend/src/lib/modelText.js';
 
 test('web search citation markers are removed from answers', () => {
   assert.equal(

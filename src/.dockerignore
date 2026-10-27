@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+**/publish/
+**/node_modules/
+**/__pycache__/
+backend/wwwroot/
+frontend/dist/
+frontend/tests/
+**/*.user
+**/*.suo
+**/.vs/
+**/.vscode/
+**/deploy.zip
+**/appsettings.Local.json
+**/appsettings.Production.json
+**/*.log
+**/Thumbs.db

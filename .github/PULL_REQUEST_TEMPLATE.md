@@ -14,7 +14,7 @@
 ## Checklist
 
 - [ ] Builds locally (`dotnet build`)
-- [ ] Frontend builds (`npm run build` in `src/Dashboard/frontend`)
+- [ ] Frontend builds (`npm run build` in `src/frontend`)
 - [ ] No new secrets committed
 - [ ] No DELETE methods enabled in HTTP helpers
 - [ ] Updated `.github/copilot-instructions.md` if behaviour or structure changed

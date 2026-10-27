@@ -8,7 +8,8 @@
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot | Split-Path -Parent
-$dashboardDir = Join-Path $repoRoot 'src/Dashboard'
+# Docker build context: src/ holds the Dockerfile, backend/ and frontend/.
+$buildContext = Join-Path $repoRoot 'src'
 
 Write-Host "`n=== azd postdeploy ===" -ForegroundColor Cyan
 
@@ -31,7 +32,7 @@ $webApp  = $webApp.Trim('"')
 $rg      = $rg.Trim('"')
 
 Write-Host "  Building image $image in ACR $acrName (this can take 3-6 min on the first run)..." -ForegroundColor Yellow
-Push-Location $dashboardDir
+Push-Location $buildContext
 try {
     # `az acr build` does NOT reliably honour .dockerignore — it tars the whole
     # context regardless. On a machine that has built locally that means shipping
@@ -39,7 +40,7 @@ try {
     # which crawls or times out instead of the ~76 KB a clean tree produces. The
     # Dockerfile rebuilds all of these inside the image anyway, so remove them
     # first. Same cleanup the manual checklist in the deploy skill mandates.
-    $generated = @('bin', 'obj', 'publish', 'wwwroot', 'frontend/node_modules', 'frontend/dist')
+    $generated = @('backend/bin', 'backend/obj', 'backend/publish', 'backend/wwwroot', 'frontend/node_modules', 'frontend/dist')
     foreach ($g in $generated) {
         if (Test-Path $g) {
             Write-Host "  Pruning build context: $g" -ForegroundColor DarkGray

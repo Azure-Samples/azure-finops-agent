@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createRequire } from "node:module";
-import { createExceptionReporter, redactDiagnosticText, safeTelemetryProperties } from "../../src/Dashboard/frontend/src/telemetrySafety.js";
+import { createExceptionReporter, redactDiagnosticText, safeTelemetryProperties } from "../../src/frontend/src/lib/telemetrySafety.js";
 
 test("installed notification manager preserves its asynchronous state argument", async () => {
-  const require = createRequire(new URL("../../src/Dashboard/frontend/package.json", import.meta.url));
+  const require = createRequire(new URL("../../src/frontend/package.json", import.meta.url));
   const { NotificationManager } = require("@microsoft/applicationinsights-core-js");
   const manager = new NotificationManager({});
   let timeout;

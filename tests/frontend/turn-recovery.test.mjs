@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeServerTurn, describeTurnFailure, formatElapsed, serverTurnFromProbe, terminalRecoveryState, userFacingStreamError } from '../../src/Dashboard/frontend/src/turnRecovery.js';
+import { describeServerTurn, describeTurnFailure, formatElapsed, serverTurnFromProbe, terminalRecoveryState, userFacingStreamError } from '../../src/frontend/src/lib/turnRecovery.js';
 
 const failed = {
   startedUtc: '2026-01-01T00:00:00Z',

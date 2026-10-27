@@ -39,7 +39,7 @@ Scan `Program.cs` for all OAuth scopes requested during authentication. List eve
 
 ### 4. Setup Script
 
-Scan `setup-entra-app.ps1` and confirm:
+Scan `infra/scripts/setup-entra-app.ps1` and confirm:
 
 - All API permissions added are read-only (delegated `Scope` type, not application `Role` type).
 - No admin-consent-required write permissions are configured.

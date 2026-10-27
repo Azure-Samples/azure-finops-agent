@@ -21,11 +21,11 @@ Deploy only after the user explicitly confirms the target environment and asks t
 ### 2. Validate
 
 ```powershell
-cd src/Dashboard/frontend
+cd src/frontend
 npm ci
 npm run build
 
-cd ..
+cd ../backend
 dotnet build Dashboard.csproj --no-restore
 ```
 

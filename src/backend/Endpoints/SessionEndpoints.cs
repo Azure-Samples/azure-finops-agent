@@ -1,0 +1,493 @@
+using System.Diagnostics;
+using System.Text.Json;
+using AzureFinOps.Dashboard.AI;
+using AzureFinOps.Dashboard.AI.Runtime;
+using AzureFinOps.Dashboard.Auth;
+using AzureFinOps.Dashboard.Observability;
+using AzureFinOps.Dashboard.Infrastructure;
+
+namespace AzureFinOps.Dashboard.Endpoints;
+
+/// <summary>A rating of the answer to the caller's <paramref name="Turn"/>-th visible question.</summary>
+public sealed record AnswerFeedbackRequest(int Turn, string? Rating);
+
+/// <summary>
+/// Per-user chat session management — list past conversations, start a new
+/// one, switch between them, delete. Backed by the per-owner conversation
+/// directories managed by <see cref="AgentSessionFactory"/>.
+///
+/// Anonymous (non-Entra) users get an ephemeral working dir so these endpoints
+/// always return an empty list for them — multi-session is an Entra-only feature.
+/// </summary>
+public static class SessionEndpoints
+{
+    public static void MapSessionEndpoints(
+        this IEndpointRouteBuilder app,
+        AgentSessionFactory agentFactory,
+        AiTelemetry telemetry,
+        AzureFinOps.Dashboard.Jobs.JobStore jobStore,
+        ILogger logger)
+    {
+        app.MapGet("/api/sessions", async (HttpContext ctx) =>
+        {
+            if (!SessionIdentity.TryResolve(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
+                return Results.Unauthorized();
+
+            var sessions = await agentFactory.ListUserSessionsAsync(
+                userId, entraTenantId, entraOid, ctx.RequestAborted);
+            telemetry.CurrentSessionId.TryGetValue(userId, out var currentId);
+            // A conversation appears once its first question is asked; the blank one a page load
+            // or New chat starts is not listed.
+            var payload = sessions
+                .Where(s => !string.IsNullOrWhiteSpace(s.Summary)
+                    || (telemetry.SessionTitles.TryGetValue(s.SessionId, out var named) && !string.IsNullOrWhiteSpace(named)))
+                .Select(s => new
+            {
+                id = s.SessionId,
+                summary = telemetry.SessionTitles.TryGetValue(s.SessionId, out var t) && !string.IsNullOrWhiteSpace(t)
+                    ? CleanSummary(t)
+                    : CleanSummary(s.Summary),
+                modified = s.ModifiedTime,
+                started = s.StartTime,
+            });
+            return Results.Ok(new { sessions = payload, currentSessionId = currentId });
+        });
+
+        app.MapPost("/api/sessions/new", async (HttpContext ctx) =>
+        {
+            if (!SessionIdentity.TryResolve(ctx, out var userId, out var userLogin, out var entraTenantId, out var entraOid))
+                return Results.Unauthorized();
+
+            var session = await agentFactory.CreateNewAsync(
+                userId, userLogin, entraTenantId, entraOid);
+            UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
+            return Results.Ok(new { sessionId = session.SessionId });
+        });
+
+        // Turn-activity probe: lets the frontend re-attach after a page refresh —
+        // if a turn is still running it polls until done, then reloads the
+        // transcript instead of leaving the user staring at dead air.
+        app.MapGet("/api/sessions/{sessionId}/active", async (HttpContext ctx, string sessionId) =>
+        {
+            if (!SessionIdentity.TryResolve(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
+                return Results.Unauthorized();
+            if (!await agentFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
+                return Results.NotFound();
+            return Results.Ok(AzureFinOps.Dashboard.AI.ChatEndpoints.ActiveTurnState(sessionId));
+        });
+
+        app.MapGet("/api/sessions/{sessionId}/outcomes", async (HttpContext ctx, string sessionId) =>
+        {
+            if (!SessionIdentity.TryResolve(ctx, out var userId, out _, out var entraTenantId, out var entraOid)) return Results.Unauthorized();
+            if (!await agentFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted)) return Results.NotFound();
+            return Results.Ok(new { outcomes = TurnOutcomeStore.Default.ForSession(userId, sessionId) });
+        });
+
+        app.MapPost("/api/sessions/{sessionId}/select", async (HttpContext ctx, string sessionId) =>
+        {
+            if (!SessionIdentity.TryResolve(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
+                return Results.Unauthorized();
+            // IDOR guard: a sessionId is a public-ish string (it's emitted to the
+            // browser and logged to App Insights). Reject any id that doesn't
+            // belong to this user's workdir.
+            if (!await agentFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
+                return Results.NotFound();
+
+            agentFactory.SetCurrentSession(userId, sessionId);
+            UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
+            logger.LogInformation("User {UserId} switched to session {SessionId}", userId, sessionId);
+            return Results.NoContent();
+        });
+
+        app.MapDelete("/api/sessions/{sessionId}", async (HttpContext ctx, string sessionId) =>
+        {
+            if (!SessionIdentity.TryResolve(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
+                return Results.Unauthorized();
+
+            if (!await agentFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
+                return Results.NotFound();
+
+            if (!ChatEndpoints.TryBeginTurn(sessionId, userId, null, out var deletionGate))
+                return Results.Conflict(new
+                {
+                    code = "session_active",
+                    error = "This conversation is still answering. Open it and press Stop, or wait for it to finish, then delete it.",
+                });
+
+            try
+            {
+                await agentFactory.DeleteUserSessionAsync(userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted);
+                // If this conversation was a job's run log, detach the job so it
+                // behaves as "never ran" (next run creates a fresh session) instead
+                // of pointing at a dead transcript.
+                jobStore.DetachSession(sessionId);
+                logger.LogInformation("User {UserId} deleted session {SessionId}", userId, sessionId);
+                return Results.NoContent();
+            }
+            finally
+            {
+                await ChatEndpoints.EndTurnAsync(deletionGate, dispatchAttempted: false);
+            }
+        });
+
+        // Replay endpoint: returns the persisted user/assistant/tool transcript
+        // for a session so the frontend can rebuild the chat UI exactly as it
+        // was when the user last left it.
+        app.MapGet("/api/sessions/{sessionId}/messages", async (HttpContext ctx, string sessionId) =>
+        {
+            if (!SessionIdentity.TryResolve(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
+                return Results.Unauthorized();
+
+            // NB: unlike GET /api/sessions (the sidebar list, which stays hidden
+            // for anonymous users), transcript replay IS allowed for anonymous
+            // users. It's how a backgrounded/minimized tab recovers the answer
+            // the server persisted while the SSE was frozen or severed — the
+            // client still holds the sessionId in memory even though anon convos
+            // never appear in the sidebar and can't be re-found after a refresh.
+            // The IDOR guard below scopes to the caller's anonymous or
+            // tenant-and-object working directory and is the security boundary
+            // for both anonymous and Entra callers.
+            if (!await agentFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
+                return Results.NotFound();
+
+            UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
+
+            // Read-only load — does NOT register this session as the user's
+            // current and does NOT bump the ActiveSessions gauge. Just viewing
+            // a past conversation must not switch the user's active thread.
+            IReadOnlyList<AgentEvent> events;
+            try
+            {
+                events = await agentFactory.LoadTranscriptAsync(
+                    sessionId, userId, entraTenantId, entraOid, ctx.RequestAborted);
+            }
+            catch (AgentSessionFactory.HistoryUnavailableException)
+            {
+                return Results.NotFound(new { code = "history_unavailable", error = "The retained conversation history is unavailable. Start a new conversation to continue." });
+            }
+
+            var messages = BuildTranscript(events, userId);
+            // A pending approval is answered by the next user message, so only requests after the last one still wait.
+            var lastUser = events.Select((item, index) => (item, index)).LastOrDefault(entry => entry.item is UserMessageEvent).index;
+            var pendingChanges = events.Skip(lastUser).OfType<ApprovalRequestEvent>().Select(ChatEndpoints.PendingChange).ToArray();
+            return Results.Ok(new { messages, pendingChanges, consentActions = ConsentActions(events) });
+        });
+
+        // A thumbs up or down on one answer. Kept in the owner's own transcript, so it
+        // returns on reload and is deleted with the conversation, and reported as a
+        // telemetry event without any question or answer text.
+        app.MapPost("/api/sessions/{sessionId}/feedback", async (HttpContext ctx, string sessionId, AnswerFeedbackRequest? body) =>
+        {
+            if (!SessionIdentity.TryResolve(ctx, out var userId, out _, out var entraTenantId, out var entraOid))
+                return Results.Unauthorized();
+            if (body is null || body.Turn < 1 || body.Rating is not ("up" or "down" or "none"))
+                return Results.BadRequest(new { error = "Send the question's turn number and a rating of up, down or none." });
+            if (!await agentFactory.UserOwnsSessionAsync(
+                userId, entraTenantId, entraOid, sessionId, ctx.RequestAborted))
+                return Results.NotFound();
+
+            IReadOnlyList<AgentEvent> events;
+            try
+            {
+                events = await agentFactory.LoadTranscriptAsync(
+                    sessionId, userId, entraTenantId, entraOid, ctx.RequestAborted);
+            }
+            catch (AgentSessionFactory.HistoryUnavailableException)
+            {
+                return Results.NotFound();
+            }
+            if (!AnsweredTurns(events).Contains(body.Turn))
+                return Results.BadRequest(new { error = "That question has no answer to rate." });
+            if (AnswerFeedback(events).GetValueOrDefault(body.Turn, "none") == body.Rating)
+                return Results.NoContent();
+            if (events.OfType<AnswerFeedbackEvent>().Count() >= MaxFeedbackChanges)
+                return Results.Conflict(new { error = "This conversation has reached its limit of rating changes." });
+            if (!await agentFactory.RecordFeedbackAsync(userId, entraTenantId, entraOid, sessionId,
+                new AnswerFeedbackEvent(body.Turn, body.Rating), ctx.RequestAborted))
+                return Results.NotFound();
+
+            using var activity = HttpHelper.Telemetry.StartActivity("answer.feedback", ActivityKind.Internal);
+            activity?.SetTag("session.id", sessionId);
+            activity?.SetTag("feedback.turn", body.Turn);
+            activity?.SetTag("feedback.rating", body.Rating);
+            return Results.NoContent();
+        });
+    }
+
+    /// <summary>Bounds how often one conversation's ratings can change, so its transcript cannot be grown without limit.</summary>
+    internal const int MaxFeedbackChanges = 500;
+
+    /// <summary>
+    /// The consent buttons the conversation's tool results asked the user to press, so a reopened conversation shows the
+    /// button its answer names. Live turns send them as consent_required events; the same allow-listed tiers and hrefs
+    /// are rebuilt from the saved results, and the page hides the ones the user has since granted.
+    /// </summary>
+    internal static object[] ConsentActions(IEnumerable<AgentEvent> events) =>
+        [.. events.OfType<ToolCompleteEvent>().SelectMany(done => HttpHelper.ConsentActions(done.Result)).Distinct()];
+
+    /// <summary>The visible questions (1-based, in order) that have an answer.</summary>
+    internal static IReadOnlySet<int> AnsweredTurns(IReadOnlyList<AgentEvent> events)
+    {
+        var answered = new HashSet<int>();
+        var turn = 0;
+        foreach (var evt in events)
+        {
+            if (evt is UserMessageEvent user && VisibleUserText(user.Content) is not null) turn++;
+            else if (evt is AssistantMessageEvent { Content.Length: > 0 } && turn > 0) answered.Add(turn);
+        }
+        return answered;
+    }
+
+    /// <summary>The latest rating of each answered question; a cleared rating is absent.</summary>
+    internal static Dictionary<int, string> AnswerFeedback(IEnumerable<AgentEvent> events)
+    {
+        var ratings = new Dictionary<int, string>();
+        foreach (var feedback in events.OfType<AnswerFeedbackEvent>())
+        {
+            if (feedback.Rating is "up" or "down") ratings[feedback.Turn] = feedback.Rating;
+            else ratings.Remove(feedback.Turn);
+        }
+        return ratings;
+    }
+
+    internal static IReadOnlyList<object> BuildTranscript(IReadOnlyList<AgentEvent> events, long userId)
+    {
+        // First pass: index tool results by call id so each started tool
+        // gets its result / success / error / duration.
+        var resultsById = new Dictionary<string, ToolCompleteEvent>();
+        foreach (var evt in events)
+        {
+            if (evt is ToolCompleteEvent done && !string.IsNullOrEmpty(done.CallId))
+                resultsById[done.CallId] = done;
+        }
+
+        var messages = new List<object>();
+        var feedbackByTurn = AnswerFeedback(events);
+        var turn = 0;
+        string? pendingAssistantText = null;
+        var pendingThinking = new List<string>();
+        var pendingTools = new List<object>();
+        var pendingCharts = new List<string>();
+        object? pendingHtml = null;
+        object? pendingScript = null;
+        var hasUserMessage = false;
+
+        void FlushAssistant()
+        {
+            if (pendingAssistantText is null && pendingTools.Count == 0
+                && pendingCharts.Count == 0 && pendingHtml is null && pendingScript is null)
+            {
+                pendingThinking.Clear();
+                return;
+            }
+            messages.Add(new
+            {
+                role = "assistant",
+                content = pendingAssistantText ?? "",
+                thinking = pendingThinking.Count > 0 ? string.Join("\n\n", pendingThinking) : null,
+                toolCalls = pendingTools.ToArray(),
+                charts = pendingCharts.ToArray(),
+                html = pendingHtml,
+                script = pendingScript,
+                feedback = turn > 0 && feedbackByTurn.TryGetValue(turn, out var rating) ? rating : null,
+            });
+            pendingAssistantText = null;
+            pendingThinking.Clear();
+            pendingTools.Clear();
+            pendingCharts.Clear();
+            pendingHtml = null;
+            pendingScript = null;
+        }
+
+        foreach (var evt in events)
+        {
+            if (evt is UserMessageEvent um)
+            {
+                var raw = um.Content;
+                if (IsInjectedUserContext(raw)) continue;
+                FlushAssistant();
+                var clean = StripContextPrefix(raw);
+                if (string.IsNullOrWhiteSpace(clean)) continue;
+                messages.Add(new { role = "user", content = clean });
+                hasUserMessage = true;
+                turn++;
+            }
+            else if (evt is AssistantMessageEvent am)
+            {
+                if (!string.IsNullOrEmpty(am.Content))
+                    pendingAssistantText = (pendingAssistantText is null ? "" : pendingAssistantText + "\n\n") + am.Content;
+            }
+            else if (evt is ReasoningEvent thought)
+            {
+                if (!string.IsNullOrWhiteSpace(thought.Content)) pendingThinking.Add(thought.Content);
+            }
+            else if (evt is ToolStartEvent r)
+            {
+                resultsById.TryGetValue(r.CallId, out var ex);
+                pendingTools.Add(new
+                {
+                    name = r.ToolName,
+                    args = r.Arguments ?? "",
+                    id = r.CallId,
+                    intent = (string?)null,
+                    result = ex?.Result,
+                    success = ex?.Success,
+                    error = ex?.Error,
+                    durationMs = ex is null ? (long?)null : ex.DurationMs ?? Math.Max(0, (long)(ex.Timestamp - r.Timestamp).TotalMilliseconds),
+                });
+
+                // Mirror ChatEndpoints.HandleToolDoneAsync side-channel parsing
+                // so charts/scripts/decks survive a session resume.
+                if (ex is { Success: true, Result: { } rt })
+                {
+                    if (r.ToolName == "RenderChart" || r.ToolName == "RenderAdvancedChart")
+                    {
+                        pendingCharts.Add(rt);
+                    }
+                    else if (rt.Contains("__CHART__:"))
+                    {
+                        foreach (var line in rt.Split('\n'))
+                        {
+                            var t = line.Trim();
+                            if (t.StartsWith("__CHART__:"))
+                            {
+                                pendingCharts.Add(t["__CHART__:".Length..].Trim());
+                                break;
+                            }
+                        }
+                    }
+                    if (rt.Contains("__HTML_READY__:"))
+                    {
+                        foreach (var line in rt.Split('\n'))
+                        {
+                            var t = line.Trim();
+                            if (t.StartsWith("__HTML_READY__:"))
+                            {
+                                var parts = t["__HTML_READY__:".Length..].Split(':', 3);
+                                if (parts.Length >= 2)
+                                    pendingHtml = new
+                                    {
+                                        fileId = parts[0],
+                                        fileName = parts[1],
+                                        slideCount = parts.Length > 2 ? parts[2] : "",
+                                        // Artifacts live 30 min in-memory + on temp disk; after a
+                                        // TTL sweep or restart the download link is dead — let the
+                                        // UI render an \"expired\" state instead of a 404 link.
+                                        expired = ArtifactStore.Default.Find(parts[0], userId) is null,
+                                    };
+                                break;
+                            }
+                        }
+                    }
+                    if (rt.Contains("__SCRIPT_READY__:"))
+                    {
+                        foreach (var line in rt.Split('\n'))
+                        {
+                            var t = line.Trim();
+                            if (t.StartsWith("__SCRIPT_READY__:"))
+                            {
+                                var parts = t["__SCRIPT_READY__:".Length..].Split(':', 5);
+                                if (parts.Length >= 4)
+                                {
+                                    var entry = ArtifactStore.Default.Find(parts[0], userId);
+                                    var live = entry is not null;
+                                    pendingScript = new
+                                    {
+                                        fileId = parts[0],
+                                        fileName = parts[1],
+                                        lineCount = parts[2],
+                                        language = parts[3],
+                                        description = parts.Length > 4 ? parts[4] : "",
+                                        content = entry is not null ? File.ReadAllText(entry.Path) : "",
+                                        // See __HTML_READY__ above — expired artifacts render a
+                                        // \"regenerate\" hint instead of dead download/copy buttons.
+                                        expired = !live,
+                                    };
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            else if (evt is TurnErrorEvent error && hasUserMessage)
+            {
+                FlushAssistant();
+                messages.Add(new
+                {
+                    role = "system",
+                    content = error.Message,
+                    terminalStatus = "error",
+                });
+            }
+        }
+        FlushAssistant();
+        return messages;
+    }
+
+    private static string StripContextPrefix(string raw)
+    {
+        return StripLeadingBracketBlocks(raw);
+    }
+
+    /// <summary>The user's own words in a persisted prompt without host-injected context; null when nothing the user wrote remains.</summary>
+    internal static string? VisibleUserText(string raw) =>
+        IsInjectedUserContext(raw) || StripContextPrefix(raw) is not { } text || string.IsNullOrWhiteSpace(text) ? null : text;
+
+    private static bool IsInjectedUserContext(string raw)
+    {
+        var s = raw.TrimStart();
+        return s.StartsWith("<skill-context", StringComparison.OrdinalIgnoreCase) ||
+               s.StartsWith("<tool-context", StringComparison.OrdinalIgnoreCase) ||
+               s.StartsWith("<agent-context", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string StripLeadingBracketBlocks(string? raw)
+    {
+        var s = raw?.Trim() ?? "";
+        while (s.StartsWith('['))
+        {
+            var depth = 0;
+            var close = -1;
+            for (var i = 0; i < s.Length; i++)
+            {
+                if (s[i] == '[') depth++;
+                else if (s[i] == ']' && --depth == 0)
+                {
+                    close = i;
+                    break;
+                }
+            }
+            if (close < 0) return ""; // truncated context block — no user content follows
+            s = s[(close + 1)..].TrimStart();
+        }
+        return s;
+    }
+
+
+    /// <summary>
+    /// Strips the injected <c>[CONTEXT: ...]</c> and <c>[UPLOADED FILES ...]</c>
+    /// system prefixes that <c>ChatEndpoints</c> prepends to every user message.
+    /// Without this, the stored conversation summary surfaces our internal prompt
+    /// scaffolding ("User IS connected to Azure...") instead of the user's real
+    /// first question. Falls back to "Untitled conversation" if nothing remains.
+    /// </summary>
+    internal static string CleanSummary(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "Untitled conversation";
+        // Balance nested schema arrays (for example columns=[A, B]) instead of
+        // stopping at the first ']'. The latter leaked the remainder of the
+        // [UPLOADED FILES] block into transcript rows and conversation titles.
+        var s = StripLeadingBracketBlocks(raw);
+        // Take the first non-empty line so multi-line prompts surface cleanly.
+        var firstLine = s.Split('\n', 2, StringSplitOptions.RemoveEmptyEntries)
+                         .FirstOrDefault()?.Trim();
+        if (string.IsNullOrWhiteSpace(firstLine)) return "Untitled conversation";
+        return firstLine.Length > 80 ? firstLine[..80] + "…" : firstLine;
+    }
+}

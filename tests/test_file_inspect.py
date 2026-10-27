@@ -15,7 +15,7 @@ import pandas as pd
 from openpyxl import Workbook
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "src/Dashboard/AI/Tools/Resources/file_inspect.py"
+SCRIPT = ROOT / "src/backend/AI/Tools/Resources/file_inspect.py"
 SPEC = importlib.util.spec_from_file_location("file_inspect", SCRIPT)
 HELPER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HELPER)

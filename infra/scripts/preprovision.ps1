@@ -12,7 +12,6 @@
 # Idempotent: if AZURE_ENTRA_APP_ID is already set, skip Entra creation.
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = Split-Path -Parent $PSScriptRoot | Split-Path -Parent
 
 Write-Host "`n=== azd preprovision ===" -ForegroundColor Cyan
 
@@ -97,7 +96,7 @@ if (-not [string]::IsNullOrWhiteSpace($existingAppId)) {
 } else {
     Write-Host "  Creating Entra ID app registration (multi-tenant, 5 consent tiers)..." -ForegroundColor Yellow
 
-    $entraScript = Join-Path $repoRoot 'src/Dashboard/setup-entra-app.ps1'
+    $entraScript = Join-Path $PSScriptRoot 'setup-entra-app.ps1'
     $appName = "Azure FinOps Agent ($envName)"
 
     # Production redirect URI is unknown until Bicep runs. Register localhost now;

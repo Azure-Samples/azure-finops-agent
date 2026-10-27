@@ -13,7 +13,7 @@ Azure FinOps Agent is an open-source AI agent for Azure. Ask it in plain words h
 
 **[Try it now](https://azure-finops-agent.com)** · [Deploy to your Azure](#deploy-to-your-azure-subscription) · [Slides](https://azure-finops-agent.com/slides)
 
-<img src="src/Dashboard/frontend/public/og-image.png" alt="Azure FinOps Agent: plain answers on AI governance, AI costs and your Azure spend" width="100%">
+<img src="src/frontend/public/og-image.png" alt="Azure FinOps Agent: plain answers on AI governance, AI costs and your Azure spend" width="100%">
 
 ## See it in action
 
@@ -150,7 +150,7 @@ Your Azure CLI identity also needs **Foundry User** (formerly Azure AI User) on 
 ### Configure
 
 ```powershell
-cd src\Dashboard
+cd src\backend
 dotnet user-secrets set "AzureOpenAI:Endpoint" "https://<account>.services.ai.azure.com/api/projects/<project>"
 dotnet user-secrets set "AzureOpenAI:DeploymentName" "<your-deployment>"
 ```
@@ -165,22 +165,22 @@ Optional settings:
 ### Build and run
 
 ```powershell
-cd src\Dashboard\frontend
+cd src\frontend
 npm ci
 npm run build
 
-cd ..
+cd ..\backend
 $env:ASPNETCORE_ENVIRONMENT = "Development"
 dotnet run --urls http://localhost:5000
 ```
 
-Open [http://localhost:5000](http://localhost:5000). Build the frontend before starting the backend, so the static web root exists at startup. The [contributor guide](CONTRIBUTING.md#regression-tests) covers the backend, Python, frontend and desktop/mobile browser regression tests.
+Open [http://localhost:5000](http://localhost:5000). Build the frontend before starting the backend, so the static web root (`src/backend/wwwroot`) exists at startup. The [contributor guide](CONTRIBUTING.md#regression-tests) covers the backend, Python, frontend and desktop/mobile browser regression tests.
 
 ## For maintainers
 
 - [`/evaluate-sessions`](.github/skills/evaluate-sessions/SKILL.md) exports the last 30 days of real conversations, rates each one from 0 to 10, finds the ten most important issues and their root causes in the code, and asks which to fix before implementing regression-tested local fixes. It never impersonates users, commits customer transcripts or deploys on its own.
 - [`/investigate-logs`](.github/skills/investigate-logs/SKILL.md) triages exceptions in Application Insights.
-- `npm run og-image` in `src/Dashboard/frontend` re-renders the social sharing card from [its HTML source](src/Dashboard/frontend/social/og-image.html).
+- `npm run og-image` in `src/frontend` re-renders the social sharing card from [its HTML source](src/frontend/social/og-image.html).
 
 ## Security
 

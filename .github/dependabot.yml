@@ -1,7 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: nuget
-    directory: /src/Dashboard
+    directory: /src/backend
     schedule:
       interval: weekly
       day: monday
@@ -31,7 +31,7 @@ updates:
         patterns: ["Microsoft.NET.Test.Sdk", "xunit*"]
 
   - package-ecosystem: npm
-    directory: /src/Dashboard/frontend
+    directory: /src/frontend
     schedule:
       interval: weekly
       day: monday
@@ -52,7 +52,7 @@ updates:
       default-days: 7
 
   - package-ecosystem: docker
-    directory: /src/Dashboard
+    directory: /src
     schedule:
       interval: weekly
     labels: [dependencies, docker]

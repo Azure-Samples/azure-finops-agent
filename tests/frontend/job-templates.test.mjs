@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { JOB_TEMPLATES } from '../../src/Dashboard/frontend/src/data/jobTemplates.js';
+import { JOB_TEMPLATES } from '../../src/frontend/src/data/jobTemplates.js';
 
 test('capacity monitoring preserves unknowns and does not promise allocation', () => {
   const prompt = JOB_TEMPLATES.find(t => t.label === 'Check capacity of X').prompt;

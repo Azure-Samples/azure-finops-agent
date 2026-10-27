@@ -8,6 +8,6 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.12" />
-    <ProjectReference Include="../../src/Dashboard/Dashboard.csproj" />
+    <ProjectReference Include="../../src/backend/Dashboard.csproj" />
   </ItemGroup>
 </Project>

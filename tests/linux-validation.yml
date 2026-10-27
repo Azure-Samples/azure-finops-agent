@@ -16,10 +16,10 @@ steps:
       npx playwright install --with-deps chromium;
       npm run test:browser;
       npm run build'
-    workingDirectory: /workspace/src/Dashboard/frontend
+    workingDirectory: /workspace/src/frontend
     env: ["CI=true"]
     id: frontend
-  - build: -t finops-validation:{{.Run.ID}} -f src/Dashboard/Dockerfile src/Dashboard
+  - build: -t finops-validation:{{.Run.ID}} -f src/Dockerfile src
     id: image
   - cmd: finops-validation:{{.Run.ID}} /workspace/tests/container_smoke.py
     entryPoint: python3
