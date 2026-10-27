@@ -59,6 +59,9 @@ public sealed class ToolGuidanceTests
     [InlineData("QueryAzure", null, "no documentation lookup or web search first")]
     [InlineData("QueryAzure", null, "Convert units in the same query that selects the rows")]
     [InlineData("QueryAzure", null, "returned rows carry priceType as type, so a query selects x.type, never x.priceType")]
+    // A license answer filtered Resource Graph on a type that does not exist (microsoft.sql/virtualmachines), got zero rows
+    // and reported that no SQL licensing resources existed (live gate, 27 October 2026).
+    [InlineData("QueryAzure", null, "zero rows show absence only for a type name copied from returned data or a provider listing")]
     [InlineData("QueryAzure", "query", "LINQ")]
     [InlineData("QueryAzure", "url", "one per line")]
     [InlineData("QueryAzure", null, "Leave api-version out of reads")]
