@@ -110,6 +110,11 @@ public sealed class ToolGuidanceTests
         Assert.Contains("{count, data, skip_token, total_records} in snake_case", tool.Description);
         // A script read two fields from a list query's TSV, which prints one value per line, so the second stayed empty.
         Assert.Contains("a JMESPath list ([a, b]) prints one value per line while an object ({a:a, b:b}) prints its values on one tab-separated line", tool.Description);
+        // A storage account script asked for with six stated settings required jq and refused to run without it, a requirement
+        // the user never stated (live gate, 27 October 2026).
+        Assert.Contains("never jq, Python or another tool the user did not mention", tool.Description);
+        Assert.Contains("never stop the script because such a tool is missing", tool.Description);
+        Assert.Contains("only the requested CLI and the user's sign-in; no jq or other extra tools", content.GetProperty("description").GetString()!);
         Assert.Contains("appears to the user as a download card below the answer: refer to it in words and never write a link or file path to it",
             AgentSessionFactory.SystemPrompt);
     }
