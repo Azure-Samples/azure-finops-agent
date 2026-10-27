@@ -88,6 +88,8 @@ async function arrange(
       });
     if (path === "/api/chat/stop" && options.stopTurn)
       return options.stopTurn(route);
+    if (path.startsWith("/api/feedback") && options.feedback)
+      return options.feedback(route);
     if (path === "/api/jobs")
       return route.fulfill({
         json: { jobs: options.jobs || [], entraRequired: !options.jobs },
@@ -334,8 +336,9 @@ test("navigation exposes one New chat and the start page offers the starter ques
     );
   await expect(page.getByText("Browse all prompts")).toHaveCount(0);
   await expect(page.locator(".input-notice")).toHaveText(
-    "AI-generated answers can be wrong. Check important figures.",
+    "AI-generated answers can be wrong. Check important figures. Have feedback?",
   );
+  await expect(page.locator(".input-notice").getByRole("button", { name: "Have feedback?" })).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("start-page-starters.png"),
     animations: "disabled",
@@ -661,6 +664,7 @@ test("the latest answer offers a deck and a script, and the message box keeps on
     "Copy",
     "",
     "",
+    "Feedback",
     "Make a deck",
     "Write a script",
   ]);
@@ -707,15 +711,214 @@ test("the latest answer offers a deck and a script, and the message box keeps on
   expect(requests[1].prompt).toContain("generate an Azure CLI script");
   // Every answer can be copied and rated; the deck and script follow only the latest.
   await expect(actions).toHaveCount(2);
-  await expect(actions.first().getByRole("button")).toHaveText(["Copy", "", ""]);
+  await expect(actions.first().getByRole("button")).toHaveText(["Copy", "", "", "Feedback"]);
   await expect(actions.last().getByRole("button")).toHaveText([
     "Copy",
     "",
     "",
+    "Feedback",
     "Make a deck",
     "Write a script",
   ]);
   await expect(page.locator(".question-edit")).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+const feedbackRepository = "Azure-Samples/azure-finops-agent";
+
+// Serves /api/feedback/config and records each submission; `answer` decides the reply.
+function feedbackServer(mode, answer) {
+  const posted = [];
+  const handler = (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/feedback/config")
+      return route.fulfill({ json: { mode, repository: feedbackRepository } });
+    posted.push(route.request().postDataJSON());
+    return answer(route, posted.length);
+  };
+  return { posted, handler };
+}
+
+test("Have feedback? in the top bar files a GitHub issue and gives focus back", async ({
+  page,
+}, testInfo) => {
+  const issue = `https://github.com/${feedbackRepository}/issues/42`;
+  const github = feedbackServer("direct", (route) =>
+    route.fulfill({ status: 201, json: { mode: "direct", number: 42, url: issue } }),
+  );
+  const { errors } = await arrange(page, [], undefined, { feedback: github.handler });
+  const wide = page.viewportSize().width > 600;
+  const trigger = page.locator(".portal-feedback");
+  await expect(trigger).toBeVisible();
+  await expect(trigger.getByText(wide ? "Have feedback?" : "Feedback", { exact: true })).toBeVisible();
+  // The message box offers the same form.
+  await expect(page.locator(".input-notice-link")).toHaveText("Have feedback?");
+  // The extra button must not push the top bar wider than a phone.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "Send feedback" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Summary")).toBeFocused();
+  await expect(dialog).toContainText("No GitHub account needed");
+  await expect(dialog).toContainText("Feedback is posted publicly on GitHub");
+  await expect(dialog.getByRole("radio", { name: "Idea" })).toBeChecked();
+  const box = await dialog.boundingBox();
+  expect(box.width).toBeLessThanOrEqual(page.viewportSize().width);
+
+  // A summary is needed before anything is sent.
+  await dialog.getByRole("button", { name: "Send feedback" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Add a short summary.");
+  await expect(dialog.getByLabel("Summary")).toHaveAttribute("aria-invalid", "true");
+  expect(github.posted).toHaveLength(0);
+
+  await dialog.getByText("Bug", { exact: true }).click();
+  await dialog.getByLabel("Summary").fill("Chart is empty");
+  // The error describes what was sent; editing clears it.
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await expect(dialog.getByLabel("Summary")).not.toHaveAttribute("aria-invalid", "true");
+  await dialog.getByLabel(/Details/).fill("The cost chart stayed blank.");
+  await page.screenshot({ path: testInfo.outputPath("feedback-form.png"), animations: "disabled" });
+  await dialog.getByRole("button", { name: "Send feedback" }).click();
+  await expect(dialog.getByRole("status")).toContainText("Your feedback is issue #42.");
+  const link = dialog.getByRole("link", { name: "View on GitHub" });
+  await expect(link).toHaveAttribute("href", issue);
+  await expect(link).toHaveAttribute("target", "_blank");
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(link).toBeFocused();
+  expect(github.posted).toEqual([
+    { kind: "bug", title: "Chart is empty", details: "The cost chart stayed blank." },
+  ]);
+  await page.screenshot({ path: testInfo.outputPath("feedback-sent.png"), animations: "disabled" });
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  // A sent form starts empty next time.
+  await trigger.click();
+  await expect(page.getByRole("dialog").getByLabel("Summary")).toHaveValue("");
+  expect(errors).toEqual([]);
+});
+
+test("every answer offers Feedback that can carry its question and rating", async ({
+  page,
+}) => {
+  const github = feedbackServer("direct", (route, count) =>
+    route.fulfill({
+      status: 201,
+      json: { mode: "direct", number: 42 + count, url: `https://github.com/${feedbackRepository}/issues/${42 + count}` },
+    }),
+  );
+  const { errors } = await arrange(
+    page,
+    [{ type: "message", content: "Synthetic answer." }],
+    undefined,
+    { feedback: github.handler },
+  );
+  await send(page, "What did I spend last month?");
+  const actions = page.locator(".answer-actions");
+  await expect(actions.getByRole("button", { name: "Feedback" })).toBeVisible();
+
+  // A Poor answer rating turns the button into an invitation.
+  await actions.getByRole("button", { name: "Poor answer" }).click();
+  const invite = actions.getByRole("button", { name: "Tell us what went wrong" });
+  await expect(invite).toBeVisible();
+  await invite.click();
+  const dialog = page.getByRole("dialog", { name: "Feedback on this answer" });
+  await expect(dialog.getByRole("radio", { name: "Answer quality" })).toBeChecked();
+  const include = dialog.getByRole("checkbox", { name: "Include the question I asked" });
+  // The question stays out of a public issue unless the user includes it.
+  await expect(include).not.toBeChecked();
+  await expect(dialog.locator(".feedback-quote")).toHaveCount(0);
+  await include.check();
+  await expect(dialog.locator(".feedback-quote")).toHaveText("What did I spend last month?");
+  await dialog.getByLabel("Summary").fill("Total left out storage");
+  await dialog.getByRole("button", { name: "Send feedback" }).click();
+  await expect(dialog.getByRole("status")).toContainText("issue #43");
+  expect(github.posted).toEqual([
+    {
+      kind: "answer",
+      title: "Total left out storage",
+      details: "",
+      question: "What did I spend last month?",
+      rating: "down",
+    },
+  ]);
+  await dialog.getByRole("button", { name: "Close" }).first().click();
+  await expect(invite).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test("without the GitHub App the form continues on GitHub with the feedback filled in", async ({
+  page,
+}) => {
+  const prefilled = `https://github.com/${feedbackRepository}/issues/new?title=Idea%3A%20Dark%20mode&body=Please.&labels=feedback%2Cenhancement`;
+  const github = feedbackServer("link", (route) =>
+    route.fulfill({ json: { mode: "link", url: prefilled } }),
+  );
+  const { errors } = await arrange(page, [], undefined, { feedback: github.handler });
+  await page.locator(".input-notice-link").click();
+  const dialog = page.getByRole("dialog", { name: "Send feedback" });
+  await expect(dialog).toContainText("post it with your GitHub account");
+  await dialog.getByLabel("Summary").fill("Dark mode");
+  await dialog.getByLabel(/Details/).fill("Please.");
+  await dialog.getByRole("button", { name: "Continue on GitHub" }).click();
+  await expect(dialog.getByRole("status")).toContainText("One more step on GitHub");
+  const open = dialog.getByRole("link", { name: "Open GitHub" });
+  await expect(open).toHaveAttribute("href", prefilled);
+  await expect(open).toHaveAttribute("target", "_blank");
+  expect(errors).toEqual([]);
+});
+
+test("feedback refusals keep the draft, and only GitHub links are offered", async ({
+  page,
+}) => {
+  const replies = [
+    { status: 422, json: { field: "details", error: "Remove the email address first: feedback is posted publicly on GitHub." } },
+    { status: 429, json: { error: "You've sent a lot of feedback in a short time.", fallbackUrl: "javascript:alert(1)" } },
+    { status: 502, json: { error: "GitHub didn't accept the feedback just now.", fallbackUrl: `https://github.com/${feedbackRepository}/issues/new?title=x` } },
+    { status: 201, json: { mode: "direct", number: 9, url: "https://phishing.example/issues/9" } },
+  ];
+  const github = feedbackServer("direct", (route, count) => route.fulfill(replies[count - 1]));
+  const { errors } = await arrange(page, [], undefined, { feedback: github.handler });
+  const trigger = page.locator(".portal-feedback");
+  await trigger.click();
+  let dialog = page.getByRole("dialog", { name: "Send feedback" });
+  await dialog.getByLabel("Summary").fill("Please call me");
+  await dialog.getByLabel(/Details/).fill("Reach me at someone@contoso.example");
+  const sendButton = dialog.getByRole("button", { name: "Send feedback" });
+
+  await sendButton.click();
+  await expect(dialog.getByRole("alert")).toHaveText("Remove the email address first: feedback is posted publicly on GitHub.");
+  await expect(dialog.getByLabel(/Details/)).toHaveAttribute("aria-invalid", "true");
+  await expect(dialog.getByLabel(/Details/)).toBeFocused();
+  await expect(dialog.getByLabel(/Details/)).toHaveValue("Reach me at someone@contoso.example");
+
+  // A draft survives closing and reopening the form.
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await trigger.click();
+  dialog = page.getByRole("dialog", { name: "Send feedback" });
+  await expect(dialog.getByLabel("Summary")).toHaveValue("Please call me");
+
+  await dialog.getByLabel(/Details/).fill("Call back please");
+  await sendButton.click();
+  await expect(dialog.getByRole("alert")).toContainText("a lot of feedback");
+  // A link that is not GitHub's is never offered.
+  await expect(dialog.getByRole("link")).toHaveCount(0);
+
+  await sendButton.click();
+  await expect(dialog.getByRole("alert")).toContainText("GitHub didn't accept");
+  await expect(dialog.getByRole("link", { name: "Post it on GitHub instead" })).toHaveAttribute(
+    "href",
+    `https://github.com/${feedbackRepository}/issues/new?title=x`,
+  );
+
+  // Even a success is not shown with a link that leaves GitHub.
+  await sendButton.click();
+  await expect(dialog.getByRole("alert")).toHaveText("Your feedback couldn't be sent. Try again in a moment.");
+  await expect(dialog.getByRole("status")).toHaveCount(0);
+  expect(github.posted).toHaveLength(4);
   expect(errors).toEqual([]);
 });
 

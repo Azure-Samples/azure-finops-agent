@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using AzureFinOps.Dashboard.Infrastructure;
 
 namespace AzureFinOps.Dashboard.Endpoints;
 
@@ -19,7 +19,7 @@ public static class MetaEndpoints
         string appInsightsConnectionString,
         string azureOpenAIDeployment)
     {
-        var (sha, build, branch) = ResolveBuildInfo();
+        var (sha, build, branch) = (BuildInfo.Sha, BuildInfo.Number, BuildInfo.Branch);
 
         app.MapGet("/api/version", () => Results.Ok(new { sha, build, branch, started = StartedUtc }));
 
@@ -35,31 +35,5 @@ public static class MetaEndpoints
                 new { id = azureOpenAIDeployment, name = azureOpenAIDeployment }
             });
         });
-    }
-
-    private static (string Sha, string Build, string Branch) ResolveBuildInfo()
-    {
-        var sha = Environment.GetEnvironmentVariable("BUILD_SHA");
-        if (string.IsNullOrEmpty(sha))
-        {
-            try { sha = Process.Start(new ProcessStartInfo("git", "rev-parse --short HEAD") { RedirectStandardOutput = true, UseShellExecute = false })!.StandardOutput.ReadToEnd().Trim(); }
-            catch { sha = "dev"; }
-        }
-
-        var build = Environment.GetEnvironmentVariable("BUILD_NUMBER");
-        if (string.IsNullOrEmpty(build))
-        {
-            try { build = Process.Start(new ProcessStartInfo("git", "rev-list --count HEAD") { RedirectStandardOutput = true, UseShellExecute = false })!.StandardOutput.ReadToEnd().Trim(); }
-            catch { build = "0"; }
-        }
-
-        var branch = Environment.GetEnvironmentVariable("BUILD_BRANCH");
-        if (string.IsNullOrEmpty(branch))
-        {
-            try { branch = Process.Start(new ProcessStartInfo("git", "rev-parse --abbrev-ref HEAD") { RedirectStandardOutput = true, UseShellExecute = false })!.StandardOutput.ReadToEnd().Trim(); }
-            catch { branch = "main"; }
-        }
-
-        return (sha!, build!, branch!);
     }
 }

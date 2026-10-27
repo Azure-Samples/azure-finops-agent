@@ -24,6 +24,8 @@ param entraAppId string
 param entraClientSecret string = ''
 param entraTenantId string
 param publicSiteHost string = ''
+@secure()
+param githubFeedback object = {}
 param acrName string
 param aoaiName string
 param aoaiResourceGroup string = resourceGroup().name
@@ -52,7 +54,7 @@ resource slot 'Microsoft.Web/sites/slots@2024-04-01' = {
     httpsOnly: true
     publicNetworkAccess: 'Enabled'
     siteConfig: buildSiteConfig(acrLoginServer, containerImageName, appInsightsConnectionString, aoaiEndpoint,
-      aoaiDeploymentName, aoaiReasoningEffort, aoaiWebSearch, entraAppId, entraClientSecret, entraTenantId, publicSiteHost)
+      aoaiDeploymentName, aoaiReasoningEffort, aoaiWebSearch, entraAppId, entraClientSecret, entraTenantId, publicSiteHost, githubFeedback)
   }
 }
 

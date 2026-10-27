@@ -189,6 +189,7 @@ src/
 │   ├── AI/                 # Agent Framework runtime, chat SSE endpoint, tools
 │   ├── Auth/               # Entra ID OAuth, session identity, token store, persistent identity
 │   ├── Endpoints/          # Sessions, downloads, uploads, SEO/meta endpoints
+│   ├── Feedback/           # In-app feedback form: GitHub App issue creation, content guard, rate limits
 │   ├── Infrastructure/     # HTTP helper, JSON query, artifact and upload stores
 │   ├── Jobs/               # Scheduled jobs: endpoints, scheduler, store, run outcomes
 │   └── Observability/      # OpenTelemetry sources/meters, live-session state

@@ -5,6 +5,7 @@ using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.Auth;
 using AzureFinOps.Dashboard.Observability;
 using AzureFinOps.Dashboard.Endpoints;
+using AzureFinOps.Dashboard.Feedback;
 using AzureFinOps.Dashboard.Infrastructure;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -82,6 +83,8 @@ builder.Services.AddHttpClient("entra-token", c =>
     c.Timeout = TimeSpan.FromSeconds(30);
     c.DefaultRequestVersion = System.Net.HttpVersion.Version20;
 });
+// GitHub API for the feedback form; a slow GitHub must not hold the form open.
+builder.Services.AddHttpClient(GitHubAppClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(15));
 
 if (!builder.Environment.IsDevelopment())
     builder.Services.AddHttpsRedirection(options => options.HttpsPort = 443);
@@ -411,6 +414,12 @@ app.MapMetaEndpoints(appInsightsCs ?? "", azureOpenAIDeployment);
 app.MapDownloadEndpoints();
 app.MapUploadEndpoints();
 app.MapSeoEndpoints();
+
+using var feedbackClient = new GitHubAppClient(
+    FeedbackOptions.FromConfiguration(app.Configuration, logger),
+    app.Services.GetRequiredService<IHttpClientFactory>(), TimeProvider.System,
+    loggerFactory.CreateLogger("AzureFinOps.Feedback"));
+app.MapFeedbackEndpoints(feedbackClient, new FeedbackRateLimiter(TimeProvider.System), logger);
 
 // Customer overview deck — clean URL (file is also reachable at /slides.html)
 // Both /slides (canonical) and /slide (alias) serve the same deck.

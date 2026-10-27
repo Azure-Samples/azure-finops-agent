@@ -41,6 +41,18 @@
         </a>
       </div>
       <div class="portal-header-right">
+        <!-- Always in view: the way to tell the maintainers what to fix or
+             add. Answers carry their own Feedback button. -->
+        <button
+          type="button"
+          class="portal-feedback"
+          title="Report a bug or suggest an improvement"
+          @click="openFeedback()"
+        >
+          <AppIcon name="feedback" size="16" />
+          <span class="portal-feedback-long">Have feedback?</span>
+          <span class="portal-feedback-short">Feedback</span>
+        </button>
         <div
           v-if="buildBranch && buildBranch !== 'main'"
           class="portal-build-badge portal-build-badge--preview"
@@ -1389,6 +1401,20 @@
                       </button>
                     </template>
                     <button
+                      type="button"
+                      class="answer-action"
+                      :class="{ 'answer-action--invite': msg.feedback === 'down' }"
+                      title="Tell the maintainers what was good or wrong in this answer"
+                      @click="openAnswerFeedback(msg, i)"
+                    >
+                      <AppIcon name="feedback" size="16" />
+                      <span>{{
+                        msg.feedback === "down"
+                          ? "Tell us what went wrong"
+                          : "Feedback"
+                      }}</span>
+                    </button>
+                    <button
                       v-if="answerEvidence(i)"
                       type="button"
                       class="answer-action answer-evidence"
@@ -2001,6 +2027,13 @@
           </div>
           <p v-if="!currentJob" class="input-notice">
             AI-generated answers can be wrong. Check important figures.
+            <button
+              type="button"
+              class="input-notice-link"
+              @click="openFeedback()"
+            >
+              Have feedback?
+            </button>
           </p>
         </div>
       </div>
@@ -2464,6 +2497,12 @@
         </div>
       </div>
     </Teleport>
+
+    <FeedbackDialog
+      :open="feedbackOpen"
+      :context="feedbackContext"
+      @close="feedbackOpen = false"
+    />
   </div>
 </template>
 
@@ -2495,6 +2534,7 @@ import {
   terminalRecoveryState,
 } from "../lib/turnRecovery.js";
 import TurnFailureNotice from "./TurnFailureNotice.vue";
+import FeedbackDialog from "./FeedbackDialog.vue";
 import RequestProgressCard from "./RequestProgressCard.vue";
 import ActivityIndicator from "./ActivityIndicator.vue";
 import AppIcon from "./AppIcon.vue";
@@ -6205,6 +6245,25 @@ async function rateAnswer(msg, index, rating) {
     msg.feedbackSaving = false;
   }
 }
+
+// The feedback form: general from the top bar and the message box, or about
+// one answer, carrying the question it answers and the user's rating.
+const feedbackOpen = ref(false);
+const feedbackContext = ref(null);
+function openFeedback(context = null) {
+  feedbackContext.value = context;
+  feedbackOpen.value = true;
+}
+function openAnswerFeedback(msg, index) {
+  const question = messages.value
+    .slice(0, index)
+    .findLast((m) => m.role === "user");
+  openFeedback({
+    turn: answerTurn(index),
+    question: String(question?.content || "").trim(),
+    rating: msg.feedback || null,
+  });
+}
 const answerActionsAvailable = computed(
   () =>
     !currentJob.value &&
@@ -9141,6 +9200,43 @@ async function send() {
     display: none;
   }
 }
+/* "Have feedback?": outlined on the brand bar so it reads as a button. */
+.portal-feedback {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+  padding: 5px 12px;
+  border: 1px solid var(--on-brand-line);
+  border-radius: var(--radius);
+  background: var(--on-brand-fill);
+  font: inherit;
+  font-size: var(--text-label-size);
+  line-height: 1;
+  font-weight: 500;
+  color: #fff;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
+.portal-feedback:hover {
+  background: var(--on-brand-hover);
+}
+.portal-feedback:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+.portal-feedback-short {
+  display: none;
+}
+@media (max-width: 600px) {
+  .portal-feedback-long {
+    display: none;
+  }
+  .portal-feedback-short {
+    display: inline;
+  }
+}
 
 .sidebar-new-chat,
 .new-chat-control {
@@ -11699,6 +11795,19 @@ async function send() {
   line-height: var(--text-caption-line);
   color: var(--text-muted);
 }
+.input-notice-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.input-notice-link:hover {
+  color: var(--accent-hover);
+}
 /* ── Job conversation context bar (above the composer) ── */
 .job-context-bar {
   display: flex;
@@ -13782,6 +13891,10 @@ async function send() {
 }
 .answer-action[aria-pressed="true"] {
   background: var(--accent-soft);
+  color: var(--accent);
+}
+/* After a Poor answer rating the Feedback button asks what went wrong. */
+.answer-action--invite {
   color: var(--accent);
 }
 

@@ -121,6 +121,16 @@ param entraClientSecret string = ''
 @description('Entra tenant ID for OAuth — `common` for multi-tenant. Leave default unless restricting to a single tenant.')
 param entraTenantId string = 'common'
 
+@description('Repository (owner/name) that receives in-app feedback issues. Empty uses the upstream sample repository.')
+param githubFeedbackRepository string = ''
+
+@description('Client ID or app ID of a GitHub App installed on the feedback repository with Issues read and write. Empty makes the feedback form open a prefilled GitHub issue instead.')
+param githubFeedbackAppId string = ''
+
+@secure()
+@description('That GitHub App\'s private key (PEM, or base64 of the PEM).')
+param githubFeedbackPrivateKey string = ''
+
 @description('Optional custom domain to serve the app on, e.g. contoso.com. When set, an Azure DNS zone is created with the apex/www/asuid/CAA/SPF/DMARC records already in place, and the app marks every other hostname noindex. You must then delegate the domain to the returned nameservers at your registrar and bind the hostnames — see .github/skills/migrate-tenant/SKILL.md. Empty skips all DNS.')
 param customDomainName string = ''
 
@@ -181,6 +191,11 @@ module resources 'main-resources.bicep' = {
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId
+    githubFeedback: {
+      repository: githubFeedbackRepository
+      appId: githubFeedbackAppId
+      privateKey: githubFeedbackPrivateKey
+    }
     customDomainName: customDomainName
     dmarcReportEmail: dmarcReportEmail
     enableDeleteLocks: enableDeleteLocks

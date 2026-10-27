@@ -21,10 +21,14 @@ param entraTenantId string
 @description('Canonical public hostname (bare, no scheme), e.g. contoso.com. Marks every other host — including the default *.azurewebsites.net — as noindex so search engines do not split ranking across duplicates. Empty disables the check.')
 param publicSiteHost string = ''
 
+@secure()
+@description('Feedback form settings: repository, appId and privateKey of a GitHub App. Empty keeps the prefilled GitHub link.')
+param githubFeedback object = {}
+
 var planTier = startsWith(appServicePlanSku, 'B') ? 'Basic' : (startsWith(appServicePlanSku, 'S') ? 'Standard' : 'PremiumV3')
 
 var siteConfig = buildSiteConfig(acrLoginServer, containerImageName, appInsightsConnectionString, aoaiEndpoint,
-  aoaiDeploymentName, aoaiReasoningEffort, aoaiWebSearch, entraAppId, entraClientSecret, entraTenantId, publicSiteHost)
+  aoaiDeploymentName, aoaiReasoningEffort, aoaiWebSearch, entraAppId, entraClientSecret, entraTenantId, publicSiteHost, githubFeedback)
 
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: 'plan-finops-${resourceToken}'

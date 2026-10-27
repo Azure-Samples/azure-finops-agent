@@ -20,6 +20,8 @@ param entraAppId string
 @secure()
 param entraClientSecret string
 param entraTenantId string
+@secure()
+param githubFeedback object = {}
 param customDomainName string
 param dmarcReportEmail string
 param enableDeleteLocks bool
@@ -87,6 +89,7 @@ module appservice 'modules/appservice.bicep' = {
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId
     publicSiteHost: customDomainName
+    githubFeedback: githubFeedback
   }
 }
 
@@ -110,6 +113,7 @@ module preview 'modules/preview.bicep' = if (!empty(previewSlotName)) {
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId
     publicSiteHost: customDomainName
+    githubFeedback: githubFeedback
     acrName: acr.outputs.name
     aoaiName: aoai.outputs.accountName
     aoaiResourceGroup: aoai.outputs.resourceGroup

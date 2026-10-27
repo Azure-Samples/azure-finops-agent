@@ -53,6 +53,15 @@
     "entraTenantId": {
       "value": "${AZURE_ENTRA_TENANT_ID=common}"
     },
+    "githubFeedbackRepository": {
+      "value": "${GITHUB_FEEDBACK_REPOSITORY=}"
+    },
+    "githubFeedbackAppId": {
+      "value": "${GITHUB_FEEDBACK_APP_ID=}"
+    },
+    "githubFeedbackPrivateKey": {
+      "value": "${GITHUB_FEEDBACK_PRIVATE_KEY=}"
+    },
     "customDomainName": {
       "value": "${AZURE_CUSTOM_DOMAIN=}"
     },

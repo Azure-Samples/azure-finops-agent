@@ -14,7 +14,8 @@ func buildSiteConfig(
   entraAppId string,
   entraClientSecret string,
   entraTenantId string,
-  publicSiteHost string
+  publicSiteHost string,
+  githubFeedback object
 ) object => {
   linuxFxVersion: 'DOCKER|${acrLoginServer}/${containerImageName}'
   acrUseManagedIdentityCreds: true
@@ -26,7 +27,7 @@ func buildSiteConfig(
   ftpsState: 'Disabled'
   minTlsVersion: '1.2'
   healthCheckPath: '/api/version'
-  appSettings: [
+  appSettings: concat([
     // Tells App Service which port the container listens on (matches Dockerfile EXPOSE 8080).
     { name: 'WEBSITES_PORT', value: '8080' }
     // CRITICAL: mount the persistent /home Azure Files share into the container.
@@ -62,5 +63,15 @@ func buildSiteConfig(
     { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
     { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }
     { name: 'PUBLIC_SITE_HOST', value: publicSiteHost }
-  ]
+  ],
+  // Feedback form: issues go to this repository (default: the upstream sample).
+  empty(githubFeedback.?repository ?? '') ? [] : [
+    { name: 'GitHubFeedback__Repository', value: githubFeedback.repository }
+  ],
+  // A GitHub App installed on that repository lets the form create the issue
+  // itself; without one, users post GitHub's prefilled new-issue page.
+  empty(githubFeedback.?appId ?? '') || empty(githubFeedback.?privateKey ?? '') ? [] : [
+    { name: 'GitHubFeedback__AppId', value: githubFeedback.appId }
+    { name: 'GitHubFeedback__PrivateKey', value: githubFeedback.privateKey }
+  ])
 }
