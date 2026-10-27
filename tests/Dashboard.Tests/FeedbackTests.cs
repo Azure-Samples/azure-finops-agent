@@ -109,7 +109,7 @@ public sealed class FeedbackTests
     [Fact]
     public void TheLinkedIssueFormExistsWithTheFeedbackLabelAndTheFilledField()
     {
-        var form = File.ReadAllText(Path.Combine(RepositoryRoot(), ".github", "ISSUE_TEMPLATE", FeedbackReport.IssueForm));
+        var form = File.ReadAllText(Path.Join(RepositoryRoot(), ".github", "ISSUE_TEMPLATE", FeedbackReport.IssueForm));
         Assert.Contains("labels: [\"" + FeedbackReport.FeedbackLabel + "\"]", form);
         Assert.Contains("type: textarea\n    id: " + FeedbackReport.IssueFormField + "\n", form.Replace("\r\n", "\n"));
     }
@@ -117,7 +117,7 @@ public sealed class FeedbackTests
     private static string RepositoryRoot([System.Runtime.CompilerServices.CallerFilePath] string source = "")
     {
         for (var directory = Path.GetDirectoryName(source); directory is not null; directory = Path.GetDirectoryName(directory))
-            if (Directory.Exists(Path.Combine(directory, ".github", "ISSUE_TEMPLATE"))) return directory;
+            if (Directory.Exists(Path.Join(directory, ".github", "ISSUE_TEMPLATE"))) return directory;
         throw new DirectoryNotFoundException("The repository root was not found above the test source.");
     }
 
