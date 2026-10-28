@@ -17,13 +17,13 @@ internal static class ApiExceptionHandling
 
             if (aborted)
             {
-                logger.LogInformation("Request aborted on {Method} {Path} (client disconnect, traceId={TraceId})",
-                    context.Request.Method, context.Request.Path.Value, traceId);
+                logger.LogInformation("Request aborted on {Method} (client disconnect, traceId={TraceId})",
+                    context.Request.Method, traceId);
             }
             else if (exception is not null)
             {
-                logger.LogError(exception, "Unhandled exception on {Method} {Path} (traceId={TraceId})",
-                    context.Request.Method, context.Request.Path.Value, traceId);
+                logger.LogError(exception, "Unhandled exception on {Method} (traceId={TraceId})",
+                    context.Request.Method, traceId);
                 context.Features.Get<IHttpMetricsTagsFeature>()?.Tags.Add(
                     new KeyValuePair<string, object?>("error.type", exception.GetType().FullName));
             }

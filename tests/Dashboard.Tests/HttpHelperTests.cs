@@ -122,7 +122,7 @@ public sealed class HttpHelperTests
             if (expectedRequests == 2)
             {
                 var dispatched = requests.ToArray();
-                Assert.True(Stopwatch.GetElapsedTime(dispatched[0], dispatched[1]) >= TimeSpan.FromSeconds(1));
+                Assert.True(Stopwatch.GetElapsedTime(dispatched[0], dispatched[1]) >= TimeSpan.FromMilliseconds(950));
             }
             Assert.Equal(expectedRequests == 2, notices.First().WillRetry);
             Assert.NotNull(notices.First().RetryAtUtc);

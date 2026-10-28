@@ -167,8 +167,8 @@ public class FaqTools
                 urlList = new[] { $"https://{PublicSiteHost}/faq/{slug}" },
                 key = IndexNowKey
             });
-            await http.PostAsync("https://api.indexnow.org/indexnow",
-                new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+            using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+            using var response = await http.PostAsync("https://api.indexnow.org/indexnow", content);
         }
         catch { }
     }

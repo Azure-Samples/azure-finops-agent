@@ -47,7 +47,8 @@ public sealed class ApiExceptionHandlingTests
         var entry = Assert.Single(logs.Entries, entry => entry.Exception is not null);
         Assert.Same(exception, entry.Exception);
         Assert.Equal("AzureFinOps.AI", entry.Category);
-        Assert.Contains("GET /failure", entry.Message);
+        Assert.Contains("GET", entry.Message);
+        Assert.DoesNotContain("/failure", entry.Message);
         Assert.Contains(traceId!, entry.Message);
         Assert.Contains(metrics.Tags, tag => tag.Key == "error.type" && Equals(tag.Value, exception.GetType().FullName));
     }
@@ -63,7 +64,7 @@ public sealed class ApiExceptionHandlingTests
         using var body = new MemoryStream();
         context.Response.Body = body;
         context.Request.Method = "GET";
-        context.Request.Path = "/cancel";
+        context.Request.Path = "/cancel\r\nforged";
         context.RequestAborted = new CancellationToken(requestAborted);
         context.Features.Set<IHttpMetricsTagsFeature>(metrics);
         context.Features.Set<IExceptionHandlerFeature>(new ExceptionHandlerFeature
@@ -78,6 +79,7 @@ public sealed class ApiExceptionHandlingTests
         Assert.Equal(LogLevel.Information, entry.Level);
         Assert.Null(entry.Exception);
         Assert.Contains("Request aborted", entry.Message);
+        Assert.DoesNotContain("forged", entry.Message);
         Assert.Equal(0, body.Length);
         Assert.Empty(metrics.Tags);
     }
