@@ -199,7 +199,7 @@ public static class MicrosoftAuthEndpoints
             {
                 if (!MicrosoftOAuthOptions.IsValidTenantId(tenantParam))
                 {
-                    logger.LogWarning("Rejected invalid tenant query param: {Tenant}", tenantParam);
+                    logger.LogWarning("Rejected invalid tenant query parameter");
                     return Results.BadRequest("Invalid tenant identifier");
                 }
                 ctx.Session.SetString("auth_tenant", tenantParam);
@@ -245,8 +245,7 @@ public static class MicrosoftAuthEndpoints
                 }
             }
 
-            logger.LogInformation("Microsoft OAuth redirect: tier={Tier} prompt={Prompt} tenant={Tenant} from {Host}",
-                tier, promptType, effectiveTenant, ctx.Request.Host);
+            logger.LogInformation("Microsoft OAuth redirect initiated");
             return Results.Redirect(url);
         });
 
@@ -261,7 +260,14 @@ public static class MicrosoftAuthEndpoints
 
             var tenantParam = ctx.Request.Query["tenant"].ToString().Trim();
             if (!string.IsNullOrEmpty(tenantParam))
+            {
+                if (!MicrosoftOAuthOptions.IsValidTenantId(tenantParam))
+                {
+                    logger.LogWarning("Rejected invalid admin consent tenant query parameter");
+                    return Results.BadRequest("Invalid tenant identifier");
+                }
                 ctx.Session.SetString("auth_tenant", tenantParam);
+            }
             var effectiveTenant = ctx.Session.GetString("auth_tenant") ?? options.TenantId;
             if (effectiveTenant == "common") effectiveTenant = "organizations";
 
@@ -272,7 +278,7 @@ public static class MicrosoftAuthEndpoints
                       $"&state={state}" +
                       $"&scope=https://graph.microsoft.com/.default";
 
-            logger.LogInformation("Admin consent redirect: tenant={Tenant} from {Host}", effectiveTenant, ctx.Request.Host);
+            logger.LogInformation("Admin consent redirect initiated");
             return Results.Redirect(url);
         });
 
@@ -289,15 +295,21 @@ public static class MicrosoftAuthEndpoints
             var error = ctx.Request.Query["error"].ToString();
             if (!string.IsNullOrEmpty(error))
             {
-                var desc = ctx.Request.Query["error_description"].ToString();
-                logger.LogWarning("Admin consent failed: {Error} — {Desc}", error, desc);
+                logger.LogWarning("Admin consent failed");
                 return Results.Redirect("/?azure_error=" + Uri.EscapeDataString(error));
             }
 
             var grantedTenant = ctx.Request.Query["tenant"].ToString();
-            logger.LogInformation("Admin consent granted for tenant={Tenant}", grantedTenant);
             if (!string.IsNullOrEmpty(grantedTenant))
+            {
+                if (!MicrosoftOAuthOptions.IsValidTenantId(grantedTenant))
+                {
+                    logger.LogWarning("Rejected invalid tenant from admin consent callback");
+                    return Results.BadRequest("Invalid tenant identifier");
+                }
                 ctx.Session.SetString("auth_tenant", grantedTenant);
+            }
+            logger.LogInformation("Admin consent granted");
             return Results.Redirect("/?admin_consent=ok&tenant=" + Uri.EscapeDataString(grantedTenant));
         });
 
@@ -309,17 +321,6 @@ public static class MicrosoftAuthEndpoints
                 var state = ctx.Request.Query["state"].ToString();
                 var error = ctx.Request.Query["error"].ToString();
 
-                if (!string.IsNullOrEmpty(error))
-                {
-                    var errorDesc = ctx.Request.Query["error_description"].ToString();
-                    logger.LogWarning("Microsoft OAuth error: {Error} — {Description}", error, errorDesc);
-                    ctx.Session.Remove("ms_oauth_state");
-                    ctx.Session.Remove("pkce_verifier");
-                    ctx.Session.Remove("oidc_nonce");
-                    ClearAuthChain(ctx);
-                    return Results.Redirect("/?azure_error=" + Uri.EscapeDataString(error));
-                }
-
                 if (state != ctx.Session.GetString("ms_oauth_state"))
                 {
                     logger.LogWarning("Microsoft OAuth state mismatch — possible CSRF attempt");
@@ -330,6 +331,15 @@ public static class MicrosoftAuthEndpoints
                 }
 
                 ctx.Session.Remove("ms_oauth_state");
+
+                if (!string.IsNullOrEmpty(error))
+                {
+                    logger.LogWarning("Microsoft OAuth authorization failed");
+                    ctx.Session.Remove("pkce_verifier");
+                    ctx.Session.Remove("oidc_nonce");
+                    ClearAuthChain(ctx);
+                    return Results.Redirect("/?azure_error=" + Uri.EscapeDataString(error));
+                }
 
                 // Named client with 30 s overall timeout. IPv4-only transport is
                 // already applied by ConfigureHttpClientDefaults in Program.cs.

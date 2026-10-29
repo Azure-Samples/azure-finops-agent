@@ -29,7 +29,8 @@ namespace AzureFinOps.Dashboard.Auth;
 /// <c>/home/dataprotection-keys/</c> so they survive restarts but never leave
 /// the tenant. Only refresh tokens are written to disk &#8212; access tokens
 /// stay in-memory. The cookie itself contains only an opaque token; the tenant
-/// and object identifiers are inside the encrypted payload.
+/// and object identifiers are inside the encrypted payload. Revocation markers
+/// keyed by the tenant/object pair prevent rehydration if identity-file deletion fails.
 /// </summary>
 public sealed class PersistentIdentity
 {
@@ -115,6 +116,7 @@ public sealed class PersistentIdentity
             var encrypted = _protector.Protect(JsonSerializer.Serialize(record));
             AtomicWrite(path, encrypted);
             WriteLegacyOwnerMarker(dir, record.TenantId, record.Oid);
+            File.Delete(RevocationMarkerPath(record.TenantId, record.Oid));
             _userIdToPrincipal[record.UserId] = (record.TenantId, record.Oid);
         }
         catch (Exception ex)
@@ -186,30 +188,51 @@ public sealed class PersistentIdentity
         if (legacy is not null && HasPrincipal(legacy)
             && string.Equals(legacy.Oid, pointer, StringComparison.OrdinalIgnoreCase))
         {
-            var normalized = Normalize(legacy);
-            var legacyDirectory = Path.GetDirectoryName(legacyPath)!;
-            _principalDirectories[PrincipalKey(normalized.TenantId, normalized.Oid)] = legacyDirectory;
-            WriteLegacyOwnerMarker(legacyDirectory, normalized.TenantId, normalized.Oid);
-            SetIdentityCookie(ctx, normalized.TenantId, normalized.Oid);
-            return normalized;
+            var normalized = LoadByPrincipal(legacy.TenantId, legacy.Oid);
+            if (normalized is not null
+                && string.Equals(normalized.Oid, pointer, StringComparison.OrdinalIgnoreCase))
+            {
+                SetIdentityCookie(ctx, normalized.TenantId, normalized.Oid);
+                return normalized;
+            }
         }
 
         ctx.Response.Cookies.Delete(IdentityCookieName);
         return null;
     }
 
-    /// <summary>Clears the identity cookie and removes the on-disk file. Called
-    /// from /auth/logout.</summary>
+    /// <summary>Clears the identity cookie, persists revocation, then removes the
+    /// on-disk file. A deletion failure is reported after revocation is durable.</summary>
     public void Clear(HttpContext ctx, string? tenantId, string? oid)
     {
         ctx.Response.Cookies.Delete(IdentityCookieName);
         if (!string.IsNullOrWhiteSpace(tenantId) && !string.IsNullOrWhiteSpace(oid))
         {
             var principalKey = PrincipalKey(tenantId, oid);
-            try { File.Delete(Path.Combine(GetOwnedUserDirectory(tenantId, oid), "identity.json")); }
-            catch { }
-            _principalDirectories.TryRemove(principalKey, out _);
-            _userIdToPrincipal.TryRemove(DeriveUserId(tenantId, oid), out _);
+            var sem = LockFor(principalKey);
+            sem.Wait();
+            try
+            {
+                var revocationPath = RevocationMarkerPath(tenantId, oid);
+                Directory.CreateDirectory(Path.GetDirectoryName(revocationPath)!);
+                AtomicWrite(revocationPath, "");
+
+                try
+                {
+                    File.Delete(Path.Combine(GetOwnedUserDirectory(tenantId, oid), "identity.json"));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogWarning(ex, "Identity was revoked but encrypted file cleanup failed");
+                    throw;
+                }
+            }
+            finally
+            {
+                _principalDirectories.TryRemove(principalKey, out _);
+                _userIdToPrincipal.TryRemove(DeriveUserId(tenantId, oid), out _);
+                sem.Release();
+            }
         }
     }
 
@@ -230,11 +253,9 @@ public sealed class PersistentIdentity
         {
             var record = LoadRecord(path);
             if (record is null || !HasPrincipal(record)) continue;
-            var normalized = Normalize(record);
-            if (normalized.UserId != userId) continue;
-            _principalDirectories[PrincipalKey(normalized.TenantId, normalized.Oid)] =
-                Path.GetDirectoryName(path)!;
-            return normalized;
+            if (DeriveUserId(record.TenantId, record.Oid) != userId) continue;
+            var normalized = LoadByPrincipal(record.TenantId, record.Oid);
+            if (normalized is not null && normalized.UserId == userId) return normalized;
         }
         return null;
     }
@@ -245,10 +266,18 @@ public sealed class PersistentIdentity
     public IdentityRecord? LoadByPrincipal(string tenantId, string oid)
     {
         if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(oid)) return null;
-        var path = Path.Combine(GetOwnedUserDirectory(tenantId, oid), "identity.json");
-        var record = LoadRecord(path);
-        if (record is null || !Matches(record, tenantId, oid)) return null;
-        return Normalize(record);
+        var principalKey = PrincipalKey(tenantId, oid);
+        var sem = LockFor(principalKey);
+        sem.Wait();
+        try
+        {
+            if (IsRevoked(tenantId, oid)) return null;
+            var path = Path.Combine(GetOwnedUserDirectory(tenantId, oid), "identity.json");
+            var record = LoadRecord(path);
+            if (record is null || !Matches(record, tenantId, oid)) return null;
+            return Normalize(record);
+        }
+        finally { sem.Release(); }
     }
 
     /// <summary>Updates only the refresh token + recorded scopes on an existing
@@ -269,12 +298,14 @@ public sealed class PersistentIdentity
 
     private async Task UpdateRecordAsync(string tenantId, string oid, Action<IdentityRecord> mutate)
     {
-        var path = Path.Combine(GetOwnedUserDirectory(tenantId, oid), "identity.json");
-        if (!File.Exists(path)) return;
-        var sem = LockFor(PrincipalKey(tenantId, oid));
+        var principalKey = PrincipalKey(tenantId, oid);
+        var sem = LockFor(principalKey);
         await sem.WaitAsync();
         try
         {
+            if (IsRevoked(tenantId, oid)) return;
+            var path = Path.Combine(GetOwnedUserDirectory(tenantId, oid), "identity.json");
+            if (!File.Exists(path)) return;
             var existing = JsonSerializer.Deserialize<IdentityRecord>(_protector.Unprotect(File.ReadAllText(path)));
             if (existing is null || !Matches(existing, tenantId, oid)) return;
             mutate(existing);
@@ -426,6 +457,21 @@ public sealed class PersistentIdentity
         if (!Guid.TryParse(oid, out _) || Path.GetFileName(oid) != oid)
             return Path.Combine(_agentHome, "invalid-legacy-identity");
         return Path.Combine(_agentHome, "users", oid, "identity.json");
+    }
+
+    // Keep revocations outside users/ so user-data cleanup cannot remove them.
+    private string RevocationMarkerPath(string tenantId, string oid) =>
+        Path.Combine(_agentHome, "identity-revocations", PrincipalDirectoryName(tenantId, oid) + ".revoked");
+
+    private bool IsRevoked(string tenantId, string oid)
+    {
+        try
+        {
+            using var marker = File.OpenRead(RevocationMarkerPath(tenantId, oid));
+            return true;
+        }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
     }
 
     /// <summary>Crash-safe write: stage to a sibling .tmp then atomically replace

@@ -11,7 +11,7 @@ It is designed for customers to deploy into **their own tenant and subscription*
 ## Stack
 
 - Backend: .NET 10 minimal API in `src/backend` (`Dashboard.csproj`; namespaces stay `AzureFinOps.Dashboard.*`)
-- Frontend: Vue 3 + Vite + ECharts in `src/frontend` (components in `src/components`, data in `src/data`, plain JS helpers in `src/lib`); `npm run build` writes `src/backend/wwwroot`
+- Frontend: Vue 3 + Vite + ECharts in `src/frontend` (components in `src/components`, data in `src/data`, plain JS helpers in `src/lib`); `npm run build` writes `src/backend/wwwroot`. Keep Vite and its transitive dependencies on patched releases and verify updates with `npm audit`.
 - Container: `src/Dockerfile` builds both with `src/` as the context
 - Agent runtime: Microsoft Agent Framework (`Microsoft.Agents.AI.Foundry`): one `AIProjectClient.AsAIAgent(ChatClientAgentOptions)` agent over the Foundry project Responses API. `AzureOpenAI:Endpoint` is the project endpoint (or the account endpoint plus `AzureOpenAI:ProjectName`).
 - Default model: `gpt-6.1-sol`, version `2026-09-29`, using the Responses API at reasoning effort `medium` (`AzureOpenAI:ReasoningEffort`; CI deploys the gate-tested `EVAL_REASONING_EFFORT`). Turns are dominated by model time: on gpt-6.1-sol a round at `xhigh` takes about 45 s against about 15 s at `medium`. Live evaluations use the same model for the agent and the judge (`EVAL_MODEL`/`EVAL_JUDGE_MODEL` in the `ai-evaluation` GitHub environment decide what CI deploys). Existing-account reuse requires that deployment and a Foundry project to exist and the app identity to have account-scoped **Foundry User** (formerly Azure AI User); **Cognitive Services OpenAI User** does not cover the project Responses endpoint, and the evaluation identity needs the same role. Verify available model-specific quota; deleting a different model does not free its quota. gpt-6.1-sol does not support the Priority service tier.
@@ -83,7 +83,7 @@ OAuth tiers are resource-specific and delegated:
 Disconnect/revoke/logout differ intentionally:
 
 - Disconnect clears live/session tokens and the browser identity cookie, but retains the encrypted identity record for explicit reconnect.
-- Revoke clears the cookie and encrypted identity record and forces fresh consent next time.
+- Revoke writes a tenant/object-pair revocation marker before removing the encrypted identity record, so a failed file deletion cannot restore the refresh token from a copied cookie; deletion failures are reported. A fresh validated login removes the marker only after persisting the new identity.
 - Logout clears Entra identity and immediately assigns a new anonymous chat identity.
 
 Before manually testing a fresh consent flow, revoke existing grants for the test app in the selected test tenant. Use placeholders or local configuration—never commit real values.

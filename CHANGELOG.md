@@ -7,6 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Security
+
+- Upgrade Vite to 8.3.5 and `source-map-js` to 1.2.2 to address the seven frontend Dependabot alerts affecting Vite/`launch-editor` and `source-map-js`.
+- Validate OAuth state before handling provider errors, validate admin-consent tenant IDs, and keep untrusted request values out of authentication and exception logs.
+- Persist a pair-scoped revocation marker before deleting encrypted identity records, preventing copied cookies from restoring a refresh token after a failed file deletion.
+- Dispose IndexNow request content and responses after FAQ publication.
+
 ## [0.4.0] - 2026-10-27
 
 ### Added

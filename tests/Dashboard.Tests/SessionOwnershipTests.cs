@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AzureFinOps.Dashboard.Auth;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Dashboard.Tests;
@@ -73,6 +74,70 @@ public sealed class SessionOwnershipTests : IDisposable
         Assert.Equal(legacyDirectory, afterLogout.GetOwnedUserDirectory(tenantA, oid));
         Assert.NotEqual(legacyDirectory, afterLogout.GetOwnedUserDirectory(tenantB, oid));
         Assert.Null(afterLogout.LoadByPrincipal(tenantA, oid));
+    }
+
+    [Fact]
+    public async Task RevocationMarkerBlocksIdentityWhenEncryptedFileCannotBeDeleted()
+    {
+        const string tenantId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        const string oid = "11111111-1111-1111-1111-111111111111";
+        var provider = new EphemeralDataProtectionProvider();
+        var identity = new PersistentIdentity(
+            provider, NullLogger<PersistentIdentity>.Instance, _root);
+        var context = new DefaultHttpContext();
+        var record = new IdentityRecord
+        {
+            TenantId = tenantId,
+            Oid = oid,
+            RefreshToken = "synthetic-refresh-token",
+        };
+        await identity.SaveIdentityAsync(context, record);
+        Assert.NotNull(identity.LoadByPrincipal(tenantId, oid));
+        var copiedCookie = context.Response.Headers.SetCookie.ToString().Split(';', 2)[0];
+
+        var identityPath = Path.Combine(identity.GetOwnedUserDirectory(tenantId, oid), "identity.json");
+        File.Delete(identityPath);
+        Directory.CreateDirectory(identityPath);
+
+        Assert.Throws<UnauthorizedAccessException>(() => identity.Clear(context, tenantId, oid));
+
+        var afterRevoke = new PersistentIdentity(
+            provider, NullLogger<PersistentIdentity>.Instance, _root);
+        Assert.Null(afterRevoke.LoadByPrincipal(tenantId, oid));
+        Assert.Null(afterRevoke.LoadByUserId(record.UserId));
+        var copiedCookieContext = new DefaultHttpContext();
+        copiedCookieContext.Request.Headers.Cookie = copiedCookie;
+        Assert.Null(afterRevoke.Load(copiedCookieContext));
+    }
+
+    [Fact]
+    public async Task FreshIdentityPersistenceRemovesTheRevocationMarker()
+    {
+        const string tenantId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        const string oid = "11111111-1111-1111-1111-111111111111";
+        var provider = new EphemeralDataProtectionProvider();
+        var identity = new PersistentIdentity(
+            provider, NullLogger<PersistentIdentity>.Instance, _root);
+        var context = new DefaultHttpContext();
+
+        await identity.SaveIdentityAsync(context, new IdentityRecord
+        {
+            TenantId = tenantId,
+            Oid = oid,
+            RefreshToken = "old-refresh-token",
+        });
+        identity.Clear(context, tenantId, oid);
+
+        await identity.SaveIdentityAsync(context, new IdentityRecord
+        {
+            TenantId = tenantId,
+            Oid = oid,
+            RefreshToken = "new-refresh-token",
+        });
+
+        var afterLogin = new PersistentIdentity(
+            provider, NullLogger<PersistentIdentity>.Instance, _root);
+        Assert.Equal("new-refresh-token", afterLogin.LoadByPrincipal(tenantId, oid)?.RefreshToken);
     }
 
     public void Dispose()
