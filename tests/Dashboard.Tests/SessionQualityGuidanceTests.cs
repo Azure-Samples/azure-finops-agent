@@ -110,6 +110,10 @@ public sealed class SessionQualityGuidanceTests
     // A statement with no question was repeated back as the whole answer.
     [InlineData("states a goal or capability instead of asking a question")]
     [InlineData("never repeat the message back")]
+    // A request unrelated to the product (a recipe, the weather, the news) is declined without a tool call or a web search.
+    [InlineData("completely unrelated to Azure, Microsoft 365, cloud spend or their tenant")]
+    [InlineData("call no tool and do not search the web; politely decline in one sentence")]
+    [InlineData("your purpose is to answer Azure, spend or tenant related questions")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
