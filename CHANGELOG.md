@@ -23,6 +23,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Reject malformed chat JSON and missing or wrongly typed prompts with HTTP 400 instead of HTTP 500, without echoing request contents.
+- Create the identity-revocation directory before clearing a marker on login, so first-time identity saves finish without a missing-directory exception and register the persisted principal.
 - Let the AI quality report re-test chosen evals. Dispatching `ai-quality-report.yml` with the `scenarios` input failed its Plan job: the workflow exports the input to the whole job, which also runs the evaluation tests, and three tests that start the real entry point inherited it, so one of them ended with an empty selection ("No scenario matches the selection") instead of the configuration error it checks. Those tests now blank `EVAL_SCENARIOS` like their neighbours, and the suite passes with the dispatch inputs set.
 
 ## [0.4.0] - 2026-10-27

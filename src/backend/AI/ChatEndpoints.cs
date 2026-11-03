@@ -156,8 +156,29 @@ public static class ChatEndpoints
                 return;
             }
 
-            using var bodyDoc = await JsonDocument.ParseAsync(ctx.Request.Body);
-            var prompt = bodyDoc.RootElement.GetProperty("prompt").GetString();
+            JsonDocument bodyDoc;
+            try
+            {
+                bodyDoc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+            }
+            catch (JsonException)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await ctx.Response.WriteAsJsonAsync(new { error = "request body must be valid JSON" });
+                return;
+            }
+            using var requestBody = bodyDoc;
+            var prompt = bodyDoc.RootElement.ValueKind == JsonValueKind.Object
+                && bodyDoc.RootElement.TryGetProperty("prompt", out var promptProp)
+                && promptProp.ValueKind == JsonValueKind.String
+                    ? promptProp.GetString() : null;
+            if (string.IsNullOrWhiteSpace(prompt))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await ctx.Response.WriteAsJsonAsync(new { error = "prompt is required and must be a nonempty string" });
+                return;
+            }
+
             var attachmentIds = bodyDoc.RootElement.TryGetProperty("fileIds", out var fileIds) && fileIds.ValueKind == JsonValueKind.Array
                 ? fileIds.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()!).ToArray() : [];
             string? requestedSessionId = null;
@@ -172,13 +193,6 @@ public static class ChatEndpoints
                 && approvalProp.TryGetProperty("requestId", out var requestIdProp) && requestIdProp.ValueKind == JsonValueKind.String
                 && approvalProp.TryGetProperty("approved", out var approvedProp) && approvedProp.ValueKind is JsonValueKind.True or JsonValueKind.False)
                 approval = new ApprovalDecision(requestIdProp.GetString() ?? "", approvedProp.GetBoolean());
-
-            if (string.IsNullOrWhiteSpace(prompt))
-            {
-                ctx.Response.StatusCode = 400;
-                await ctx.Response.WriteAsJsonAsync(new { error = "prompt is required" });
-                return;
-            }
 
             // Track activity for the janitor's idle eviction.
             UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;

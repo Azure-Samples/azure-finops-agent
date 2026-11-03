@@ -2,6 +2,7 @@ using System.Text.Json;
 using AzureFinOps.Dashboard.Auth;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Dashboard.Tests;
@@ -77,6 +78,33 @@ public sealed class SessionOwnershipTests : IDisposable
     }
 
     [Fact]
+    public async Task FirstIdentitySaveSucceedsWithoutARevocationDirectoryOrWarning()
+    {
+        var tenantId = Guid.NewGuid().ToString();
+        var oid = Guid.NewGuid().ToString();
+        var provider = new EphemeralDataProtectionProvider();
+        var logger = new RecordingLogger();
+        var identity = new PersistentIdentity(provider, logger, _root);
+        var context = new DefaultHttpContext();
+        Assert.False(Directory.Exists(Path.Combine(_root, "identity-revocations")));
+
+        await identity.SaveIdentityAsync(context, new IdentityRecord
+        {
+            TenantId = tenantId,
+            Oid = oid,
+            RefreshToken = "synthetic-refresh-token",
+        });
+
+        Assert.Empty(logger.Entries);
+        var afterRestart = new PersistentIdentity(provider, logger, _root);
+        Assert.Equal("synthetic-refresh-token",
+            afterRestart.LoadByUserId(PersistentIdentity.DeriveUserId(tenantId, oid))?.RefreshToken);
+        var cookieContext = new DefaultHttpContext();
+        cookieContext.Request.Headers.Cookie = context.Response.Headers.SetCookie.ToString().Split(';', 2)[0];
+        Assert.NotNull(afterRestart.Load(cookieContext));
+    }
+
+    [Fact]
     public async Task RevocationMarkerBlocksIdentityWhenEncryptedFileCannotBeDeleted()
     {
         const string tenantId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
@@ -144,5 +172,14 @@ public sealed class SessionOwnershipTests : IDisposable
     {
         try { Directory.Delete(_root, recursive: true); }
         catch { }
+    }
+
+    private sealed class RecordingLogger : ILogger<PersistentIdentity>
+    {
+        public List<(LogLevel Level, Exception? Exception)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Entries.Add((logLevel, exception));
     }
 }

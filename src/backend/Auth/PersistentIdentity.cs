@@ -116,7 +116,9 @@ public sealed class PersistentIdentity
             var encrypted = _protector.Protect(JsonSerializer.Serialize(record));
             AtomicWrite(path, encrypted);
             WriteLegacyOwnerMarker(dir, record.TenantId, record.Oid);
-            File.Delete(RevocationMarkerPath(record.TenantId, record.Oid));
+            var revocationPath = RevocationMarkerPath(record.TenantId, record.Oid);
+            Directory.CreateDirectory(Path.GetDirectoryName(revocationPath)!);
+            File.Delete(revocationPath);
             _userIdToPrincipal[record.UserId] = (record.TenantId, record.Oid);
         }
         catch (Exception ex)

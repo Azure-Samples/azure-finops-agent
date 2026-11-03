@@ -83,7 +83,7 @@ OAuth tiers are resource-specific and delegated:
 Disconnect/revoke/logout differ intentionally:
 
 - Disconnect clears live/session tokens and the browser identity cookie, but retains the encrypted identity record for explicit reconnect.
-- Revoke writes a tenant/object-pair revocation marker before removing the encrypted identity record, so a failed file deletion cannot restore the refresh token from a copied cookie; deletion failures are reported. A fresh validated login removes the marker only after persisting the new identity.
+- Revoke writes a tenant/object-pair revocation marker before removing the encrypted identity record, so a failed file deletion cannot restore the refresh token from a copied cookie; deletion failures are reported. A fresh validated login removes the marker only after persisting the new identity, creating the revocation directory first so an initial login also completes.
 - Logout clears Entra identity and immediately assigns a new anonymous chat identity.
 
 Before manually testing a fresh consent flow, revoke existing grants for the test app in the selected test tenant. Use placeholders or local configuration—never commit real values.

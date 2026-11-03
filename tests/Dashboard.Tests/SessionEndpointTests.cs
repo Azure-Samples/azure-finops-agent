@@ -35,6 +35,7 @@ public sealed class SessionEndpointTests : IAsyncLifetime
         builder.WebHost.UseTestServer();
         builder.Services.AddDistributedMemoryCache();
         builder.Services.AddSession();
+        builder.Services.AddHttpClient();
         _app = builder.Build();
         _app.UseSession();
         _app.Use(async (context, next) =>
@@ -44,8 +45,41 @@ public sealed class SessionEndpointTests : IAsyncLifetime
             await next();
         });
         _app.MapSessionEndpoints(_factory, telemetry, new JobStore(NullLogger.Instance), NullLogger.Instance);
+        var options = new MicrosoftOAuthOptions();
+        var credentials = new EntraClientCredentials(options, NullLogger<EntraClientCredentials>.Instance);
+        var tokenStore = new SessionTokenStore(options, credentials, identity, NullLogger<SessionTokenStore>.Instance);
+        _app.MapChatEndpoints(_factory, tokenStore, telemetry, NullLogger.Instance);
         await _app.StartAsync();
         _client = _app.GetTestClient();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("plain text")]
+    [InlineData("{\"prompt\":")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("42")]
+    [InlineData("\"text\"")]
+    [InlineData("{}")]
+    [InlineData("{\"prompt\":null}")]
+    [InlineData("{\"prompt\":42}")]
+    [InlineData("{\"prompt\":true}")]
+    [InlineData("{\"prompt\":[]}")]
+    [InlineData("{\"prompt\":{}}")]
+    [InlineData("{\"prompt\":\"\"}")]
+    [InlineData("{\"prompt\":\"   \"}")]
+    public async Task InvalidChatBodiesReturnBadRequestWithoutCallingTheModel(string body)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/chat");
+        request.Headers.Add("X-Test-User", NewBrowser().ToString());
+        request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+
+        using var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.False(string.IsNullOrWhiteSpace(json.RootElement.GetProperty("error").GetString()));
     }
 
     [Fact]
