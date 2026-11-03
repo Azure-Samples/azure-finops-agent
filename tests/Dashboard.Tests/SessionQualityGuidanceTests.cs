@@ -98,9 +98,11 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("{\"usage\":{\"name\":\"UsageQuantity\",\"function\":\"Sum\"}}")]
     // The agent inventory card asks what each step needs; 12 of its 22 answers wrote "eligible plan" or "appropriate
     // permissions" although the documentation they had read named the license, preview opt-in and admin role (Oct 2026).
-    [InlineData("a column for what a step needs names each license, preview opt-in and admin role exactly as the sources you read name them")]
-    [InlineData("never a general phrase such as eligible plan or appropriate permissions")]
-    [InlineData("marks an item those sources do not state as unconfirmed")]
+    // Asking only to name each item left rows vague, and the quality report's judge wanted plan names in the rows and
+    // unstated items marked, so the rule covers all three items in every row.
+    [InlineData("a column for what a step needs covers the license, the preview opt-in and the admin role in every row")]
+    [InlineData("\"none needed\" where a source says so and unconfirmed where no source states it")]
+    [InlineData("never eligible plan, existing licenses or appropriate permissions")]
     // A tender needing a PDF got HTML without a word, and "execute the bash script" got a request to upload the script back.
     [InlineData("You cannot write PDF, Word or PowerPoint files or run a script")]
     [InlineData("say so in the first sentence and deliver the closest result yourself from data your tools read")]

@@ -561,7 +561,7 @@ test("the real extended entry point fails closed on missing configuration and wr
                 EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "",
                 EVAL_DATA_CLASSIFICATION: "internal-test", EVAL_MODEL_ENDPOINT: "",
                 EVAL_OUTPUT_DIRECTORY: directory, EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY: "",
-                EVAL_GROUPS: "safety", EVAL_QUALITY_THRESHOLD: "",
+                EVAL_GROUPS: "safety", EVAL_SCENARIOS: "", EVAL_QUALITY_THRESHOLD: "",
             },
         });
         assert.equal(result.status, 1);
@@ -578,7 +578,7 @@ test("the real extended entry point fails closed on missing configuration and wr
 test("the extended entry point rejects an unknown group, a bad bar and CI-only misuse before any live case", async () => {
     const run = (extra) => spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url))], {
         encoding: "utf8",
-        env: { ...process.env, EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_OUTPUT_DIRECTORY: join(repositoryRoot, "tests", "LiveEvaluations", "obj", ".never-written"), ...extra },
+        env: { ...process.env, EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_SCENARIOS: "", EVAL_OUTPUT_DIRECTORY: join(repositoryRoot, "tests", "LiveEvaluations", "obj", ".never-written"), ...extra },
     });
     assert.match(run({ EVAL_GROUPS: "nope" }).stderr, /Unknown scenario group: "nope"/);
     assert.match(run({ EVAL_QUALITY_THRESHOLD: "150" }).stderr, /percentage from 0 to 100/);
@@ -593,7 +593,7 @@ test("a hostile groups input can never put a workflow command on its own log lin
     assert.throws(() => selectScenarios(extended, hostile), (error) => !/[\r\n]/.test(error.message) && !error.message.includes("\n::"));
     const result = spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url))], {
         encoding: "utf8",
-        env: { ...process.env, EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: hostile, EVAL_OUTPUT_DIRECTORY: join(repositoryRoot, "tests", "LiveEvaluations", "obj", ".never-written") },
+        env: { ...process.env, EVAL_EXPECTED_SHA: sha, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: hostile, EVAL_SCENARIOS: "", EVAL_OUTPUT_DIRECTORY: join(repositoryRoot, "tests", "LiveEvaluations", "obj", ".never-written") },
     });
     assert.equal(result.status, 1);
     for (const line of result.stderr.split(/\r?\n/)) assert.ok(!line.startsWith("::"), `log line starts a command: ${line}`);
