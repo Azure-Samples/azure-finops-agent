@@ -41,6 +41,14 @@ const DOCUMENTATION_LABELS = new Set([
 
 const COST_PATTERN = /cost|spend|budget|forecast|invoice|billing|price ?sheet|anomal|reservation|savings|egress|peering/i;
 
+// Case expectations appended to the shared rubric of a catalog scenario, by label. The inventory card asks what each
+// step needs; 12 of its 22 audited answers wrote "eligible plan" or "appropriate permissions" although the Microsoft
+// documentation they had read named the license, preview opt-in and admin role.
+export const CATALOG_EXPECTATIONS = Object.freeze({
+    "How do I find all our AI agents?":
+        "Case expectation: the column for what each step needs names the specific license, preview opt-in and admin role that the documentation states for that step, not only a general phrase such as 'eligible plan' or 'appropriate permissions'; an item the documentation does not state is called unconfirmed.",
+});
+
 // Cost Management quota is tenant-wide, so scenarios that may query it share one paced lane; the rest run beside it.
 export function extendedLane(scenario) {
     if (scenario.lane) return scenario.lane;
@@ -154,6 +162,12 @@ export const NEW_SCENARIOS = Object.freeze([
         question: "Show the resource groups with the most resources and the subscription each one belongs to.",
         label: "Largest resource groups", group: "resources", lane: "tenant", requiredTools: ["QueryAzure"],
         expectation: "Case expectation: counts are taken from a single inventory read and the table shows the exact group and subscription names as returned.",
+    }),
+    define({
+        question: "Flags idle virtual machines as usage data becomes available and tells their owners.",
+        label: "Goal stated without a question", group: "resources", lane: "tenant",
+        expectation: "Case expectation: the message states a goal and asks no question. The answer treats it as a request for help: it either carries the check out with its read tools or explains how it would do it and what it needs (such as the connected scopes and the utilization it would read). Repeating or rephrasing the sentence is not an answer.",
+        maxToolCalls: 14,
     }),
 
     // ── Security and access (about 27%) ──
@@ -270,6 +284,11 @@ export const NEW_SCENARIOS = Object.freeze([
         question: "Create a one-page HTML summary of my top five savings opportunities with the estimated monthly saving for each.",
         label: "Savings summary page", group: "reports", lane: "tenant", requiredTools: ["QueryAzure"],
         expectation: "Case expectation: each opportunity cites its evidence from Advisor or a read this turn, savings are labelled as estimates, overlapping recommendations are not added together, and no file is claimed unless a report tool returned it.",
+    }),
+    define({
+        question: "Give me last month's cost by service as a PDF I can email to my manager.",
+        label: "PDF request", group: "reports", lane: COST_MANAGEMENT_LANE, requiredTools: ["QueryAzure"],
+        expectation: "Case expectation: this agent cannot write PDF files, and says so in the first sentence instead of claiming one. It delivers the closest file it can write, such as an HTML report (which the browser can save as PDF) or an XLSX or CSV file, with rows from the cost query; no PDF is claimed.",
     }),
 
     // ── Scripts and infrastructure as code (about 10%) ──
@@ -423,6 +442,8 @@ export function buildExtendedSuite(catalog = buildCatalog(), gate = buildSuite(c
             group: groupOf(scenario),
             lane: extendedLane(scenario),
             ...(ASKED_BY[scenario.label] ? { askedBy: ASKED_BY[scenario.label] } : {}),
+            ...(CATALOG_EXPECTATIONS[scenario.label]
+                ? { rubric: `${scenario.rubric} ${CATALOG_EXPECTATIONS[scenario.label]}` } : {}),
             ...(DOCUMENTATION_LABELS.has(scenario.label) || scenario.origins[0] === "incident:learn-docs"
                 ? { knownIssue: KNOWN_LIMITATION } : {}),
         }));

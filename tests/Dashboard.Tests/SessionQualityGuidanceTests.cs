@@ -96,6 +96,18 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("never a query per subscription, which the host runs one at a time")]
     [InlineData("Enterprise Agreement subscriptions only: for Microsoft Customer Agreement, CSP and other offers")]
     [InlineData("{\"usage\":{\"name\":\"UsageQuantity\",\"function\":\"Sum\"}}")]
+    // The agent inventory card asks what each step needs; 12 of its 22 answers wrote "eligible plan" or "appropriate
+    // permissions" although the documentation they had read named the license, preview opt-in and admin role (Oct 2026).
+    [InlineData("a column for what a step needs names each license, preview opt-in and admin role exactly as the sources you read name them")]
+    [InlineData("never a general phrase such as eligible plan or appropriate permissions")]
+    [InlineData("marks an item those sources do not state as unconfirmed")]
+    // A tender needing a PDF got HTML without a word, and "execute the bash script" got a request to upload the script back.
+    [InlineData("You cannot write PDF, Word or PowerPoint files or run a script")]
+    [InlineData("say so in the first sentence and deliver the closest result yourself from data your tools read")]
+    [InlineData("never claiming the format or the run")]
+    // A statement with no question was repeated back as the whole answer.
+    [InlineData("states a goal or capability instead of asking a question")]
+    [InlineData("never repeat the message back")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 

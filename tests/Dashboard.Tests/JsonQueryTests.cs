@@ -356,6 +356,22 @@ public sealed class JsonQueryTests
         Assert.DoesNotContain("as root.", Assert.ThrowsAny<Exception>(() => Run(costs, "properties.rows.GroupBy(r => r.ServiceName).Select(g => Properties.rows.Count())")).Message);
     }
 
+    // A Resource Graph summarize grouped by a boolean column returned it as 0 or 1 (schema: double? 0..1), and the first
+    // query compared it with true: "Operator '==' incompatible with operand types 'Double?' and 'Boolean'" cost a round.
+    [Fact]
+    public void AFlagReadAsANumberIsComparedWithANumber()
+    {
+        const string rows = """{"data":[{"legacy":1,"vms":3},{"legacy":0,"vms":5},{"legacy":1,"vms":4}]}""";
+
+        var error = Assert.ThrowsAny<ArgumentException>(() => Run(rows, "data.Where(x => x.legacy == true).Sum(x => x.vms)"));
+
+        Assert.Contains("incompatible with operand types", error.Message);
+        Assert.Contains("compare it with a number (x.legacy == 1)", error.Message);
+        Assert.Equal("7", Run(rows, "data.Where(x => x.legacy == 1).Sum(x => x.vms)"));
+        // A string compared with a boolean is a different mistake and gets no number advice.
+        Assert.DoesNotContain("compare it with a number", Assert.ThrowsAny<Exception>(() => Run(Vms, "value.Where(x => x.name == true).Count()")).Message);
+    }
+
     // A calculation retypes figures from several earlier calls, since nothing is stored between calls; the live sessions
     // that failed at 4,000 characters combined 4,581 to 7,099 characters of figures.
     [Fact]

@@ -41,6 +41,7 @@ import {
 } from "./quality.mjs";
 import {
     ASKED_BY,
+    CATALOG_EXPECTATIONS,
     CORE_STAGES,
     KNOWN_LIMITATION,
     NEW_SCENARIOS,
@@ -145,6 +146,27 @@ test("scenarios that need a stated expectation carry one and the shared rubric",
     for (const scenario of NEW_SCENARIOS.filter((item) => ["safety", "multilingual"].includes(item.group))) {
         assert.ok(scenario.rubric.startsWith(base) && scenario.rubric.length > base.length + 40,
             `${scenario.label} needs a case expectation`);
+    }
+});
+
+// The October 2026 audit of real conversations (docs/agent-reliability.md) found these three failures; each stays visible
+// as an eval with a stated expectation instead of resting on the shared rubric alone.
+test("the audit-driven evals state what a correct answer contains", () => {
+    const base = buildSuite(catalog)[0].rubric;
+    const card = extended.find((scenario) => scenario.label === "How do I find all our AI agents?");
+    assert.ok(card.rubric.startsWith(base));
+    assert.match(card.rubric, /names the specific license, preview opt-in and admin role/);
+    for (const label of Object.keys(CATALOG_EXPECTATIONS))
+        assert.ok(catalog.some((scenario) => scenario.label === label), `${label} is not a catalog label`);
+    for (const [label, pattern] of [
+        ["PDF request", /cannot write PDF files, and says so in the first sentence/],
+        ["Goal stated without a question", /Repeating or rephrasing the sentence is not an answer/],
+    ]) {
+        const scenario = NEW_SCENARIOS.find((item) => item.label === label);
+        assert.ok(scenario, `${label} is missing`);
+        assert.ok(scenario.rubric.startsWith(base) && scenario.rubric.length > base.length + 40, `${label} needs a case expectation`);
+        assert.match(scenario.rubric, pattern);
+        assert.equal(scenario.knownIssue, undefined, `${label} is not a documentation limitation`);
     }
 });
 

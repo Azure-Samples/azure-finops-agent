@@ -14,6 +14,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Persist a pair-scoped revocation marker before deleting encrypted identity records, preventing copied cookies from restoring a refresh token after a failed file deletion.
 - Dispose IndexNow request content and responses after FAQ publication.
 
+### Changed
+
+- Name what each step needs. A table column for what a step needs (license, preview opt-in, admin role) must now name each item exactly as the sources the agent read name it, and mark an item they do not state as unconfirmed. An evaluation of 123 real conversations (30 days to 3 November 2026, mean score 8.84) found 12 of the 22 answers to the start-page agent-inventory card writing "eligible plan" or "appropriate permissions" although the documentation they had fetched named the license, preview opt-in and admin role; the table rule's one-short-phrase-per-cell limit stays, so the answer stays short.
+- Say what the agent cannot write or run. It cannot create PDF, Word or PowerPoint files or run a script, and now says so in the first sentence and delivers the closest result from data its tools read (an HTML report that the browser saves as PDF, or XLSX or CSV), instead of handing over HTML without a word or asking the user to upload the script it had written. A statement of a goal with no question ("Flags unusual spending ...") is treated as a request for it, never repeated back as the answer (one conversation scored 3 for that).
+- Tell the model when a number is not a boolean. A flag that a Resource Graph `summarize ... by` grouped on arrives as 0 or 1 (`double?` in the schema), and `x.legacy == true` failed with "Operator '==' incompatible with operand types 'Double?' and 'Boolean'" and cost a model round. The error now says to compare such a member with a number (`x.legacy == 1`).
+- Hold the evaluation tier to these. The agent-inventory card's eval carries an expectation that the "what it needs" column names the specific license, preview opt-in and admin role, and two synthetic evals cover a PDF request and a goal stated without a question (the extended library now has 65 synthetic scenarios).
+
 ## [0.4.0] - 2026-10-27
 
 ### Added

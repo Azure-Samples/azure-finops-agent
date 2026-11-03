@@ -145,6 +145,8 @@ internal static partial class JsonQuery
                 if (attempt < MaxRepairs && config == Config && MathOverload().IsMatch(message)) { config = MathConfig; continue; }
                 if (MathOverload().IsMatch(message)) message += ". Numbers are double?; unwrap them for Math with ?? (Math.Max(0, (x.a ?? 0) - (x.b ?? 0)))";
                 if (DuplicateName().IsMatch(message)) message += "; name each projected member once (new { x.kind, propertiesKind = x.properties.kind })";
+                // A flag a query grouped by (Resource Graph summarize ... by isLegacy) arrives as 0 or 1, which the schema shows as double?.
+                if (NumberBooleanComparison().IsMatch(message)) message += ". A member the schema shows as double? holds numbers, even a 0 or 1 flag: compare it with a number (x.legacy == 1); only a bool? member compares with true or false";
                 if (IndexedLambda().IsMatch(text)) message += ". " + LinePositions;
                 if (NotCollection().Match(message) is { Success: true } notList && RootLists(shape) is { Count: > 0 } lists
                     && (shape.Clr!.Name == notList.Groups["type"].Value || shape.Clr.FullName == notList.Groups["type"].Value))
@@ -341,6 +343,10 @@ internal static partial class JsonQuery
 
     [System.Text.RegularExpressions.GeneratedRegex(@"^The identifier '\w+' was defined more than once", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex DuplicateName();
+
+    // A number compared with a boolean literal, in either order (x.flag == true where flag is double?).
+    [System.Text.RegularExpressions.GeneratedRegex(@"incompatible with operand types '(?:Double|Single|Decimal|Int32|Int64)\??' and 'Boolean\??'|incompatible with operand types 'Boolean\??' and '(?:Double|Single|Decimal|Int32|Int64)\??'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex NumberBooleanComparison();
 
     // Members the query enumerates with a lambda or a LINQ operator.
     [System.Text.RegularExpressions.GeneratedRegex(@"\b(?<m>\w+)\s*\??\.\s*(?:Select|SelectMany|Where|Any|All|Count|Sum|Average|Min|Max|OrderBy|OrderByDescending|GroupBy|First|FirstOrDefault|Last|LastOrDefault|Take|Skip|Distinct|ToList|ToArray)\s*\(", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
