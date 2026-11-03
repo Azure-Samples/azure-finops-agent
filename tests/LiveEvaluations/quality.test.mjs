@@ -894,6 +894,44 @@ test("the real merge writes the scoreboard, the dashboard and results, and is re
 
 // ── What each scenario explains ─────────────────────────────────────────────
 
+// Re-testing one eval, the documented way to check a fix, leaves exactly one stage artifact, and actions/download-artifact
+// extracts a lone matching artifact straight into its path instead of into a folder named after it: the first such run
+// (run 41728961377) passed its stage and still printed "1 not run of 1 scenarios".
+test("a re-test of one stage's evals still gets a scoreboard: a lone artifact is read without a folder of its own", async () => {
+    const directory = await createDirectory();
+    try {
+        const core = buildCoreSuite();
+        const one = core.find((scenario) => scenario.group === "start-page");
+        const cost = core.find((scenario) => scenario.group === "cost");
+        const published = (row) => ({ ...row, result: publishableResult(row.result, false) });
+        const stages = join(directory, "stages");
+        await mkdir(stages, { recursive: true });
+        await writeFile(join(stages, "results.json"), JSON.stringify({ sha, publishAnswers: false, cases: [one], results: [published(passRow(one))] }));
+
+        const reports = await readStageReports(stages);
+        assert.deepEqual([...reports.keys()], ["start-page"]);
+        assert.deepEqual(combineReports([one], reports, sha).results.map((row) => row.id), [one.id]);
+
+        const output = join(directory, "out");
+        const merge = spawnSync(process.execPath, [fileURLToPath(new URL("./quality.mjs", import.meta.url)), "--merge", stages, join(directory, "no-jobs.json")], {
+            encoding: "utf8",
+            env: { ...process.env, GITHUB_SHA: sha, GITHUB_ACTIONS: "", EVAL_GROUPS: "", EVAL_SCENARIOS: one.id, EVAL_OUTPUT_DIRECTORY: output, EVAL_QUALITY_THRESHOLD: "" },
+        });
+        assert.equal(merge.status, 0, merge.stderr);
+        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All 1 scenario green/);
+
+        // A report that is not one stage's is not read: evals of two stages, or ids no core stage owns.
+        await writeFile(join(stages, "results.json"), JSON.stringify({ sha, cases: [one, cost], results: [] }));
+        assert.equal((await readStageReports(stages)).size, 0);
+        await writeFile(join(stages, "results.json"), JSON.stringify({ sha, cases: "x", results: [{ id: "0123456789abcdef" }] }));
+        assert.equal((await readStageReports(stages)).size, 0);
+        await writeFile(join(stages, "results.json"), "not json");
+        assert.equal((await readStageReports(stages)).size, 0);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test("the judge's finding codes match the evaluator's closed vocabulary", async () => {
     const judge = await readFile(new URL("./JudgeClient.cs", import.meta.url), "utf8");
     const declared = judge.match(/FindingCodes =\s*\[([\s\S]*?)\];/)[1].match(/"([a-z_]+)"/g).map((code) => code.slice(1, -1));

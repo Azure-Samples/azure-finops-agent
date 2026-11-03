@@ -183,6 +183,22 @@ export function stagePresentationFor(group, cases) {
 // the newest attempt of each stage wins.
 export const STAGE_ARTIFACT = /^ai-quality-stage-([a-z-]+)-(\d+)$/;
 
+// actions/download-artifact extracts a lone matching artifact straight into its path instead of into a folder named
+// after it, which is what a re-test of one stage's evals leaves. Its stage is the one every one of its evals belongs to,
+// read from the core suite rather than from a name inside the artifact.
+async function lonelyStageReport(directory, names) {
+    if (!names.some((entry) => entry.isFile() && entry.name === "results.json")) return null;
+    try {
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        const stageOf = new Map(buildCoreSuite().map((scenario) => [scenario.id, scenario.group]));
+        const groups = new Set([report.cases, report.results].filter(Array.isArray).flat().map((item) => stageOf.get(item?.id)));
+        groups.delete(undefined);
+        return groups.size === 1 ? { group: [...groups][0], report } : null;
+    } catch {
+        return null;
+    }
+}
+
 export async function readStageReports(directory) {
     const latest = new Map();
     let names = [];
@@ -191,6 +207,8 @@ export async function readStageReports(directory) {
     } catch {
         return latest;
     }
+    const lonely = await lonelyStageReport(directory, names);
+    if (lonely) latest.set(lonely.group, { attempt: Number(process.env.GITHUB_RUN_ATTEMPT) || 1, report: lonely.report });
     for (const entry of names) {
         const match = entry.isDirectory() ? STAGE_ARTIFACT.exec(entry.name) : null;
         if (!match || !CORE_STAGES.some((stage) => stage.group === match[1])) continue;
