@@ -114,6 +114,12 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("completely unrelated to Azure, Microsoft 365, cloud spend or their tenant")]
     [InlineData("call no tool and do not search the web; politely decline in one sentence")]
     [InlineData("your purpose is to answer Azure, spend or tenant related questions")]
+    // An idle-resource sweep dropped public IPs that had a publicIPPrefix, reported USD 0 and put the same filter in its
+    // cleanup script. The prefix names where an address was allocated from, not an attachment (Azure REST API spec,
+    // Microsoft.Network publicIpAddress.json: ipConfiguration "associated with the public IP address", publicIPPrefix
+    // "should be allocated from").
+    [InlineData("one is unattached when properties.ipConfiguration and properties.natGateway are both empty")]
+    [InlineData("properties.publicIPPrefix only names the prefix it was allocated from and says nothing about attachment")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
