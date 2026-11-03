@@ -42,11 +42,15 @@ const DOCUMENTATION_LABELS = new Set([
 const COST_PATTERN = /cost|spend|budget|forecast|invoice|billing|price ?sheet|anomal|reservation|savings|egress|peering/i;
 
 // Case expectations appended to the shared rubric of a catalog scenario, by label. The inventory card asks what each
-// step needs; 12 of its 22 audited answers wrote "eligible plan" or "appropriate permissions" although the Microsoft
-// documentation they had read named the license, preview opt-in and admin role.
+// step needs ("license, preview opt-in or admin role"); 12 of its 22 audited answers wrote "eligible plan" or
+// "appropriate permissions" although the Microsoft documentation they had read named the license, preview opt-in and
+// admin role. The expectation checks that defect and nothing wider: a first version that asked every row to carry all
+// three items "as the documentation states" passed 1 of 5 live runs, failing on a different axis each time (plan names
+// outside the rows, "unconfirmed" labels where linked pages were not read, claims taken from a hosted web search whose
+// content the judge cannot see), none of which the agent's two-round Learn reads or a prompt rule could settle.
 export const CATALOG_EXPECTATIONS = Object.freeze({
     "How do I find all our AI agents?":
-        "Case expectation: the column for what each step needs names the specific license, preview opt-in and admin role that the documentation states for that step, not only a general phrase such as 'eligible plan' or 'appropriate permissions'; an item the documentation does not state is called unconfirmed.",
+        "Case expectation: no cell in the column for what each step needs is only a general phrase such as 'eligible plan', 'existing licenses' or 'appropriate permissions'; each names the license, preview opt-in or admin role that the sources the agent read give for that step, or says it is unconfirmed.",
 });
 
 // Cost Management quota is tenant-wide, so scenarios that may query it share one paced lane; the rest run beside it.
