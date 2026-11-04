@@ -9,7 +9,7 @@ param modelName string
 param modelVersion string
 param deploymentName string
 param modelCapacity int
-@description('Deployment service tier. "Default" is standard processing. "Priority" enables priority processing at a premium, but only for models that support it; gpt-6.1-sol 2026-09-29 does not, gpt-6-sol 2026-09-22 does on GlobalStandard.')
+@description('Deployment service tier. "Default" is standard processing. "Priority" enables priority processing at a premium, but only for models that support it; gpt-6.1-terra 2026-10-26 and gpt-6.1-sol 2026-09-29 are not listed as supporting it, gpt-6-sol 2026-09-22 is on GlobalStandard.')
 @allowed(['Default', 'Priority'])
 param serviceTier string = 'Default'
 param existingAoaiResourceId string
