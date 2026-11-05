@@ -17,7 +17,7 @@ The Bicep in [infra/main.bicep](../infra/main.bicep) targets **subscription scop
 
 You also need available **quota** for:
 
-- Azure OpenAI in `aoaiLocation` (default `swedencentral`): unallocated GlobalStandard quota for `gpt-6.1-terra` (default capacity 1000 units via `AZURE_OPENAI_MODEL_CAPACITY`; lower it when quota is shared). Quota is per model: `gpt-6.1-sol` or `gpt-6-sol` quota does not cover `gpt-6.1-terra`. gpt-6.1-terra 2026-10-26 is not listed as supporting the Priority service tier, so keep `AZURE_OPENAI_SERVICE_TIER` at `Default` (Priority requires a model that supports it, such as gpt-6-sol 2026-09-22 on GlobalStandard).
+- Azure OpenAI in `aoaiLocation` (default `swedencentral`): unallocated GlobalStandard quota for `gpt-6.1-terra` (default capacity 1000 units via `AZURE_OPENAI_MODEL_CAPACITY`; lower it when quota is shared). Quota is per model: quota for another model does not cover `gpt-6.1-terra`. gpt-6.1-terra 2026-10-26 is not listed as supporting the Priority service tier, so keep `AZURE_OPENAI_SERVICE_TIER` at `Default` (Priority requires a model that supports it, such as gpt-6-sol 2026-09-22 on GlobalStandard).
 - The chosen App Service Plan SKU in `location` (default `B1`). An optional preview slot (`AZURE_PREVIEW_SLOT_NAME`) needs `S1` or higher; Basic plans have no slots.
 
 ## 2. Microsoft Entra ID (tenant)
