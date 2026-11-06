@@ -281,6 +281,9 @@ public sealed class SessionQualityGuidanceTests
         // Several url lines can be POSTs with one body, and combine totals their responses in the same call.
         Assert.Contains("all GET, or all POST with one body sent to each", azure.Description);
         Assert.Contains("combine instead runs once over all responses", azure.Description);
+        // A judge failed an Advisor answer that called its complete list "pagination not reported": the host adds pagesRead
+        // and complete only when a next link existed, so their absence means the one page was the whole list.
+        Assert.Contains("a response with no pagesRead or complete had no next page, so its list is complete", azure.Description);
         // Learn's own search stays the fallback when its MCP tools are not available.
         Assert.Contains("only when those tools are not available, search https://learn.microsoft.com/api/search", azure.Description);
     }
