@@ -7,6 +7,7 @@ namespace AzureFinOps.Dashboard.AI.Runtime;
 /// <summary>
 /// Resends one model request once when its stream fails with the service's <c>server_error</c>
 /// ("The model deployment encountered an error processing your request. You can retry your request")
+/// or a transient service-unavailable error
 /// before it produced answer text or a function call. The SDK retries HTTP 5xx, but not an error
 /// reported inside a response stream that already opened, and such a failure otherwise ends the
 /// whole turn without an answer after every tool round succeeded. Sits below Agent Framework's
@@ -15,8 +16,14 @@ namespace AzureFinOps.Dashboard.AI.Runtime;
 internal sealed class ServerErrorRetryChatClient(IChatClient inner, ILogger logger) : DelegatingChatClient(inner)
 {
     internal static bool IsRetryable(ErrorContent error) =>
-        string.Equals(error.ErrorCode, "server_error", StringComparison.OrdinalIgnoreCase)
+        (string.Equals(error.ErrorCode, "server_error", StringComparison.OrdinalIgnoreCase) || IsServiceUnavailable(error))
         && !ModelRunCompletion.IsRateLimit(error.ErrorCode, error.Message);
+
+    // A transient 503 reported inside the stream: the evaluation gate failed one case on "Service Unavailable" while the
+    // deployment's other calls in the same minutes succeeded.
+    private static bool IsServiceUnavailable(ErrorContent error) =>
+        error.ErrorCode is { } code && (code.Contains("service_unavailable", StringComparison.OrdinalIgnoreCase) || code.Contains("503", StringComparison.Ordinal))
+        || string.Equals(error.Message?.Trim().TrimEnd('.'), "Service Unavailable", StringComparison.OrdinalIgnoreCase);
 
     public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)

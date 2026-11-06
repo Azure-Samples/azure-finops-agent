@@ -97,6 +97,22 @@ public sealed class ServerErrorRetryChatClientTests
     }
 
     [Theory]
+    [InlineData("service_unavailable", "The service is temporarily unavailable.")]
+    [InlineData(null, "Service Unavailable")]
+    public async Task AServiceUnavailableErrorBeforeAnyAnswerIsSentOnceMore(string? code, string message)
+    {
+        var inner = new ScriptedClient(
+            [Update(new ErrorContent(message) { ErrorCode = code })],
+            [Update(new TextContent("Answer")), Done()]);
+
+        var (updates, completion) = await RunAsync(new ServerErrorRetryChatClient(inner, NullLogger.Instance));
+
+        Assert.Equal(2, inner.Calls);
+        Assert.DoesNotContain(updates, update => update.Contents.OfType<ErrorContent>().Any());
+        Assert.Null(completion.Failure);
+    }
+
+    [Theory]
     [InlineData("rate_limit_exceeded", "Rate limit exceeded.")]
     [InlineData("content_filter", "The response was filtered.")]
     [InlineData(null, "Unknown failure.")]
