@@ -42,7 +42,7 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("only an open region without a quota row needs GET /subscriptions/{id}/providers/Microsoft.Compute/locations/{region}/usages")]
     [InlineData("for every Retail region as url lines of one call, in the same response as the quota query")]
     [InlineData("so every Retail region is accounted for")]
-    [InlineData("list it as a candidate with unknown quota, never as not available")]
+    [InlineData("list it as a candidate with unknown quota, saying that the locations list omits it")]
     [InlineData("A budget answer gives the dates of the cycle its currentSpend covers")]
     [InlineData("describe the Forecast sum by its own firstDate and lastDate")]
     [InlineData("Never intersect region lists from two responses by typing them into a query-only call")]
