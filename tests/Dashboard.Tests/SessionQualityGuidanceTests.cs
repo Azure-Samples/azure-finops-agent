@@ -45,6 +45,7 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("list it as a candidate with unknown quota, saying that the locations list omits it")]
     [InlineData("A budget answer gives the dates of the cycle its currentSpend covers")]
     [InlineData("a scan that finds none says no resource matched those conditions, never that no resource has a license setting")]
+    [InlineData("Purchased Microsoft 365 quantities come from Microsoft Graph GET /directory/subscriptions")]
     [InlineData("describe the Forecast sum by its own firstDate and lastDate")]
     [InlineData("An Azure license scan reads every license resource and every resource that carries a license setting instead of a hand-picked list of types")]
     [InlineData("Never intersect region lists from two responses by typing them into a query-only call")]
