@@ -116,6 +116,8 @@ public sealed class ToolGuidanceTests
         // A storage account script asked for with six stated settings required jq and refused to run without it, a requirement
         // the user never stated (live gate, 27 October 2026).
         Assert.Contains("never jq, Python or another tool the user did not mention", tool.Description);
+        // The gate failed a create-this-storage-account script that defaulted to a dry run and demanded a terminal and a confirmation.
+        Assert.Contains("A script that only creates what the user explicitly asked for, with the settings they named, runs that request directly", tool.Description);
         Assert.Contains("never stop the script because such a tool is missing", tool.Description);
         Assert.Contains("only the requested CLI and the user's sign-in; no jq or other extra tools", content.GetProperty("description").GetString()!);
         Assert.Contains("appears to the user as a download card below the answer: refer to it in words and never write a link or file path to it",
