@@ -158,9 +158,9 @@ public sealed class SessionQualityGuidanceTests
     // A VM that cost USD 363 in a month was promised USD 309 a month from a 730-hour retail difference.
     [InlineData("A saving on an existing resource follows the hours it actually ran")]
     [InlineData("saves that actual cost times (1 - new rate / current rate)")]
-    // A re-priced VM's answer applied the rate ratio to its compute meter (USD 2.77 of USD 12.39) without naming the rest,
-    // and the judge read the saving as missing (quality report first run, 10 November 2026).
-    [InlineData("the ratio applies to the cost of the meters whose rate changes (a VM's compute meter), so name the resource's other meters (disks, bandwidth, licenses) and their cost as not re-priced")]
+    // The re-price eval's expectation is the VM's whole actual cost times the rate ratio; answers that re-priced only the
+    // compute meter (USD 2.77 of USD 12.39) failed it twice (quality report, 10 November 2026).
+    [InlineData("that actual cost is the resource's whole cost in the period read, every meter billed to it, never only the meter whose rate was compared")]
     [InlineData("a difference over 730 hours is only the ceiling for a resource that ran all month")]
     [InlineData("A reservation or savings plan priced from retail rates bills every hour of its term")]
     // A question asking for savings "using Azure retail pricing" got only the saving at the VM's actual October hours,
@@ -185,6 +185,10 @@ public sealed class SessionQualityGuidanceTests
     // A newest-models answer twice put a wrong headline range above a correct table ("USD 0.30 to 2" over a 0.25 row):
     // the range was read by eye (live gate first runs, 10 November 2026).
     [InlineData("a range or an extreme in the headline (from lowest to highest, the cheapest, the largest) is Min and Max over exactly the rows the table shows, computed in the query that selected them, never read off the table by eye")]
+    // A Crawl answer ordered Advisor's recommendations by impact, kept 15 of 22 and called one the largest saving; an idle
+    // sweep that found nothing left its monthly waste "not estimated" (live gate first runs, 10 November 2026).
+    [InlineData("by that measure itself before any rows are cut (never ordered by another field such as impact first and then truncated)")]
+    [InlineData("A scan that succeeded and found no candidates (no idle, orphaned or unused resources of a kind) shows no waste of that kind: report its monthly waste as USD 0 for the categories scanned, with no price lookup, never as not estimated")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
