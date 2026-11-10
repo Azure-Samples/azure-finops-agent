@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-10
+
 ### Added
 
 - A `reasoning_effort` input on the AI quality report's manual run. It runs the agent at another reasoning effort for that run only, so a setting can be measured on the 13 extended evals before `EVAL_REASONING_EFFORT` changes. The gate, the judge and production keep the variable.
@@ -572,7 +574,8 @@ Initial public release.
 - Crypto-random session user IDs; `SameSite=Lax`, `Secure`, `HttpOnly` cookies.
 - DataProtection keys persisted to `/home/dataprotection-keys` to survive container restarts.
 
-[Unreleased]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.2.0...v0.3.0
