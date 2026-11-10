@@ -226,6 +226,9 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("x.meterName.ToLower().Contains(\"glbl\") in query and contains(tolower(meterName),'glbl') in $filter", Prompt);
         Assert.Contains("effectiveStartDate is when a price took effect, not when the model was released", Prompt);
         Assert.Contains("pick each family's newest model by the version in its meter or SKU names", Prompt);
+        // A newest-models answer listed one of the two GPT variants that share the highest version, and the judge called
+        // the other one missing (live gate, 10 November 2026).
+        Assert.Contains("every model that shares that version, such as two variants of one release, is newest too and gets its own row", Prompt);
         Assert.DoesNotContain("newest release by effectiveStartDate", Prompt);
         Assert.DoesNotContain("equals that family's latest date", Prompt);
         Assert.DoesNotContain("contains(meterName,", Prompt);
