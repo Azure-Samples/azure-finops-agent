@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-10
+
 ### Security
 
 - Upgrade Vite to 8.3.5 and `source-map-js` to 1.2.2 to address the seven frontend Dependabot alerts affecting Vite/`launch-editor` and `source-map-js`.
@@ -552,7 +554,8 @@ Initial public release.
 - Crypto-random session user IDs; `SameSite=Lax`, `Secure`, `HttpOnly` cookies.
 - DataProtection keys persisted to `/home/dataprotection-keys` to survive container restarts.
 
-[Unreleased]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.1.0...v0.2.0
