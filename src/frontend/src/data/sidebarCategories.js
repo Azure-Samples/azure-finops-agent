@@ -55,7 +55,7 @@ const aiPricingPrompts = [
   {
     label: "Which AI model is best value?",
     prompt:
-      "Which of the newest models in Foundry give the best quality for the price? Compare the newest OpenAI, Anthropic, Meta, Mistral, DeepSeek and xAI models on their latest published quality benchmark and current Azure token prices. Show one table: model, quality score, input price per 1M tokens, output price per 1M tokens. Give each score's source and date in a note, then name the best-value pick.",
+      "Which of the newest models in Foundry give the best quality for the price? Compare the newest OpenAI, Anthropic, Meta, Mistral, DeepSeek and xAI models on their latest published quality benchmark and current Azure token prices. Show one table: model, quality score, input price per 1M tokens, output price per 1M tokens. Give each score's source and date in a note, then name the best-value pick and the measure it is ranked by.",
   },
   {
     label: "Who is spending what on AI?",

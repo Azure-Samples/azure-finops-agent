@@ -40,3 +40,11 @@ test('the agent inventory card asks for each step\'s Microsoft Learn link', () =
     .find(({ label }) => label === 'How do I find all our AI agents?');
   assert.match(card.prompt, /Microsoft tool \(linked to its Microsoft Learn page\)/);
 });
+
+// A best-value answer named its pick with only the token mix, not the score-per-USD measure behind it, which the
+// session evaluation had found users could not check (November 2026).
+test('the best-value card asks for the measure its pick is ranked by', () => {
+  const card = pricingSections.flatMap((section) => section.prompts)
+    .find(({ label }) => label === 'Which AI model is best value?');
+  assert.match(card.prompt, /name the best-value pick and the measure it is ranked by\.$/);
+});

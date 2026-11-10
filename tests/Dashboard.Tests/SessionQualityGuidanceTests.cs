@@ -235,6 +235,9 @@ public sealed class SessionQualityGuidanceTests
         Assert.DoesNotContain("equals that family's latest date", Prompt);
         Assert.DoesNotContain("contains(meterName,", Prompt);
         Assert.Contains("Std Gl (Global Standard), Std DZ (Data Zone Standard), PP (Priority Processing)", Prompt);
+        // The newest GPT release spells its output meters "Opt std Gl"; a case-sensitive "Std Gl" match left its output
+        // price unknown in a best-value answer and dropped the model from a newest-models gate answer (November 2026).
+        Assert.Contains("their case varies too (one release spells its output meters 'Opt std Gl'), so match them lowercased as well, x.meterName.ToLower().Contains(\"std gl\")", Prompt);
         Assert.Contains("whose retailPrice is per PTU for the whole reservationTerm even though unitOfMeasure reads '1/Hour'", Prompt);
         Assert.Contains("published model benchmarks and leaderboards (quality, speed, latency)", withSearch);
         Assert.Contains("Only when the user asks for model benchmarks, speed or latency, answer directly with no clarifying question", withSearch);
