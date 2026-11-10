@@ -131,7 +131,11 @@ public sealed class SessionQualityGuidanceTests
     // Session evaluation of 107 conversations (November 2026). The agent-inventory card, a quarter of all points lost,
     // left its steps without a way to follow them and most of what they need unconfirmed after three page reads.
     [InlineData("for a table that states what each step needs, one page per product the question names, at most five")]
-    [InlineData("In a table of steps, each step's tool cell links the Microsoft Learn page a search or fetch returned for that step")]
+    // A later quality report put the links in citations after the table instead (the "link each source once" rule
+    // pulled them out of the cells) and wrote "tenant permissions; licensing varies" for a step no source covered.
+    [InlineData("In a table of steps, each step's tool cell is itself a link, [tool](url) inside the cell, to the Microsoft Learn page a search or fetch returned for that step")]
+    [InlineData("that cell link is the page's citation, so the page needs no second link after the table, and a link after the table never replaces it")]
+    [InlineData("nor any other phrase that names no license, opt-in or role (such as tenant permissions or licensing varies), which is unconfirmed")]
     // The best-value card reported Claude as having no published price: Claude models have no Retail Prices meter, and
     // Microsoft bills them at Anthropic's own rates (Learn, Claude Consumption Units billing in Microsoft Foundry).
     [InlineData("Claude (Anthropic) models are the one exception")]
@@ -213,7 +217,7 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("published model benchmarks and leaderboards (quality, speed, latency)", withSearch);
         Assert.Contains("Only when the user asks for model benchmarks, speed or latency, answer directly with no clarifying question", withSearch);
         Assert.Contains("one row per newest priced model of each requested family", withSearch);
-        Assert.Contains("name newer benchmarked versions that have no Foundry price in one sentence below the table instead of adding rows", withSearch);
+        Assert.Contains("Name newer benchmarked versions that have no Foundry price in one sentence below the table instead of adding rows", withSearch);
         Assert.Contains("A Foundry model price, deployment-type, PTU, caching or cost-estimate question needs no web search", withSearch);
         Assert.Contains("never search the web or documentation to identify or name models, their availability or deployment types for a pricing question", Prompt);
         // A price answer once added "newer announced" models from release trackers that no returned evidence supported.
@@ -233,6 +237,10 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("then read at most one results page it found, with QueryAzure GET and never through web search", withSearch);
         Assert.Contains("a web search's own page view is not shown and can be partial), and take every figure from that read", withSearch);
         Assert.Contains("at the highest reasoning effort the source lists for it, named in the note", withSearch);
+        // The next report's best-value answer left two models unscored although the page it read scored them: the price
+        // list shortens a tier to its initials and the leaderboard adds a release date, so names never matched exactly.
+        Assert.Contains("so match them by family and version number, not spelling", withSearch);
+        Assert.Contains("is the same model when that family has exactly one model with that version number on each side; the row keeps the price list's name and the note names each such match", withSearch);
         Assert.Contains("Never search or open third-party price, calculator or comparison sites: they copy the Retail Prices API and are not evidence (Anthropic's own pricing page is not one of them", withSearch);
         Assert.Contains("so an abbreviation stays an abbreviation and is said to be one", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);
