@@ -145,7 +145,10 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("A saving on an existing resource follows the hours it actually ran")]
     [InlineData("saves that actual cost times (1 - new rate / current rate)")]
     [InlineData("a difference over 730 hours is only the ceiling for a resource that ran all month")]
-    [InlineData("A reservation or savings plan bills every hour of its term")]
+    [InlineData("A reservation or savings plan priced from retail rates bills every hour of its term")]
+    // Advisor's reservation and savings plan estimates come from hourly usage over the lookback period, so the rule
+    // above must not put a "runs all month" caveat on them (Microsoft Learn, Determine what reservation to purchase).
+    [InlineData("Advisor's reservation and savings plan estimates already come from hourly usage over their lookbackPeriod")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
