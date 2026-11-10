@@ -32,3 +32,11 @@ test('public prompts name model brands, never a model version or one model servi
       assert.doesNotMatch(`${label} ${prompt}`, /azure openai/i, label);
     }
 });
+
+// Users of the agent-inventory card could not follow its steps, and a system-prompt rule alone did not get the links
+// written (three quality reports, November 2026), so the card itself asks for them.
+test('the agent inventory card asks for each step\'s Microsoft Learn link', () => {
+  const card = pricingSections.flatMap((section) => section.prompts)
+    .find(({ label }) => label === 'How do I find all our AI agents?');
+  assert.match(card.prompt, /Microsoft tool \(linked to its Microsoft Learn page\)/);
+});

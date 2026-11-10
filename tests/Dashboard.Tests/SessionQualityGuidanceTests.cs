@@ -171,6 +171,8 @@ public sealed class SessionQualityGuidanceTests
     // sweep's uncorrected TheLastMonth query failed the live gate on 10 November 2026.
     [InlineData("The service rejects timeframe TheLastMonth (\"timeframe TheLastMonth is currently not supported\") although the API reference lists it")]
     [InlineData("so the previous calendar month is timeframe Custom with timePeriod from its first day to its last day at T23:59:59Z")]
+    // A French price comparison computed 20% on East US's price and called it 20% less than West Europe's (16.5%).
+    [InlineData("a percentage difference is divided by the value the sentence measures it against (X% less than B divides by B, X% more than A by A), so word it with the base the query used")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
