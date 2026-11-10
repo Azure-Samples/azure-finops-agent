@@ -8,8 +8,7 @@ Pass -RunId to download that GitHub Actions run's artifacts for the current repo
 temporary folder, or -Path for an already downloaded private-diagnostics.enc.json. Works for the
 deployment gate (live-ai-evaluations-*) and the AI quality report, whose stage jobs each keep their
 own diagnostics (ai-quality-stage-*), including a stage that finished while the run still goes on;
-every encrypted file in the run is decrypted. Prints each
-failed case's judge verdict, findings, rationale, gate failures and answer. -OutFile also saves the
+every encrypted file in the run is decrypted. Prints each failed case's judge verdict, findings, rationale, gate failures and answer, and the failed first run of every case that was run twice (its Run column says whether the second run passed). -OutFile also saves the
 full decrypted JSON (including tool arguments and results; a JSON array when the run had several
 files); keep it in an access-restricted folder.
 
@@ -89,9 +88,16 @@ try {
     foreach ($document in $documents) {
         $diagnostics = $document.Json | ConvertFrom-Json
         if ($diagnostics.failure) { Write-Host "$($document.Source): suite failure: $($diagnostics.failure)" }
-        foreach ($row in $diagnostics.results) {
+        # Final failures, then the failed first run of every retried case (also when its second run passed).
+        $runs = @(foreach ($row in $diagnostics.results) { [pscustomobject]@{ Row = $row; Run = 'final failure' } }) +
+            @(foreach ($row in $diagnostics.firstRuns) {
+                [pscustomobject]@{ Row = $row; Run = if ($row.passedOnRetry) { 'first run; passed on retry' } else { 'first run; retry failed' } }
+            })
+        foreach ($entry in $runs) {
+            $row = $entry.Row
             [pscustomobject]@{
                 Source          = $document.Source
+                Run             = $entry.Run
                 Id              = $row.id
                 Question        = $row.result.question
                 Accepted        = $row.result.judge.accepted

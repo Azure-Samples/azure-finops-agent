@@ -765,6 +765,8 @@ export async function runCases(
     } = {},
 ) {
     const results = [];
+    // Private first runs of retried cases; written only into the encrypted or retained diagnostics, never published.
+    const firstRuns = [];
     const plannedOrder = new Map(cases.map((scenario, index) => [scenario.id, index]));
     const laneProfiles = [];
     await mkdir(output, { recursive: true });
@@ -958,11 +960,23 @@ export async function runCases(
                 // runs fail: a consistent defect still fails twice, while one run that the agent's or the judge's sampling
                 // tipped no longer decides the suite. After a final service throttle the retry also waits out the quota.
                 let retriedAfter;
+                let firstRun;
                 if (failures.length > 0) {
                     retriedAfter = {
                         failures: [...failures],
                         findings: Array.isArray(result?.judge?.findings) ? [...result.judge.findings] : [],
                         throttled,
+                    };
+                    // The private record of the failed first run, kept for the encrypted or retained diagnostics only, so
+                    // a case that passes on its retry can still be traced to what went wrong the first time.
+                    firstRun = {
+                        id: scenario.id,
+                        exitCode,
+                        result,
+                        failures: [...failures],
+                        unfinishedCapture: result === null
+                            ? await readFile(`${resultPath}.tmp`, "utf8").catch(() => null)
+                            : null,
                     };
                     console.log(`[${index + 1}/${cases.length}] ${scenario.id} ${throttled ? "throttled by the service; retrying once after cooldown." : "failed; retrying once, unchanged."}`);
                     mark(throttled ? "waiting out a service throttle" : "waiting to retry a failed case");
@@ -974,6 +988,7 @@ export async function runCases(
                     ({ exitCode, result, failures } = await runAttempt());
                     noteThrottle(result);
                     attempts = 2;
+                    firstRuns.push({ ...firstRun, passedOnRetry: failures.length === 0 });
                 }
                 if (result && typeof result === "object" && !Array.isArray(result)) {
                     result.attempts = attempts;
@@ -1048,6 +1063,7 @@ export async function runCases(
                         sha, suiteHash, cases,
                         completed: results.length,
                         results: results.filter((row) => row.failures.length > 0),
+                        firstRuns,
                         failure: runFailure?.message ?? null,
                     }, null, 2),
                     { mode: 0o600, flag: "wx" },
@@ -1060,7 +1076,7 @@ export async function runCases(
             }
         } else {
             const failed = results.filter((row) => row.failures.length > 0);
-            if (encryptDiagnosticsTo && (failed.length > 0 || runFailure)) {
+            if (encryptDiagnosticsTo && (failed.length > 0 || firstRuns.length > 0 || runFailure)) {
                 try {
                     // A timed-out case has no result; its unfinished capture is the only evidence.
                     const rows = await Promise.all(failed.map(async (row) => ({
@@ -1071,7 +1087,7 @@ export async function runCases(
                     })));
                     const plaintext = Buffer.from(JSON.stringify({
                         sha, suiteHash, completed: results.length,
-                        results: rows, failure: runFailure?.message ?? null,
+                        results: rows, firstRuns, failure: runFailure?.message ?? null,
                     }));
                     await writeFile(
                         resolve(output, ENCRYPTED_DIAGNOSTICS_FILE),

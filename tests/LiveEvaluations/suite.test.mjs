@@ -1451,8 +1451,57 @@ test("encrypted CI diagnostics keep failed-case rationale readable only with the
         assert.deepEqual(diagnostics.results.map((row) => row.id), [rejected.id, timedOut.id]);
         assert.equal(diagnostics.results[0].result.judge.reason, "tenant-rationale-must-not-publish");
         assert.equal(diagnostics.results[1].unfinishedCapture, "tenant-unfinished-capture-must-not-publish");
+        // Each failed case also ran once more; its first run is kept beside the final failure.
+        assert.deepEqual(diagnostics.firstRuns.map((row) => [row.id, row.passedOnRetry]), [[rejected.id, false], [timedOut.id, false]]);
+        assert.equal(diagnostics.firstRuns[0].result.judge.reason, "tenant-rationale-must-not-publish");
+        assert.equal(diagnostics.firstRuns[1].unfinishedCapture, "tenant-unfinished-capture-must-not-publish");
         ciphertext[0] ^= 1;
         assert.throws(() => decrypt(ciphertext));
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("a case that passed on its retry keeps its failed first run in the encrypted diagnostics only", async () => {
+    const directory = await createDirectory();
+    const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+    const recipient = diagnosticsRecipient(publicKey.export({ type: "spki", format: "pem" }));
+    try {
+        const [flaky] = cases;
+        let run = 0;
+        await runCases(
+            [flaky], directory, sha, suiteHash,
+            async (scenario, path) => {
+                const result = privateResult(scenario);
+                if (++run === 1) {
+                    result.accepted = false;
+                    Object.assign(result.judge, { accepted: false, findings: ["wrong_figure"] });
+                }
+                await writeFile(path, JSON.stringify(result));
+                return run === 1 ? 1 : 0;
+            },
+            async () => {}, false, 0,
+            { encryptDiagnosticsTo: recipient },
+        );
+        assert.equal(run, 2);
+        const published = JSON.parse(await readFile(join(directory, "results.json"), "utf8")).results[0];
+        assert.equal(published.failures.length, 0);
+        assert.deepEqual(published.result.retriedAfter.findings, ["wrong_figure"]);
+        assert.doesNotMatch(await readPublished(directory), /tenant-.*-must-not-publish/);
+        const envelope = JSON.parse(await readFile(join(directory, ENCRYPTED_DIAGNOSTICS_FILE), "utf8"));
+        const contentKey = privateDecrypt(
+            { key: privateKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+            Buffer.from(envelope.encryptedKey, "base64"),
+        );
+        const decipher = createDecipheriv("aes-256-gcm", contentKey, Buffer.from(envelope.iv, "base64"));
+        decipher.setAAD(Buffer.from(DIAGNOSTICS_ENVELOPE_FORMAT));
+        decipher.setAuthTag(Buffer.from(envelope.tag, "base64"));
+        const diagnostics = JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, "base64")), decipher.final()]).toString("utf8"));
+        assert.deepEqual(diagnostics.results, []);
+        assert.equal(diagnostics.firstRuns.length, 1);
+        assert.equal(diagnostics.firstRuns[0].passedOnRetry, true);
+        assert.equal(diagnostics.firstRuns[0].result.judge.reason, "tenant-rationale-must-not-publish");
+        assert.ok(diagnostics.firstRuns[0].failures.includes("Structured judge rejected the answer."));
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
