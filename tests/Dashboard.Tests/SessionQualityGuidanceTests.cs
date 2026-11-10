@@ -104,6 +104,9 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("never a query per subscription, which the host runs one at a time")]
     [InlineData("Enterprise Agreement subscriptions only: for Microsoft Customer Agreement, CSP and other offers")]
     [InlineData("{\"usage\":{\"name\":\"UsageQuantity\",\"function\":\"Sum\"}}")]
+    // A chargeback answer claimed 0% owner-tag coverage for 1 October to 10 November although its owner queries covered
+    // only 1-10 October and 1-10 November (live gate, 10 November 2026).
+    [InlineData("report each key's billed coverage from those rows for exactly the period they cover (the first key's for each compared period, the other key's for the whole span), never one key's coverage over a period its rows did not cover")]
     // The agent inventory card asks what each step needs; 12 of its 22 answers wrote "eligible plan" or "appropriate
     // permissions" although the documentation they had read named the license, preview opt-in and admin role (Oct 2026).
     // Asking only to name each item left rows vague, and the quality report's judge wanted plan names in the rows and

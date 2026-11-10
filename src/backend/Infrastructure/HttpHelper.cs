@@ -64,7 +64,10 @@ public static partial class HttpHelper
 
     private const int MaxThrottleRetries = 5;
     private const int MaxTransportRetries = 2;
-    private const int MaxInteractiveCostAttempts = 2;
+    // A throttled cost query waits out each cooldown the service names and tries again, up to five attempts within
+    // CostQueryCoordinator.MaximumAutomaticWait in total. With one retry, a busy tenant quota (12 QPU per 10 s, 60 per
+    // minute) turned a one-minute wait into a missing answer (live gate, 10 November 2026).
+    private const int MaxInteractiveCostAttempts = 5;
 
     private const int MaxRetryWaitSeconds = 60;
 
@@ -238,7 +241,10 @@ public static partial class HttpHelper
                 DateTimeOffset? retryAt = null;
                 if (costThrottle)
                 {
-                    var final = attempt == maxAttempts - 1 || waitSeconds > CostQueryCoordinator.MaximumAutomaticWait.TotalSeconds;
+                    // Final only when the attempts or the total automatic wait would run out, so the user sees a countdown
+                    // and gets the data rather than a 429 after the first busy minute.
+                    var final = attempt == maxAttempts - 1
+                        || totalWaitSec + waitSeconds > CostQueryCoordinator.MaximumAutomaticWait.TotalSeconds;
                     retryAt = CostQueries.RecordThrottle(CostQueryCoordinator.TenantKey(token), waitSeconds, final);
                     if (final)
                     {

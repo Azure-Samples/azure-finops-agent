@@ -56,6 +56,8 @@ public sealed class ToolGuidanceTests
     [InlineData("QueryAzure", null, "pricesheet download")]
     [InlineData("QueryAzure", null, "not tenant-specific")]
     [InlineData("QueryAzure", null, "license-included pricing adds the tier's '- SQL License' product")]
+    // The host now waits out a throttled cost query's cooldowns for up to five minutes instead of one retry.
+    [InlineData("QueryAzure", null, "when the service throttles one it waits out each cooldown the service names and retries, for up to five minutes, while the user sees the countdown")]
     // A database comparison filtered rows on "flexible", dropped the 'Flex Server Storage' product and priced PostgreSQL
     // storage from a managed disk's P20 row instead, which the judge rejected (live gate, 10 November 2026).
     [InlineData("QueryAzure", null, "storage under 'Azure Database for PostgreSQL Flex Server Storage', meter 'Storage Data Stored' per GB-month")]

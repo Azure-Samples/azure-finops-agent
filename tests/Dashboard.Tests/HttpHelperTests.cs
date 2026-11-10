@@ -150,6 +150,53 @@ public sealed class HttpHelperTests
         }
     }
 
+    // A busy tenant quota can refuse several minutes in a row; the host keeps waiting out each named cooldown instead of
+    // returning a 429 after the first retry (live gate, 10 November 2026), and gives up only when its attempts or its
+    // total automatic wait would run out.
+    [Theory]
+    [InlineData(3, 4, true)]
+    [InlineData(10, 5, false)]
+    public async Task CostThrottleKeepsWaitingOutCooldownsWithinItsBudget(int throttledResponses, int expectedRequests, bool succeeds)
+    {
+        var requests = 0;
+        var notices = new ConcurrentQueue<HttpHelper.RetryNotice>();
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var server = builder.Build();
+        server.MapPost("/providers/Microsoft.CostManagement/query", async context =>
+        {
+            if (Interlocked.Increment(ref requests) <= throttledResponses)
+            {
+                context.Response.StatusCode = 429;
+                context.Response.Headers["x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after"] = "1";
+                await context.Response.WriteAsJsonAsync(new { error = new { code = "429", message = "Synthetic throttle" } });
+            }
+            else
+                await context.Response.WriteAsJsonAsync(new { properties = new { rows = new[] { new object[] { 42.73, "USD" } } } });
+        });
+        await server.StartAsync();
+        var sessionId = "synthetic-cost-" + Guid.NewGuid().ToString("N");
+        var reporterKey = "101:" + sessionId;
+        HttpHelper.RetryReporters[reporterKey] = notice => { notices.Enqueue(notice); return Task.CompletedTask; };
+        try
+        {
+            using var context = new ToolExecutionContext(sessionId, 101, CancellationToken.None);
+            var url = server.Urls.Single() + "/providers/Microsoft.CostManagement/query";
+            var response = await HttpHelper.SendWithRetryAsync(url, sessionId, null, "cost-test", HttpMethod.Post, "{}", includeTimestamp: true);
+            Assert.Equal(expectedRequests, requests);
+            Assert.StartsWith(succeeds ? "HTTP 200" : "HTTP 429", response);
+            // Every wait but a final refusal tells the user the host will try again.
+            Assert.All(notices.Take(Math.Min(throttledResponses, expectedRequests - 1)), notice => Assert.True(notice.WillRetry));
+            if (!succeeds) Assert.False(notices.Last().WillRetry);
+        }
+        finally
+        {
+            HttpHelper.RetryReporters.TryRemove(reporterKey, out _);
+            await server.StopAsync();
+        }
+    }
+
     [Theory]
     [InlineData("LogAnalyticsToken", "loganalytics")]
     [InlineData("StorageToken", "storage")]
