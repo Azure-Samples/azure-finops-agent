@@ -74,6 +74,11 @@ public sealed class ToolGuidanceTests
     [InlineData("ReportMaturityScore", null, "/providers/Microsoft.CostManagement/scheduledActions;")]
     [InlineData("ReportMaturityScore", null, "without api-version (the host adds it)")]
     [InlineData("ReportMaturityScore", null, "with no provider, documentation or spec lookup first")]
+    // A gate run's Crawl score left the guardrails dimension unknown although every policy read succeeded, because the
+    // member definitions of a built-in security initiative were not read; the judge called the assessment incomplete.
+    [InlineData("ReportMaturityScore", null, "Unknown is only for evidence that could not be read (a denied, failed or throttled read)")]
+    [InlineData("ReportMaturityScore", null, "never unknown because more could have been read")]
+    [InlineData("ReportMaturityScore", null, "A built-in initiative (policy set) is classified by its own displayName")]
     [InlineData("ApplyAzureChange", null, "only after they approve")]
     [InlineData("ApplyAzureChange", null, "with the api-version that read used (its _apiVersion.used when the host chose it)")]
     [InlineData("ApplyAzureChange", null, "GenerateScript")]
