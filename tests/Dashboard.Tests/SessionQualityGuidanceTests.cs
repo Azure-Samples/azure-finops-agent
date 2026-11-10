@@ -155,6 +155,9 @@ public sealed class SessionQualityGuidanceTests
     // A VM that cost USD 363 in a month was promised USD 309 a month from a 730-hour retail difference.
     [InlineData("A saving on an existing resource follows the hours it actually ran")]
     [InlineData("saves that actual cost times (1 - new rate / current rate)")]
+    // A re-priced VM's answer applied the rate ratio to its compute meter (USD 2.77 of USD 12.39) without naming the rest,
+    // and the judge read the saving as missing (quality report first run, 10 November 2026).
+    [InlineData("the ratio applies to the cost of the meters whose rate changes (a VM's compute meter), so name the resource's other meters (disks, bandwidth, licenses) and their cost as not re-priced")]
     [InlineData("a difference over 730 hours is only the ceiling for a resource that ran all month")]
     [InlineData("A reservation or savings plan priced from retail rates bills every hour of its term")]
     // A question asking for savings "using Azure retail pricing" got only the saving at the VM's actual October hours,
@@ -260,6 +263,10 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("the Retail Prices API lists every priced model and deployment type except Claude's (see the Retail Prices API facts), and the answer names only the models it returned", withSearch);
         // A best-value pick named a winner by no stated measure, although a much cheaper scored model was in the table.
         Assert.Contains("by score per USD of one blended per-1M price (3 input tokens to 1 output token unless the user gives a mix), computed in the query or combine that built the table", withSearch);
+        // A best-value pick rested on a rate Anthropic applies only to prompts up to a token length; above it the ranking
+        // changed, and the judge called the omitted condition material (quality report first run, 10 November 2026).
+        Assert.Contains("A rate that holds only under a condition the price source states (such as prompts up to a token length, above which a higher rate applies) is quoted with that condition", withSearch);
+        Assert.Contains("when the higher rate would change the ranking, the note names the pick that wins above it", withSearch);
         // The best-value eval scored 2 of 6 requested models from a web search's page view, which the user and the judge
         // never see, while the same leaderboard read as a page held scores for 5 of them and showed the sixth has none.
         Assert.Contains("then read at most one results page it found, with QueryAzure GET and never through web search", withSearch);
