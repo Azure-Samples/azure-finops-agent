@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-10
+
 ### Changed
 
 - Run every failed live-evaluation case once more, unchanged, and fail it only when both runs fail. Before, only a case refused by a final service throttle was re-run. On 10 November 2026 the agent passed about 97% of 184 gate case runs, but a gate that needs all 23 cases to pass, each decided by one run, was green in only 5 of 10 runs. Every red gate came from a different case: a rare defect, sampling or judge noise, or the shared Cost Management quota. A consistent defect still fails twice, so the gate still blocks real regressions. At that rate the gate would be green about 99% of the time. The same runner serves the AI quality report, so its evals get the same single re-run. A case that passed only on its second run is published with `attempts: 2` and `retriedAfter` (the first run's host-written failure lines and judge finding codes), and the summary and log say "passed on its second run". Flaky cases stay visible and get fixed at their cause. The failed first run of every re-run case is also kept, with its private details, in the maintainer-encrypted diagnostics (`firstRuns`, listed by `Unprotect-Diagnostics.ps1` with a `Run` column). That holds even when the re-run passed, so that first run can be traced like a final failure. A throttled case still waits out a full Cost Management quota minute before its re-run.
@@ -588,7 +590,8 @@ Initial public release.
 - Crypto-random session user IDs; `SameSite=Lax`, `Secure`, `HttpOnly` cookies.
 - DataProtection keys persisted to `/home/dataprotection-keys` to survive container restarts.
 
-[Unreleased]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Azure-Samples/azure-finops-agent/compare/v0.3.0...v0.4.0
