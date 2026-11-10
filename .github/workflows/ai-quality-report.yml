@@ -1,20 +1,25 @@
 name: AI quality report
 
 # The AI quality report. The deployment gate (live-evaluations.yml) stays at its 23 curated scenarios and decides
-# whether a build ships; this workflow runs the ten most important evals beyond it, red or green, and never blocks a
-# deployment. It lives in its own workflow so a failing eval cannot stop a release and the gate keeps its single,
+# whether a build ships; this workflow runs the thirteen most important evals beyond it, red or green, and never blocks
+# a deployment. It lives in its own workflow so a failing eval cannot stop a release and the gate keeps its single,
 # unconditional contract. The run graph is the picture: 🧭 Plan → one green or red box per stage → 🏁 Scoreboard. Each
 # stage's summary explains every eval in it (what it checks, what happened, what the judge scored and why), failing
 # evals are annotated on the run page, and "Re-run failed jobs" re-runs only the red stages.
-# Run it on demand from the Actions tab (optionally for chosen evals) or let the weekly schedule do it.
+# It runs after every successful production deployment (no deployment waits for it), weekly, and on demand from the
+# Actions tab (optionally for chosen evals).
 
 on:
   schedule:
     - cron: "0 3 * * 1" # Mondays, 03:00 UTC
+  workflow_run:
+    workflows: ["Deploy main to production"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       scenarios:
-        description: "Eval ids to run, comma-separated (empty runs all ten); each eval's id is in results.json"
+        description: "Eval ids to run, comma-separated (empty runs every core eval); each eval's id is in results.json"
         type: string
         default: ""
       threshold:
@@ -22,7 +27,7 @@ on:
         type: string
         default: ""
 
-run-name: AI quality report · ${{ inputs.scenarios && 'chosen evals' || 'core evals' }}
+run-name: AI quality report · ${{ github.event_name == 'workflow_run' && 'after production deployment' || inputs.scenarios && 'chosen evals' || 'core evals' }}
 
 permissions:
   contents: read
@@ -39,6 +44,8 @@ jobs:
   # for running deployment gates once before any stage starts.
   plan:
     name: 🧭 Plan
+    # After a deployment the report checks the release, so a failed or cancelled deployment starts nothing.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:

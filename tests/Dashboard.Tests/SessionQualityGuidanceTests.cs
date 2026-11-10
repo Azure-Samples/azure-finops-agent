@@ -1,6 +1,7 @@
 using AzureFinOps.Dashboard.AI;
 using AzureFinOps.Dashboard.AI.Tools;
 using AzureFinOps.Dashboard.Auth;
+using AzureFinOps.Dashboard.Infrastructure;
 
 namespace Dashboard.Tests;
 
@@ -127,8 +128,44 @@ public sealed class SessionQualityGuidanceTests
     // "should be allocated from").
     [InlineData("one is unattached when properties.ipConfiguration and properties.natGateway are both empty")]
     [InlineData("properties.publicIPPrefix only names the prefix it was allocated from and says nothing about attachment")]
+    // Session evaluation of 107 conversations (November 2026). The agent-inventory card, a quarter of all points lost,
+    // left its steps without a way to follow them and most of what they need unconfirmed after three page reads.
+    [InlineData("for a table that states what each step needs, one page per product the question names, at most five")]
+    [InlineData("In a table of steps, each step's tool cell links the Microsoft Learn page a search or fetch returned for that step")]
+    // The best-value card reported Claude as having no published price: Claude models have no Retail Prices meter, and
+    // Microsoft bills them at Anthropic's own rates (Learn, Claude Consumption Units billing in Microsoft Foundry).
+    [InlineData("Claude (Anthropic) models are the one exception")]
+    [InlineData("so they have no Retail Prices meter and are never reported as having no published price")]
+    [InlineData("QueryAzure GET https://platform.claude.com/docs/en/about-claude/pricing in the same response as the price list")]
+    [InlineData("US Data Zone Standard costs 1.1 times as much")]
+    [InlineData("quote only Claude models that https://learn.microsoft.com/azure/foundry/foundry-models/concepts/claude-models lists")]
+    // Cost Management answers a missing role with 401 RBACAccessDenied and Graph with 403; no answer named the remedy.
+    [InlineData("A failed read's _access note says which role or permission grants that access and how the user gets it")]
+    // A VM that cost USD 363 in a month was promised USD 309 a month from a 730-hour retail difference.
+    [InlineData("A saving on an existing resource follows the hours it actually ran")]
+    [InlineData("saves that actual cost times (1 - new rate / current rate)")]
+    [InlineData("a difference over 730 hours is only the ceiling for a resource that ran all month")]
+    [InlineData("A reservation or savings plan bills every hour of its term")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
+
+    // Four signed-out cost questions got a text-only "select Connect Azure" and no alternative.
+    [Fact]
+    public void ASignedOutTenantQuestionShowsTheConnectButtonAndOffersAnUpload()
+    {
+        var context = ChatEndpoints.ConnectionContext([], null, null, new DateTime(2026, 11, 10, 12, 0, 0, DateTimeKind.Utc));
+
+        Assert.StartsWith("[CONTEXT: Azure NOT connected. Today is 2026-11-10 (UTC).", context);
+        Assert.Contains("call QueryAzure once with GET /subscriptions, which sends nothing without a connection and shows the user a Connect Azure button", context);
+        Assert.Contains("offer to analyze a cost or usage export they upload now instead", context);
+        Assert.Contains("Do NOT refuse public questions", context);
+        // Without a token that read is the host's own consent result, which the page shows as the Connect Azure button.
+        using var actions = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(
+            HttpHelper.ConsentActions(HttpHelper.TokenMissing("AzureToken", null, "azure"))));
+        var action = Assert.Single(actions.RootElement.EnumerateArray());
+        Assert.Equal("Connect Azure", action.GetProperty("label").GetString());
+        Assert.Equal("/auth/microsoft?tier=base", action.GetProperty("href").GetString());
+    }
 
     [Fact]
     public void PromptNoLongerSuggestsOneCostQueryPerScope() =>
@@ -180,7 +217,10 @@ public sealed class SessionQualityGuidanceTests
         // "an older snapshot"; the judge rejected the comparison (live gate run 37772538434, attempt 2).
         Assert.Contains("Its currentSpend and forecastSpend are the service's own measure for the budget's scope, filter and period, so budget-versus-actual answers, risk calls and gauges use them", Prompt);
         Assert.Contains("never call either figure an older snapshot or a lagging copy of the other", Prompt);
-        Assert.Contains("the Retail Prices API lists every priced model and deployment type, and the answer names only the models it returned", withSearch);
+        Assert.Contains("the Retail Prices API lists every priced model and deployment type except Claude's (see the Retail Prices API facts), and the answer names only the models it returned", withSearch);
+        // A best-value pick named a winner by no stated measure, although a much cheaper scored model was in the table.
+        Assert.Contains("by score per USD of one blended per-1M price (3 input tokens to 1 output token unless the user gives a mix), computed in the query or combine that built the table", withSearch);
+        Assert.Contains("Never search or open third-party price, calculator or comparison sites: they copy the Retail Prices API and are not evidence (Anthropic's own pricing page is not one of them", withSearch);
         Assert.Contains("so an abbreviation stays an abbreviation and is said to be one", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);
         Assert.Contains("Never search or open third-party price, calculator or comparison sites", withSearch);

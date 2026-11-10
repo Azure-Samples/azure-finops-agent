@@ -77,6 +77,8 @@ internal static class Program
         var requestedResources = (Environment.GetEnvironmentVariable("EVAL_TOKEN_RESOURCES") ?? "azure")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Append("azure").Distinct().ToArray();
         if (requestedResources.Any(resource => !resourceScopes.ContainsKey(resource))) throw new InvalidOperationException("Unknown evaluation token resource.");
+        // A signed-out case is a browser that never connected Azure: an app user without an Entra principal, tokens or scopes.
+        var signedOut = string.Equals(Environment.GetEnvironmentVariable("EVAL_SIGNED_OUT"), "true", StringComparison.OrdinalIgnoreCase);
         var telemetry = new AiTelemetry();
         var options = new MicrosoftOAuthOptions();
         var builder = WebApplication.CreateBuilder();
@@ -102,6 +104,11 @@ internal static class Program
         app.Use(async (context, next) =>
         {
             context.Session.SetString("user", JsonSerializer.Serialize(new { id = owner, login = "synthetic-live-evaluation" }));
+            if (signedOut)
+            {
+                await next(context);
+                return;
+            }
             context.Session.SetString("azure_user", JsonSerializer.Serialize(new { objectId = ownerOid, tenantId = tenant }));
             var phase = state.Phase;
             foreach (var resource in requestedResources)
@@ -163,7 +170,7 @@ internal static class Program
                 state.RecordThrottle(
                     DateTimeOffset.TryParse(Text(item, "retryAtUtc"), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var retryAt) ? retryAt : null,
                     !(throttleStatus.GetInt32() == 429 && item.TryGetProperty("willRetry", out var willRetry) && willRetry.ValueKind == JsonValueKind.False));
-            if (type is "chart" or "maturity_score" or "follow_up" or "html_ready" or "script_ready" or "approval_required" && visible.Count < 20)
+            if (type is "chart" or "maturity_score" or "follow_up" or "html_ready" or "script_ready" or "approval_required" or "consent_required" && visible.Count < 20)
                 visible.Add(line[6..].Length <= 200000 ? line[6..] : JsonSerializer.Serialize(new { type, omitted = "Visible payload exceeds the judge budget", characters = line.Length - 6 }));
             if (type == "tool_start")
             {
@@ -195,14 +202,16 @@ internal static class Program
                 && EvaluationGate.TranscriptMatches(await transcript.Content.ReadAsStringAsync(deadline.Token), question, answer);
         }
         if (!state.TranscriptVerified) errors.Add("Persisted transcript did not match the completed question and answer.");
-        state.HostContext = $"Connected Azure APIs: {string.Join(", ", requestedResources)}. Connected subscriptions ({scopes.Length}): {JsonSerializer.Serialize(scopes)}. Evaluation run clock UTC (host time only; it is not a source data or budget evaluation timestamp): {DateTimeOffset.UtcNow:O}.";
+        state.HostContext = signedOut
+            ? $"Signed out: the user has not connected Azure, so no Azure, Microsoft Graph, Log Analytics or Storage API is available and no tenant data can be read. Evaluation run clock UTC (host time only; it is not a source data or budget evaluation timestamp): {DateTimeOffset.UtcNow:O}."
+            : $"Connected Azure APIs: {string.Join(", ", requestedResources)}. Connected subscriptions ({scopes.Length}): {JsonSerializer.Serialize(scopes)}. Evaluation run clock UTC (host time only; it is not a source data or budget evaluation timestamp): {DateTimeOffset.UtcNow:O}.";
         var capture = state.Capture();
         using var judgeHttp = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         var scenario = new EvaluationCase(Environment.GetEnvironmentVariable("EVAL_CASE_ID") ?? "live-probe", question,
             Environment.GetEnvironmentVariable("EVAL_RUBRIC") ?? "Fulfil the question using actual tool evidence; preserve full scope and explicit unknowns. Do not confuse pricing with availability, quota with capacity, or tool completion with task success. Match the user's language.",
             (Environment.GetEnvironmentVariable("EVAL_REQUIRED_TOOLS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries),
             (Environment.GetEnvironmentVariable("EVAL_FORBIDDEN_TOOLS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries),
-            MaxToolCalls: maxToolCalls, MaxDurationSeconds: maxDurationSeconds);
+            MaxToolCalls: maxToolCalls, MaxDurationSeconds: maxDurationSeconds, SignedOut: signedOut);
         using var judgeDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         state.Phase = "judge";
         var judgement = await new JudgeClient(judgeHttp, credential, new Uri(endpoint), Environment.GetEnvironmentVariable("EVAL_JUDGE_MODEL") ?? model)

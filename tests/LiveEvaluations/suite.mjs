@@ -1155,6 +1155,7 @@ export async function executeCase(
                     EVAL_MAX_DURATION_SECONDS: String(
                         scenario.maxDurationSeconds,
                     ),
+                    EVAL_SIGNED_OUT: scenario.signedOut ? "true" : "false",
                     EVAL_RESULT_PATH: resultPath,
                     EVAL_EXPECTED_SHA: sha,
                     EVAL_SUITE_HASH: suiteHash,

@@ -1,10 +1,10 @@
 // The AI quality report: node tests/LiveEvaluations/quality.mjs
 //
-// Runs the ten most important evals the deployment gate does not (CORE_STAGES: the start-page questions customers asked
-// most, two cost questions, three trust guarantees and another language) against the same candidate handler, tools and
-// judge, and reports each one red or green; EVAL_SCOPE=all runs every extended scenario locally. It never blocks a
-// deployment: the gate in suite.mjs stays at its 23 curated scenarios. This run fails (red) only when the share of
-// scored evals that pass drops below the quality bar, or when it cannot complete.
+// Runs the thirteen most important evals the deployment gate does not (CORE_STAGES: the start-page questions customers
+// asked most, three cost questions, four trust guarantees including a signed-out user, and another language) against
+// the same candidate handler, tools and judge, and reports each one red or green; EVAL_SCOPE=all runs every extended
+// scenario locally. It never blocks a deployment: the gate in suite.mjs stays at its 23 curated scenarios. This run
+// fails (red) only when the share of scored evals that pass drops below the quality bar, or when it cannot complete.
 
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";

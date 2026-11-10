@@ -5,7 +5,7 @@ using AzureFinOps.Dashboard.AI.Tools;
 namespace LiveEvaluations;
 
 public sealed record EvaluationCase(string Id, string Question, string Rubric, string[] RequiredTools,
-    string[] ForbiddenTools, int MaxToolCalls = 20, int MaxDurationSeconds = 180);
+    string[] ForbiddenTools, int MaxToolCalls = 20, int MaxDurationSeconds = 180, bool SignedOut = false);
 
 public sealed record ToolResult(string Name, bool Success, string Result, string? Error, string Arguments = "",
     long StartedMs = -1, long CompletedMs = -1);
@@ -100,6 +100,13 @@ public static class EvaluationGate
         return banner.Success && banner.Groups["failed"].Value == banner.Groups["absent"].Value;
     }
 
+    // Signed out, the one Azure read a tenant question needs sends nothing and returns the host's own Connect Azure
+    // consent result, which the page shows as a button: the intended outcome there, not a failed call to correct.
+    public static bool IsConnectPrompt(ToolResult tool) =>
+        tool.Name == "QueryAzure" && AzureFinOps.Dashboard.Infrastructure.HttpHelper.ConsentActions(tool.Result.TrimStart())
+            .Select(action => JsonSerializer.SerializeToElement(action).GetProperty("href").GetString())
+            .Contains("/auth/microsoft?tier=base");
+
     private static bool Failed(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.Array) return value.EnumerateArray().Any(Failed);
@@ -121,7 +128,8 @@ public static class EvaluationGate
         if (!run.Terminal) reasons.Add("The turn did not complete.");
         if (string.IsNullOrWhiteSpace(run.Answer)) reasons.Add("The final answer is empty.");
         if (run.Errors.Length > 0) reasons.Add("The run emitted errors.");
-        var failedCalls = run.Tools.Select((tool, index) => (tool, index)).Where(call => !ToolSucceeded(call.tool)).ToArray();
+        var failedCalls = run.Tools.Select((tool, index) => (tool, index))
+            .Where(call => !ToolSucceeded(call.tool) && !(scenario.SignedOut && IsConnectPrompt(call.tool))).ToArray();
         if (failedCalls.Length > AllowedCorrectedToolFailures)
             reasons.Add($"{failedCalls.Length} tool calls failed; at most {AllowedCorrectedToolFailures} corrected failures are allowed.");
         else if (failedCalls.Any(call => !run.Tools.Where((later, index) => StartedAfter(later, index, call.tool, call.index))

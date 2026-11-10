@@ -380,6 +380,8 @@ public static partial class HttpHelper
         ["chargeback"] = "Grant cost allocation access"
     };
 
+    internal static string ConsentLabel(string tier) => ConsentLabels[tier];
+
     /// <summary>
     /// The allow-listed consent buttons a tool result asks for: a consent_required 401 as the whole result, or as one url's
     /// part of a multi-url QueryAzure result ("[n] url", then "HTTP 401 ...", then its JSON). Only the host's own consent

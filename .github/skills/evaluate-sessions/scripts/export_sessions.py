@@ -66,9 +66,14 @@ PRIVATE_FIELDS = {"reasoningOpaque", "encryptedContent", "reasoningText", "encry
 CITATION = re.compile(r"[ \t]*\ue200[^\ue200\ue201]{0,500}\ue201")
 # infra/scripts/deployment-smoke.mjs asks this after every deployment; it is a probe, not a user.
 SMOKE_PROMPT = "Deployment health check. Do not call any tools."
-# Tools whose result the user sees as a chart, score card, file, script, deck, approval prompt or follow-up button.
+# Tools whose result the user sees as a chart, score card, file, script, deck, report, approval prompt or follow-up button.
 VISIBLE_OUTPUT_TOOLS = {"RenderChart", "RenderAdvancedChart", "ReportMaturityScore", "GenerateScript", "GenerateDataReport",
-                        "GenerateHtmlPresentation", "ApplyAzureChange", "PublishFAQ", "SuggestFollowUp"}
+                        "GenerateHtmlPresentation", "GenerateMaturityReport", "ApplyAzureChange", "PublishFAQ", "SuggestFollowUp"}
+# The transcript's success flag only says the tool did not throw; a returned "Error:" or HTTP 4xx/5xx is a failure too
+# (EvidenceInspector), except a 404 whose error code names the missing item, which shows it is absent (AzureQueryTools.IsAbsent).
+ABSENCE_CODE = re.compile(r'"code"\s*:\s*"(?!NotFound"|SubscriptionNotFound")\w*NotFound"', re.IGNORECASE)
+ABSENCE_BANNER = re.compile(r"^(?:Error: all (\d+) requests failed\.|PARTIAL RESULT: (\d+) of \d+ requests failed;[^\n]*?) "
+                            r"(\d+) of them (?:is a 404|are 404s) that say")
 # A turn's browser stream and turn record are matched to its user message by time; client clocks can drift.
 MATCH_WINDOW = timedelta(minutes=5)
 
@@ -107,6 +112,21 @@ def arguments_view(raw: str | None, limit: int):
         return json.loads(raw)
     except json.JSONDecodeError:
         return raw
+
+
+def reports_failure(tool: str | None, result: str) -> bool:
+    """Whether a tool's own result reports a failure, as the runtime's EvidenceInspector and the live gate read it."""
+    text = result.lstrip()
+    if text.startswith("{") and re.match(r'\{\s*"isError"\s*:\s*true', text):
+        return True
+    if not (text[:5].lower() == "error" or text.startswith(("HTTP 4", "HTTP 5"))):
+        return False
+    if tool == "QueryAzure":
+        if text.startswith("HTTP 404") and ABSENCE_CODE.search(text[:2000]):
+            return False
+        if (banner := ABSENCE_BANNER.match(text)) and (banner.group(1) or banner.group(2)) == banner.group(3):
+            return False
+    return True
 
 
 def split_user_message(raw: str | None) -> tuple[str | None, str | None]:
@@ -658,7 +678,7 @@ union
                     # A consent_required result is shown to the user live as a button labelled with the access to grant.
                     if '"consent_required"' in result[:400]:
                         consent.extend(label for label in re.findall(r'"label"\s*:\s*"([^"]+)"', result) if label not in consent)
-                    call.update(success=event.get("success"),
+                    call.update(success=event.get("success") is not False and not reports_failure(call.get("tool"), result),
                                 seconds=round(event["durationMs"] / 1000, 1) if event.get("durationMs") is not None else None,
                                 error=bounded(event.get("error"), 2000), resultCharacters=len(result),
                                 result=bounded(result, args.max_tool_result) if result else None)

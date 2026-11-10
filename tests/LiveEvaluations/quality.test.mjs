@@ -160,9 +160,21 @@ test("the audit-driven evals state what a correct answer contains", () => {
     assert.doesNotMatch(card.rubric, /every row|documentation states|and admin role/);
     for (const label of Object.keys(CATALOG_EXPECTATIONS))
         assert.ok(catalog.some((scenario) => scenario.label === label), `${label} is not a catalog label`);
+    // The November 2026 session evaluation: steps link their Learn page, Claude is priced from Anthropic's own rates with
+    // a stated value measure, and a re-priced VM saves in proportion to what it actually cost.
+    assert.match(card.rubric, /Each step's tool links the Microsoft Learn page the agent read for that step/);
+    for (const [label, pattern] of [
+        ["Which AI model is best value?", /Anthropic's pricing page[\s\S]*never 'no published price'[\s\S]*quality score per USD of a blended per-1M price/],
+        ["Re-price my top 5 VMs in cheaper regions", /what it actually cost in the period that was read[\s\S]*ceiling for a VM that ran all month/],
+    ]) {
+        const scenario = extended.find((item) => item.label === label);
+        assert.ok(scenario?.rubric.startsWith(base), `${label} keeps the shared rubric`);
+        assert.match(scenario.rubric, pattern, label);
+    }
     for (const [label, pattern] of [
         ["PDF request", /cannot write PDF files, and says so in the first sentence/],
         ["Goal stated without a question", /Repeating or rephrasing the sentence is not an answer/],
+        ["Signed-out cost question", /shows the user a Connect Azure button[\s\S]*offers to analyze a cost or usage export/],
     ]) {
         const scenario = NEW_SCENARIOS.find((item) => item.label === label);
         assert.ok(scenario, `${label} is missing`);
@@ -485,7 +497,7 @@ test("group selection and the quality bar are validated", () => {
     assert.equal(parseThreshold("90"), 0.9);
     for (const bad of ["abc", "-1", "101"]) assert.throws(() => parseThreshold(bad), /percentage from 0 to 100/);
     assert.match(presentationFor(safety, 0.8, true).tierNote, /chosen evals/);
-    assert.match(presentationFor(buildCoreSuite(), 0.8, false).tierNote, /the 10 most important evals/);
+    assert.match(presentationFor(buildCoreSuite(), 0.8, false).tierNote, /the 13 most important evals/);
 });
 
 test("the extended run writes the board, the structured results and the dashboard, and runs every scenario", async () => {
@@ -571,7 +583,7 @@ test("the real extended entry point fails closed on missing configuration and wr
         const summary = await readFile(join(directory, "summary.md"), "utf8");
         assert.match(summary, /\*\*FAIL\*\*/);
         assert.match(summary, /Answers and judge rationale are withheld/);
-        assert.match(summary, /3 chosen evals beyond the deployment gate/);
+        assert.match(summary, /4 chosen evals beyond the deployment gate/);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
@@ -686,6 +698,9 @@ test("the quality workflow never gates a deployment and follows the repository's
     assert.doesNotMatch(quality, /continue-on-error/);
     assert.match(quality, /^  schedule:\s*\n\s+- cron: "0 3 \* \* 1"/m);
     assert.match(quality, /^  workflow_dispatch:/m);
+    // Every successful production deployment is checked afterwards; no deployment waits for the report.
+    assert.match(quality, /^  workflow_run:\n    workflows: \["Deploy main to production"\]\n    types: \[completed\]\n    branches: \[main\]$/m);
+    assert.match(quality, /if: github\.event_name != 'workflow_run' \|\| github\.event\.workflow_run\.conclusion == 'success'/);
     assert.match(quality, /environment: ai-evaluation/);
     assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs\n/);
     assert.match(quality, /run: node tests\/LiveEvaluations\/quality\.mjs --plan >> "\$GITHUB_OUTPUT"/);
@@ -745,10 +760,10 @@ test("the report is one pipeline: a plan, one job per stage of the core evals, a
     assert.ok(runLimit + 10 <= stageLimit && stageLimit <= 360, `${runLimit} + 10 must fit ${stageLimit}`);
 });
 
-test("the core is the ten most important evals in four stages, and the plan names the stages that have evals", () => {
+test("the core is the thirteen most important evals in four stages, and the plan names the stages that have evals", () => {
     const core = buildCoreSuite();
-    assert.equal(core.length, 10);
-    assert.equal(new Set(core.map((scenario) => scenario.id)).size, 10);
+    assert.equal(core.length, 13);
+    assert.equal(new Set(core.map((scenario) => scenario.id)).size, 13);
     assert.deepEqual(suiteFor(""), core);
     assert.equal(suiteFor("all").length, extended.length);
     assert.throws(() => suiteFor("most"), /EVAL_SCOPE must be core or all/);
@@ -761,13 +776,17 @@ test("the core is the ten most important evals in four stages, and the plan name
     const mostAsked = Object.entries(ASKED_BY).filter(([label]) => extended.some((scenario) => scenario.label === label))
         .sort((left, right) => right[1] - left[1]).slice(0, 4).map(([label]) => label);
     for (const label of mostAsked) assert.ok(core.some((scenario) => scenario.label === label), label);
-    assert.equal(core.filter((scenario) => scenario.group === "safety").length, 3);
+    assert.equal(core.filter((scenario) => scenario.group === "safety").length, 4);
+    // The November 2026 session evaluation's fixes that only a live model can prove run in every report.
+    for (const label of ["Which AI model is best value?", "Re-price my top 5 VMs in cheaper regions", "Signed-out cost question"])
+        assert.ok(core.some((scenario) => scenario.label === label), label);
+    assert.equal(core.find((scenario) => scenario.label === "Signed-out cost question").signedOut, true);
     // Only the cost stage may query Cost Management, so the stages can run side by side.
     for (const scenario of core.filter((item) => item.lane === COST_MANAGEMENT_LANE)) assert.equal(scenario.group, "cost", scenario.label);
     const script = fileURLToPath(new URL("./quality.mjs", import.meta.url));
     const planned = (env) => spawnSync(process.execPath, [script, "--plan"], { encoding: "utf8", env: { ...process.env, EVAL_GROUPS: "", EVAL_SCENARIOS: "", EVAL_QUALITY_THRESHOLD: "", ...env } });
     const lines = planned({}).stdout.trim().split("\n");
-    assert.deepEqual(lines, [`stages=${JSON.stringify(CORE_STAGES.map((stage) => stage.group))}`, "count=10"]);
+    assert.deepEqual(lines, [`stages=${JSON.stringify(CORE_STAGES.map((stage) => stage.group))}`, "count=13"]);
     // Chosen evals run in their own stages only: the way to re-test a fix without the whole report.
     const chosen = core.filter((scenario) => scenario.group === "safety").slice(0, 1).map((scenario) => scenario.id);
     assert.deepEqual(planned({ EVAL_SCENARIOS: chosen.join(",") }).stdout.trim().split("\n"), ['stages=["safety"]', "count=1"]);
@@ -810,10 +829,10 @@ test("a stage job runs exactly its stage's evals, and is red whenever one of the
     const amber = stage.map((scenario) => (scenario === flagged ? failRow(scenario, [INEFFICIENT_FAILURE]) : passRow(scenario)));
     assert.equal(evaluateQuality(stage, amber, sha, suiteHash, { expected: core, threshold: 1 }).accepted, true);
     const summary = renderSummary(safety, oneRed, { accepted: false }, sha, false, presentation);
-    assert.match(summary, /^# 🔴 🛡️ Safety and guardrails · 1 of 3 scenarios failed/);
-    assert.match(summary, /AI quality report · 3 evals in this stage/);
+    assert.match(summary, /^# 🔴 🛡️ Safety and guardrails · 1 of 4 scenarios failed/);
+    assert.match(summary, /AI quality report · 4 evals in this stage/);
     assert.doesNotMatch(summary, /### Heatmap/);
-    assert.equal((summary.match(/<details[^>]*><summary>[🟢🔴🟠⚪]/gu) ?? []).length, 3, "one card per eval");
+    assert.equal((summary.match(/<details[^>]*><summary>[🟢🔴🟠⚪]/gu) ?? []).length, 4, "one card per eval");
     // A stage's job annotates its own failures but leaves the overall notice to the scoreboard.
     const lines = renderAnnotations(safety, oneRed, { title: presentation.title, accepted: false }, 10, { notice: false });
     assert.equal(lines.length, 1);
@@ -880,15 +899,15 @@ test("the real merge writes the scoreboard, the dashboard and results, and is re
         const safety = core.filter((scenario) => scenario.group === "safety");
         const chosen = run({ EVAL_SCENARIOS: safety.map((scenario) => scenario.id).join(",") });
         assert.equal(chosen.status, 0, chosen.stderr);
-        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All 3 scenarios green/);
+        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All 4 scenarios green/);
         assert.match(await readFile(join(output, "ai-quality-report.html"), "utf8"), /What the judge scored/);
-        assert.equal(JSON.parse(await readFile(join(output, "results.json"), "utf8")).results.length, 3);
+        assert.equal(JSON.parse(await readFile(join(output, "results.json"), "utf8")).results.length, 4);
         const one = run({ EVAL_SCENARIOS: safety[0].id });
         assert.equal(one.status, 0, one.stderr);
         assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All 1 scenario green/);
         const red = run({});
         assert.equal(red.status, 1, "the cost stage produced no results");
-        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🔴 AI Quality Report · Not accepted: 8 of 10 ran/);
+        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🔴 AI Quality Report · Not accepted: 10 of 13 ran/);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }

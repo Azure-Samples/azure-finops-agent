@@ -390,6 +390,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
                 ["reason"] = "Cost Management rejects Currency as a grouping dimension and every row already carries a Currency column, so the grouping was removed; read each row's Currency.",
             });
         }
+        result = WithCostAccessNote(result);
         return versionNote is null ? result : AnnotateRoot(result, "_apiVersion", versionNote);
     }
 
@@ -453,10 +454,10 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         var response = await HttpHelper.SendWithRetryAsync(uri.AbsoluteUri, token, activity, "graph", method,
             method == HttpMethod.Get ? null : body, timestamp, GraphHeaders(), cancellationToken: cancellationToken);
         if (IsReportServiceAbsent(uri.AbsolutePath, response)) return ReportServiceAbsent(response, activity);
-        if (method == HttpMethod.Get)
-            response = await PaginateAsync(response, uri, maxPages, next => HttpHelper.SendWithRetryAsync(next.AbsoluteUri, token, activity, "graph",
-                HttpMethod.Get, extraHeaders: GraphHeaders(), cancellationToken: cancellationToken));
-        return ResponseShaper.Normalize(response);
+        if (method != HttpMethod.Get) return ResponseShaper.Normalize(response);
+        response = await PaginateAsync(response, uri, maxPages, next => HttpHelper.SendWithRetryAsync(next.AbsoluteUri, token, activity, "graph",
+            HttpMethod.Get, extraHeaders: GraphHeaders(), cancellationToken: cancellationToken));
+        return WithGraphAccessNote(ResponseShaper.Normalize(response), token);
     }
 
     // Directory advanced queries ($count, $search, assignedLicenses/$count, ne/not/endsWith filters) fail with 400
@@ -955,6 +956,70 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         }
         catch (JsonException) { return false; }
     }
+
+    private static string? ErrorCode(string response)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(ResponseShaper.SplitPreamble(response).Body);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object
+                && error.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String ? code.GetString() : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    // Cost Management answers a user without a cost-reading role at the scope with 401 RBACAccessDenied, which names
+    // neither a role nor an action, so the answer had no way forward. The roles are those of
+    // https://learn.microsoft.com/azure/cost-management-billing/costs/understand-work-scopes.
+    internal static readonly IReadOnlyDictionary<string, string> CostAccessNote = new Dictionary<string, string>
+    {
+        ["meaning"] = "The signed-in user holds no role that reads cost data at this scope, so its cost is unknown, not zero.",
+        ["grantedBy"] = "At a subscription, resource group or management group: Cost Management Reader, Reader, Contributor or Owner assigned on it. At a billing account or billing profile: a billing role that views costs, such as its Reader role.",
+        ["howToGet"] = "An Owner of the scope, or an administrator of the billing account, assigns the role; signing in again or granting consent adds no role.",
+        ["source"] = "https://learn.microsoft.com/azure/cost-management-billing/costs/understand-work-scopes",
+    };
+
+    internal static string WithCostAccessNote(string response) =>
+        response.StartsWith("HTTP 401", StringComparison.Ordinal) && ErrorCode(response) == "RBACAccessDenied"
+            ? AnnotateRoot(response, "_access", CostAccessNote) : response;
+
+    // Graph answers both a delegated permission this app was not granted and a directory role the user lacks with
+    // 403 Authorization_RequestDenied, so the note lists the Graph scopes the connection holds and the consent tiers
+    // it has not granted. Only the scope names are read from the token, which is neither validated nor returned.
+    internal static string WithGraphAccessNote(string response, string? token) =>
+        response.StartsWith("HTTP 403", StringComparison.Ordinal) && ErrorCode(response) == "Authorization_RequestDenied"
+            ? AnnotateRoot(response, "_access", GraphAccessNote(token)) : response;
+
+    internal static IReadOnlyDictionary<string, string> GraphAccessNote(string? token)
+    {
+        var granted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            if (!string.IsNullOrEmpty(token) && new Microsoft.IdentityModel.JsonWebTokens.JsonWebToken(token).TryGetClaim("scp", out var scopes))
+                granted.UnionWith(scopes.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        }
+        catch (ArgumentException) { }
+        string[] TierScopes(string tier) => [.. MicrosoftOAuthOptions.GetScopesForTier(tier)
+            .Select(scope => scope[(scope.LastIndexOf('/') + 1)..]).Where(scope => scope != "User.Read")];
+        string[] tiers = ["licenses", "chargeback"];
+        var note = new Dictionary<string, string>
+        {
+            ["meaning"] = "Microsoft Graph refused this read: this connection lacks a delegated permission the API requires, or the signed-in user lacks a directory role it requires. The permissions section of the API's Microsoft Learn page names both. Its data is unknown, not zero.",
+            ["consentButtons"] = string.Join("; ", tiers.Select(tier => $"{HttpHelper.ConsentLabel(tier)} grants {string.Join(" and ", TierScopes(tier))}"))
+                + " (each under Add scopes in the sidebar). No button grants another Microsoft Graph permission or a directory role, which an Entra administrator assigns.",
+        };
+        // Microsoft Graph tokens are opaque to clients, so an unreadable one leaves only the button map above.
+        if (granted.Count == 0) return note;
+        note["grantedScopes"] = string.Join(" ", granted.Order(StringComparer.OrdinalIgnoreCase));
+        var missing = tiers.Select(tier => (Tier: tier, Scopes: TierScopes(tier).Where(scope => !granted.Contains(scope)).ToArray()))
+            .Where(item => item.Scopes.Length > 0)
+            .Select(item => $"{string.Join(", ", item.Scopes)} ({HttpHelper.ConsentLabel(item.Tier)})").ToArray();
+        note["notGranted"] = missing.Length > 0 ? string.Join("; ", missing)
+            : "none of this app's Microsoft Graph permissions, so the user needs the directory role the API lists";
+        return note;
+    }
+
     /// The provider namespace and resource type addressed by an ARM path (for example Microsoft.CostManagement and
     /// scheduledActions); null when the path names no provider.
     /// </summary>

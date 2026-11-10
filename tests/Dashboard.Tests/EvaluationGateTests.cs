@@ -133,6 +133,26 @@ public sealed class EvaluationGateTests
         Assert.Contains(verdict.Reasons, reason => reason.Contains("failed", StringComparison.Ordinal));
     }
 
+    // Signed out, the one Azure read a tenant question needs sends nothing and shows the Connect Azure button: the
+    // intended outcome of that eval, not a failed call. Any other failure, and the same result when signed in, still fail.
+    [Fact]
+    public void OnlyASignedOutCaseAcceptsTheConnectAzurePrompt()
+    {
+        var signedOut = new EvaluationCase("signed-out", "What did my Azure subscriptions cost last month?", "Offer to connect.",
+            ["QueryAzure"], [], SignedOut: true);
+        ToolResult prompt = new("QueryAzure", true, AzureFinOps.Dashboard.Infrastructure.HttpHelper.TokenMissing("AzureToken", null, "azure"), null);
+        var run = Success with { Tools = [prompt] };
+
+        Assert.True(EvaluationGate.IsConnectPrompt(prompt));
+        Assert.True(EvaluationGate.Assess(signedOut, run, Accepted).Accepted);
+        Assert.False(EvaluationGate.Assess(signedOut with { SignedOut = false }, run, Accepted).Accepted);
+        ToolResult graphConsent = new("QueryAzure", true, AzureFinOps.Dashboard.Infrastructure.HttpHelper.TokenMissing("GraphToken", null, "graph"), null);
+        Assert.False(EvaluationGate.IsConnectPrompt(graphConsent));
+        Assert.False(EvaluationGate.Assess(signedOut, Success with { Tools = [graphConsent] }, Accepted).Accepted);
+        ToolResult denied = new("QueryAzure", true, "HTTP 403 Forbidden\n{\"error\":{\"code\":\"AuthorizationFailed\"}}", null);
+        Assert.False(EvaluationGate.Assess(signedOut, Success with { Tools = [denied] }, Accepted).Accepted);
+    }
+
     [Fact]
     public async Task JudgeSeparatesInventoryFromBillingWithoutDroppingKnownEvidence()
     {

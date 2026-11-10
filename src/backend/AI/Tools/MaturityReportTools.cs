@@ -30,7 +30,7 @@ public sealed class MaturityReportTools(long ownerUserId)
 
 DATA SCOPING: reportJson uses concise source aggregates for the requested assessment period and full declared scope. Include every requested capability and subscription, but only fields needed for scores, evidence and decisions; do not embed raw inventories, entire exports or transcripts. This is a renderer, not a data-query tool. Scope evidence queries before generating the report and preserve unknown or partial findings instead of dropping them to improve a score.
 
-This renders the canonical FinOps Foundation framework: 4 DOMAINS — 'Understand Cloud Usage & Cost', 'Quantify Business Value', 'Optimize Cloud Usage & Cost', 'Manage the FinOps Practice' — and up to 19 CAPABILITIES. Score every capability 0-5 from REAL Azure API data before calling (Resource Graph, Cost Management query+forecast, Consumption budgets, Advisor, Policy, Locks, Reservations/Capacity, Cost exports, Graph, Log Analytics).
+This renders the canonical FinOps Foundation framework: 4 DOMAINS — 'Understand Cloud Usage & Cost', 'Quantify Business Value', 'Optimize Cloud Usage & Cost', 'Manage the FinOps Practice' — and up to 19 CAPABILITIES. Score every capability 0-5 from REAL Azure API data before calling (Resource Graph, Cost Management query+forecast, Consumption budgets, Advisor, Policy, Locks, Reservations/Capacity, Cost exports, Graph, Log Analytics). A capability the evidence did not check (a scope, feed, setting or source that was not read, or a read that failed or was throttled) scores null with stage 'Not assessed', and the report shows it as not assessed; 0 means it was checked and found absent.
 
 MANDATORY for credibility — every capability MUST include: concrete EVIDENCE bullets with real numbers (counts, %, $), a per-capability priority (CRITICAL/HIGH/MEDIUM/LOW), an effort estimate, the Crawl/Walk/Run definitions for THAT capability, and a per-subscription score breakdown. No empty evidence. Never invent numbers — only report what the APIs returned. Prefer projected EOM cost (Cost Management Forecast) for the headline spend.
 
@@ -69,7 +69,7 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
                   ""actions"": [ { ""action"": ""Implement governance tagging"", ""capability"": ""Cost Allocation"", ""priority"": ""CRITICAL"", ""effort"": ""Medium"", ""impact"": ""Enables all cost attribution"" } ] } ],
   ""dataSources"": [ { ""source"": ""Resource Inventory"", ""api"": ""Azure Resource Graph"", ""finding"": ""186 resources across 10 subs"" } ]
 }
-Only 'capabilities' is strictly required; every other section renders when present. Provide as many as you have real data for.")] string reportJson,
+Only 'capabilities' is strictly required; every other section renders when present. Provide as many as you have real data for. A capability, domain average or per-subscription score whose evidence was not checked is null (stage 'Not assessed'), never 0.")] string reportJson,
         [Description("Filename without extension. Default 'FinOps-Maturity-Assessment'.")] string? filename = null,
         [Description("Optional customer/tenant name (overrides reportJson.customer for chrome).")] string? customer = null)
     {
@@ -105,7 +105,7 @@ Only 'capabilities' is strictly required; every other section renders when prese
     // Body sections
     // ────────────────────────────────────────────────────────────────────
 
-    private static string BuildBody(JsonElement root, string? customer, out int capabilityCount)
+    internal static string BuildBody(JsonElement root, string? customer, out int capabilityCount)
     {
         var sb = new StringBuilder();
         capabilityCount = 0;
@@ -196,26 +196,30 @@ Only 'capabilities' is strictly required; every other section renders when prese
             sb.Append("<div class='card'><h2>Domain Scores Overview</h2><table><thead><tr><th>Domain</th><th>Capabilities</th><th>Avg Score</th><th>Stage</th><th>Visual</th></tr></thead><tbody>");
             foreach (var d in dm.EnumerateArray())
             {
-                var avg = Num(d, "avgScore");
+                var avg = Score(d, "avgScore");
                 sb.Append("<tr>");
                 sb.Append($"<td><strong>{Enc(Str(d, "name"))}</strong></td>");
                 sb.Append($"<td>{Enc(Str(d, "capabilities"))}</td>");
-                sb.Append($"<td>{avg:0.0}/5</td>");
+                sb.Append(avg is { } value ? $"<td>{value:0.0}/5</td>" : $"<td>{NotAssessed}</td>");
                 sb.Append($"<td>{StageBadge(Str(d, "stage"))}</td>");
-                sb.Append($"<td>{ScoreBar(avg)}</td>");
+                sb.Append($"<td>{(avg is { } bar ? ScoreBar(bar) : "")}</td>");
                 sb.Append("</tr>");
             }
             sb.Append("</tbody></table></div>");
         }
 
-        // Capability score chart (Chart.js) — all capabilities, lowest first
+        // Capability score chart (Chart.js) — scored capabilities, lowest first; one not assessed has no bar.
         var caps = Arr(root, "capabilities");
         string? chartScript = null;
         if (caps is { } capsForChart)
         {
             var pairs = new List<(string label, double score)>();
+            var notAssessed = new List<string>();
             foreach (var c in capsForChart.EnumerateArray())
-                pairs.Add((Str(c, "name"), Num(c, "score")));
+            {
+                if (Score(c, "score") is { } score) pairs.Add((Str(c, "name"), score));
+                else notAssessed.Add(Str(c, "name"));
+            }
             if (pairs.Count >= 3)
             {
                 pairs = pairs.OrderBy(p => p.score).ToList();
@@ -223,7 +227,10 @@ Only 'capabilities' is strictly required; every other section renders when prese
                 var values = JsonSerializer.Serialize(pairs.Select(p => p.score));
                 var height = Math.Max(320, pairs.Count * 34);
                 sb.Append("<div class='card'><h2>Capability Scores — Lowest First</h2>");
-                sb.Append($"<div style='position:relative;height:{height}px'><canvas id='capChart'></canvas></div></div>");
+                sb.Append($"<div style='position:relative;height:{height}px'><canvas id='capChart'></canvas></div>");
+                if (notAssessed.Count > 0)
+                    sb.Append($"<p class='muted'>Not assessed, so not charted: {Enc(string.Join(", ", notAssessed))}.</p>");
+                sb.Append("</div>");
                 chartScript =
                     "new Chart(document.getElementById('capChart'),{type:'bar',data:{labels:" + labels +
                     ",datasets:[{label:'Score (0-5)',data:" + values +
@@ -341,10 +348,12 @@ Only 'capabilities' is strictly required; every other section renders when prese
     private static string RenderCapability(JsonElement c)
     {
         var sb = new StringBuilder();
-        var score = Num(c, "score");
+        var score = Score(c, "score");
         sb.Append("<div class='cap-card'><div class='cap-card-header'>");
         sb.Append($"<h4>{Enc(Str(c, "name"))}</h4><div class='cap-meta'>");
-        sb.Append($"<span class='cap-score' style='color:{ScoreColor(score)}'>{score:0}/5</span>");
+        sb.Append(score is { } value
+            ? $"<span class='cap-score' style='color:{ScoreColor(value)}'>{value:0}/5</span>"
+            : $"<span class='cap-score' style='color:#616161'>{NotAssessed}</span>");
         var stage = Str(c, "stage");
         if (stage.Length > 0) sb.Append(StageBadge(stage));
         var priority = Str(c, "priority");
@@ -378,7 +387,7 @@ Only 'capabilities' is strictly required; every other section renders when prese
         {
             sb.Append("<h5>Per-Subscription Breakdown</h5><div class='per-sub-grid'>");
             foreach (var p in ps.EnumerateArray())
-                sb.Append($"<span class='per-sub-chip'>{Enc(Str(p, "name"))}: {Enc(Str(p, "score"))}/5</span>");
+                sb.Append($"<span class='per-sub-chip'>{Enc(Str(p, "name"))}: {(Score(p, "score") is null ? NotAssessed.ToLowerInvariant() : Enc(Str(p, "score")) + "/5")}</span>");
             sb.Append("</div>");
         }
 
@@ -423,6 +432,7 @@ Only 'capabilities' is strictly required; every other section renders when prese
         var cls = key switch
         {
             "not started" or "notstarted" => "badge-not-started",
+            "not assessed" => "badge-not-assessed",
             "crawl" => "badge-crawl",
             "walk" => "badge-walk",
             "run" => "badge-run",
@@ -465,13 +475,16 @@ Only 'capabilities' is strictly required; every other section renders when prese
         };
     }
 
-    private static double Num(JsonElement e, string prop)
+    private const string NotAssessed = "Not assessed";
+
+    // A score the evidence did not establish is null, never 0, which would claim the capability was checked and absent.
+    private static double? Score(JsonElement e, string prop)
     {
-        if (!e.TryGetProperty(prop, out var v)) return 0d;
+        if (!e.TryGetProperty(prop, out var v)) return null;
         if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)) return d;
         if (v.ValueKind == JsonValueKind.String &&
             double.TryParse(v.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var sd)) return sd;
-        return 0d;
+        return null;
     }
 
     private static JsonElement? Obj(JsonElement e, string prop) =>
@@ -537,6 +550,7 @@ tbody tr:nth-child(even){background:var(--gray-50);}
 .badge-medium{background:#e3f2fd;color:#1565c0;}
 .badge-low{background:#e8f5e9;color:var(--green);}
 .badge-not-started{background:#ffebee;color:var(--red);}
+.badge-not-assessed{background:#f5f5f5;color:#616161;}
 .badge-crawl{background:#fff3e0;color:#e65100;}
 .badge-walk{background:#e8f5e9;color:var(--green);}
 .badge-run{background:#e8f5e9;color:#1b5e20;}

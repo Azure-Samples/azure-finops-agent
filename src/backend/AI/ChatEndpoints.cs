@@ -98,7 +98,7 @@ public static class ChatEndpoints
         var today = utcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
         return connectedApis.Count > 0
             ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}.{tenantScopeHint} Today is {today} (UTC). Proceed with tool calls directly.]"
-            : $"[CONTEXT: Azure NOT connected. Today is {today} (UTC). Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only suggest 'Connect Azure' when the question needs their tenant data. Do NOT refuse public questions.]";
+            : $"[CONTEXT: Azure NOT connected. Today is {today} (UTC). Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only when the question needs their tenant data: call QueryAzure once with GET /subscriptions, which sends nothing without a connection and shows the user a Connect Azure button, then say in one or two sentences what connecting lets you read and offer to analyze a cost or usage export they upload now instead. Do NOT refuse public questions.]";
     }
 
     /// <summary>The connection block to send in this session, or null when the current model context already has it.</summary>

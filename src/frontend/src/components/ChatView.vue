@@ -1613,6 +1613,7 @@
                   :key="action.href"
                   :href="action.href"
                   class="html-deck-card-btn"
+                  @click="trackConnectClick(action.href, 'chat')"
                   >{{ action.label }}</a
                 >
               </div>
@@ -2539,6 +2540,7 @@ import RequestProgressCard from "./RequestProgressCard.vue";
 import ActivityIndicator from "./ActivityIndicator.vue";
 import AppIcon from "./AppIcon.vue";
 import { JOB_TEMPLATES } from "../data/jobTemplates.js";
+import { DECK_PROMPT, SCRIPT_PROMPT } from "../data/answerActions.js";
 import {
   createRequestProgress,
   describeRequestProgress,
@@ -5094,7 +5096,18 @@ function switchTenant(tid) {
   startAuth("azure", "/auth/microsoft?tenant=" + encodeURIComponent(tid));
 }
 
+// Content-free: which access the user went to grant and from where (the sidebar or a button in the chat), so the
+// effect of the in-chat Connect Azure button on signed-out cost questions can be measured. The tenant is never sent.
+function trackConnectClick(url, source) {
+  window.__trackAppInsightsEvent?.("chat.connect.click", {
+    tier: new URL(url, window.location.origin).searchParams.get("tier") || "base",
+    source,
+    sessionId: currentSessionId.value || "",
+  });
+}
+
 function startAuth(provider, url) {
+  trackConnectClick(url, "sidebar");
   authLoading.value = provider;
   sessionStorage.setItem("authLoading", provider);
   // Append tenant param if user specified one (for guest users with multiple tenants)
@@ -7934,14 +7947,12 @@ async function requestAnalyze() {
 }
 
 function requestPresentation() {
-  input.value =
-    "Build a 6-slide deck for my FinOps team: where we're wasting money and the fixes the agent will run for us.";
+  input.value = DECK_PROMPT;
   send();
 }
 
 function requestScript() {
-  input.value =
-    "Based on our conversation, generate an Azure CLI script to implement the FinOps recommendations we discussed. Ask me to confirm the specific actions before generating the script. If there are no actionable recommendations yet, let me know.";
+  input.value = SCRIPT_PROMPT;
   send();
 }
 
