@@ -158,6 +158,11 @@ public sealed class SessionQualityGuidanceTests
     // pay-as-you-go usage and Reservation, SavingsPlan or Spot otherwise.
     [InlineData("Which hours were pay-as-you-go is read, not assumed: make PricingModel one of that cost query's two grouping dimensions")]
     [InlineData("base the comparison on OnDemand rows only and state the coverage found")]
+    // Cost Management's Query API answers timeframe TheLastMonth with 400 "currently not supported" (verified at
+    // subscription scope with api-versions 2025-03-01 and 2026-08-01), although its reference lists the value; an idle
+    // sweep's uncorrected TheLastMonth query failed the live gate on 10 November 2026.
+    [InlineData("The service rejects timeframe TheLastMonth (\"timeframe TheLastMonth is currently not supported\") although the API reference lists it")]
+    [InlineData("so the previous calendar month is timeframe Custom with timePeriod from its first day to its last day at T23:59:59Z")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
@@ -182,6 +187,10 @@ public sealed class SessionQualityGuidanceTests
     [Fact]
     public void PromptNoLongerSuggestsOneCostQueryPerScope() =>
         Assert.DoesNotContain("one cost query per scope", Prompt);
+
+    [Fact]
+    public void PromptNoLongerOffersTheLastMonthAsACalendarPeriod() =>
+        Assert.DoesNotContain("MonthToDate, TheLastMonth and Custom", Prompt);
 
     [Fact]
     public void WebSearchIsOnByDefaultAndScopedToPublicNews()
