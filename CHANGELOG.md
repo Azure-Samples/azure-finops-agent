@@ -7,6 +7,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- Run every failed live-evaluation case once more, unchanged, and fail it only when both runs fail. Before, only a case refused by a final service throttle was re-run. On 10 November 2026 the agent passed about 97% of 184 gate case runs, but a gate that needs all 23 cases to pass, each decided by one run, was green in only 5 of 10 runs. Every red gate came from a different case: a rare defect, sampling or judge noise, or the shared Cost Management quota. A consistent defect still fails twice, so the gate still blocks real regressions. At that rate the gate would be green about 99% of the time. The same runner serves the AI quality report, so its evals get the same single re-run. A case that passed only on its second run is published with `attempts: 2` and `retriedAfter` (the first run's host-written failure lines and judge finding codes), and the summary and log say "passed on its second run". Flaky cases stay visible and get fixed at their cause. A throttled case still waits out a full Cost Management quota minute before its re-run.
+
+### Fixed
+
+- Keep every prerequisite in a steps table's "what it needs" cell. The cell word limit (one short phrase of about 10 words) made the model trim a step's licenses, opt-ins and roles. The agent-inventory card's answers then lacked prerequisites their sources gave, such as Global Secure Access for the Shadow AI users view and an Agent 365 license for other-cloud discovery, and the judge rejected them. The needs list is now complete however long it is; the word limit applies to the other cells.
+
 ## [0.5.1] - 2026-11-10
 
 ### Added

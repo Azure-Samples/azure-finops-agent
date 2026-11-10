@@ -109,6 +109,9 @@ public sealed class SessionQualityGuidanceTests
     // Asking only to name each item left rows vague, and the quality report's judge wanted plan names in the rows and
     // unstated items marked, so the rule covers all three items in every row.
     [InlineData("a column for what a step needs covers the license, the preview opt-in and the admin role in every row")]
+    // The cell word limit made the model trim a step's prerequisites (Global Secure Access, an Agent 365 license), which
+    // the judge rejected as omissions (November 2026): the needs list is complete however long it is.
+    [InlineData("as one list of every such item the sources you read give for that step, however long (the word limit above is for the other cells, so never drop an item to keep this cell short)")]
     [InlineData("\"none needed\" where a source says so and unconfirmed where no source states it")]
     [InlineData("never eligible plan, existing licenses or appropriate permissions")]
     // A tender needing a PDF got HTML without a word, and "execute the bash script" got a request to upload the script back.

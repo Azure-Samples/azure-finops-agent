@@ -510,14 +510,15 @@ test("the extended run writes the board, the structured results and the dashboar
             planned, directory, sha, suiteHash,
             async (scenario, path) => {
                 executed.push(scenario.id);
-                const mine = executed.length;
                 const result = pass(scenario);
-                if (mine === 2) {
+                // A consistent defect in the second eval: it fails its run and its single retry.
+                const failing = scenario === planned[1];
+                if (failing) {
                     result.accepted = false;
                     result.reasons = ["Unsupported claim."];
                 }
                 await writeFile(path, JSON.stringify(result));
-                return mine === 2 ? 1 : 0;
+                return failing ? 1 : 0;
             },
             async () => {},
             true,
@@ -531,7 +532,8 @@ test("the extended run writes the board, the structured results and the dashboar
                 onFinish: (rows, final) => { finished = { rows, final }; },
             },
         );
-        assert.equal(executed.length, 12, "one failure does not stop the others");
+        assert.equal(executed.length, 13, "one failure, run twice, does not stop the others");
+        assert.equal(new Set(executed).size, 12);
         assert.equal(verdict.accepted, true);
         assert.equal(finished.rows.length, 12);
         assert.equal(finished.final.failed, 1);
@@ -990,6 +992,13 @@ test("each scenario explains what it checks, what happened, what the judge score
     assert.equal(info.checks.find((check) => check.label === "Never called ApplyAzureChange").ok, true);
     assert.equal(info.checks.find((check) => check.label.startsWith("The judge accepted")).ok, false);
     assert.match(happenedSentence(info), /^Answered in 12\.0 s \(first text after 0\.9 s\); 2 tool calls in 2 rounds, 1 failed; tools ran 0\.7 s, the model 11\.3 s\.$/);
+    // A case that passed only on its retry says so, with the first run's reasons, so flakiness is not hidden.
+    assert.match(happenedSentence({ ...info, attempts: 2, retriedAfter: { findings: ["missing_result"], throttled: false } }),
+        /; run twice: the first run failed \(a core part of the request was not answered\)\.$/);
+    assert.match(happenedSentence({ ...info, attempts: 2, retriedAfter: { findings: [], throttled: true } }),
+        /; run twice: the first run was refused by a service throttle\.$/);
+    const retriedRow = { ...row, failures: [], result: { ...row.result, attempts: 2, retriedAfter: { findings: ["missing_result"], throttled: false } } };
+    assert.match(renderLogLine({ index: 0, total: 1, scenario, row: retriedRow }), /↻ passed on its second run; run twice: the first run failed/);
     assert.match(judgeSentence(info), /^The judge rejected the answer: grounded ✅, complete ❌, efficiency ★★★★☆ 4\/5 \(1 avoidable call, 1 extra round, about 3 s of waste\)\.$/);
     const markdown = explainMarkdown(scenario, row, false);
     for (const heading of ["**What this eval checks.**", "**What happened.**", "**What the judge scored.**", "**Why:**", "**Checks.**"])

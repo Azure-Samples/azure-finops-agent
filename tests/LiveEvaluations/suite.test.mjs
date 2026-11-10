@@ -942,13 +942,14 @@ test("fail-fast stops after the first failed case and never accepts the partial 
                 async (scenario, path) => {
                     executed++;
                     const result = pass(scenario);
-                    if (executed === 3) {
+                    // A consistent defect: the third case fails its run and its single retry.
+                    if (scenario === cases[2]) {
                         result.accepted = false;
                         result.judge.accepted = false;
                         result.reasons = ["Unsupported claim."];
                     }
                     await writeFile(path, JSON.stringify(result));
-                    return executed === 3 ? 1 : 0;
+                    return scenario === cases[2] ? 1 : 0;
                 },
                 async () => {},
                 true,
@@ -957,7 +958,7 @@ test("fail-fast stops after the first failed case and never accepts the partial 
             ),
             (error) => error.message.includes("Fail-fast") && error.message.includes(`${LIVE_SUITE_SIZE - 3} cases were not run`),
         );
-        assert.equal(executed, 3);
+        assert.equal(executed, 4, "three cases, the third run twice");
         const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
         assert.equal(report.results.length, 3);
         assert.equal(report.verdict.accepted, false);
@@ -1181,17 +1182,18 @@ test("suite execution writes all results but rejects one failed answer", async (
             async (scenario, path) => {
                 executed++;
                 const result = pass(scenario);
-                if (executed === 11) {
+                // A consistent defect in the eleventh case: it fails its run and its single retry.
+                if (scenario === planned[10]) {
                     result.accepted = false;
                     result.judge.accepted = false;
                     result.reasons = ["Unsupported claim."];
                 }
                 await writeFile(path, JSON.stringify(result));
-                return executed === 11 ? 1 : 0;
+                return scenario === planned[10] ? 1 : 0;
             },
             async () => {},
         );
-        assert.equal(executed, LIVE_SUITE_SIZE);
+        assert.equal(executed, LIVE_SUITE_SIZE + 1, "every case, the failed one twice");
         assert.equal(verdict.accepted, false);
         const report = JSON.parse(
             await readFile(join(directory, "results.json"), "utf8"),
@@ -1238,15 +1240,18 @@ test("a final service throttle is retried once after its deadline with the rubri
             async () => {},
             false,
         );
-        assert.deepEqual(calls, [planned[0].id, planned[1].id, planned[1].id, planned[2].id]);
+        assert.deepEqual(calls, [planned[0].id, planned[1].id, planned[1].id, planned[2].id, planned[2].id]);
         assert.equal(verdict.accepted, false);
         const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
         const retried = report.results.find((row) => row.id === planned[1].id);
         assert.equal(retried.failures.length, 0);
         assert.equal(retried.result.attempts, 2);
+        assert.equal(retried.result.retriedAfter.throttled, true);
+        // A failure without a throttle is retried too, without waiting for a quota window, and stays failed.
         const failed = report.results.find((row) => row.id === planned[2].id);
         assert.ok(failed.failures.length > 0);
-        assert.equal(failed.result.attempts, 1);
+        assert.equal(failed.result.attempts, 2);
+        assert.equal(failed.result.retriedAfter.throttled, false);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
@@ -1312,6 +1317,54 @@ test("a throttled case that still fails after its single retry remains failed", 
         );
         assert.equal(executed, 2);
         assert.equal(verdict.accepted, false);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+// Maintainer decision (10 November 2026): any failed case runs once more, unchanged, and fails only when both runs fail.
+// At about 97% per case an all-23 gate in one run was green about half the time; a consistent defect still fails twice.
+test("any failed case runs once more, unchanged, and fails only when both runs fail", async () => {
+    const directory = await createDirectory();
+    try {
+        const planned = cases.slice(0, 3);
+        const runs = new Map();
+        const seen = [];
+        const verdict = await runCases(
+            planned, directory, sha, suiteHash,
+            async (scenario, path) => {
+                seen.push(scenario);
+                const run = (runs.get(scenario.id) ?? 0) + 1;
+                runs.set(scenario.id, run);
+                const result = pass(scenario);
+                // The second case fails its first run only; the third fails both, as a real defect does.
+                const fails = (scenario === planned[1] && run === 1) || scenario === planned[2];
+                if (fails) {
+                    result.accepted = false;
+                    Object.assign(result.judge, { accepted: false, complete: false, findings: ["missing_result"] });
+                    result.reasons = ["Missing result."];
+                }
+                await writeFile(path, JSON.stringify(result));
+                return fails ? 1 : 0;
+            },
+            async () => {},
+            false,
+        );
+        assert.deepEqual(planned.map((scenario) => runs.get(scenario.id)), [1, 2, 2]);
+        // The retry asks the same question against the same contracts.
+        assert.ok(seen.filter((scenario) => scenario.id === planned[1].id).every((scenario) => scenario === planned[1]));
+        assert.equal(verdict.accepted, false);
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        const flaky = report.results.find((row) => row.id === planned[1].id);
+        assert.equal(flaky.failures.length, 0);
+        assert.equal(flaky.result.attempts, 2);
+        // A pass that needed its retry stays visible with the first run's host-written reasons and judge codes.
+        assert.deepEqual(flaky.result.retriedAfter.findings, ["missing_result"]);
+        assert.ok(flaky.result.retriedAfter.failures.includes("Structured judge rejected the answer."));
+        assert.equal(flaky.result.retriedAfter.throttled, false);
+        const broken = report.results.find((row) => row.id === planned[2].id);
+        assert.ok(broken.failures.includes("Structured judge rejected the answer."));
+        assert.equal(broken.result.attempts, 2);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
@@ -1776,7 +1829,7 @@ test("leftover private .tmp output is not accepted and does not skip remaining c
             async () => {},
             false,
         );
-        assert.equal(executed, 2);
+        assert.equal(executed, 4, "each case without a result is run twice, and the second case still runs");
         assert.equal(verdict.accepted, false);
         const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
         assert.ok(report.results.every((row) =>

@@ -240,6 +240,7 @@ export function explain(scenario, row, publishAnswers = false) {
         modelMs: result?.timeline?.modelMs ?? null,
         throttleNotices: result?.throttle?.notices ?? 0,
         attempts: result?.attempts ?? 1,
+        retriedAfter: result?.retriedAfter ?? null,
         calls: ordered.map((tool) => ({ name: tool.name, ok: tool.success === true, startMs: tool.startMs ?? null, durationMs: tool.durationMs ?? null })),
         judge: judge ? {
             accepted: judge.accepted, grounded: judge.grounded, complete: judge.complete,
@@ -269,8 +270,16 @@ export function happenedSentence(info) {
     if (Number.isFinite(info.toolWallMs) && Number.isFinite(info.modelMs))
         parts.push(`tools ran ${seconds(info.toolWallMs)}, the model ${seconds(info.modelMs)}`);
     if (info.throttleNotices) parts.push(`${plural(info.throttleNotices, "service throttle notice")}`);
-    if (info.attempts > 1) parts.push(`run ${info.attempts} times after a service throttle`);
+    if (info.attempts > 1) parts.push(retrySentence(info.retriedAfter));
     return parts.join("; ") + ".";
+}
+
+// A case runs twice only when its first run failed; the report keeps that first failure visible, so a case that needed
+// its retry reads as flaky rather than as a clean pass.
+export function retrySentence(first) {
+    if (first?.throttled) return "run twice: the first run was refused by a service throttle";
+    const reasons = (first?.findings ?? []).filter((code) => FINDINGS[code]).map((code) => FINDINGS[code].text.toLowerCase());
+    return `run twice: the first run failed${reasons.length ? ` (${reasons.join("; ")})` : ""}`;
 }
 
 export function judgeSentence(info) {
@@ -452,6 +461,8 @@ export function renderLogLine({ index, total, scenario, row, color = false }) {
     const lines = [parts.join(" ")];
     if (status === "fail" || status === "known")
         lines.push(paint(status === "fail" ? "31" : "33", `           ↳ ${row.failures.join(" ")}`));
+    else if ((result?.attempts ?? 1) > 1)
+        lines.push(paint("33", `           ↻ passed on its second run; ${retrySentence(result?.retriedAfter)}`));
     return lines.join("\n");
 }
 

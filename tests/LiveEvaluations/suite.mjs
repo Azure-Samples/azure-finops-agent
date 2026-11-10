@@ -590,6 +590,18 @@ export function publishableResult(result, publishAnswers) {
               }
             : null,
         attempts: Number.isInteger(result.attempts) ? result.attempts : 1,
+        // A case that passed only on its retry stays visible: the first run's host-written failure lines and judge codes.
+        retriedAfter: result.retriedAfter && typeof result.retriedAfter === "object"
+            ? {
+                  failures: Array.isArray(result.retriedAfter.failures)
+                      ? result.retriedAfter.failures.filter((line) => typeof line === "string")
+                      : [],
+                  findings: Array.isArray(result.retriedAfter.findings)
+                      ? [...new Set(result.retriedAfter.findings.filter((code) => Object.hasOwn(FINDINGS, code)))]
+                      : [],
+                  throttled: result.retriedAfter.throttled === true,
+              }
+            : null,
         throttle: {
             notices: Number.isInteger(result.throttle?.notices)
                 ? result.throttle.notices : 0,
@@ -941,12 +953,21 @@ export async function runCases(
                 };
                 let { exitCode, result, failures } = await runAttempt();
                 let attempts = 1;
-                // A final service throttle is an environmental refusal, not an agent verdict: rerun once, unchanged, after the deadline.
-                if (noteThrottle(result) && failures.length > 0) {
-                    console.log(`[${index + 1}/${cases.length}] ${scenario.id} throttled by the service; retrying once after cooldown.`);
-                    // Wait out the reported deadline and at least one full quota window since the refusal.
-                    mark("waiting out a service throttle");
-                    await waitForCooldown(Math.max(pauseMs, throttleRetryQuietMs));
+                const throttled = noteThrottle(result);
+                // Any failed case runs once more, unchanged (same question, rubric and checks), and fails only when both
+                // runs fail: a consistent defect still fails twice, while one run that the agent's or the judge's sampling
+                // tipped no longer decides the suite. After a final service throttle the retry also waits out the quota.
+                let retriedAfter;
+                if (failures.length > 0) {
+                    retriedAfter = {
+                        failures: [...failures],
+                        findings: Array.isArray(result?.judge?.findings) ? [...result.judge.findings] : [],
+                        throttled,
+                    };
+                    console.log(`[${index + 1}/${cases.length}] ${scenario.id} ${throttled ? "throttled by the service; retrying once after cooldown." : "failed; retrying once, unchanged."}`);
+                    mark(throttled ? "waiting out a service throttle" : "waiting to retry a failed case");
+                    // After a throttle, wait out the reported deadline and at least one full quota window since the refusal.
+                    await waitForCooldown(Math.max(pauseMs, throttled ? throttleRetryQuietMs : 0));
                     controller.signal.throwIfAborted();
                     await renewLane();
                     controller.signal.throwIfAborted();
@@ -954,8 +975,10 @@ export async function runCases(
                     noteThrottle(result);
                     attempts = 2;
                 }
-                if (result && typeof result === "object" && !Array.isArray(result))
+                if (result && typeof result === "object" && !Array.isArray(result)) {
                     result.attempts = attempts;
+                    if (retriedAfter) result.retriedAfter = retriedAfter;
+                }
                 mark("recording a result");
                 if (retainedCapture && failures.length === 0) {
                     try {
