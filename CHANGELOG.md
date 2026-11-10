@@ -7,6 +7,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- Read which VM hours were pay-as-you-go before pricing a reservation against them. The AI quality report's "Reservation savings on my current VMs" eval, run after the 0.5.0 deployment, was rejected because the answer said current reservation coverage was "not verified": it never read which hours were pay-as-you-go. The savings rule now has the model make Cost Management's `PricingModel` one of the cost query's two grouping dimensions (`OnDemand` is pay-as-you-go; `Reservation`, `SavingsPlan` and `Spot` rows are not), base the comparison on `OnDemand` rows and state the coverage it found.
+- Take benchmark figures from a page `QueryAzure` reads, not from a web search's page view. The new best-value eval was rejected because its scores came from a hosted web search, whose content neither the user nor the judge can see, and only 2 of the 6 requested models had a score. The same leaderboard read as a page (about 22 KB of text, under `QueryAzure`'s 32 KB whole-response limit) held scores for 5 of them and showed the sixth has none. The model still makes one web search to find the latest results page, then reads that page with `QueryAzure` GET and takes every figure from it, at the highest reasoning effort the source lists for each model (the failed answer had compared one model at maximum effort with another at extra-high).
+- Count a signed-out run's Connect Azure prompt as succeeded wherever the live evaluator counts failed calls. The gate already accepted it, but the saved result that `suite.mjs` re-checks, the console line and the judge's timeline still called it failed, so the signed-out eval failed with "A failed tool call was never corrected" although the judge accepted the answer. `EvaluationGate.Succeeded` now decides this for all of them.
+
 ## [0.5.0] - 2026-11-10
 
 ### Security

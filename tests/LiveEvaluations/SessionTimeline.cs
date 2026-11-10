@@ -10,7 +10,7 @@ public sealed record TimelineCall(int Order, int Round, ToolResult Tool, bool Su
 public sealed record SessionTimeline(double TotalSeconds, double? FirstTokenSeconds, int ToolCalls, int FailedToolCalls, int Rounds,
     int MaxConcurrentTools, double ToolWallSeconds, double ModelSeconds, TimelineCall[] Calls)
 {
-    public static SessionTimeline From(RunCapture run)
+    public static SessionTimeline From(RunCapture run, bool signedOut = false)
     {
         static double Seconds(long milliseconds) => Math.Round(milliseconds / 1000d, 2);
         static bool Timed(ToolResult tool) => tool.StartedMs >= 0 && tool.CompletedMs >= tool.StartedMs;
@@ -26,7 +26,7 @@ public sealed record SessionTimeline(double TotalSeconds, double? FirstTokenSeco
         {
             if (!Timed(tool))
             {
-                calls.Add(new(calls.Count + 1, 0, tool, EvaluationGate.ToolSucceeded(tool), null, null, null));
+                calls.Add(new(calls.Count + 1, 0, tool, EvaluationGate.Succeeded(tool, signedOut), null, null, null));
                 continue;
             }
             // A round is a group of calls that overlap in time; a call starting after every earlier call finished begins a new round.
@@ -38,7 +38,7 @@ public sealed record SessionTimeline(double TotalSeconds, double? FirstTokenSeco
                 (spanStart, spanEnd) = (tool.StartedMs, tool.CompletedMs);
             }
             else spanEnd = Math.Max(spanEnd, tool.CompletedMs);
-            calls.Add(new(calls.Count + 1, round, tool, EvaluationGate.ToolSucceeded(tool),
+            calls.Add(new(calls.Count + 1, round, tool, EvaluationGate.Succeeded(tool, signedOut),
                 Seconds(tool.StartedMs), Seconds(tool.CompletedMs), Seconds(tool.CompletedMs - tool.StartedMs)));
         }
         if (spanStart >= 0) wall += spanEnd - spanStart;

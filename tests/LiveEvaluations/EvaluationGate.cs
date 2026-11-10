@@ -107,6 +107,10 @@ public static class EvaluationGate
             .Select(action => JsonSerializer.SerializeToElement(action).GetProperty("href").GetString())
             .Contains("/auth/microsoft?tier=base");
 
+    // Every count of failed calls (this gate, the saved result suite.mjs re-checks and the judge's timeline) uses this,
+    // so a signed-out run's Connect Azure prompt is not failed in one place and succeeded in another.
+    public static bool Succeeded(ToolResult tool, bool signedOut) => ToolSucceeded(tool) || signedOut && IsConnectPrompt(tool);
+
     private static bool Failed(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.Array) return value.EnumerateArray().Any(Failed);
@@ -129,7 +133,7 @@ public static class EvaluationGate
         if (string.IsNullOrWhiteSpace(run.Answer)) reasons.Add("The final answer is empty.");
         if (run.Errors.Length > 0) reasons.Add("The run emitted errors.");
         var failedCalls = run.Tools.Select((tool, index) => (tool, index))
-            .Where(call => !ToolSucceeded(call.tool) && !(scenario.SignedOut && IsConnectPrompt(call.tool))).ToArray();
+            .Where(call => !Succeeded(call.tool, scenario.SignedOut)).ToArray();
         if (failedCalls.Length > AllowedCorrectedToolFailures)
             reasons.Add($"{failedCalls.Length} tool calls failed; at most {AllowedCorrectedToolFailures} corrected failures are allowed.");
         else if (failedCalls.Any(call => !run.Tools.Where((later, index) => StartedAfter(later, index, call.tool, call.index))

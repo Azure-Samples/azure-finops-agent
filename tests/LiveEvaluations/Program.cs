@@ -79,6 +79,7 @@ internal static class Program
         if (requestedResources.Any(resource => !resourceScopes.ContainsKey(resource))) throw new InvalidOperationException("Unknown evaluation token resource.");
         // A signed-out case is a browser that never connected Azure: an app user without an Entra principal, tokens or scopes.
         var signedOut = string.Equals(Environment.GetEnvironmentVariable("EVAL_SIGNED_OUT"), "true", StringComparison.OrdinalIgnoreCase);
+        state.SignedOut = signedOut;
         var telemetry = new AiTelemetry();
         var options = new MicrosoftOAuthOptions();
         var builder = WebApplication.CreateBuilder();
@@ -188,7 +189,7 @@ internal static class Program
                 var result = new ToolResult(Text(item, "tool"), item.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.True, Text(item, "result"), Text(item, "error"),
                     toolArguments.GetValueOrDefault(id, ""), toolStarts.GetValueOrDefault(id, -1), started.ElapsedMilliseconds);
                 tools.Add(result);
-                Console.WriteLine(JsonSerializer.Serialize(new { type, result.Name, Success = EvaluationGate.ToolSucceeded(result), elapsedMs = started.ElapsedMilliseconds }));
+                Console.WriteLine(JsonSerializer.Serialize(new { type, result.Name, Success = EvaluationGate.Succeeded(result, signedOut), elapsedMs = started.ElapsedMilliseconds }));
             }
         }
         if (pendingTools.Count > 0) errors.Add("One or more tools have no terminal result.");
@@ -227,7 +228,8 @@ internal static class Program
         var capture = state.Capture();
         var tools = state.Tools;
         var subscriptions = state.Subscriptions;
-        var timeline = SessionTimeline.From(capture);
+        var timeline = SessionTimeline.From(capture, state.SignedOut);
+        bool Succeeded(ToolResult tool) => EvaluationGate.Succeeded(tool, state.SignedOut);
         string Bounded(string text, int limit)
         {
             var redacted = Redact(text, subscriptions);
@@ -246,7 +248,7 @@ internal static class Program
             tools = tools.Select(tool => new
             {
                 name = tool.Name,
-                success = EvaluationGate.ToolSucceeded(tool),
+                success = Succeeded(tool),
                 startMs = tool.StartedMs >= 0 ? tool.StartedMs : (long?)null,
                 durationMs = tool.StartedMs >= 0 && tool.CompletedMs >= tool.StartedMs ? tool.CompletedMs - tool.StartedMs : (long?)null
             }),
@@ -257,8 +259,8 @@ internal static class Program
                 toolWallMs = (long)Math.Round(timeline.ToolWallSeconds * 1000),
                 modelMs = (long)Math.Round(timeline.ModelSeconds * 1000)
             },
-            failedTools = tools.Count(tool => !EvaluationGate.ToolSucceeded(tool)),
-            failedToolDetails = tools.Where(tool => !EvaluationGate.ToolSucceeded(tool)).Select(tool => new
+            failedTools = tools.Count(tool => !Succeeded(tool)),
+            failedToolDetails = tools.Where(tool => !Succeeded(tool)).Select(tool => new
             {
                 name = tool.Name,
                 arguments = Bounded(tool.Arguments, 6000),
@@ -270,7 +272,7 @@ internal static class Program
                 return new
                 {
                     name = tool.Name,
-                    success = EvaluationGate.ToolSucceeded(tool),
+                    success = Succeeded(tool),
                     arguments = Bounded(tool.Arguments, 6000),
                     result = result.Length <= 12000 ? result : result[..12000],
                     resultTruncated = result.Length > 12000,

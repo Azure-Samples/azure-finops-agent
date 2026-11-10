@@ -149,6 +149,11 @@ public sealed class SessionQualityGuidanceTests
     // Advisor's reservation and savings plan estimates come from hourly usage over the lookback period, so the rule
     // above must not put a "runs all month" caveat on them (Microsoft Learn, Determine what reservation to purchase).
     [InlineData("Advisor's reservation and savings plan estimates already come from hourly usage over their lookbackPeriod")]
+    // The quality report's reservation eval (November 2026) was rejected because "currently on pay-as-you-go" was never
+    // read: the answer left reservation coverage unverified. Cost Management's PricingModel dimension returns OnDemand for
+    // pay-as-you-go usage and Reservation, SavingsPlan or Spot otherwise.
+    [InlineData("Which hours were pay-as-you-go is read, not assumed: make PricingModel one of that cost query's two grouping dimensions")]
+    [InlineData("base the comparison on OnDemand rows only and state the coverage found")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
@@ -223,6 +228,11 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("the Retail Prices API lists every priced model and deployment type except Claude's (see the Retail Prices API facts), and the answer names only the models it returned", withSearch);
         // A best-value pick named a winner by no stated measure, although a much cheaper scored model was in the table.
         Assert.Contains("by score per USD of one blended per-1M price (3 input tokens to 1 output token unless the user gives a mix), computed in the query or combine that built the table", withSearch);
+        // The best-value eval scored 2 of 6 requested models from a web search's page view, which the user and the judge
+        // never see, while the same leaderboard read as a page held scores for 5 of them and showed the sixth has none.
+        Assert.Contains("then read at most one results page it found, with QueryAzure GET and never through web search", withSearch);
+        Assert.Contains("a web search's own page view is not shown and can be partial), and take every figure from that read", withSearch);
+        Assert.Contains("at the highest reasoning effort the source lists for it, named in the note", withSearch);
         Assert.Contains("Never search or open third-party price, calculator or comparison sites: they copy the Retail Prices API and are not evidence (Anthropic's own pricing page is not one of them", withSearch);
         Assert.Contains("so an abbreviation stays an abbreviation and is said to be one", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);

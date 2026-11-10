@@ -18,6 +18,7 @@ public sealed class EvaluationRunState
     public bool TranscriptVerified { get; set; }
     public string HostContext { get; set; } = "";
     public string AgentProfile { get; set; } = "";
+    public bool SignedOut { get; set; }
     public int ThrottleNotices { get; set; }
     public bool FinalThrottle { get; set; }
     public DateTimeOffset? ThrottleRetryAtUtc { get; set; }

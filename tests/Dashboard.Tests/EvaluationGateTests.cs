@@ -135,6 +135,7 @@ public sealed class EvaluationGateTests
 
     // Signed out, the one Azure read a tenant question needs sends nothing and shows the Connect Azure button: the
     // intended outcome of that eval, not a failed call. Any other failure, and the same result when signed in, still fail.
+    // The saved result that suite.mjs re-checks and the judge's timeline count it the same way as the gate.
     [Fact]
     public void OnlyASignedOutCaseAcceptsTheConnectAzurePrompt()
     {
@@ -146,8 +147,13 @@ public sealed class EvaluationGateTests
         Assert.True(EvaluationGate.IsConnectPrompt(prompt));
         Assert.True(EvaluationGate.Assess(signedOut, run, Accepted).Accepted);
         Assert.False(EvaluationGate.Assess(signedOut with { SignedOut = false }, run, Accepted).Accepted);
+        Assert.True(EvaluationGate.Succeeded(prompt, signedOut: true));
+        Assert.False(EvaluationGate.Succeeded(prompt, signedOut: false));
+        Assert.Equal(0, SessionTimeline.From(run, signedOut: true).FailedToolCalls);
+        Assert.Equal(1, SessionTimeline.From(run).FailedToolCalls);
         ToolResult graphConsent = new("QueryAzure", true, AzureFinOps.Dashboard.Infrastructure.HttpHelper.TokenMissing("GraphToken", null, "graph"), null);
         Assert.False(EvaluationGate.IsConnectPrompt(graphConsent));
+        Assert.False(EvaluationGate.Succeeded(graphConsent, signedOut: true));
         Assert.False(EvaluationGate.Assess(signedOut, Success with { Tools = [graphConsent] }, Accepted).Accepted);
         ToolResult denied = new("QueryAzure", true, "HTTP 403 Forbidden\n{\"error\":{\"code\":\"AuthorizationFailed\"}}", null);
         Assert.False(EvaluationGate.Assess(signedOut, Success with { Tools = [denied] }, Accepted).Accepted);

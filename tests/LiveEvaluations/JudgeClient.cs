@@ -153,7 +153,7 @@ public sealed class JudgeClient(HttpClient http, TokenCredential credential, Uri
 
     internal static object Evidence(EvaluationCase scenario, RunCapture run)
     {
-        var timeline = SessionTimeline.From(run);
+        var timeline = SessionTimeline.From(run, scenario.SignedOut);
         return new
         {
             question = scenario.Question,
