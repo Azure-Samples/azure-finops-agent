@@ -182,6 +182,9 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("so the previous calendar month is timeframe Custom with timePeriod from its first day to its last day at T23:59:59Z")]
     // A French price comparison computed 20% on East US's price and called it 20% less than West Europe's (16.5%).
     [InlineData("a percentage difference is divided by the value the sentence measures it against (X% less than B divides by B, X% more than A by A), so word it with the base the query used")]
+    // A newest-models answer twice put a wrong headline range above a correct table ("USD 0.30 to 2" over a 0.25 row):
+    // the range was read by eye (live gate first runs, 10 November 2026).
+    [InlineData("a range or an extreme in the headline (from lowest to highest, the cheapest, the largest) is Min and Max over exactly the rows the table shows, computed in the query that selected them, never read off the table by eye")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
