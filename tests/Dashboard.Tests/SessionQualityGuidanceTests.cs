@@ -136,6 +136,10 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("In a table of steps, each step's tool cell is itself a link, [tool](url) inside the cell, to the Microsoft Learn page a search or fetch returned for that step")]
     [InlineData("that cell link is the page's citation, so the page needs no second link after the table, and a link after the table never replaces it")]
     [InlineData("nor any other phrase that names no license, opt-in or role (such as tenant permissions or licensing varies), which is unconfirmed")]
+    // Even so, a later report's inventory answer linked nothing; the row format now sits in the documentation-question
+    // workflow where the answer is planned, and a link counts as the cell's one value.
+    [InlineData("A table of steps writes each step's tool as a link to the Learn page read for that step, in the tool cell itself: | 1. <step> | [<tool>](<that page's URL>) | <what to do> | <what it needs> |")]
+    [InlineData("the link is that cell's one value, and its URL does not count toward the cell's word limit")]
     // The best-value card reported Claude as having no published price: Claude models have no Retail Prices meter, and
     // Microsoft bills them at Anthropic's own rates (Learn, Claude Consumption Units billing in Microsoft Foundry).
     [InlineData("Claude (Anthropic) models are the one exception")]
@@ -150,6 +154,10 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("saves that actual cost times (1 - new rate / current rate)")]
     [InlineData("a difference over 730 hours is only the ceiling for a resource that ran all month")]
     [InlineData("A reservation or savings plan priced from retail rates bills every hour of its term")]
+    // A question asking for savings "using Azure retail pricing" got only the saving at the VM's actual October hours,
+    // and the judge called the requested retail comparison missing; both figures are now given.
+    [InlineData("give that retail saving whenever the user asks for retail pricing, and when the resource's actual pay-as-you-go cost was read, give the saving at its actual hours beside it")]
+    [InlineData("without actual cost, say the retail saving assumes the resource runs all month")]
     // Advisor's reservation and savings plan estimates come from hourly usage over the lookback period, so the rule
     // above must not put a "runs all month" caveat on them (Microsoft Learn, Determine what reservation to purchase).
     [InlineData("Advisor's reservation and savings plan estimates already come from hourly usage over their lookbackPeriod")]
@@ -250,6 +258,10 @@ public sealed class SessionQualityGuidanceTests
         // list shortens a tier to its initials and the leaderboard adds a release date, so names never matched exactly.
         Assert.Contains("so match them by family and version number, not spelling", withSearch);
         Assert.Contains("is the same model when that family has exactly one model with that version number on each side; the row keeps the price list's name and the note names each such match", withSearch);
+        // A later answer read the source's chart page, whose text names models without their scores, and found 2 of 6;
+        // its leaderboard page scores 5 of them in rows. It then searched again in a later round.
+        Assert.Contains("Choose the source's leaderboard or table page, which lists every model in a row with its score, never an overview, chart or single-model page", withSearch);
+        Assert.Contains("make no second web search, because a requested model the leaderboard lists without a score has no published result there", withSearch);
         Assert.Contains("Never search or open third-party price, calculator or comparison sites: they copy the Retail Prices API and are not evidence (Anthropic's own pricing page is not one of them", withSearch);
         Assert.Contains("so an abbreviation stays an abbreviation and is said to be one", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);
