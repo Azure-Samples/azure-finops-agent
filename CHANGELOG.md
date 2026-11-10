@@ -13,6 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Ride out a short sign-in outage in the live evaluations. Each lane renews its Azure sign-in (a GitHub OIDC token, then `az login` and `az account set`) before every case. Run 42884448429 stopped after 12 passing cases when the renewal and its one retry 10 seconds later both failed, which blocked a deployment with no answer at fault. Renewal now makes three attempts, 10 and then 30 seconds apart. If it still fails, the suite failure names the step that failed and whether it timed out, never the error's own text, so the next occurrence can be diagnosed.
 - Keep every prerequisite in a steps table's "what it needs" cell. The cell word limit (one short phrase of about 10 words) made the model trim a step's licenses, opt-ins and roles. The agent-inventory card's answers then lacked prerequisites their sources gave, such as Global Secure Access for the Shadow AI users view and an Agent 365 license for other-cloud discovery, and the judge rejected them. The needs list is now complete however long it is; the word limit applies to the other cells.
 
 ## [0.5.1] - 2026-11-10

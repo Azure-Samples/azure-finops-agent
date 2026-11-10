@@ -1340,10 +1340,11 @@ async function main() {
     if (!verdict.accepted) process.exitCode = 1;
 }
 
-export const IDENTITY_RENEWAL_RETRY_MS = 10000;
+// Entra ID or GitHub's OIDC endpoint can refuse a sign-in for longer than a few seconds. Three attempts, 10 s and then 30 s
+// apart, ride out such a hiccup before the suite stops: run 39459732793 lost a stage after two passing cases on a single
+// attempt, and run 42884448429 stopped after twelve passing cases when the one 10-second retry failed as well.
+export const IDENTITY_RENEWAL_BACKOFF_MS = Object.freeze([10000, 30000]);
 
-// One transient failure of the OIDC exchange or az login would otherwise end every remaining case (run 39459732793 lost
-// a stage after two passing cases). It is retried once, after a pause; a second failure stops the suite as before.
 export async function refreshEvaluationIdentity(
     environment = process.env,
     request = fetch,
@@ -1351,15 +1352,23 @@ export async function refreshEvaluationIdentity(
     pause = (milliseconds) => delay(milliseconds),
 ) {
     if (environment.GITHUB_ACTIONS !== "true") return;
-    try {
-        await renewEvaluationIdentityOnce(environment, request, execute);
-    } catch {
-        await pause(IDENTITY_RENEWAL_RETRY_MS);
-        await renewEvaluationIdentityOnce(environment, request, execute);
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await renewEvaluationIdentityOnce(environment, request, execute);
+        } catch (error) {
+            if (attempt >= IDENTITY_RENEWAL_BACKOFF_MS.length) {
+                // The suite failure names the renewal step that failed, never the error's own text, which may carry a
+                // token or a tenant detail.
+                error.evaluationStep = `renewing the evaluation sign-in (${error.renewalStage ?? "an unknown step"} failed${error.renewalTimedOut ? " by timing out" : ""}, ${attempt + 1} attempts)`;
+                throw error;
+            }
+            await pause(IDENTITY_RENEWAL_BACKOFF_MS[attempt]);
+        }
     }
 }
 
 async function renewEvaluationIdentityOnce(environment, request, execute) {
+    let stage = "checking the identity configuration";
     try {
         for (const key of [
             "ACTIONS_ID_TOKEN_REQUEST_URL",
@@ -1374,6 +1383,7 @@ async function renewEvaluationIdentityOnce(environment, request, execute) {
         if (url.protocol !== "https:")
             throw new Error("Invalid identity endpoint.");
         url.searchParams.set("audience", "api://AzureADTokenExchange");
+        stage = "the GitHub OIDC token request";
         const response = await request(url, {
             headers: {
                 Authorization: `Bearer ${environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN}`,
@@ -1385,6 +1395,7 @@ async function renewEvaluationIdentityOnce(environment, request, execute) {
         const token = (await response.json()).value;
         if (typeof token !== "string" || !token)
             throw new Error("Identity token missing.");
+        stage = "az login";
         await execute(
             "az",
             [
@@ -1401,6 +1412,7 @@ async function renewEvaluationIdentityOnce(environment, request, execute) {
             ],
             { timeout: 60000, env: environment },
         );
+        stage = "az account set";
         await execute(
             "az",
             [
@@ -1411,10 +1423,14 @@ async function renewEvaluationIdentityOnce(environment, request, execute) {
             ],
             { timeout: 30000, env: environment },
         );
-    } catch {
-        throw new Error(
+    } catch (error) {
+        // Only the step and whether it timed out leave this function: the original error may hold the token or tenant.
+        throw Object.assign(new Error(
             "Evaluation OIDC renewal failed; no remaining cases or deployment can be accepted.",
-        );
+        ), {
+            renewalStage: stage,
+            renewalTimedOut: error?.killed === true || error?.name === "TimeoutError" || error?.code === "ETIMEDOUT",
+        });
     }
 }
 

@@ -32,7 +32,7 @@ import {
     preparePrivateDiagnostics,
     publishableResult,
     refreshEvaluationIdentity,
-    IDENTITY_RENEWAL_RETRY_MS,
+    IDENTITY_RENEWAL_BACKOFF_MS,
     renderSummary,
     runCases,
     terminateProcessTree,
@@ -889,10 +889,22 @@ test("CI obtains a new scoped OIDC login for each case without exposing tokens",
         }, async () => {}, pause),
         (error) =>
             !error.message.includes("secret-must-not-escape") &&
-            error.message.includes("OIDC renewal failed"),
+            error.message.includes("OIDC renewal failed") &&
+            // The suite failure names the step that failed, never the error's text.
+            error.evaluationStep === "renewing the evaluation sign-in (the GitHub OIDC token request failed, 3 attempts)",
     );
-    assert.equal(requests, 2, "a failed renewal is retried once, then stops the suite");
-    assert.deepEqual(pauses, [IDENTITY_RENEWAL_RETRY_MS]);
+    assert.equal(requests, 3, "a failed renewal is retried twice, then stops the suite");
+    assert.deepEqual(pauses, [...IDENTITY_RENEWAL_BACKOFF_MS]);
+    assert.deepEqual([...IDENTITY_RENEWAL_BACKOFF_MS], [10000, 30000]);
+    // A timed-out az login is named as such.
+    pauses.length = 0;
+    await assert.rejects(
+        refreshEvaluationIdentity(environment, request, async (command, args) => {
+            if (args[0] === "login") throw Object.assign(new Error("secret-must-not-escape"), { killed: true, signal: "SIGTERM" });
+        }, pause),
+        (error) => error.evaluationStep === "renewing the evaluation sign-in (az login failed by timing out, 3 attempts)"
+            && !JSON.stringify({ message: error.message, step: error.evaluationStep }).includes("secret-must-not-escape"),
+    );
     // One transient failure no longer ends the suite.
     let attempts = 0;
     commands.length = 0;
