@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- A `reasoning_effort` input on the AI quality report's manual run. It runs the agent at another reasoning effort for that run only, so a setting can be measured on the 13 extended evals before `EVAL_REASONING_EFFORT` changes. The gate, the judge and production keep the variable.
+
 ### Fixed
 
 - Read which VM hours were pay-as-you-go before pricing a reservation against them. The AI quality report's "Reservation savings on my current VMs" eval, run after the 0.5.0 deployment, was rejected because the answer said current reservation coverage was "not verified": it never read which hours were pay-as-you-go. The savings rule now has the model make Cost Management's `PricingModel` one of the cost query's two grouping dimensions (`OnDemand` is pay-as-you-go; `Reservation`, `SavingsPlan` and `Spot` rows are not), base the comparison on `OnDemand` rows and state the coverage it found.

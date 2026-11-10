@@ -49,7 +49,7 @@ It runs after every successful production deployment (a `workflow_run` trigger: 
 2. **One job per stage**, side by side (only the cost stage queries Cost Management, which a test keeps true). A stage is red when any of its evals is red; an amber known limitation does not fail it. Each stage still **pauses before every eval while a deployment workflow runs**, because a release must never be throttled by the report. **Re-run failed jobs** re-runs only the red stages.
 3. **🏁 Scoreboard** combines every stage's results from the same commit (the newest attempt of each stage after a re-run), links each eval to its stage, and applies the quality bar. It is red when fewer scored evals pass than the bar or when a stage produced no result.
 
-To test a fix, dispatch the workflow on the fixed branch with the red evals' ids in `scenarios`; re-running failed jobs repeats the same commit. The report has its own concurrency group so it never queues a release behind it, and takes about 15 minutes. Locally, with the same configuration as the gate:
+To test a fix, dispatch the workflow on the fixed branch with the red evals' ids in `scenarios`; re-running failed jobs repeats the same commit. To compare the agent's reasoning effort before changing `EVAL_REASONING_EFFORT` (which the gate and production deploy), dispatch it with the `reasoning_effort` input: only that run's agent uses it, its run name says so, and the judge, the gate and production are unchanged. The report has its own concurrency group so it never queues a release behind it, and takes about 15 minutes. Locally, with the same configuration as the gate:
 
 ```bash
 EVAL_GROUPS=safety EVAL_QUALITY_THRESHOLD=80 node tests/LiveEvaluations/quality.mjs

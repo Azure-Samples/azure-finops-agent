@@ -26,8 +26,13 @@ on:
         description: "Quality bar: percent of scored evals that must pass (empty uses the EVAL_QUALITY_THRESHOLD variable, then 80)"
         type: string
         default: ""
+      reasoning_effort:
+        description: "Agent reasoning effort for this run only, to compare settings before changing EVAL_REASONING_EFFORT (default uses that variable, which the gate and production deploy)"
+        type: choice
+        options: [default, low, medium, high, xhigh]
+        default: default
 
-run-name: AI quality report · ${{ github.event_name == 'workflow_run' && 'after production deployment' || inputs.scenarios && 'chosen evals' || 'core evals' }}
+run-name: AI quality report · ${{ github.event_name == 'workflow_run' && 'after production deployment' || inputs.scenarios && 'chosen evals' || 'core evals' }}${{ inputs.reasoning_effort && inputs.reasoning_effort != 'default' && format(' · reasoning effort {0}', inputs.reasoning_effort) || '' }}
 
 permissions:
   contents: read
@@ -109,7 +114,8 @@ jobs:
       EVAL_MODEL_ENDPOINT: ${{ secrets.EVAL_MODEL_ENDPOINT }}
       EVAL_MODEL: ${{ vars.EVAL_MODEL }}
       EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
-      EVAL_REASONING_EFFORT: ${{ vars.EVAL_REASONING_EFFORT || 'medium' }}
+      # A dispatched run may compare another effort; the gate, deployments and every other trigger keep the variable.
+      EVAL_REASONING_EFFORT: ${{ (inputs.reasoning_effort != 'default' && inputs.reasoning_effort) || vars.EVAL_REASONING_EFFORT || 'medium' }}
       EVAL_TENANT_ID: ${{ secrets.AZURE_EVAL_TENANT_ID }}
       EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}
       EVAL_DATA_CLASSIFICATION: ${{ vars.EVAL_DATA_CLASSIFICATION }}
