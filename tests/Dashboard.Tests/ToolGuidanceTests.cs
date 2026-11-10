@@ -56,6 +56,10 @@ public sealed class ToolGuidanceTests
     [InlineData("QueryAzure", null, "pricesheet download")]
     [InlineData("QueryAzure", null, "not tenant-specific")]
     [InlineData("QueryAzure", null, "license-included pricing adds the tier's '- SQL License' product")]
+    // A database comparison filtered rows on "flexible", dropped the 'Flex Server Storage' product and priced PostgreSQL
+    // storage from a managed disk's P20 row instead, which the judge rejected (live gate, 10 November 2026).
+    [InlineData("QueryAzure", null, "storage under 'Azure Database for PostgreSQL Flex Server Storage', meter 'Storage Data Stored' per GB-month")]
+    [InlineData("QueryAzure", null, "never another service's (a managed disk's P-tier price is not a database's storage price)")]
     [InlineData("QueryAzure", null, "no documentation lookup or web search first")]
     [InlineData("QueryAzure", null, "Convert units in the same query that selects the rows")]
     [InlineData("QueryAzure", null, "returned rows carry priceType as type, so a query selects x.type, never x.priceType")]
