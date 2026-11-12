@@ -75,8 +75,9 @@ public sealed class ToolGuidanceTests
     // A Crawl scorecard reported "Cost data exports" and "Cost alerts" as 0/Not Started from a single narrow check
     // (subscription-scope exports only; scheduledActions only, ignoring an enabled budget notification already read
     // for the budgets dimension), although the tenant had working ingestion/alerting through those other paths
-    // (session evaluation, 12 November 2026).
-    [InlineData("ReportMaturityScore", null, "/providers/Microsoft.CostManagement/exports) and at the connection's management-group and billing-account scopes")]
+    // (session evaluation, 12 November 2026). Management-group exports exist only for Enterprise Agreement (Learn,
+    // Tutorial: Create and manage Cost Management exports), so that scope is read only for EA subscriptions.
+    [InlineData("ReportMaturityScore", null, "its management groups only when the subscriptions are Enterprise Agreement (quotaId EnterpriseAgreement_2014-09-01; management-group exports exist for no other agreement, and hold usage only)")]
     [InlineData("ReportMaturityScore", null, "Score 0 only when every scope you could read is empty")]
     [InlineData("ReportMaturityScore", null, "/providers/Microsoft.CostManagement/scheduledActions;")]
     [InlineData("ReportMaturityScore", null, "An enabled budget notification (read for the budgets dimension) is also a cost alert")]

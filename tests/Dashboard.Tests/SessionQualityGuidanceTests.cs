@@ -198,6 +198,26 @@ public sealed class SessionQualityGuidanceTests
     // (session evaluation, 12 November 2026).
     [InlineData("That link's label never says \"download\" or implies the file is already made")]
     [InlineData("word it as the action it actually takes, such as \"Generate the full list as a file\"")]
+    // Advisor's newest stable API (2026-10-01), which the host picks for reads without api-version, also lists Completed
+    // recommendations: a live read returned 15 New and 7 Completed cost recommendations where the previous version
+    // returned the 15 open ones, and Resource Graph AdvisorResources shows the same split (12 November 2026).
+    [InlineData("Microsoft.Advisor/recommendations?$filter=Category eq 'Cost' and RecommendationStatus eq 'New'")]
+    [InlineData("also lists recommendations already Completed, Postponed or Dismissed (properties.recommendationStatus), which are not open savings")]
+    [InlineData("keep only rows whose tostring(properties.recommendationStatus) is New")]
+    // The Copilot usage report supports only report version v2, whose periods are D7, D28, D90, D180 and ALL (Learn,
+    // copilotReportRoot: getMicrosoft365CopilotUsageUserDetail); the prompt's D30 example was invalid.
+    [InlineData("getMicrosoft365CopilotUsageUserDetail(period='D28')")]
+    [InlineData("accepts periods D7, D28, D90, D180 and ALL, never D30")]
+    // Foundry tags usage of models sold by Azure with an automatic project tag (preview), and bills CCU-billed Claude
+    // under the Foundry resource without project attribution (Learn, Plan and manage costs for Microsoft Foundry;
+    // Claude Consumption Units billing).
+    [InlineData("Cost Management tags their usage automatically with the tag key project (preview)")]
+    [InlineData("Claude's CCU charges are billed under the Foundry resource itself")]
+    [InlineData("Where no project-tagged cost exists there is only an estimate")]
+    // Learn's retirement schedule has no rows for the newest models; the ARM Models API dates every model version.
+    [InlineData("Microsoft.CognitiveServices/locations/{region}/models: each model version's lifecycleStatus")]
+    // Flex rows ('Flex Gl', 'Fl Gl') cost half the Std Gl rate in a live Retail Prices read (12 November 2026).
+    [InlineData("Flex Gl or Fl Gl (Flex processing, published for only some models at half the Std Gl rate, never quoted as the Global Standard price)")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
@@ -222,6 +242,10 @@ public sealed class SessionQualityGuidanceTests
     [Fact]
     public void PromptNoLongerSuggestsOneCostQueryPerScope() =>
         Assert.DoesNotContain("one cost query per scope", Prompt);
+
+    [Fact]
+    public void PromptNoLongerSuggestsAnUnsupportedCopilotReportPeriod() =>
+        Assert.DoesNotContain("getMicrosoft365CopilotUsageUserDetail(period='D30')", Prompt);
 
     [Fact]
     public void PromptNoLongerOffersTheLastMonthAsACalendarPeriod() =>
