@@ -396,8 +396,11 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
 
     // ARM rejects an api-version it does not support by naming the supported ones, and a provider that checks none
     // treats the latest possible date as its newest, so a read without api-version is first sent with this placeholder.
-    // The newest stable version ARM names is then kept per resource type for an hour.
+    // The newest stable version ARM names is then kept per resource type for a day: each probe is a failed round trip
+    // of about a second before the real read (135 of 138 failed ARM calls in five days of production telemetry), and a
+    // version retired sooner is rejected with the supported list, which replaces it.
     internal const string PlaceholderApiVersion = "9999-12-31";
+    internal static readonly TimeSpan ChosenApiVersionLifetime = TimeSpan.FromDays(1);
     internal static readonly ConcurrentDictionary<string, (string Version, DateTimeOffset Until)> ChosenApiVersions = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -428,7 +431,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
             var correctedPath = WithApiVersion(path, version);
             var corrected = await send(correctedPath);
             if (IsUnlistedApiVersionRejection(corrected)) continue;
-            ChosenApiVersions[key] = (version, DateTimeOffset.UtcNow.AddHours(1));
+            ChosenApiVersions[key] = (version, DateTimeOffset.UtcNow + ChosenApiVersionLifetime);
             activity?.SetTag("azure.api_version_corrected", version);
             var success = corrected.StartsWith("HTTP 2", StringComparison.Ordinal);
             if (chosen || success) return (corrected, correctedPath, success ? ApiVersionNote(version, chosen ? null : sent) : null);

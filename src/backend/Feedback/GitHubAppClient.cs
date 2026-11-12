@@ -39,6 +39,7 @@ public sealed class GitHubAppClient : IDisposable
     private DateTimeOffset _tokenExpires;
     private bool _available;
     private DateTimeOffset _availabilityKnownUntil;
+    private string? _unavailableReason;
 
     public GitHubAppClient(FeedbackOptions options, IHttpClientFactory http, TimeProvider time, ILogger logger)
     {
@@ -79,11 +80,18 @@ public sealed class GitHubAppClient : IDisposable
                 try
                 {
                     await GetTokenLockedAsync(cancellationToken);
+                    _unavailableReason = null;
                     Remember(true);
                 }
                 catch (Exception ex) when (IsGitHubFailure(ex, cancellationToken))
                 {
-                    _logger.LogWarning("GitHub feedback is unavailable ({Reason}); the form links to GitHub's new-issue page.", Describe(ex));
+                    // A missing installation is rechecked every two minutes; warn when the reason changes, not on every recheck.
+                    var reason = Describe(ex);
+                    if (reason != _unavailableReason)
+                        _logger.LogWarning("GitHub feedback is unavailable ({Reason}); the form links to GitHub's new-issue page.", reason);
+                    else
+                        _logger.LogDebug("GitHub feedback is still unavailable ({Reason}).", reason);
+                    _unavailableReason = reason;
                     Remember(false);
                 }
             }

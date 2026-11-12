@@ -311,6 +311,7 @@ public sealed class EvaluationGateTests
         var verdict = EvaluationGate.Assess(Scenario, TwelveCalls,
             $$"""{"accepted":true,"grounded":true,"complete":true,"avoidableCalls":{{calls}},"avoidableRounds":{{rounds}},"avoidableSeconds":{{seconds}},"findings":["redundant_calls"],"reason":"Calls 9-12 repeated a lookup."}""");
         Assert.Equal(score, verdict.Judge!.EfficiencyScore);
+        Assert.NotNull(verdict.Judge.Findings);
         Assert.Equal(["redundant_calls"], verdict.Judge.Findings);
         Assert.Equal(score >= EvaluationGate.MinimumEfficiencyScore, verdict.Judge.Efficient);
         Assert.Equal(score >= EvaluationGate.MinimumEfficiencyScore, verdict.Accepted);
