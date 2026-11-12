@@ -7,6 +7,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix four causes a session evaluation traced in 102 real conversations of the last 30 days (12 November 2026, mean 8.55 of 10; production on `d8aad45`):
+  - Let a table of steps give the "what to do" cell the same length exception the "needs" cell already had. The agent-inventory card, the most-asked start-page question (13 of 102 conversations, 13 distinct owners, mean score 7.0), kept every cell at the general ~10-word limit, so steps such as connecting other-cloud providers, assigning an owner to an ownerless agent, or making an agent visible in the Copilot Studio registry collapsed into a vague verb ("connect the providers", "fix ownerless entries") with no concrete action, which the judge rejected as incomplete seven times.
+  - Score the Crawl "Cost data exports" and "Cost alerts & scheduled actions" dimensions from more than one narrow scope. "Exports" only listed subscription-scope exports and scored 0/"Not Started" for a tenant that exports centrally at a management-group or billing-account scope instead; "alerts" only listed `scheduledActions` and scored 0 even when the tenant's budgets already had an enabled notification (read for the "budgets" dimension, a cost alert in its own right). One conversation on the current production revision was docked for exactly the alerts gap, confirming it is still live.
+  - Give the generic "Preparing the file" / "Building the deck" / "Writing the script" status line a duration hint. `GenerateDataReport` rounds averaged 94.2 s and reached 271 s on a row-count-mismatch retry (the slowest 5 turns in the export, 567-281 s, were dominated by it), and several users reported no visible text for almost the whole wait.
+  - Stop offering a follow-up link labeled "Download the full resource inventory" when clicking it only queues a new turn that then spends its own round writing the file; no file exists yet when the link is shown. The prompt now requires wording that matches what the click actually does ("Generate the full list as a file").
+
+  Credential-free regression tests cover each fix: `SessionQualityGuidanceTests` pins for the new "what to do" exemption and the download-wording rule, `ToolGuidanceTests` for the broadened exports/alerts dimension checks.
+
 ## [0.5.2] - 2026-11-10
 
 ### Changed

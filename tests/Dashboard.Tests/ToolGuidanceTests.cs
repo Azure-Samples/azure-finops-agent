@@ -72,8 +72,14 @@ public sealed class ToolGuidanceTests
     [InlineData("QueryAzure", "url", "one per line")]
     [InlineData("QueryAzure", null, "Leave api-version out of reads")]
     [InlineData("QueryAzure", "url", "out of reads")]
-    [InlineData("ReportMaturityScore", null, "/providers/Microsoft.CostManagement/exports. Score 0 if none")]
+    // A Crawl scorecard reported "Cost data exports" and "Cost alerts" as 0/Not Started from a single narrow check
+    // (subscription-scope exports only; scheduledActions only, ignoring an enabled budget notification already read
+    // for the budgets dimension), although the tenant had working ingestion/alerting through those other paths
+    // (session evaluation, 12 November 2026).
+    [InlineData("ReportMaturityScore", null, "/providers/Microsoft.CostManagement/exports) and at the connection's management-group and billing-account scopes")]
+    [InlineData("ReportMaturityScore", null, "Score 0 only when every scope you could read is empty")]
     [InlineData("ReportMaturityScore", null, "/providers/Microsoft.CostManagement/scheduledActions;")]
+    [InlineData("ReportMaturityScore", null, "An enabled budget notification (read for the budgets dimension) is also a cost alert")]
     [InlineData("ReportMaturityScore", null, "without api-version (the host adds it)")]
     [InlineData("ReportMaturityScore", null, "with no provider, documentation or spec lookup first")]
     // A gate run's Crawl score left the guardrails dimension unknown although every policy read succeeded, because the

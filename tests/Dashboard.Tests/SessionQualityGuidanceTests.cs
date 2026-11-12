@@ -189,6 +189,15 @@ public sealed class SessionQualityGuidanceTests
     // sweep that found nothing left its monthly waste "not estimated" (live gate first runs, 10 November 2026).
     [InlineData("by that measure itself before any rows are cut (never ordered by another field such as impact first and then truncated)")]
     [InlineData("A scan that succeeded and found no candidates (no idle, orphaned or unused resources of a kind) shows no waste of that kind: report its monthly waste as USD 0 for the categories scanned, with no price lookup, never as not estimated")]
+    // The agent-inventory card (the most-asked start question, 13 conversations in one 30-day session evaluation,
+    // mean score 7.0) kept vague "what to do" cells ("connect the providers", "fix ownerless entries") because the
+    // general 10-word cell limit left no room for the concrete action a multi-part governance step needs.
+    [InlineData("in a table of steps, the \"what to do\" cell is exempt from that limit exactly like the \"needs\" cell below")]
+    [InlineData("name every concrete sub-action the step requires (which console or admin center, what to connect, register or create)")]
+    // A follow-up link labeled "Download the full resource inventory" only queued a new turn; no file existed yet
+    // (session evaluation, 12 November 2026).
+    [InlineData("That link's label never says \"download\" or implies the file is already made")]
+    [InlineData("word it as the action it actually takes, such as \"Generate the full list as a file\"")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 

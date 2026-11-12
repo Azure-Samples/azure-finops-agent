@@ -5791,13 +5791,13 @@ function activityPhrase(tc) {
     case "QueryUploadedFile":
       return "Reading your file";
     case "GenerateScript":
-      return "Writing the script";
+      return "Writing the script (can take a minute)";
     case "GenerateHtmlPresentation":
-      return "Building the deck";
+      return "Building the deck (can take a minute or two)";
     case "GenerateMaturityReport":
       return "Building the report";
     case "GenerateDataReport":
-      return "Preparing the file";
+      return "Preparing the file (can take a minute or two)";
     case "RenderChart":
     case "RenderAdvancedChart":
       return "Drawing the chart";
