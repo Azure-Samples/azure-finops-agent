@@ -187,6 +187,18 @@ public sealed class ToolGuidanceTests
         Assert.Contains(guidance, parameter.GetProperty("description").GetString()!, StringComparison.OrdinalIgnoreCase);
     }
 
+    // The assessment report eval delivered a grounded report whose summary and answer named no overall stage or urgent
+    // actions, because only the capabilities were required (quality report, 16 November 2026).
+    [Fact]
+    public void MaturityReportRequiresItsVerdict()
+    {
+        var tool = new MaturityReportTools(101).Create().Single();
+        Assert.Contains("THE VERDICT is the assessment's main result, so it is REQUIRED", tool.Description);
+        Assert.Contains("Your answer in the chat opens with the same verdict, the overall stage and the most urgent actions", tool.Description);
+        var report = tool.JsonSchema.GetProperty("properties").GetProperty("reportJson").GetProperty("description").GetString()!;
+        Assert.Contains("'capabilities', 'overall' (at least its stage and counts), 'executiveSummary' and 'priorityActions' are required", report);
+    }
+
     [Fact]
     public void ReportToolNeedsNoSourceRowCountForTextTheModelWrote()
     {

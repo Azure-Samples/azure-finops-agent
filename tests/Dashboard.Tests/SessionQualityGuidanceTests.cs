@@ -335,6 +335,11 @@ public sealed class SessionQualityGuidanceTests
         // never see, while the same leaderboard read as a page held scores for 5 of them and showed the sixth has none.
         Assert.Contains("then read at most one results page it found, with QueryAzure GET and never through web search", withSearch);
         Assert.Contains("a web search's own page view is not shown and can be partial), and take every figure from that read", withSearch);
+        // The cap-AI-spending eval stated a GitHub budget limit from a page it had only opened through web search, which the
+        // user and the judge never see, while the page it did read never mentioned it (quality report, 16 November 2026).
+        Assert.Contains("A web search only finds pages: the pages it opens and its result snippets are not shown to the user", withSearch);
+        Assert.Contains("take every fact from those reads, and leave out, or name as unconfirmed, anything they do not state. Cite only pages read this turn", withSearch);
+        Assert.DoesNotContain("Cite every fact taken from a web search", withSearch);
         // A best-value answer quoted a benchmark at an effort Foundry does not offer for that model (session evaluation,
         // 16 November 2026).
         Assert.Contains("at the highest reasoning effort the source lists for it among those Foundry offers for that model (when a read named them), named in the note", withSearch);
@@ -361,7 +366,7 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("Never search or open third-party price, calculator or comparison sites", withSearch);
         Assert.Contains("never research a caveat the question did not ask about", withSearch);
         Assert.Contains("an answer that cites no web source should have made no search", withSearch);
-        Assert.Contains("source URL", withSearch);
+        Assert.Contains("Write each source as a Markdown link [title](url) in the answer text itself", withSearch);
         Assert.Contains("because citation markers are removed before the user sees the answer", withSearch);
         Assert.Equal(Prompt, AgentSessionFactory.Instructions(webSearch: false));
     }

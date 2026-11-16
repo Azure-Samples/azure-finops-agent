@@ -34,6 +34,8 @@ This renders the canonical FinOps Foundation framework: 4 DOMAINS — 'Understan
 
 MANDATORY for credibility — every capability MUST include: concrete EVIDENCE bullets with real numbers (counts, %, $), a per-capability priority (CRITICAL/HIGH/MEDIUM/LOW), an effort estimate, the Crawl/Walk/Run definitions for THAT capability, and a per-subscription score breakdown. No empty evidence. Never invent numbers — only report what the APIs returned. Prefer projected EOM cost (Cost Management Forecast) for the headline spend.
 
+THE VERDICT is the assessment's main result, so it is REQUIRED: 'overall.stage' is the stage most of the assessed capabilities reached (count them from your own capability list, leaving out Not assessed ones; on a tie, the lower stage), with 'overall.notStarted' and 'overall.walkOrRun' counted the same way; 'priorityActions' groups the CRITICAL and HIGH actions; and the first 'executiveSummary' bullet states the overall stage and the two or three most urgent actions. Your answer in the chat opens with the same verdict, the overall stage and the most urgent actions, in one or two sentences; the report holds the detail.
+
 The 19 canonical capabilities (group under the 4 domains):
 - Understand: Data Ingestion & Normalization, Cost Allocation, Reporting & Analytics, Anomaly Management.
 - Quantify: Planning & Forecasting, Budgeting, Benchmarking / Unit Economics.
@@ -69,7 +71,7 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
                   ""actions"": [ { ""action"": ""Implement governance tagging"", ""capability"": ""Cost Allocation"", ""priority"": ""CRITICAL"", ""effort"": ""Medium"", ""impact"": ""Enables all cost attribution"" } ] } ],
   ""dataSources"": [ { ""source"": ""Resource Inventory"", ""api"": ""Azure Resource Graph"", ""finding"": ""186 resources across 10 subs"" } ]
 }
-Only 'capabilities' is strictly required; every other section renders when present. Provide as many as you have real data for. A capability, domain average or per-subscription score whose evidence was not checked is null (stage 'Not assessed'), never 0.")] string reportJson,
+'capabilities', 'overall' (at least its stage and counts), 'executiveSummary' and 'priorityActions' are required, because they carry the verdict; every other section renders when present. Provide as many as you have real data for. A capability, domain average or per-subscription score whose evidence was not checked is null (stage 'Not assessed'), never 0.")] string reportJson,
         [Description("Filename without extension. Default 'FinOps-Maturity-Assessment'.")] string? filename = null,
         [Description("Optional customer/tenant name (overrides reportJson.customer for chrome).")] string? customer = null)
     {
