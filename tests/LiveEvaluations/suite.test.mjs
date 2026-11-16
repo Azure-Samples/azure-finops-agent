@@ -376,7 +376,7 @@ test("feature deployment consumes only the successful environment-resolved evalu
     assert.doesNotMatch(feature, /EVAL_MODEL_ENDPOINT/);
 });
 
-test("full catalog retains every frontend template, both concrete incident cases and the evaluation-only pricing case", () => {
+test("full catalog retains every frontend template, both concrete incident cases and the evaluation-only pricing cases", () => {
     const questions = new Set([
         ...maturityCategories.flatMap((category) =>
             (category.prompts ?? []).map((prompt) => prompt.prompt)),
@@ -386,6 +386,7 @@ test("full catalog retains every frontend template, both concrete incident cases
         "in which regions can I get h200 on spot quota?",
         "Calculate the monthly total for 2 units at USD 3 per unit with zero discount and tax, using a QueryAzure query rather than mental arithmetic. Report the total in English. Do not look up prices.",
         "What do the newest AI models on Azure cost? Show the newest GPT, Grok, DeepSeek, Llama and Mistral models with their Global Standard price per 1M input and output tokens.",
+        "Compare Azure Blob Storage costs for 10 TB across Hot, Cool, Cold, and Archive tiers in East US.",
         "Is purge protection on by default for a new Azure Key Vault, and can I turn it off later?",
         "Write an Azure CLI script that creates a storage account exactly like our existing dev account: name stfinopsdev01, resource group rg-finops-dev, region swedencentral, Standard_LRS redundancy, StorageV2, and public network access enabled.",
         "Do my key vaults have purge protection enabled?",

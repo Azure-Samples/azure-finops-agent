@@ -6096,13 +6096,16 @@ const scoreCategories = computed(() =>
 );
 
 const pricingNavigationSections = computed(() =>
-  pricingSections.map((section) => ({
-    ...section,
-    prompts:
-      azureConnected.value && section.connectedPrompts?.length
+  pricingSections.map((section) => {
+    const connected = azureConnected.value && section.connectedPrompts?.length > 0;
+    return {
+      ...section,
+      label: connected && section.connectedLabel ? section.connectedLabel : section.label,
+      prompts: connected
         ? [...section.connectedPrompts, ...section.prompts]
         : section.prompts,
-  })),
+    };
+  }),
 );
 
 // The start page shows each section's five most important questions; phones

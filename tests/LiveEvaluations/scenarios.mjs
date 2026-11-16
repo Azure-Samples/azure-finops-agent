@@ -57,8 +57,12 @@ export const CATALOG_EXPECTATIONS = Object.freeze({
         "Case expectation: no cell in the column for what each step needs is only a general phrase such as 'eligible plan', 'existing licenses' or 'appropriate permissions'; each names the license, preview opt-in or admin role that the sources the agent read give for that step, or says it is unconfirmed. Each step's tool links the Microsoft Learn page the agent read for that step.",
     "Which AI model is best value?":
         "Case expectation: the Anthropic row carries Claude's per-1M input and output rates from Anthropic's pricing page, which Microsoft Learn says Foundry bills Claude models from, never 'no published price'; and the best-value pick follows a measure the answer states (quality score per USD of a blended per-1M price at a stated input-to-output mix), computed from the table's own figures.",
-    "Re-price my top 5 VMs in cheaper regions":
+    "Cheaper regions for my top 5 VMs":
         "Case expectation: a VM's monthly saving follows what it actually cost in the period that was read (that cost times one minus the new rate over the current rate); a full-month (730-hour) difference appears only as the ceiling for a VM that ran all month.",
+    // A start-page card since the November 2026 audit, in which 3 of the 8 signed-in people typed this request and
+    // retried it across six chats.
+    "FinOps assessment report":
+        "Case expectation: the assessment is delivered as one generated HTML report (GenerateMaturityReport) built from evidence read this turn. Each capability is scored from what was read; one whose evidence was not checked is not assessed rather than 0, and the answer's summary gives the overall stage and the most urgent actions without figures the reads did not return.",
 });
 
 // Cost Management quota is tenant-wide, so scenarios that may query it share one paced lane; the rest run beside it.
@@ -484,11 +488,12 @@ export function buildExtendedSuite(catalog = buildCatalog(), gate = buildSuite(c
 }
 
 // The evals the AI quality report runs, chosen by importance: the start-page cards customers asked most in the
-// audit, the two cost questions closest to a FinOps team's day (one on real tenant data), three trust guarantees and
-// one other language, plus the three fixes of the November 2026 session evaluation that only a live model can prove:
-// the best-value card, re-pricing VMs by what they actually cost, and a signed-out cost question. Each stage is one box
-// in the report's pipeline; a stage takes its title from its group. The rest of the extended suite stays defined here
-// for local runs (EVAL_SCOPE=all).
+// audits (October 2026, and the November 2026 14-day audit, which added "Can we cap AI spending?", asked by 3 of 37
+// people and evaluated nowhere else), the two cost questions closest to a FinOps team's day (one on real tenant data)
+// and the signed-in FinOps assessment report card, three trust guarantees and one other language, plus the three fixes
+// of the November 2026 session evaluation that only a live model can prove: the best-value card, re-pricing VMs by what
+// they actually cost, and a signed-out cost question. Each stage is one box in the report's pipeline; a stage takes its
+// title from its group. The rest of the extended suite stays defined here for local runs (EVAL_SCOPE=all).
 export const CORE_STAGES = Object.freeze([
     { group: "start-page", labels: Object.freeze([
         "How do I find all our AI agents?",
@@ -496,11 +501,13 @@ export const CORE_STAGES = Object.freeze([
         "Agent 365, Foundry or API Center?",
         "Who is spending what on AI?",
         "Which AI model is best value?",
+        "Can we cap AI spending?",
     ]) },
     { group: "cost", labels: Object.freeze([
         "Why don't costs match my invoice?",
-        "Reservation savings on my current VMs",
-        "Re-price my top 5 VMs in cheaper regions",
+        "Reservation savings on my VMs",
+        "Cheaper regions for my top 5 VMs",
+        "FinOps assessment report",
     ]) },
     { group: "safety", labels: Object.freeze([
         "Refuses to delete a resource group",

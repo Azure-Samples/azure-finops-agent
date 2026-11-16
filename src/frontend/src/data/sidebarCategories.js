@@ -74,10 +74,20 @@ const aiPricingPrompts = [
   },
 ];
 
-// Infrastructure retail-pricing prompts — work without an Azure login. The first
-// four are curated live-evaluation cases identified by their text
-// (CURATED_CASE_IDS).
+// Infrastructure retail-pricing prompts — work without an Azure login. Pricing
+// the user's own configuration was the most common typed request in the
+// November 2026 audit (6 of 37 people over 14 days, often "like the pricing
+// calculator"), and a back-and-forth of one clarification per turn took one of
+// them six turns, so that card asks for every input at once. The next three are
+// curated live-evaluation cases identified by their text (CURATED_CASE_IDS);
+// "Which storage tier is cheapest?" left the page (one click in that audit) and
+// stays an evaluation-only case.
 const infrastructurePricingPrompts = [
+  {
+    label: "Price my own setup",
+    prompt:
+      "Price my own Azure setup like the Azure pricing calculator. Before looking up any price, ask me in one short message for everything you need: each service with its size or tier and quantity, the region, the operating system or license, storage, the currency, and the pricing term (pay-as-you-go, a 1-year or 3-year reservation, or a savings plan), and say which default you will use for anything I leave out. Then price every line from the Azure Retail Prices API and show one table: service, configuration, monthly price.",
+  },
   {
     label: "What will my 3-tier app cost?",
     prompt:
@@ -94,44 +104,37 @@ const infrastructurePricingPrompts = [
       "Compare monthly cost of Azure SQL 8-vCore vs Cosmos DB 10K RU/s vs PostgreSQL Flexible 8-vCore with 500 GB storage in East US.",
   },
   {
-    label: "Which storage tier is cheapest?",
-    prompt:
-      "Compare Azure Blob Storage costs for 10 TB across Hot, Cool, Cold, and Archive tiers in East US.",
-  },
-  {
     label: "Reservation or savings plan?",
     prompt:
       "Compare the monthly price of a D4s_v5 Linux VM in East US on pay-as-you-go, a 1-year and 3-year reservation, and a 1-year and 3-year savings plan, using Azure retail prices. Show one table: option, monthly cost, saving versus pay-as-you-go.",
   },
 ];
 
-// Personalised pricing prompts — only useful once the user has connected Azure,
-// because they cross-reference the user's actual resources with retail pricing.
-const connectedPricingPrompts = [
+// Signed-in prompts, shown first in the third section under its connected
+// label. In the November 2026 audit, signed-in users typed a FinOps assessment
+// report (3 of 8 people, across six chats) and ran the savings-and-Crawl
+// prompt, while three earlier cards here (Spot eligibility, storage tier
+// downgrade, workload projection) got no click in 14 days. The savings card
+// sends the gate-tested Crawl prompt word for word, so it stays one case.
+const connectedCostPrompts = [
   {
-    label: "Re-price my top 5 VMs in cheaper regions",
+    label: "Where can I save money?",
+    prompt: "Where are my biggest Azure savings opportunities? Score my Crawl maturity.",
+  },
+  {
+    label: "FinOps assessment report",
+    prompt:
+      "Create a FinOps maturity assessment report of my connected Azure subscriptions, aligned with the FinOps Foundation framework, as one HTML document: an executive summary with this month's cost, each capability's score with its evidence, priority and next step, and a phased roadmap. Score only from what the Azure APIs return, and mark any capability you could not check as not assessed.",
+  },
+  {
+    label: "Cheaper regions for my top 5 VMs",
     prompt:
       "List my top 5 most expensive VMs by monthly cost. For each, find the 3 Azure regions with the lowest retail price for the same VM size and OS that are cheaper than its current region, and show a comparison table with the potential monthly savings if I migrated.",
   },
   {
-    label: "Reservation savings on my current VMs",
+    label: "Reservation savings on my VMs",
     prompt:
       "For each VM SKU I'm currently running on pay-as-you-go, compute the savings from moving to a 1-year and 3-year reservation using Azure retail pricing. Sort by total annual savings.",
-  },
-  {
-    label: "Spot eligibility for dev/test",
-    prompt:
-      "Find my VMs that look like dev/test (tagged Environment=Dev or in resource groups containing 'dev', 'test', 'sandbox') and compute the savings if I converted them to spot pricing using Azure retail rates.",
-  },
-  {
-    label: "Storage tier downgrade savings",
-    prompt:
-      "List my storage accounts and their used capacity. For Hot-tier blobs that haven't been accessed in 30+ days, compute monthly savings from moving them to Cool or Cold using Azure retail pricing.",
-  },
-  {
-    label: "Cost projection if I add this workload",
-    prompt:
-      "I want to add a new workload to my subscription. Describe the resources you need (VMs, storage, databases) and I'll project the new monthly bill using Azure retail prices, broken down by service and added on top of my current spend.",
   },
 ];
 
@@ -143,8 +146,9 @@ const publicPricingPrompts = [
 ];
 
 // The start page shows the public questions as three sections, most important
-// first; once Azure is connected, the price section lists the personalised
-// prompts first. Titles say what the questions help with.
+// first; once Azure is connected, the price section is titled for the user's
+// own estate and lists the signed-in prompts first. Titles say what the
+// questions help with.
 export const pricingSections = [
   {
     key: "ai-governance",
@@ -163,9 +167,10 @@ export const pricingSections = [
   {
     key: "infrastructure-pricing",
     label: "Compare Azure prices",
+    connectedLabel: "Optimize my Azure costs",
     icon: "tag",
     prompts: infrastructurePricingPrompts,
-    connectedPrompts: connectedPricingPrompts,
+    connectedPrompts: connectedCostPrompts,
   },
 ];
 
@@ -176,7 +181,7 @@ export const pricingCategory = {
   colorClass: "cat-pricing",
   requiresAzure: false,
   publicPrompts: publicPricingPrompts,
-  connectedPrompts: connectedPricingPrompts,
+  connectedPrompts: connectedCostPrompts,
   sections: pricingSections,
   // Backwards-compat: callers that read .prompts get the public list.
   prompts: publicPricingPrompts,

@@ -165,7 +165,7 @@ test("the audit-driven evals state what a correct answer contains", () => {
     assert.match(card.rubric, /Each step's tool links the Microsoft Learn page the agent read for that step/);
     for (const [label, pattern] of [
         ["Which AI model is best value?", /Anthropic's pricing page[\s\S]*never 'no published price'[\s\S]*quality score per USD of a blended per-1M price/],
-        ["Re-price my top 5 VMs in cheaper regions", /what it actually cost in the period that was read[\s\S]*ceiling for a VM that ran all month/],
+        ["Cheaper regions for my top 5 VMs", /what it actually cost in the period that was read[\s\S]*ceiling for a VM that ran all month/],
     ]) {
         const scenario = extended.find((item) => item.label === label);
         assert.ok(scenario?.rubric.startsWith(base), `${label} keeps the shared rubric`);
@@ -497,7 +497,7 @@ test("group selection and the quality bar are validated", () => {
     assert.equal(parseThreshold("90"), 0.9);
     for (const bad of ["abc", "-1", "101"]) assert.throws(() => parseThreshold(bad), /percentage from 0 to 100/);
     assert.match(presentationFor(safety, 0.8, true).tierNote, /chosen evals/);
-    assert.match(presentationFor(buildCoreSuite(), 0.8, false).tierNote, /the 13 most important evals/);
+    assert.match(presentationFor(buildCoreSuite(), 0.8, false).tierNote, /the 15 most important evals/);
 });
 
 test("the extended run writes the board, the structured results and the dashboard, and runs every scenario", async () => {
@@ -766,10 +766,10 @@ test("the report is one pipeline: a plan, one job per stage of the core evals, a
     assert.ok(runLimit + 10 <= stageLimit && stageLimit <= 360, `${runLimit} + 10 must fit ${stageLimit}`);
 });
 
-test("the core is the thirteen most important evals in four stages, and the plan names the stages that have evals", () => {
+test("the core is the fifteen most important evals in four stages, and the plan names the stages that have evals", () => {
     const core = buildCoreSuite();
-    assert.equal(core.length, 13);
-    assert.equal(new Set(core.map((scenario) => scenario.id)).size, 13);
+    assert.equal(core.length, 15);
+    assert.equal(new Set(core.map((scenario) => scenario.id)).size, 15);
     assert.deepEqual(suiteFor(""), core);
     assert.equal(suiteFor("all").length, extended.length);
     assert.throws(() => suiteFor("most"), /EVAL_SCOPE must be core or all/);
@@ -784,7 +784,10 @@ test("the core is the thirteen most important evals in four stages, and the plan
     for (const label of mostAsked) assert.ok(core.some((scenario) => scenario.label === label), label);
     assert.equal(core.filter((scenario) => scenario.group === "safety").length, 4);
     // The November 2026 session evaluation's fixes that only a live model can prove run in every report.
-    for (const label of ["Which AI model is best value?", "Re-price my top 5 VMs in cheaper regions", "Signed-out cost question"])
+    for (const label of ["Which AI model is best value?", "Cheaper regions for my top 5 VMs", "Signed-out cost question"])
+        assert.ok(core.some((scenario) => scenario.label === label), label);
+    // So do the start-page cards the November 2026 audit found used but unevaluated, and the new signed-in report card.
+    for (const label of ["Can we cap AI spending?", "FinOps assessment report"])
         assert.ok(core.some((scenario) => scenario.label === label), label);
     assert.equal(core.find((scenario) => scenario.label === "Signed-out cost question").signedOut, true);
     // Only the cost stage may query Cost Management, so the stages can run side by side.
@@ -792,7 +795,7 @@ test("the core is the thirteen most important evals in four stages, and the plan
     const script = fileURLToPath(new URL("./quality.mjs", import.meta.url));
     const planned = (env) => spawnSync(process.execPath, [script, "--plan"], { encoding: "utf8", env: { ...process.env, EVAL_GROUPS: "", EVAL_SCENARIOS: "", EVAL_QUALITY_THRESHOLD: "", ...env } });
     const lines = planned({}).stdout.trim().split("\n");
-    assert.deepEqual(lines, [`stages=${JSON.stringify(CORE_STAGES.map((stage) => stage.group))}`, "count=13"]);
+    assert.deepEqual(lines, [`stages=${JSON.stringify(CORE_STAGES.map((stage) => stage.group))}`, "count=15"]);
     // Chosen evals run in their own stages only: the way to re-test a fix without the whole report.
     const chosen = core.filter((scenario) => scenario.group === "safety").slice(0, 1).map((scenario) => scenario.id);
     assert.deepEqual(planned({ EVAL_SCENARIOS: chosen.join(",") }).stdout.trim().split("\n"), ['stages=["safety"]', "count=1"]);
@@ -913,7 +916,7 @@ test("the real merge writes the scoreboard, the dashboard and results, and is re
         assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🟢 AI Quality Report · All 1 scenario green/);
         const red = run({});
         assert.equal(red.status, 1, "the cost stage produced no results");
-        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🔴 AI Quality Report · Not accepted: 10 of 13 ran/);
+        assert.match(await readFile(join(output, "summary.md"), "utf8"), /^# 🔴 AI Quality Report · Not accepted: 11 of 15 ran/);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }

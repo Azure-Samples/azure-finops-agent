@@ -226,6 +226,13 @@ export function buildCatalog() {
         "Newest models' token prices",
         "evaluation:pricing",
     );
+    // A former start-page card (one click in 14 days, November 2026) kept as an evaluation-only case with its text, so
+    // its id and the gate's Blob Storage tier coverage stay unchanged.
+    add(
+        "Compare Azure Blob Storage costs for 10 TB across Hot, Cool, Cold, and Archive tiers in East US.",
+        "Which storage tier is cheapest?",
+        "evaluation:pricing",
+    );
     // Failure modes found by the 2026-10-07 audit of real sessions, each pinned to its fixed behavior. The documentation
     // case stays in the catalog but out of the curated gate: the model still re-checks a Learn result with a
     // site:learn.microsoft.com web search in about a third of runs, which the judge rightly scores as waste.

@@ -55,19 +55,21 @@ The start page offers the questions customers ask most:
 
 | Govern AI agents                   | Control AI spending               | Compare Azure prices               |
 | ---------------------------------- | --------------------------------- | ---------------------------------- |
-| How do I find all our AI agents?   | How do we budget and justify AI?  | What will my 3-tier app cost?      |
-| What does E7 add for AI agents?    | Which AI model is best value?     | Which region is cheapest for a VM? |
-| How do we audit what agents do?    | Who is spending what on AI?       | Which database is cheapest?        |
-| Agent 365, Foundry or API Center?  | Can we cap AI spending?           | Which storage tier is cheapest?    |
+| How do I find all our AI agents?   | How do we budget and justify AI?  | Price my own setup                 |
+| What does E7 add for AI agents?    | Which AI model is best value?     | What will my 3-tier app cost?      |
+| How do we audit what agents do?    | Who is spending what on AI?       | Which region is cheapest for a VM? |
+| Agent 365, Foundry or API Center?  | Can we cap AI spending?           | Which database is cheapest?        |
 | Can we allow only approved models? | Why don't costs match my invoice? | Reservation or savings plan?       |
 
 You can also ask your own question about Azure prices or service health, or upload a CSV, TSV, JSON, Excel, PDF, Parquet, text or image file and ask about it. The [demo data](demo-data/README.md) has samples to try.
 
 ### After you connect Azure
 
+The start page's third section becomes **Optimize my Azure costs** and starts with *Where can I save money?* and a *FinOps assessment report*.
+
 - **Spend:** costs by service, subscription, resource group, tag and region, with forecasts and budgets.
 - **Savings:** Azure Advisor, reservations and savings plans, and idle or orphaned resources.
-- **Maturity:** a Crawl, Walk and Run FinOps score, with the evidence behind each rating.
+- **Maturity:** a Crawl, Walk and Run FinOps score, with the evidence behind each rating, and a FinOps Foundation assessment report of your subscriptions.
 - **More data, with your consent:** Microsoft 365 licenses and Copilot usage (Microsoft Graph), Log Analytics and Application Insights queries, and cost exports in Azure Storage. Each needs its own consent.
 - **Scheduled jobs:** rerun a check on a schedule, such as a daily cost digest, a budget guard or an anomaly watch.
 - **Deliverables:** charts, Excel and CSV reports, HTML presentations, and Azure CLI, PowerShell, Bicep or ARM scripts for you to review.

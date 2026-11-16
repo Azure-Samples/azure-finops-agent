@@ -1,7 +1,7 @@
 name: AI quality report
 
 # The AI quality report. The deployment gate (live-evaluations.yml) stays at its 23 curated scenarios and decides
-# whether a build ships; this workflow runs the thirteen most important evals beyond it, red or green, and never blocks
+# whether a build ships; this workflow runs the fifteen most important evals beyond it, red or green, and never blocks
 # a deployment. It lives in its own workflow so a failing eval cannot stop a release and the gate keeps its single,
 # unconditional contract. The run graph is the picture: 🧭 Plan → one green or red box per stage → 🏁 Scoreboard. Each
 # stage's summary explains every eval in it (what it checks, what happened, what the judge scored and why), failing
