@@ -24,6 +24,41 @@ public sealed class EvaluationRunState
     public DateTimeOffset? ThrottleRetryAtUtc { get; set; }
     public EvaluationFailure? Failure { get; private set; }
 
+    private const int RecentEventLimit = 40;
+    private const int HostWarningLimit = 40;
+    private readonly object _diagnostics = new();
+    private readonly Dictionary<string, int> _eventCounts = new(StringComparer.Ordinal);
+    private readonly Queue<(string Type, long Ms)> _recentEvents = new();
+    private readonly List<string> _hostWarnings = [];
+
+    /// <summary>
+    /// Every SSE event's type and arrival time, never its content: a case that stalls shows whether the host was still
+    /// streaming (keepalive pings, reasoning) and what it last did. Private diagnostics only.
+    /// </summary>
+    public void RecordEvent(string type, long ms)
+    {
+        var name = type.Length is > 0 and <= 40 && type.All(c => c is >= 'a' and <= 'z' or '_') ? type : "other";
+        lock (_diagnostics)
+        {
+            _eventCounts[name] = _eventCounts.GetValueOrDefault(name) + 1;
+            _recentEvents.Enqueue((name, ms));
+            if (_recentEvents.Count > RecentEventLimit) _recentEvents.Dequeue();
+        }
+    }
+
+    /// <summary>The host's own warnings (a resent model request, a failed turn), bounded; private diagnostics only.</summary>
+    public void RecordHostWarning(string warning)
+    {
+        lock (_diagnostics)
+            if (_hostWarnings.Count < HostWarningLimit) _hostWarnings.Add(warning.Length <= 600 ? warning : warning[..600]);
+    }
+
+    public (IReadOnlyDictionary<string, int> Counts, (string Type, long Ms)[] Recent, string[] Warnings) Diagnostics()
+    {
+        lock (_diagnostics)
+            return (new Dictionary<string, int>(_eventCounts, StringComparer.Ordinal), [.. _recentEvents], [.. _hostWarnings]);
+    }
+
     public void RecordThrottle(DateTimeOffset? retryAtUtc, bool willRetry)
     {
         ThrottleNotices++;

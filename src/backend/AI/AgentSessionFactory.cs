@@ -180,7 +180,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
                 Name = "azure-finops-agent",
                 ChatOptions = AgentChatOptions(deployment, reasoningEffort, webSearch),
                 AllowConcurrentInvocation = true,
-            }, clientFactory: inner => new ServerErrorRetryChatClient(inner, _logger), loggerFactory: loggerFactory)
+            }, clientFactory: inner => new ModelStreamRetryChatClient(inner, _logger), loggerFactory: loggerFactory)
             .AsBuilder()
             .UseOpenTelemetry(AiTelemetry.AgentSourceName)
             .Build();
@@ -283,10 +283,13 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         sharedTools.AddRange(ChartTools.Create(loggerFactory.CreateLogger("AzureFinOps.AI.Charts")));
 
         var effort = string.IsNullOrWhiteSpace(reasoningEffort) ? null : reasoningEffort.Trim().ToLowerInvariant();
-        // System.ClientModel's 100 s default also bounds each streaming read; a long silent reasoning stretch would
-        // otherwise time out and retry the whole model request.
-        var projectClient = new AIProjectClient(projectEndpoint, credential,
-            new AIProjectClientOptions { NetworkTimeout = TimeSpan.FromMinutes(10) });
+        // System.ClientModel's default network timeout (100 s) bounds the wait for a response to start and for each
+        // read of a streamed one. A healthy Responses stream is never quiet that long: reasoning summaries, answer text
+        // and function-call arguments all stream as deltas (gaps of at most 4 s on gpt-6.1-terra and 12 s on
+        // gpt-6.1-sol at xhigh effort, measured 16 November 2026), so a longer silence is a stream that died on the
+        // wire. The SDK retries a request whose response never started; ModelStreamRetryChatClient resends one whose
+        // stream stopped before it answered. A 10-minute timeout used to hold such a turn for 10 minutes.
+        var projectClient = new AIProjectClient(projectEndpoint, credential);
         var factory = new AgentSessionFactory(telemetry, identity, projectClient,
             deployment, effort, webSearch, sharedTools, microsoftLearn ? new MicrosoftLearnMcp(loggerFactory) : null, loggerFactory);
         factory._logger.LogInformation("Agent runtime ready; deployment={Deployment} effort={Effort} webSearch={WebSearch} microsoftLearn={MicrosoftLearn}",
@@ -379,6 +382,15 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         {
             _logger.LogWarning(exception, "Agent turn failed: the SDK could not read a hosted web search status");
             return HostedSearchWatchdog.Message;
+        }
+        // The stream died on the wire again after its one resend, or after the answer had started; or every one of the
+        // SDK's own tries timed out before a response started.
+        if (ModelStreamRetryChatClient.IsTransportFailure(exception, CancellationToken.None)
+            || exception is AggregateException { InnerExceptions.Count: > 0 } tries
+            && tries.InnerExceptions.All(inner => ModelStreamRetryChatClient.IsTransportFailure(inner, CancellationToken.None)))
+        {
+            _logger.LogWarning("Agent turn failed: the model stream stopped ({Failure})", exception.GetType().Name);
+            return ModelStreamRetryChatClient.StalledMessage;
         }
         _logger.LogWarning(exception, "Agent turn failed");
         if (exception is ClientResultException { Status: 429 }) return ModelRunCompletion.BusyMessage;

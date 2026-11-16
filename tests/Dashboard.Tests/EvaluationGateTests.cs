@@ -1,5 +1,6 @@
 using LiveEvaluations;
 using Azure.Core;
+using Microsoft.Extensions.Logging;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -372,6 +373,32 @@ public sealed class EvaluationGateTests
         Assert.False(state.Capture().Terminal);
         Assert.Contains("One or more tools have no terminal result.", state.Capture().Errors);
         Assert.False(EvaluationGate.Assess(Scenario, state.Capture(), Accepted).Accepted);
+    }
+
+    // A gate case once waited 580 s on a silent model stream and left no trace of what the host was doing: the
+    // evaluator ignored keepalive pings and reasoning events and discarded the host's own warnings.
+    [Fact]
+    public void AStalledCaseKeepsWhatTheHostLastStreamedAndItsWarnings()
+    {
+        var state = new EvaluationRunState { Phase = "chat" };
+        state.RecordEvent("tool_done", 17_500);
+        for (var ping = 1; ping <= 50; ping++) state.RecordEvent("ping", 17_500 + ping * 20_000);
+        state.RecordEvent("<script>", 1_017_500);
+        using (var provider = new HostWarningCapture(state))
+        {
+            var logger = provider.CreateLogger("AzureFinOps.AI");
+            logger.LogInformation("not kept");
+            for (var warning = 0; warning < 45; warning++) logger.LogWarning("Model stream stopped ({Failure}) before any answer", "TaskCanceledException");
+        }
+
+        var (counts, recent, warnings) = state.Diagnostics();
+        Assert.Equal(1, counts["tool_done"]);
+        Assert.Equal(50, counts["ping"]);
+        Assert.Equal(1, counts["other"]);
+        Assert.Equal(40, recent.Length);
+        Assert.Equal(("other", 1_017_500L), recent[^1]);
+        Assert.Equal(40, warnings.Length);
+        Assert.All(warnings, warning => Assert.Contains("Warning AzureFinOps.AI: Model stream stopped (TaskCanceledException) before any answer", warning));
     }
 
     [Fact]

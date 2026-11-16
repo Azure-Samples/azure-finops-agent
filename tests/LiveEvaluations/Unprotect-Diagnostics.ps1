@@ -109,6 +109,9 @@ try {
                 Failures        = $row.failures -join ' | '
                 Answer          = $row.result.answer
                 Unfinished      = [bool]$row.unfinishedCapture
+                # What the host streamed last (event types and seconds, no content) and its own warnings.
+                LastEvents      = @($row.result.stream.recent | Select-Object -Last 12 | ForEach-Object { '{0} {1:N1}s' -f $_.type, ($_.ms / 1000) }) -join ', '
+                HostWarnings    = @($row.result.hostWarnings) -join "`n"
             }
         }
     }

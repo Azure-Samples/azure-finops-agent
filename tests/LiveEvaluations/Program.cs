@@ -85,6 +85,7 @@ internal static class Program
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(new HostWarningCapture(state));
         builder.Services.AddDistributedMemoryCache();
         builder.Services.AddSession();
         builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
@@ -161,6 +162,7 @@ internal static class Program
             using var document = JsonDocument.Parse(line[6..]);
             var item = document.RootElement;
             var type = Text(item, "type");
+            state.RecordEvent(type, started.ElapsedMilliseconds);
             if (type == "session") sessionId = Text(item, "id");
             if (type is "delta" or "message" && Text(item, "content").Length > 0) state.FirstTokenMs ??= started.ElapsedMilliseconds;
             if (type == "message" && !string.IsNullOrWhiteSpace(Text(item, "content"))) answers[Text(item, "messageId")] = Text(item, "content");
@@ -228,6 +230,7 @@ internal static class Program
         var capture = state.Capture();
         var tools = state.Tools;
         var subscriptions = state.Subscriptions;
+        var diagnostics = state.Diagnostics();
         var timeline = SessionTimeline.From(capture, state.SignedOut);
         bool Succeeded(ToolResult tool) => EvaluationGate.Succeeded(tool, state.SignedOut);
         string Bounded(string text, int limit)
@@ -285,6 +288,14 @@ internal static class Program
                 type = failure.Type,
                 detail = Bounded(failure.Detail, 4000)
             } : null,
+            // Private: what the host streamed (event types and times, no content) and its own warnings, so a stalled
+            // case shows whether the host was alive and what it last did.
+            stream = new
+            {
+                counts = diagnostics.Counts,
+                recent = diagnostics.Recent.Select(item => new { type = item.Type, ms = item.Ms })
+            },
+            hostWarnings = diagnostics.Warnings.Select(warning => Bounded(warning, 600)),
             transcriptVerified = state.TranscriptVerified,
             throttle = new
             {
