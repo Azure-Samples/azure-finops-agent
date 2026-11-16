@@ -344,11 +344,17 @@ public sealed class SessionQualityGuidanceTests
         Assert.Contains("is the same model when that family has exactly one model with that version number on each side; the row keeps the price list's name and the note names each such match", withSearch);
         // A later answer read the source's chart page, whose text names models without their scores, and found 2 of 6;
         // its leaderboard page scores 5 of them in rows. It then searched again in a later round.
-        Assert.Contains("Choose the source's leaderboard or table page, which lists every model in a row with its score, never an overview, chart or single-model page", withSearch);
-        Assert.Contains("make no second web search, because a requested model the leaderboard lists without a score has no published result there", withSearch);
+        Assert.Contains("Choose the leaderboard or table page on the benchmark publisher's own site, which lists every model it ranks in a row with its score, never an overview, chart or single-model page", withSearch);
+        Assert.Contains("make no second web search, because a requested model the publisher's leaderboard lists without a score has no published result there", withSearch);
         // The quality report on 16 November 2026 failed the best-value eval twice: the leaderboard the search found
         // answered with a human-verification page, and the no-second-search rule left 10 of 11 scores unknown.
-        Assert.Contains("Only when that read shows no scores at all (a human-verification, sign-in or empty page), read another independent source's leaderboard page in the next round", withSearch);
+        Assert.Contains("Only when that read shows no scores at all (a human-verification, sign-in or empty page)", withSearch);
+        // The next report's first run read another site's nine-day-old copy of the leaderboard that held its top 25 of
+        // 99 models, and left 7 of 11 requested models unscored; the publisher's own page, read the same way, scored 5 of
+        // them, including its top-ranked model, which the copy did not list. The no-second-read rule gave it no way back.
+        Assert.Contains("and never another site's copy of its results (a blog, news or aggregator page), which can hold only its top entries or be out of date", withSearch);
+        Assert.Contains("or holds only part of the board (it says it lists the top entries, or fewer than the board ranks) and lacks a requested model, read the publisher's full leaderboard in the next round (its address from the search results or the page's own source link)", withSearch);
+        Assert.Contains("or another independent source's leaderboard when the publisher's cannot be read", withSearch);
         Assert.Contains("Never search or open third-party price, calculator or comparison sites: they copy the Retail Prices API and are not evidence (Anthropic's own pricing page is not one of them", withSearch);
         Assert.Contains("so an abbreviation stays an abbreviation and is said to be one", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);
