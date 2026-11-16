@@ -527,6 +527,7 @@ test("the extended run writes the board, the structured results and the dashboar
                 environment: {},
                 laneOf: extendedLane,
                 failFast: false,
+                retryFailed: true,
                 evaluate: (cases, rows, commit, hash) => evaluateQuality(cases, rows, commit, hash, { expected: extended, threshold: 0.5 }),
                 presentation: presentationFor(planned, 0.5, true),
                 onFinish: (rows, final) => { finished = { rows, final }; },

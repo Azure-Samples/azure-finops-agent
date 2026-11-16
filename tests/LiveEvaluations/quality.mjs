@@ -357,6 +357,8 @@ async function main() {
             privateDiagnosticsDirectory: process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY,
             // Every scenario runs: the point of this tier is the whole picture, not the first failure.
             failFast: false,
+            // A failed scenario runs once more, so a pass that needed it is shown as flaky instead of decided by one run.
+            retryFailed: true,
             laneOf: extendedLane,
             throttleRetryQuietMs: COST_QUOTA_WINDOW_MS,
             encryptDiagnosticsTo,

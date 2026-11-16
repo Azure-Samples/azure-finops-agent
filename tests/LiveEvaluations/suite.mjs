@@ -752,6 +752,9 @@ export async function runCases(
         environment = process.env,
         diagnosticsSourceRoot = repositoryRoot,
         failFast = false,
+        // The deployment gate fails a failed case at once and its cause is fixed, never retried away (maintainer
+        // decision, 16 November 2026). The non-blocking quality report runs a failed case once more to show flakiness.
+        retryFailed = false,
         laneOf = () => COST_MANAGEMENT_LANE,
         throttleRetryQuietMs = 0,
         encryptDiagnosticsTo = null,
@@ -956,12 +959,12 @@ export async function runCases(
                 let { exitCode, result, failures } = await runAttempt();
                 let attempts = 1;
                 const throttled = noteThrottle(result);
-                // Any failed case runs once more, unchanged (same question, rubric and checks), and fails only when both
-                // runs fail: a consistent defect still fails twice, while one run that the agent's or the judge's sampling
-                // tipped no longer decides the suite. After a final service throttle the retry also waits out the quota.
+                // With retryFailed (the quality report), a failed case runs once more, unchanged (same question, rubric and
+                // checks), and fails only when both runs fail; after a final service throttle the retry also waits out
+                // the quota. The deployment gate does not retry: its first failed run is final.
                 let retriedAfter;
                 let firstRun;
-                if (failures.length > 0) {
+                if (retryFailed && failures.length > 0) {
                     retriedAfter = {
                         failures: [...failures],
                         findings: Array.isArray(result?.judge?.findings) ? [...result.judge.findings] : [],

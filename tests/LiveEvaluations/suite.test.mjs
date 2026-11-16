@@ -954,7 +954,7 @@ test("fail-fast stops after the first failed case and never accepts the partial 
                 async (scenario, path) => {
                     executed++;
                     const result = pass(scenario);
-                    // A consistent defect: the third case fails its run and its single retry.
+                    // The third case fails, and its first failed run is final.
                     if (scenario === cases[2]) {
                         result.accepted = false;
                         result.judge.accepted = false;
@@ -970,7 +970,7 @@ test("fail-fast stops after the first failed case and never accepts the partial 
             ),
             (error) => error.message.includes("Fail-fast") && error.message.includes(`${LIVE_SUITE_SIZE - 3} cases were not run`),
         );
-        assert.equal(executed, 4, "three cases, the third run twice");
+        assert.equal(executed, 3, "three cases, each run once");
         const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
         assert.equal(report.results.length, 3);
         assert.equal(report.verdict.accepted, false);
@@ -1194,7 +1194,7 @@ test("suite execution writes all results but rejects one failed answer", async (
             async (scenario, path) => {
                 executed++;
                 const result = pass(scenario);
-                // A consistent defect in the eleventh case: it fails its run and its single retry.
+                // A failed answer in the eleventh case: the gate does not run it again.
                 if (scenario === planned[10]) {
                     result.accepted = false;
                     result.judge.accepted = false;
@@ -1205,7 +1205,7 @@ test("suite execution writes all results but rejects one failed answer", async (
             },
             async () => {},
         );
-        assert.equal(executed, LIVE_SUITE_SIZE + 1, "every case, the failed one twice");
+        assert.equal(executed, LIVE_SUITE_SIZE, "every case once, the failed one included");
         assert.equal(verdict.accepted, false);
         const report = JSON.parse(
             await readFile(join(directory, "results.json"), "utf8"),
@@ -1223,7 +1223,7 @@ test("suite execution writes all results but rejects one failed answer", async (
     }
 });
 
-test("a final service throttle is retried once after its deadline with the rubric unchanged", async () => {
+test("with retryFailed (the quality report), a final service throttle is retried once after its deadline with the rubric unchanged", async () => {
     const directory = await createDirectory();
     try {
         const planned = cases.slice(0, 3);
@@ -1251,6 +1251,8 @@ test("a final service throttle is retried once after its deadline with the rubri
             },
             async () => {},
             false,
+            0,
+            { retryFailed: true },
         );
         assert.deepEqual(calls, [planned[0].id, planned[1].id, planned[1].id, planned[2].id, planned[2].id]);
         assert.equal(verdict.accepted, false);
@@ -1296,7 +1298,7 @@ test("a throttle rerun waits a full quota window even after a short service dead
             async () => {},
             false,
             0,
-            { throttleRetryQuietMs: 400 },
+            { throttleRetryQuietMs: 400, retryFailed: true },
         );
         assert.equal(starts.length, 2);
         assert.ok(starts[1] - firstEnded >= 380, `rerun started ${starts[1] - firstEnded}ms after the refusal`);
@@ -1305,7 +1307,7 @@ test("a throttle rerun waits a full quota window even after a short service dead
     }
 });
 
-test("a throttled case that still fails after its single retry remains failed", async () => {
+test("with retryFailed, a throttled case that still fails after its single retry remains failed", async () => {
     const directory = await createDirectory();
     try {
         const planned = cases.slice(0, 1);
@@ -1326,6 +1328,8 @@ test("a throttled case that still fails after its single retry remains failed", 
             },
             async () => {},
             false,
+            0,
+            { retryFailed: true },
         );
         assert.equal(executed, 2);
         assert.equal(verdict.accepted, false);
@@ -1334,9 +1338,47 @@ test("a throttled case that still fails after its single retry remains failed", 
     }
 });
 
-// Maintainer decision (10 November 2026): any failed case runs once more, unchanged, and fails only when both runs fail.
-// At about 97% per case an all-23 gate in one run was green about half the time; a consistent defect still fails twice.
-test("any failed case runs once more, unchanged, and fails only when both runs fail", async () => {
+// Maintainer decision (16 November 2026): a failed eval fails the deployment at once. Its cause is found and fixed in the
+// agent, host, tool contract or evaluation; it is never re-run, nor made to pass by changing effort, models or thresholds.
+test("the deployment gate fails a failed or throttled case at once and never runs it again", async () => {
+    const directory = await createDirectory();
+    try {
+        const planned = cases.slice(0, 3);
+        const calls = [];
+        await assert.rejects(
+            runCases(
+                planned, directory, sha, suiteHash,
+                async (scenario, path) => {
+                    calls.push(scenario.id);
+                    const result = pass(scenario);
+                    if (scenario === planned[1]) {
+                        result.accepted = false;
+                        result.reasons = ["At least one tool failed."];
+                        result.throttle = { notices: 1, final: true, retryAtUtc: new Date(Date.now() + 20).toISOString() };
+                    }
+                    await writeFile(path, JSON.stringify(result));
+                    return scenario === planned[1] ? 1 : 0;
+                },
+                async () => {}, false, 0,
+                { failFast: true },
+            ),
+            (error) => error.message.includes("Fail-fast") && error.message.includes(planned[1].id),
+        );
+        assert.deepEqual(calls, [planned[0].id, planned[1].id], "the failed case ran once and no case started after it");
+        const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
+        const failed = report.results.find((row) => row.id === planned[1].id);
+        assert.ok(failed.failures.length > 0);
+        assert.equal(failed.result.attempts, 1);
+        assert.equal(failed.result.retriedAfter, null);
+        assert.equal(report.verdict.accepted, false);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+// The quality report keeps the earlier rule (10 November 2026): a failed scenario runs once more, unchanged, and fails only
+// when both runs fail, so a pass that needed its second run is published as flaky.
+test("with retryFailed, a failed case runs once more, unchanged, and fails only when both runs fail", async () => {
     const directory = await createDirectory();
     try {
         const planned = cases.slice(0, 3);
@@ -1361,6 +1403,8 @@ test("any failed case runs once more, unchanged, and fails only when both runs f
             },
             async () => {},
             false,
+            0,
+            { retryFailed: true },
         );
         assert.deepEqual(planned.map((scenario) => runs.get(scenario.id)), [1, 2, 2]);
         // The retry asks the same question against the same contracts.
@@ -1463,10 +1507,8 @@ test("encrypted CI diagnostics keep failed-case rationale readable only with the
         assert.deepEqual(diagnostics.results.map((row) => row.id), [rejected.id, timedOut.id]);
         assert.equal(diagnostics.results[0].result.judge.reason, "tenant-rationale-must-not-publish");
         assert.equal(diagnostics.results[1].unfinishedCapture, "tenant-unfinished-capture-must-not-publish");
-        // Each failed case also ran once more; its first run is kept beside the final failure.
-        assert.deepEqual(diagnostics.firstRuns.map((row) => [row.id, row.passedOnRetry]), [[rejected.id, false], [timedOut.id, false]]);
-        assert.equal(diagnostics.firstRuns[0].result.judge.reason, "tenant-rationale-must-not-publish");
-        assert.equal(diagnostics.firstRuns[1].unfinishedCapture, "tenant-unfinished-capture-must-not-publish");
+        // The gate runs a failed case once, so there is no separate first run.
+        assert.deepEqual(diagnostics.firstRuns, []);
         ciphertext[0] ^= 1;
         assert.throws(() => decrypt(ciphertext));
     } finally {
@@ -1474,7 +1516,7 @@ test("encrypted CI diagnostics keep failed-case rationale readable only with the
     }
 });
 
-test("a case that passed on its retry keeps its failed first run in the encrypted diagnostics only", async () => {
+test("with retryFailed, a case that passed on its retry keeps its failed first run in the encrypted diagnostics only", async () => {
     const directory = await createDirectory();
     const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
     const recipient = diagnosticsRecipient(publicKey.export({ type: "spki", format: "pem" }));
@@ -1493,7 +1535,7 @@ test("a case that passed on its retry keeps its failed first run in the encrypte
                 return run === 1 ? 1 : 0;
             },
             async () => {}, false, 0,
-            { encryptDiagnosticsTo: recipient },
+            { encryptDiagnosticsTo: recipient, retryFailed: true },
         );
         assert.equal(run, 2);
         const published = JSON.parse(await readFile(join(directory, "results.json"), "utf8")).results[0];
@@ -1890,7 +1932,7 @@ test("leftover private .tmp output is not accepted and does not skip remaining c
             async () => {},
             false,
         );
-        assert.equal(executed, 4, "each case without a result is run twice, and the second case still runs");
+        assert.equal(executed, 2, "each case without a result fails on its one run, and the second case still runs");
         assert.equal(verdict.accepted, false);
         const report = JSON.parse(await readFile(join(directory, "results.json"), "utf8"));
         assert.ok(report.results.every((row) =>
