@@ -55,7 +55,7 @@ public sealed class ModelStreamRetryChatClientTests
         var completion = new ModelRunCompletion();
         await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "q")], cancellationToken: cancellationToken))
         {
-            completion.Observe(update.Contents, update.FinishReason);
+            completion.Observe(update.Contents, update.FinishReason, update);
             updates.Add(update);
         }
         return (updates, completion);
@@ -262,5 +262,83 @@ public sealed class ModelStreamRetryChatClientTests
             Assert.Equal("resp_test", updates.ToChatResponse().ConversationId);
         }
         finally { await release.CancelAsync(); }
+    }
+
+    private const string AnswerStarted = """
+        event: response.output_item.added
+        data: {"type":"response.output_item.added","output_index":0,"sequence_number":1,"item":{"type":"message","id":"msg_test","role":"assistant","content":[],"status":"in_progress"}}
+
+        event: response.output_text.delta
+        data: {"type":"response.output_text.delta","item_id":"msg_test","output_index":0,"content_index":0,"delta":"Answer","sequence_number":2}
+
+
+        """;
+
+    private const string AnswerCompleted = """
+        event: response.output_item.done
+        data: {"type":"response.output_item.done","output_index":0,"sequence_number":3,"item":{"type":"message","id":"msg_test","role":"assistant","content":[{"type":"output_text","text":"Answer","annotations":[]}],"status":"completed"}}
+
+
+        """;
+
+    // The service's error event nests its fields under "error", then the response is marked failed.
+    private const string FailedByTheService = """
+        event: error
+        data: {"type":"error","sequence_number":4,"error":{"type":"server_error","code":"server_error","message":"The model deployment encountered an error processing your request.","param":null}}
+
+        event: response.failed
+        data: {"type":"response.failed","sequence_number":5,"response":{"id":"resp_test","object":"response","created_at":1794843755,"status":"failed","model":"test-model","output":[],"error":{"code":"server_error","message":"The model deployment encountered an error processing your request."}}}
+
+
+        """;
+
+    private static async Task<(int Requests, string Text, ModelRunCompletion Completion)> StreamThroughRealClientAsync(string body)
+    {
+        var requests = 0;
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        await using var app = builder.Build();
+        app.MapPost("/v1/responses", async (HttpContext context) =>
+        {
+            Interlocked.Increment(ref requests);
+            context.Response.ContentType = "text/event-stream";
+            await context.Response.WriteAsync(body);
+        });
+        await app.StartAsync();
+#pragma warning disable OPENAI001 // The Responses client is evaluation-only in OpenAI .NET.
+        var model = new OpenAIClient(new ApiKeyCredential("test"), new OpenAIClientOptions
+        {
+            Endpoint = new Uri("http://localhost/v1"),
+            Transport = new HttpClientPipelineTransport(app.GetTestClient()),
+        }).GetResponsesClient().AsIChatClient("test-model");
+#pragma warning restore OPENAI001
+        var (updates, completion) = await RunAsync(new ModelStreamRetryChatClient(model, NullLogger.Instance));
+        return (requests, string.Concat(updates.SelectMany(update => update.Contents.OfType<TextContent>()).Select(text => text.Text)), completion);
+    }
+
+    // The live gate's answer streamed whole and the service failed the response ten seconds later (16 November 2026):
+    // the answer stands and is not generated again, and the failed response is kept out of the chain.
+    [Fact]
+    public async Task AServiceErrorAfterTheAnswerCompletedKeepsTheAnswer()
+    {
+        var (requests, text, completion) = await StreamThroughRealClientAsync(Created + AnswerStarted + AnswerCompleted + FailedByTheService);
+
+        Assert.Equal(1, requests);
+        Assert.Equal("Answer", text);
+        Assert.True(completion.AnswerKeptAfterServiceError);
+        Assert.Null(completion.Failure);
+        Assert.Contains("OutputItemDone(message:Completed), Error", completion.Trail);
+    }
+
+    // Before the service marked the message completed, the text may be cut off, so the turn still fails.
+    [Fact]
+    public async Task AServiceErrorBeforeTheAnswerCompletedStillFailsTheTurn()
+    {
+        var (requests, text, completion) = await StreamThroughRealClientAsync(Created + AnswerStarted + FailedByTheService);
+
+        Assert.Equal(1, requests);
+        Assert.Equal("Answer", text);
+        Assert.False(completion.AnswerKeptAfterServiceError);
+        Assert.Equal("The model service returned an error: The model deployment encountered an error processing your request.", completion.Failure);
     }
 }

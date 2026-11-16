@@ -370,12 +370,21 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     internal Task<IReadOnlyList<AITool>> DocumentationToolsAsync(CancellationToken cancellationToken, TimeSpan? wait = null) =>
         _learn?.ToolsAsync(cancellationToken, wait) ?? Task.FromResult<IReadOnlyList<AITool>>([]);
 
+    /// <summary>Records a final response the service failed after its answer was whole; the turn keeps the answer.</summary>
+    internal void LogAnswerKeptAfterServiceError(string trail) =>
+        _logger.LogWarning("The model service failed a response after its answer was complete; the answer was kept and the next turn continues from a recap (model events: {Trail})", trail);
+
     /// <summary>A bounded failure description that is safe to show and persist.</summary>
     internal string DescribeFailure(Exception exception)
     {
         if (exception is IncompleteModelResponseException or HostedSearchStalledException)
         {
-            _logger.LogWarning("Agent turn failed: {Reason}", exception.Message);
+            // The trail names the failed response's last stream events (never content), so the log shows whether the
+            // answer was whole when the service failed.
+            if (exception is IncompleteModelResponseException { Trail.Length: > 0 } incomplete)
+                _logger.LogWarning("Agent turn failed: {Reason} (model events: {Trail})", exception.Message, incomplete.Trail);
+            else
+                _logger.LogWarning("Agent turn failed: {Reason}", exception.Message);
             return exception.Message.Length > 400 ? exception.Message[..400] : exception.Message;
         }
         if (IsUnreadableWebSearchStatus(exception))

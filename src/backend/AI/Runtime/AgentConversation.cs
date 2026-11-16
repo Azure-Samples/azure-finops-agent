@@ -136,7 +136,11 @@ public sealed class AgentConversation : IAsyncDisposable
         {
             recap = Recap(await GetEventsAsync(), _meta.Attachments);
             System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("finops.context.compacted",
-                tags: new System.Diagnostics.ActivityTagsCollection { ["finops.context.input_tokens"] = _meta.ContextTokens }));
+                tags: new System.Diagnostics.ActivityTagsCollection
+                {
+                    ["finops.context.input_tokens"] = _meta.ContextTokens,
+                    ["finops.context.reason"] = _meta.RecapNextTurn is true ? "response_failed_after_answer" : "size",
+                }));
         }
         await PublishAsync(new UserMessageEvent(prompt));
         if (images is { Count: > 0 })
@@ -163,11 +167,15 @@ public sealed class AgentConversation : IAsyncDisposable
     internal bool StartsFreshContext => _meta.AgentSession is null || CompactsNextTurn;
 
     private bool CompactsNextTurn =>
-        ShouldCompact(_meta.ContextTokens, _meta.AgentSession is not null, _meta.PendingApprovals is { Count: > 0 });
+        ShouldCompact(_meta.ContextTokens, _meta.AgentSession is not null, _meta.PendingApprovals is { Count: > 0 }, _meta.RecapNextTurn is true);
 
-    /// <summary>A pending approval must be answered in the context that proposed it, so it postpones compaction.</summary>
-    internal static bool ShouldCompact(long? contextTokens, bool hasModelContext, bool hasPendingApprovals) =>
-        hasModelContext && !hasPendingApprovals && contextTokens > CompactAfterInputTokens;
+    /// <summary>
+    /// A pending approval must be answered in the context that proposed it, so it postpones compaction. A turn whose final
+    /// response the service failed after its answer was whole never entered the chain, so the next turn always continues
+    /// from a recap.
+    /// </summary>
+    internal static bool ShouldCompact(long? contextTokens, bool hasModelContext, bool hasPendingApprovals, bool recapNextTurn = false) =>
+        recapNextTurn || hasModelContext && !hasPendingApprovals && contextTokens > CompactAfterInputTokens;
 
     internal const int RecapCharacters = 24_000;
     internal const int RecapMessageCharacters = 4_000;
@@ -517,7 +525,7 @@ public sealed class AgentConversation : IAsyncDisposable
 
             await foreach (var update in agent.RunStreamingAsync(messages, session, options, searchWatch.Token))
             {
-                completion.Observe(update.Contents, update.FinishReason);
+                completion.Observe(update.Contents, update.FinishReason, update);
                 foreach (var content in update.Contents)
                 {
                     switch (content)
@@ -570,9 +578,20 @@ public sealed class AgentConversation : IAsyncDisposable
             }
             await FlushMessageAsync();
             await CompleteOpenCallsAsync();
-            if (completion.Failure is { } failure) throw new IncompleteModelResponseException(failure);
-            _meta.AgentSession = await agent.SerializeSessionAsync(session, cancellationToken: cancellationToken);
-            _meta.ContextTokens = contextTokens;
+            if (completion.Failure is { } failure) throw new IncompleteModelResponseException(failure, completion.Trail);
+            if (completion.AnswerKeptAfterServiceError)
+            {
+                // The answer the user read is whole, but its failed response cannot continue the chain: the chain stays
+                // where it was and the next turn starts from a recap, which carries this answer and its evidence.
+                _factory.LogAnswerKeptAfterServiceError(completion.Trail);
+                _meta.RecapNextTurn = true;
+            }
+            else
+            {
+                _meta.AgentSession = await agent.SerializeSessionAsync(session, cancellationToken: cancellationToken);
+                _meta.ContextTokens = contextTokens;
+                _meta.RecapNextTurn = null;
+            }
             _meta.PendingApprovals = surfaced.Count > 0 ? surfaced : null;
             _meta.InterruptedApproval = null;
             await PublishAsync(new TurnIdleEvent());
@@ -693,6 +712,8 @@ public sealed class AgentConversation : IAsyncDisposable
         public string? InterruptedApproval { get; set; }
         /// <summary>Names of images the user attached; a compacted context no longer shows them, so its recap names them.</summary>
         public List<string>? Attachments { get; set; }
+        /// <summary>The last turn's final response failed after its answer was whole, so it is not in the chain and the next turn starts from a recap.</summary>
+        public bool? RecapNextTurn { get; set; }
     }
 
     private sealed class Subscription(AgentConversation owner, Func<AgentEvent, Task> handler) : IDisposable
