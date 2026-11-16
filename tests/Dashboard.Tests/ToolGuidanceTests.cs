@@ -142,6 +142,11 @@ public sealed class ToolGuidanceTests
         // The gate failed a create-this-storage-account script that defaulted to a dry run and demanded a terminal and a confirmation.
         Assert.Contains("A script that only creates what the user explicitly asked for, with the settings they named, runs that request directly", tool.Description);
         Assert.Contains("never stop the script because such a tool is missing", tool.Description);
+        // The live gate failed an idle-resource cleanup script whose stopped-VM recheck read statuses from
+        // az vm get-instance-view, which prints the whole VM with them under instanceView; three other rechecks guessed
+        // right, so each such slip had been patched with one more command fact (16 November 2026).
+        Assert.Contains("A cleanup or remediation script finds and rechecks its targets with the requests that found them this turn, reading fields at the paths their responses showed", tool.Description);
+        Assert.Contains("use a command-specific selector only for a field this description names or a response this turn showed: a guessed path fails when the script runs", tool.Description);
         Assert.Contains("only the requested CLI and the user's sign-in; no jq or other extra tools", content.GetProperty("description").GetString()!);
         Assert.Contains("appears to the user as a download card below the answer: refer to it in words and never write a link or file path to it",
             AgentSessionFactory.SystemPrompt);
