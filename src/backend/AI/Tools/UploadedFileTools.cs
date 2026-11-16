@@ -394,7 +394,7 @@ Examples:
     /// </summary>
     private static readonly Lazy<string> HelperScript = new(() => WriteHelperScript("file_inspect.py"), LazyThreadSafetyMode.PublicationOnly);
 
-    private static string WriteHelperScript(string filename)
+    internal static string WriteHelperScript(string filename)
     {
         var script = LoadEmbeddedScript(filename);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(script)))[..12].ToLowerInvariant();

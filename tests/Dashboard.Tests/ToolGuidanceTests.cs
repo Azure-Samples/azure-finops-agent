@@ -65,6 +65,11 @@ public sealed class ToolGuidanceTests
     [InlineData("QueryAzure", null, "no documentation lookup or web search first")]
     [InlineData("QueryAzure", null, "Convert units in the same query that selects the rows")]
     [InlineData("QueryAzure", null, "returned rows carry priceType as type, so a query selects x.type, never x.priceType")]
+    // A tenant billed in EUR got USD list prices beside its EUR actual cost, and the agent refused the requested savings
+    // ranking (session evaluation, 16 November 2026); the API converts to the currency requested (Learn, Microsoft
+    // Customer Agreement FAQ: How is Azure priced).
+    [InlineData("QueryAzure", null, "then request the currency those rows carry (their Currency column)")]
+    [InlineData("QueryAzure", null, "never compare, add or rank amounts in two currencies")]
     // A license answer filtered Resource Graph on a type that does not exist (microsoft.sql/virtualmachines), got zero rows
     // and reported that no SQL licensing resources existed (live gate, 27 October 2026).
     [InlineData("QueryAzure", null, "zero rows show absence only for a type name copied from returned data or a provider listing")]
@@ -188,5 +193,18 @@ public sealed class ToolGuidanceTests
         var data = tool.JsonSchema.GetProperty("properties").GetProperty("dataJson").GetProperty("description").GetString()!;
         Assert.Contains("sourceRowCount:number (optional)", data);
         Assert.Contains("left out for authored text", data);
+    }
+
+    [Fact]
+    public void ReportToolDrawsRequestedGraphsFromTheSheetRows()
+    {
+        // A report asked for sections with explanations and graphs came back as tables only, with the one chart outside the
+        // document (session evaluation, 16 November 2026).
+        var tool = new ReportTools(101).Create().Single(candidate => candidate.Name == "GenerateDataReport");
+        Assert.Contains("a chart drawn from that sheet's own rows", tool.Description);
+        Assert.Contains("the document needs no RenderChart", tool.Description);
+        var data = tool.JsonSchema.GetProperty("properties").GetProperty("dataJson").GetProperty("description").GetString()!;
+        Assert.Contains("text (optional)", data);
+        Assert.Contains("chart (optional): {type, label, values:[string], title}", data);
     }
 }

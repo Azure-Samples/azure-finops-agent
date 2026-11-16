@@ -218,6 +218,27 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("Microsoft.CognitiveServices/locations/{region}/models: each model version's lifecycleStatus")]
     // Flex rows ('Flex Gl', 'Fl Gl') cost half the Std Gl rate in a live Retail Prices read (12 November 2026).
     [InlineData("Flex Gl or Fl Gl (Flex processing, published for only some models at half the Std Gl rate, never quoted as the Global Standard price)")]
+    // Session evaluation of 100 conversations (16 November 2026, production on 1e609ed):
+    // A CSP tenant billed in EUR asked to rank reservation savings by VM size; the agent priced in USD, then refused to
+    // rank and doubted coverage although its cost query already kept only OnDemand rows.
+    [InlineData("OnDemand rows are exactly the hours no reservation or savings plan covered, so they need no further coverage check")]
+    [InlineData("their rates are compared in the currency those cost rows carry")]
+    // An 18-subscription assessment typed every subscription ID into each of ten Resource Graph bodies (about 25 written
+    // tokens each) although its context listed the Tenant Root Group.
+    [InlineData("send \"managementGroups\": [that last id segment], one per tenant: it covers every subscription under it, so no subscription IDs are typed")]
+    [InlineData("resend a group-scoped query that is refused with that tenant's subscriptions")]
+    [InlineData("also read the tenant's policy assignments, policy states and Advisor recommendations as PolicyResources and AdvisorResources queries")]
+    // A top-five VM ranking queried one tenant's root management group although the context listed subscriptions of two tenants.
+    [InlineData("A management group, the Tenant Root Group included, holds only subscriptions of its own tenant")]
+    [InlineData("cover each tenant separately (another tenant's subscriptions are never under this tenant's groups) and name the tenants each total covers")]
+    // "Which users haven't used Copilot?" showed 6 of 56 users, and an assessment named 2 of 4 Advisor cost findings.
+    [InlineData("A question that asks which items match (which users, resources, VMs or recommendations) asks for every one of them")]
+    [InlineData("names every finding category its reads returned, each with its count or amount in its own row or line")]
+    // Two users asked for an Azure pricing calculator estimate or its exact Excel export, which no API creates.
+    [InlineData("No API creates, saves or exports an Azure pricing calculator estimate")]
+    [InlineData("a requested workbook is described as calculator-style, never as the calculator's own export")]
+    // The best-value eval's first run left out a Claude preview model Microsoft Learn lists for Foundry.
+    [InlineData("the preview models it lists included and marked preview")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 
@@ -314,7 +335,9 @@ public sealed class SessionQualityGuidanceTests
         // never see, while the same leaderboard read as a page held scores for 5 of them and showed the sixth has none.
         Assert.Contains("then read at most one results page it found, with QueryAzure GET and never through web search", withSearch);
         Assert.Contains("a web search's own page view is not shown and can be partial), and take every figure from that read", withSearch);
-        Assert.Contains("at the highest reasoning effort the source lists for it, named in the note", withSearch);
+        // A best-value answer quoted a benchmark at an effort Foundry does not offer for that model (session evaluation,
+        // 16 November 2026).
+        Assert.Contains("at the highest reasoning effort the source lists for it among those Foundry offers for that model (when a read named them), named in the note", withSearch);
         // The next report's best-value answer left two models unscored although the page it read scored them: the price
         // list shortens a tier to its initials and the leaderboard adds a release date, so names never matched exactly.
         Assert.Contains("so match them by family and version number, not spelling", withSearch);
@@ -323,6 +346,9 @@ public sealed class SessionQualityGuidanceTests
         // its leaderboard page scores 5 of them in rows. It then searched again in a later round.
         Assert.Contains("Choose the source's leaderboard or table page, which lists every model in a row with its score, never an overview, chart or single-model page", withSearch);
         Assert.Contains("make no second web search, because a requested model the leaderboard lists without a score has no published result there", withSearch);
+        // The quality report on 16 November 2026 failed the best-value eval twice: the leaderboard the search found
+        // answered with a human-verification page, and the no-second-search rule left 10 of 11 scores unknown.
+        Assert.Contains("Only when that read shows no scores at all (a human-verification, sign-in or empty page), read another independent source's leaderboard page in the next round", withSearch);
         Assert.Contains("Never search or open third-party price, calculator or comparison sites: they copy the Retail Prices API and are not evidence (Anthropic's own pricing page is not one of them", withSearch);
         Assert.Contains("so an abbreviation stays an abbreviation and is said to be one", Prompt);
         Assert.DoesNotContain("model benchmark", Prompt);

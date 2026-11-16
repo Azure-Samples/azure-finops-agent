@@ -512,12 +512,14 @@ AppEvents
 
     def server_logs(self) -> dict[str, list]:
         """Warnings, errors and exceptions logged while serving each turn, by the turn's request.id."""
+        # One browser page reuses its OperationId for every turn it sends, so a line is matched to a turn only
+        # within that turn's own ChatRequest span; joining on OperationId alone gave every turn every line.
         rows = self.log_analytics(f"""
 let turns = AppDependencies
     | where TimeGenerated >= datetime({self.since}) and Name == 'ChatRequest' and isnotempty(OperationId)
     | extend requestId = tostring(Properties['request.id'])
     | where isnotempty(requestId)
-    | distinct OperationId, requestId;
+    | summarize started = min(TimeGenerated), ended = max(TimeGenerated + 1ms * DurationMs) by OperationId, requestId;
 union
     (AppTraces | where TimeGenerated >= datetime({self.since}) and SeverityLevel >= 2
         | project at = TimeGenerated, OperationId, source = 'log', severity = SeverityLevel, category = tostring(Properties.CategoryName), text = Message),
@@ -526,6 +528,7 @@ union
             text = strcat(OuterType, ': ', OuterMessage, iff(isempty(InnermostMessage) or InnermostMessage == OuterMessage, '', strcat(' | inner ', InnermostType, ': ', InnermostMessage))))
 | where isnotempty(OperationId)
 | join kind=inner turns on OperationId
+| where at between ((started - 5s) .. (ended + 5s))
 | project requestId, at, source, severity, category, text
 | order by at asc
 """)

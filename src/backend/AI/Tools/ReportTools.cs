@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Reflection;
 using System.Text.Json;
 using AzureFinOps.Dashboard.Infrastructure;
 using Microsoft.Extensions.AI;
@@ -9,15 +8,19 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 
 public sealed class ReportTools(long owner)
 {
+    // Runs from a file like the upload helper: Windows caps a command line at 32,767 characters, and with charts the
+    // exporter is about 24,000 once escaped.
+    private static readonly Lazy<string> HelperScript = new(() => UploadedFileTools.WriteHelperScript("report_export.py"), LazyThreadSafetyMode.PublicationOnly);
+
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateDataReport, "GenerateDataReport",
-            "Generate a downloadable CSV, XLSX workbook or filterable HTML report from verified data. Filter and aggregate at the source, then supply only the requested columns, rows and sheets in dataJson; this formatter does not query or recover omitted data. Maximum 5000 total rows, 50 columns and 10 sheets. Include every requested output row. For rows that came from a query, give that query's row count as sourceRowCount: a payload whose rows do not match it is rejected whole and must be written again, so never adjust it to hide missing rows. For text you wrote yourself (a proposal, narrative or notes) there is no source count: leave sourceRowCount out. A top-N preview is not a full report. If the requested output exceeds limits, disclose the gap and agree a narrower or aggregated output instead of silently dropping rows or changing sourceRowCount.");
+            "Generate a downloadable CSV, XLSX workbook or filterable HTML report from verified data. Filter and aggregate at the source, then supply only the requested columns, rows and sheets in dataJson; this formatter does not query or recover omitted data. Maximum 5000 total rows, 50 columns and 10 sheets. Include every requested output row. For rows that came from a query, give that query's row count as sourceRowCount: a payload whose rows do not match it is rejected whole and must be written again, so never adjust it to hide missing rows. For text you wrote yourself (a proposal, narrative or notes) there is no source count: leave sourceRowCount out. A top-N preview is not a full report. If the requested output exceeds limits, disclose the gap and agree a narrower or aggregated output instead of silently dropping rows or changing sourceRowCount. A document with sections, explanations and graphs is one HTML or XLSX report: each sheet is a section that can carry text (its short explanation or advice) and a chart drawn from that sheet's own rows ({type: bar, horizontal_bar, line or pie; label: the category column; values: 1 to 4 numeric columns, 1 for pie; at most 100 rows, 12 for pie}), so no figure is typed twice and the document needs no RenderChart. HTML shows the text and chart above the section's table; XLSX adds an Excel chart beside the table and a Notes sheet with the texts; CSV holds one table only.");
     }
 
     private async Task<string> GenerateDataReport(
         [Description("csv, xlsx, or html")] string format,
-        [Description("JSON object: {title, source, sheets:[{name, columns:[string], rows:[[scalar]], sourceRowCount:number (optional)}]}. Select only requested columns after source filtering/aggregation. Each row must match those columns; sourceRowCount is the row count the source query returned for that sheet, not a value adjusted to hide missing rows, and is left out for authored text. Retain evidence and timestamp, or state timestamp unknown.")] string dataJson,
+        [Description("JSON object: {title, source, sheets:[{name, text (optional), columns:[string], rows:[[scalar]], sourceRowCount:number (optional), chart (optional): {type, label, values:[string], title}}]}. Select only requested columns after source filtering/aggregation. Each row must match those columns; sourceRowCount is the row count the source query returned for that sheet, not a value adjusted to hide missing rows, and is left out for authored text. A chart's label and values name columns of its own sheet. Retain evidence and timestamp, or state timestamp unknown.")] string dataJson,
         [Description("Display filename without extension.")] string? filename = null,
         CancellationToken cancellationToken = default)
     {
@@ -27,17 +30,13 @@ public sealed class ReportTools(long owner)
         JsonElement data;
         try { data = JsonSerializer.Deserialize<JsonElement>(dataJson); }
         catch (JsonException) { return "Error: report data must be valid JSON."; }
-        using var scriptStream = Assembly.GetExecutingAssembly().GetManifestResourceStream("AzureFinOps.Dashboard.AI.Tools.Resources.report_export.py")!;
-        using var reader = new StreamReader(scriptStream);
-        var script = await reader.ReadToEndAsync(cancellationToken);
         var start = new ProcessStartInfo
         {
             FileName = Environment.GetEnvironmentVariable("FINOPS_PYTHON") ?? (OperatingSystem.IsWindows() ? "python" : "python3"),
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false, CreateNoWindow = true
         };
-        start.ArgumentList.Add("-c");
-        start.ArgumentList.Add(script);
+        start.ArgumentList.Add(HelperScript.Value);
         using var process = Process.Start(start)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
