@@ -50,8 +50,8 @@ test('the best-value card asks for the measure its pick is ranked by', () => {
   assert.match(card.prompt, /name the best-value pick and the measure it is ranked by\.$/);
 });
 
-// Pricing the user's own configuration was the most common typed request in the November 2026 audit, and one user
-// needed six turns because the agent asked for one missing input per turn.
+// Pricing the user's own configuration was the most common typed request in the November 2026 audit and no card offered
+// it; the card gathers every input in one message so the next reply is the priced table.
 test('the own-setup card asks for every input in one message before it looks up any price', () => {
   const card = pricingSections.flatMap((section) => section.prompts)
     .find(({ label }) => label === 'Price my own setup');

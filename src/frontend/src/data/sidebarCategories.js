@@ -77,11 +77,11 @@ const aiPricingPrompts = [
 // Infrastructure retail-pricing prompts — work without an Azure login. Pricing
 // the user's own configuration was the most common typed request in the
 // November 2026 audit (6 of 37 people over 14 days, often "like the pricing
-// calculator"), and a back-and-forth of one clarification per turn took one of
-// them six turns, so that card asks for every input at once. The next three are
-// curated live-evaluation cases identified by their text (CURATED_CASE_IDS);
-// "Which storage tier is cheapest?" left the page (one click in that audit) and
-// stays an evaluation-only case.
+// calculator") and no card offered it, so it leads here: the card asks for
+// every input in one message and prices them all in the next reply. The next
+// three are curated live-evaluation cases identified by their text
+// (CURATED_CASE_IDS); "Which storage tier is cheapest?" left the page (one
+// click in that audit) and stays an evaluation-only case.
 const infrastructurePricingPrompts = [
   {
     label: "Price my own setup",
