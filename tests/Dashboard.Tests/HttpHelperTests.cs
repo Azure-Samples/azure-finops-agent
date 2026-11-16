@@ -83,6 +83,55 @@ public sealed class HttpHelperTests
         finally { await server.StopAsync(); }
     }
 
+    // A Cost Management query got no response within the client's 60 seconds and, as a POST, was never sent again, so
+    // the answer called the VM's usage unknown (live quality report, 16 November 2026). Production queries answer in at
+    // most 18 s; the only ones at 60 s never answered.
+    [Fact]
+    public async Task AReadThatGetsNoResponseIsSentOnceMoreAndAChangeNever()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var server = builder.Build();
+        var counts = new ConcurrentDictionary<string, int>();
+        server.Map("/{name}", async (HttpContext context, string name) =>
+        {
+            var calls = counts.AddOrUpdate(context.Request.Method + " " + name, 1, (_, count) => count + 1);
+            if (name == "hang" || name == "hang-once" && calls == 1)
+            {
+                try { await Task.Delay(Timeout.Infinite, context.RequestAborted); } catch (OperationCanceledException) { }
+                return;
+            }
+            await context.Response.WriteAsync("{\"ok\":true}");
+        });
+        await server.StartAsync();
+        HttpHelper.AttemptTimeoutOverride.Value = TimeSpan.FromMilliseconds(300);
+        try
+        {
+            var url = server.Urls.Single();
+            Assert.Equal("HTTP 200 OK\n{\"ok\":true}", await HttpHelper.SendWithRetryAsync(url + "/hang-once", "synthetic-test-only", null,
+                "arm-test", HttpMethod.Post, "{}", readOnlyPost: true));
+            Assert.Equal(2, counts["POST hang-once"]);
+
+            var unanswered = await Assert.ThrowsAsync<TimeoutException>(() =>
+                HttpHelper.SendWithRetryAsync(url + "/hang", "synthetic-test-only", null, "arm-test"));
+            Assert.Equal(2, counts["GET hang"]);
+            Assert.Contains("on either attempt, so the result is unknown", unanswered.Message);
+
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                HttpHelper.SendWithRetryAsync(url + "/hang", "synthetic-test-only", null, "arm-test", HttpMethod.Put, "{}"));
+            Assert.Equal(1, counts["PUT hang"]);
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                HttpHelper.SendWithRetryAsync(url + "/hang", "synthetic-test-only", null, "arm-test", HttpMethod.Post, "{}"));
+            Assert.Equal(1, counts["POST hang"]);
+        }
+        finally
+        {
+            HttpHelper.AttemptTimeoutOverride.Value = null;
+            await server.StopAsync();
+        }
+    }
+
     [Theory]
     [InlineData(false, 1, "query")]
     [InlineData(true, 1, "query")]

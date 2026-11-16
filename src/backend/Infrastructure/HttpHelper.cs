@@ -14,9 +14,19 @@ public static partial class HttpHelper
 {
     // Shared IPv4-only SocketsHttpHandler (see Ipv4HttpHandler.cs). Corp egress
     // drops IPv6 SYNs and the OS only gives up after ~21 s; forcing IPv4 here
-    // matches the factory defaults wired up in Program.cs.
+    // matches the factory defaults wired up in Program.cs. Each attempt carries its own deadline (AttemptTimeout), so
+    // a response that never comes is told apart from the caller's own cancellation.
     private static readonly HttpClient Http = new(Ipv4HttpHandler.Create())
-    { Timeout = TimeSpan.FromSeconds(60) };
+    { Timeout = Timeout.InfiniteTimeSpan };
+
+    /// <summary>
+    /// How long one attempt waits for its whole response. Production Cost Management queries take 4 s at the median and
+    /// at most 18 s (30 days to 16 November 2026); the only ones to reach 60 s never answered at all.
+    /// </summary>
+    internal static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>Lets a test shorten the attempt deadline for its own async flow only.</summary>
+    internal static readonly AsyncLocal<TimeSpan?> AttemptTimeoutOverride = new();
 
     public static readonly ActivitySource Telemetry = new("AzureFinOps.AI");
 
@@ -64,6 +74,8 @@ public static partial class HttpHelper
 
     private const int MaxThrottleRetries = 5;
     private const int MaxTransportRetries = 2;
+    // A read with no response within AttemptTimeout is sent once more, then reported unknown.
+    private const int MaxTimeoutRetries = 1;
     // A throttled cost query waits out each cooldown the service names and tries again, up to five attempts within
     // CostQueryCoordinator.MaximumAutomaticWait in total. With one retry, a busy tenant quota (12 QPU per 10 s, 60 per
     // minute) turned a one-minute wait into a missing answer (live gate, 10 November 2026).
@@ -96,6 +108,7 @@ public static partial class HttpHelper
         int? maxResponseChars = null,
         bool bypassCostManagementGate = false,
         int? maxAttemptsOverride = null,
+        bool readOnlyPost = false,
         CancellationToken cancellationToken = default)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
@@ -104,7 +117,7 @@ public static partial class HttpHelper
         var mutation = method == HttpMethod.Put || method == HttpMethod.Patch;
         Task<string> Send(CancellationToken requestToken) =>
             SendCoreAsync(url, token, activity, telemetryPrefix, method, jsonBody, includeTimestamp, extraHeaders,
-                maxResponseChars, bypassCostManagementGate, mutation ? 1 : maxAttemptsOverride, requestToken);
+                maxResponseChars, bypassCostManagementGate, mutation ? 1 : maxAttemptsOverride, readOnlyPost && !mutation, requestToken);
         if (!IsInteractiveCostQueryUrl(url)) return await Send(cancellation.Token);
         return await CostQueries.ExecuteAsync(CostQueryCoordinator.TenantKey(token),
             CostQueryCoordinator.RequestKey(token, (method ?? HttpMethod.Get).Method, url, jsonBody), Send, cancellation.Token,
@@ -141,6 +154,7 @@ public static partial class HttpHelper
         int? maxResponseChars = null,
         bool bypassCostManagementGate = false,
         int? maxAttemptsOverride = null,
+        bool readOnlyPost = false,
         CancellationToken cancellationToken = default)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
@@ -148,11 +162,16 @@ public static partial class HttpHelper
         var requestToken = cancellation.Token;
         requestToken.ThrowIfCancellationRequested();
         method ??= HttpMethod.Get;
+        // Reading twice changes nothing: a GET, or a POST the caller vouches is a read (QueryAzure's read-only allowlist,
+        // a Log Analytics query).
+        var read = method == HttpMethod.Get || method == HttpMethod.Post && readOnlyPost;
+        var attemptTimeout = AttemptTimeoutOverride.Value ?? AttemptTimeout;
 
         var totalSw = Stopwatch.StartNew();
         var totalWaitSec = 0.0;
         var retryCount = 0;
         var transportRetries = 0;
+        var timeoutRetries = 0;
         HttpResponseMessage res = null!;
 
         // Resolve the per-turn SSE reporter ONCE up front — used for queue waits,
@@ -210,12 +229,14 @@ public static partial class HttpHelper
                     catch (OperationCanceledException) { /* expected on response */ }
                 }, hbCts.Token);
 
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(requestToken);
+                deadline.CancelAfter(attemptTimeout);
                 try
                 {
-                    res = await Http.SendAsync(req, requestToken);
+                    res = await Http.SendAsync(req, deadline.Token);
                 }
-                // A dropped connection on an idempotent read is transient; writes and POSTs are never re-sent.
-                catch (HttpRequestException) when (method == HttpMethod.Get && transportRetries < MaxTransportRetries
+                // A read whose connection dropped is sent again; changes are never re-sent.
+                catch (HttpRequestException) when (read && transportRetries < MaxTransportRetries
                     && attempt < maxAttempts - 1 && !requestToken.IsCancellationRequested)
                 {
                     transportRetries++;
@@ -223,6 +244,23 @@ public static partial class HttpHelper
                     Logger?.LogWarning("HTTP transport retry {Tool} attempt={Attempt}", telemetryPrefix, attempt + 1);
                     await Task.Delay(TimeSpan.FromSeconds(transportRetries), requestToken);
                     continue;
+                }
+                // So is a read that got no response before its deadline: the request was not at fault, and a hung read
+                // otherwise failed for good (a Cost Management query, live quality report, 16 November 2026).
+                catch (OperationCanceledException) when (read && !requestToken.IsCancellationRequested
+                    && timeoutRetries < MaxTimeoutRetries && attempt < maxAttempts - 1)
+                {
+                    timeoutRetries++;
+                    retryCount++;
+                    Logger?.LogWarning("HTTP timeout retry {Tool} attempt={Attempt} timeoutSec={Timeout:F0}", telemetryPrefix, attempt + 1, attemptTimeout.TotalSeconds);
+                    await Task.Delay(TimeSpan.FromSeconds(timeoutRetries), requestToken);
+                    continue;
+                }
+                catch (OperationCanceledException exception) when (!requestToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"The service sent no response within {attemptTimeout.TotalSeconds:F0} seconds{(timeoutRetries > 0 ? ", on either attempt" : "")}, so the result is unknown.",
+                        exception);
                 }
                 finally
                 {

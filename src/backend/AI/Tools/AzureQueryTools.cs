@@ -371,8 +371,9 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
             if (ValidateQueryBody(path, body) is { } queryError) return queryError;
         }
         var sendBody = method == HttpMethod.Get ? null : body;
+        // Every POST reaching here passed the read-only allowlist above, so a hung one is safe to send again.
         Task<string> Send(string requestPath) => HttpHelper.SendWithRetryAsync("https://" + ArmHost + requestPath, token, activity, "azure", method,
-            sendBody, timestamp, cancellationToken: cancellationToken);
+            sendBody, timestamp, readOnlyPost: method == HttpMethod.Post, cancellationToken: cancellationToken);
         var (response, sentPath, versionNote) = method == HttpMethod.Get || method == HttpMethod.Post
             ? await SendReadAsync(path, Send, activity)
             : (await Send(path), path, null);
@@ -494,7 +495,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         if (!uri.AbsolutePath.StartsWith("/v1/", StringComparison.Ordinal))
             return "HTTP 400 BadRequest\nUse POST /v1/workspaces/{customerId}/query or /v1/apps/{appId}/query with body {\"query\":\"<KQL>\",\"timespan\":\"P1D\"}. No request was sent.";
         return await HttpHelper.SendWithRetryAsync(uri.AbsoluteUri, token, activity, "la", method,
-            method == HttpMethod.Post ? CanonicalJsonBody(body) ?? "{}" : null, timestamp, cancellationToken: cancellationToken);
+            method == HttpMethod.Post ? CanonicalJsonBody(body) ?? "{}" : null, timestamp, readOnlyPost: true, cancellationToken: cancellationToken);
     }
 
     private async Task<string> StorageAsync(Uri uri, HttpMethod method, bool timestamp, Activity? activity, CancellationToken cancellationToken)
