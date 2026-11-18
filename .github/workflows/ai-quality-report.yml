@@ -31,8 +31,12 @@ on:
         type: choice
         options: [default, low, medium, high, xhigh]
         default: default
+      model:
+        description: "Agent model deployment for this run only, to compare a model before changing EVAL_MODEL (empty uses that variable, which the gate and production deploy); it must exist in the evaluation endpoint's Foundry account"
+        type: string
+        default: ""
 
-run-name: AI quality report · ${{ github.event_name == 'workflow_run' && 'after production deployment' || inputs.scenarios && 'chosen evals' || 'core evals' }}${{ inputs.reasoning_effort && inputs.reasoning_effort != 'default' && format(' · reasoning effort {0}', inputs.reasoning_effort) || '' }}
+run-name: AI quality report · ${{ github.event_name == 'workflow_run' && 'after production deployment' || inputs.scenarios && 'chosen evals' || 'core evals' }}${{ inputs.reasoning_effort && inputs.reasoning_effort != 'default' && format(' · reasoning effort {0}', inputs.reasoning_effort) || '' }}${{ inputs.model && format(' · model {0}', inputs.model) || '' }}
 
 permissions:
   contents: read
@@ -112,9 +116,10 @@ jobs:
       EVAL_CLIENT_ID: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
       EVAL_LOGIN_SUBSCRIPTION: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
       EVAL_MODEL_ENDPOINT: ${{ secrets.EVAL_MODEL_ENDPOINT }}
-      EVAL_MODEL: ${{ vars.EVAL_MODEL }}
+      # A dispatched run may compare another model deployment or effort; the gate, deployments and every other trigger
+      # keep the variables. The judge stays on EVAL_JUDGE_MODEL, so both runs are graded alike.
+      EVAL_MODEL: ${{ inputs.model || vars.EVAL_MODEL }}
       EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
-      # A dispatched run may compare another effort; the gate, deployments and every other trigger keep the variable.
       EVAL_REASONING_EFFORT: ${{ (inputs.reasoning_effort != 'default' && inputs.reasoning_effort) || vars.EVAL_REASONING_EFFORT || 'medium' }}
       EVAL_TENANT_ID: ${{ secrets.AZURE_EVAL_TENANT_ID }}
       EVAL_SUBSCRIPTION_IDS: ${{ vars.EVAL_SUBSCRIPTION_IDS }}

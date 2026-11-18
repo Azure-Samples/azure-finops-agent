@@ -751,6 +751,10 @@ test("the report is one pipeline: a plan, one job per stage of the core evals, a
     // A dispatched run can compare another reasoning effort; every other trigger keeps the variable the gate deploys.
     assert.match(quality, /^      reasoning_effort:\n(?:        .+\n)*?        options: \[default, low, medium, high, xhigh\]\n        default: default$/m);
     assert.match(first, /EVAL_REASONING_EFFORT: \$\{\{ \(inputs\.reasoning_effort != 'default' && inputs\.reasoning_effort\) \|\| vars\.EVAL_REASONING_EFFORT \|\| 'medium' \}\}/);
+    // ... and another model deployment, graded by the same judge.
+    assert.match(quality, /^      model:\n(?:        .+\n)*?        type: string\n        default: ""$/m);
+    assert.match(first, /EVAL_MODEL: \$\{\{ inputs\.model \|\| vars\.EVAL_MODEL \}\}/);
+    assert.match(first, /EVAL_JUDGE_MODEL: \$\{\{ vars\.EVAL_JUDGE_MODEL \}\}/);
     assert.match(first, /EVAL_REPORT_LAYOUT: stage/);
     assert.match(first, /name: ai-quality-stage-\$\{\{ github\.job \}\}-\$\{\{ github\.run_attempt \}\}/);
     assert.match(board, new RegExp(`needs: \\[plan, ${stages.join(", ")}\\]`));
