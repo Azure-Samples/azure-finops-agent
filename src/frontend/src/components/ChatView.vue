@@ -888,7 +888,6 @@
                 <AppIcon name="shield" size="16" aria-hidden="true" />
                 <span class="addons-heading-text">
                   <span class="addons-title">Add scopes</span>
-                  <span class="addons-sub">· read-only</span>
                 </span>
                 <AppIcon
                   name="moreDown"
@@ -901,6 +900,7 @@
 
               <div class="addons-body-wrap" :class="{ open: addonsOpen }">
                 <div class="addons-body">
+                  <p class="addons-group">Read-only</p>
                   <div
                     class="scope-row"
                     :class="{
@@ -1209,6 +1209,7 @@
                   </div>
 
                   <!-- Write scopes: never part of "Grant all remaining add-ons", which grants only read access. -->
+                  <p class="addons-group">Changes you approve</p>
                   <div
                     class="scope-row"
                     :class="{
@@ -10195,6 +10196,13 @@ async function send() {
 .addons-sub strong {
   color: var(--ink);
   font-weight: 500;
+}
+.addons-group {
+  margin: 8px 0 2px;
+  padding: 0 9px;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
 }
 .scope-row {
   border-radius: var(--radius);
