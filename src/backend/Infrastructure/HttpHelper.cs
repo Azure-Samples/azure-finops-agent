@@ -104,6 +104,13 @@ public static partial class HttpHelper
         url.Contains("/Microsoft.CostManagement/query", StringComparison.OrdinalIgnoreCase)
         || url.Contains("/Microsoft.CostManagement/forecast", StringComparison.OrdinalIgnoreCase);
 
+    internal const string CostManagementClientType = "AzureFinOpsAgent";
+
+    internal static bool IsCostManagementUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && uri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase)
+        && uri.AbsolutePath.Contains("/providers/Microsoft.CostManagement/", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Sends HTTP requests with bounded retries. Cost query/forecast calls are
     /// tenant-serialized and retry once after a service deadline of at most five
@@ -223,6 +230,11 @@ public static partial class HttpHelper
                 using var req = new HttpRequestMessage(method, url);
                 req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 req.Headers.Add("User-Agent", "FinOps-Dashboard/1.0");
+                // Cost Management rate-limits callers by client type as well as by tenant, scope and QPU. Without a
+                // ClientType header a request draws on the default client-type quota, which answered 429 with 0 left
+                // (18 November 2026) while one naming its client had 1,995 left, and every Cost Management query that
+                // never answered followed such throttling.
+                if (IsCostManagementUrl(url)) req.Headers.TryAddWithoutValidation("ClientType", CostManagementClientType);
 
                 if (extraHeaders is not null)
                     foreach (var (key, value) in extraHeaders)
