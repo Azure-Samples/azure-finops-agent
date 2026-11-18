@@ -171,7 +171,9 @@ $graphOrgReadAll = Resolve-DelegatedScopeId $graphAppId "Organization.Read.All" 
 $graphReportsReadAll = Resolve-DelegatedScopeId $graphAppId "Reports.Read.All" "02e97553-ed7b-43d0-ab3c-f8bace0d040c"
 $graphUserReadAll = Resolve-DelegatedScopeId $graphAppId "User.Read.All" "a154be20-db9c-4678-8ab7-66f6cc099a59"
 $graphGroupReadAll = Resolve-DelegatedScopeId $graphAppId "Group.Read.All" "5f8c59db-677d-491f-a6b8-5f174b11ec1d"
-# Microsoft 365 Copilot cost management (Graph beta; admin consent). Requested by the copilotcost tier only.
+# Microsoft 365 Copilot cost management (Graph beta; admin consent). Requested by the copilotcost tier only, with
+# User.ReadBasic.All so the per-user usage records, which carry only user ids, can be shown with names.
+$graphUserReadBasicAll = Resolve-DelegatedScopeId $graphAppId "User.ReadBasic.All" "b340eb25-3456-403f-be2f-af7a0d370277"
 $graphCopilotCostReadAll = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement.Read.All" "c0fcd4f8-e2a8-4162-892c-652d9bb651fd"
 $graphCopilotCostUserData = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement-UserData.Read.All" "d3f39420-6eec-4e63-98ba-b2866ef3ba99"
 $graphCopilotCostPolicy = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement-Policy.Read.All" "7fe904eb-5276-4ddc-ab01-67e4d708b664"
@@ -204,6 +206,7 @@ $requiredAccess = @(
             @{ id = $graphReportsReadAll; type = "Scope" },
             @{ id = $graphUserReadAll; type = "Scope" },
             @{ id = $graphGroupReadAll; type = "Scope" },
+            @{ id = $graphUserReadBasicAll; type = "Scope" },
             @{ id = $graphCopilotCostReadAll; type = "Scope" },
             @{ id = $graphCopilotCostUserData; type = "Scope" },
             @{ id = $graphCopilotCostPolicy; type = "Scope" },
@@ -240,7 +243,7 @@ if ($permExit -ne 0) {
 
 Write-Status "  Azure ARM:       user_impersonation (delegated)" 'Gray'
 Write-Status "  Microsoft Graph: User.Read, Organization.Read.All, Reports.Read.All," 'Gray'
-Write-Status "                   User.Read.All, Group.Read.All, CopilotCostManagement.Read.All," 'Gray'
+Write-Status "                   User.Read.All, Group.Read.All, User.ReadBasic.All, CopilotCostManagement.Read.All," 'Gray'
 Write-Status "                   CopilotCostManagement-UserData.Read.All, CopilotCostManagement-Policy.Read.All," 'Gray'
 Write-Status "                   CopilotCostManagement-Assignment.Read.All, CopilotCostManagement-CreditReq.Read.All" 'Gray'
 Write-Status "                   (all delegated, read-only; the Copilot cost change scopes are requested by name only)" 'Gray'

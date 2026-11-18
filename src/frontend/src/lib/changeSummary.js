@@ -50,6 +50,20 @@ function bodyObject(body) {
   }
 }
 
+// A policy's monthly limits: perUserLimit for each user, periodLimit for all its users together.
+function describeLimit(name, quantity) {
+  const type = String(quantity?.["@odata.type"] ?? "").toLowerCase();
+  const perUser = name === "perUserLimit";
+  if (type.includes("unlimited"))
+    return perUser ? "remove the per-user limit" : "remove the monthly limit";
+  const value = Number(quantity?.value);
+  if (!type.includes("limited") || !Number.isFinite(value)) return null;
+  const credits = `${value.toLocaleString("en-US")} Copilot Credits a month`;
+  return perUser
+    ? `limit each user to ${credits}`
+    : `limit all its users together to ${credits}`;
+}
+
 function describeCopilotChange(verb, operation, body) {
   const parts = operation.split("/").filter(Boolean);
   const lower = parts.map((part) => part.toLowerCase());
@@ -89,6 +103,16 @@ function describeCopilotChange(verb, operation, body) {
       : `Update ${service} in ${POLICY}`;
   }
   const properties = Object.keys(fields);
+  const limits = properties.filter(
+    (name) => name === "perUserLimit" || name === "periodLimit",
+  );
+  if (limits.length && limits.length === properties.length) {
+    const phrases = limits.map((name) => describeLimit(name, fields[name]));
+    if (phrases.every(Boolean)) {
+      const text = `${phrases.join(" and ")} on ${POLICY}`;
+      return text[0].toUpperCase() + text.slice(1);
+    }
+  }
   return properties.length
     ? `Update ${listProperties(properties)} on ${POLICY}`
     : `Update ${POLICY}`;

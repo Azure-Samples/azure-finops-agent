@@ -105,6 +105,10 @@ async function logout() {
   --warning-soft: rgba(191, 135, 0, 0.1);
   --warning-border: rgba(191, 135, 0, 0.25);
 
+  /* The Preview badge on a start page question about a feature in preview. */
+  --preview: #7c3aed;
+  --preview-soft: rgba(124, 58, 237, 0.12);
+
   /* White tints for controls on the brand gradient (the top bar). */
   --on-brand-line: rgba(255, 255, 255, 0.2);
   --on-brand-fill: rgba(255, 255, 255, 0.12);

@@ -56,6 +56,13 @@ export const JOB_TEMPLATES = [
     prompt: "Check for new Azure Advisor cost recommendations and summarize the top opportunities with estimated monthly savings, ranked by impact and effort. Preserve each source currency and period; gross recommendations are not verified net savings until commitment overlap and eligibility are known.",
   },
   {
+    emoji: "🪙",
+    label: "Copilot credit watch",
+    name: "Copilot credit watch",
+    interval: 1440,
+    prompt: "Report yesterday's Microsoft 365 Copilot Credits from Copilot cost management: the top 5 users by name with their credits and the Copilot services they used, the tenant's credits by service, and any pending credit requests. Warn me about any of these users whose balance shows a service no longer allowed or a spending limit nearly used up. Read only: propose no changes.",
+  },
+  {
     emoji: "↻",
     label: "Retry last question",
     name: "Retry last question",

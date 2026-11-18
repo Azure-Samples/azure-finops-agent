@@ -1170,8 +1170,8 @@
                     <div class="scope-row-detail-wrap">
                       <div class="scope-row-detail">
                         <p class="scope-row-desc">
-                          Read Copilot credit use per user, group &amp; service,
-                          the spending limits and credit requests
+                          Read Copilot credit use per user (with names), group
+                          &amp; service, the spending limits and credit requests
                         </p>
                         <div class="scope-row-meta">
                           <span class="scope-badge scope-badge--delegated">
@@ -1181,6 +1181,7 @@
                           <span class="scope-badge">Microsoft Graph (beta)</span>
                         </div>
                         <p class="scope-row-perms">
+                          User.ReadBasic.All ·
                           CopilotCostManagement.Read.All ·
                           CopilotCostManagement-UserData.Read.All ·
                           CopilotCostManagement-Policy.Read.All ·
@@ -1343,6 +1344,24 @@
                 <h1 class="hero-title">
                   Azure <span class="hero-title-accent">FinOps</span> Agent
                 </h1>
+                <!-- The products the agent's answers cover, each named beside
+                     its official icon. -->
+                <ul class="hero-products" aria-label="Works with">
+                  <li class="hero-products-lead" aria-hidden="true">Works with</li>
+                  <li
+                    v-for="product in HERO_PRODUCTS"
+                    :key="product"
+                    class="hero-product"
+                  >
+                    <img
+                      :src="STARTER_SOURCES[product].icon"
+                      alt=""
+                      width="20"
+                      height="20"
+                    />
+                    {{ STARTER_SOURCES[product].name }}
+                  </li>
+                </ul>
                 <!-- The most asked questions, each one click from an answer.
                      Signed in, the maturity levels sit in the navigation with
                      their scores. -->
@@ -1353,6 +1372,7 @@
                       :key="section.key"
                       :id="'starters-' + section.key"
                       class="starters-group"
+                      :style="{ '--starter-icon-slots': section.iconSlots }"
                       :aria-labelledby="'starters-' + section.key + '-heading'"
                     >
                       <h2
@@ -1379,7 +1399,28 @@
                         :title="q.prompt"
                         @click="sendQuestion(q.prompt)"
                       >
-                        {{ q.label }}
+                        <span
+                          v-if="q.sources.length"
+                          class="starter-sources"
+                          aria-hidden="true"
+                        >
+                          <img
+                            v-for="source in q.sources"
+                            :key="source"
+                            class="starter-source"
+                            :src="STARTER_SOURCES[source].icon"
+                            :title="STARTER_SOURCES[source].name"
+                            alt=""
+                            width="18"
+                            height="18"
+                          />
+                        </span>
+                        <span class="starter-question-label"
+                          >{{ q.label
+                          }}<span v-if="q.badge" class="starter-badge">{{
+                            q.badge
+                          }}</span></span
+                        >
                       </button>
                       <button
                         v-if="section.expandable"
@@ -6259,6 +6300,24 @@ const pricingNavigationSections = computed(() =>
 // show the first three (CSS), and More shows the rest in place there.
 const START_PAGE_QUESTIONS = 5;
 const START_PAGE_PHONE_QUESTIONS = 3;
+// Each card shows the official icons of the products its answer covers
+// (public/product-icons, used under each owner's terms: see its README), each
+// named in its tooltip; the start page lists them all under its title with
+// their full names.
+const STARTER_SOURCES = {
+  azure: { icon: "/product-icons/azure.svg", name: "Azure" },
+  foundry: { icon: "/product-icons/foundry.svg", name: "Microsoft Foundry" },
+  copilot: {
+    icon: "/product-icons/copilot.svg",
+    name: "Microsoft 365 Copilot",
+  },
+  agent365: {
+    icon: "/product-icons/agent-365.svg",
+    name: "Microsoft Agent 365",
+  },
+  github: { icon: "/product-icons/github.svg", name: "GitHub" },
+};
+const HERO_PRODUCTS = ["azure", "foundry", "copilot", "agent365", "github"];
 const expandedStarterSections = ref({});
 
 function toggleStarterSection(key) {
@@ -6279,12 +6338,20 @@ watch(
 const startPageSections = computed(() =>
   pricingNavigationSections.value.map((section) => {
     const expanded = !!expandedStarterSections.value[section.key];
-    const prompts = section.prompts.slice(0, START_PAGE_QUESTIONS);
+    const prompts = section.prompts.slice(0, START_PAGE_QUESTIONS).map((prompt) => ({
+      ...prompt,
+      sources: (prompt.sources ?? section.sources ?? []).filter(
+        (source) => STARTER_SOURCES[source],
+      ),
+    }));
     return {
       key: section.key,
       label: section.label,
       icon: section.icon,
       prompts,
+      // Room for the most product icons any of its cards shows, so every
+      // question in the section starts at the same place.
+      iconSlots: Math.max(0, ...prompts.map((prompt) => prompt.sources.length)),
       expanded,
       expandable: prompts.length > START_PAGE_PHONE_QUESTIONS,
     };
@@ -10710,6 +10777,31 @@ async function send() {
   -webkit-text-fill-color: transparent;
   color: transparent;
 }
+/* The products the agent's answers cover, under the title. */
+.hero-products {
+  list-style: none;
+  margin: -8px 0 clamp(20px, 4vh, 32px);
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px 18px;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  color: var(--ink);
+}
+.hero-products-lead {
+  color: var(--text-muted);
+}
+.hero-product {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hero-product img {
+  display: block;
+}
 /* Start page: the maturity scores (signed in) above the most asked questions,
    each one click from an answer. */
 .starters {
@@ -10786,12 +10878,49 @@ async function send() {
   gap: 20px;
 }
 .starter-question {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 8px 14px;
   font-size: var(--text-body-size);
   line-height: var(--text-body-line);
   font-weight: 400;
+}
+/* Room for the section's most product icons (18 px each, 4 px apart), so
+   every card's question starts at the same place. */
+.starter-sources {
+  flex: 0 0
+    calc(
+      var(--starter-icon-slots, 1) * 18px +
+        (var(--starter-icon-slots, 1) - 1) * 4px
+    );
+  display: inline-flex;
+  gap: 4px;
+}
+.starter-source {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+.starter-question-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Marks a question about a feature in preview; it follows the label's last
+   word, so it wraps with the text instead of narrowing it. */
+.starter-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: var(--radius);
+  background: var(--preview-soft);
+  color: var(--preview);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 600;
+  vertical-align: 2px;
+  white-space: nowrap;
 }
 /* More/Fewer: a quiet text button under a section's cards, on phones only. */
 .starter-more {

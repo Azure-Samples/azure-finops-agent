@@ -9,6 +9,15 @@
 // that is a curated live-evaluation case is identified by a hash of its text:
 // changing that text changes the gate (CURATED_CASE_IDS).
 
+// The products a start page question covers, shown as their official icons on
+// its card (public/product-icons); a section's sources apply to its questions
+// that name none.
+const AZURE = "azure";
+const COPILOT = "copilot";
+const FOUNDRY = "foundry";
+const AGENT_365 = "agent365";
+const GITHUB = "github";
+
 // AI governance and security prompts — public, answered briefly from current
 // Microsoft Learn pages. Ranked by what customers raise most: knowing every agent
 // and its owner, what the newest Microsoft 365 suite adds, auditing what agents
@@ -16,26 +25,31 @@
 const aiGovernancePrompts = [
   {
     label: "How do I find all our AI agents?",
+    sources: [AGENT_365, FOUNDRY],
     prompt:
       "How do I build one inventory of every AI agent in my organization (Foundry, Copilot Studio and agents on other clouds) with a named owner for each, and find unapproved (shadow) agents? Show the steps in one table: step, Microsoft tool (linked to its Microsoft Learn page), what to do, what it needs (license, preview opt-in or admin role).",
   },
   {
     label: "What does E7 add for AI agents?",
+    sources: [COPILOT, AGENT_365],
     prompt:
       "What does Microsoft 365 E7 add over Microsoft 365 E5 for AI agents, and what does it cost per user? Use current Microsoft Learn and microsoft.com licensing pages. Show one table: capability, in E5, in E7, what it does for agents. Say which items you could not confirm.",
   },
   {
     label: "How do we audit what agents do?",
+    sources: [AGENT_365, FOUNDRY],
     prompt:
       "How do I trace every action an AI agent takes back to its agent identity and an accountable owner? Cover Microsoft Entra Agent ID, Entra sign-in and audit logs, Microsoft Purview audit and Foundry tracing. Show one table: what to set up, where, what it proves to an auditor.",
   },
   {
     label: "Agent 365, Foundry or API Center?",
+    sources: [AGENT_365, FOUNDRY],
     prompt:
       "Compare Agent 365, Foundry Control Plane and Azure API Center for governing AI agents across the organization. Show one table: product, what it controls, who uses it, when to choose it. Then recommend which one to use as the org-wide control plane.",
   },
   {
     label: "Can we allow only approved models?",
+    sources: [FOUNDRY, AZURE],
     prompt:
       "How do I allow only approved AI models in Foundry (for example with Azure Policy) and require approval before a new agent goes live? Show the steps in one table: control, how to set it up, what it blocks.",
   },
@@ -49,26 +63,31 @@ const aiGovernancePrompts = [
 const aiPricingPrompts = [
   {
     label: "How do we budget and justify AI?",
+    sources: [COPILOT, FOUNDRY, GITHUB],
     prompt:
       "How do I plan and justify a monthly AI budget when Microsoft 365 Copilot is billed per user, GitHub Copilot per seat plus AI credits, Copilot Studio per credit and Foundry models per token? Show one table: product, how it is billed, what drives the cost, how to forecast it.",
   },
   {
     label: "Which AI model is best value?",
+    sources: [FOUNDRY],
     prompt:
       "Which of the newest models in Foundry give the best quality for the price? Compare the newest OpenAI, Anthropic, Meta, Mistral, DeepSeek and xAI models on their latest published quality benchmark and current Azure token prices. Show one table: model, quality score, input price per 1M tokens, output price per 1M tokens. Give each score's source and date in a note, then name the best-value pick and the measure it is ranked by.",
   },
   {
     label: "Who is spending what on AI?",
+    sources: [AZURE, FOUNDRY],
     prompt:
       "How do I see AI spend per team, app and cost centre, and charge it back when several teams share one model deployment? Cover Azure Cost Management (tags, cost allocation rules, Foundry projects) and API Management token metrics. Show the steps in one table: step, tool, what it gives you.",
   },
   {
     label: "Can we cap AI spending?",
+    sources: [AZURE, FOUNDRY, GITHUB],
     prompt:
       "How do I set AI budgets and spending limits per user, app and company? Cover Azure budgets and alerts, model deployment token quotas, API Management token limits and GitHub Copilot AI credit budgets. Show one table: control, scope, what happens when the limit is reached.",
   },
   {
     label: "Why don't costs match my invoice?",
+    sources: [AZURE],
     prompt:
       "Why do my AI costs in Azure Cost Management differ from my Azure invoice, and how do I reconcile them? Cover actual vs amortized cost, billing period vs calendar month, credits, taxes, currency and data delay. Show one table: cause, how to check it.",
   },
@@ -110,6 +129,52 @@ const infrastructurePricingPrompts = [
   },
 ];
 
+// Signed-in prompts, shown first in the AI section. Microsoft 365 Copilot cost
+// management (announced 17 November 2026, Microsoft Graph beta) reports Copilot
+// Credits per user and service and sets spending limits. The cards rank the
+// top Copilot users with what they use Copilot for, put Copilot, Foundry and
+// GitHub spend in one view, show Copilot users next to the Azure VMs that cost
+// the most (no admin center shows these together), and propose a per-user
+// limit as a change the user approves. A user without the Copilot cost
+// consents gets their buttons in the answer.
+const connectedAiPrompts = [
+  {
+    label: "Who uses Copilot most, and for what?",
+    sources: [COPILOT, AGENT_365],
+    badge: "Preview",
+    prompt:
+      "Who are our top 5 Copilot users, what did they spend Copilot Credits on, and under which spending policy? Find the top users in the daily per-user reports for the last 7 completed days and include me. For each user, read their credits this month per Copilot service from their user balance, with each service's spending policy (its name, its monthly limit for all users and per user, what remains, and whether the user may still use the service) and their display name; for me, also read today's sessions from my raw usage. Show one table with one row per user and service: user, Copilot service and what it is used for (in plain words, as Microsoft Learn describes it), credits this month, spending policy and what remains. Then list my sessions today with their times and credits, and say how current each figure is.",
+  },
+  {
+    label: "What did my Copilot work cost?",
+    sources: [COPILOT, AZURE],
+    badge: "Preview",
+    prompt:
+      "What did my Copilot work cost today? Read my Copilot use today from my raw usage: each session with its start and end time and credits, and the credits per Copilot service, including services no spending policy governs. Price it at the pay-as-you-go list price per Copilot Credit from the Azure Retail Prices API, and look for what Azure Cost Management has billed this month under Microsoft Copilot Studio. Show one table: time (UTC), Copilot service, credits, list-price cost in USD rounded to the cent. Then give the total, which services no spending policy governs, my credits this month under my spending policy and its limit, the billed amount, and how current each figure is.",
+  },
+  {
+    label: "All our AI spend in one view",
+    sources: [COPILOT, FOUNDRY, GITHUB],
+    badge: "Preview",
+    prompt:
+      "Show all our AI spend this month in one view: Microsoft 365 Copilot Credits from Copilot cost management (the tenant's month by funding class, and my own credits this month from my user balance) next to what Azure Cost Management bills for them under Microsoft Copilot Studio, Azure AI model cost per Foundry deployment and agent from Azure Cost Management, and any GitHub charges billed through our Azure subscriptions. Show one table: product, what drives the cost, this month (with its unit, credits or the billing currency), largest consumer. Then say which product to review first and how current each figure is.",
+  },
+  {
+    label: "Copilot user and VM spend",
+    sources: [COPILOT, AZURE],
+    badge: "Preview",
+    prompt:
+      "Who are our top Copilot users this month, and which Azure VMs cost the most? Find the 5 users who used the most Copilot Credits in the daily per-user reports for the last 7 completed days, include me, and take each one's credits this month from their Copilot user balance, with their display name. Add the 5 VMs with the highest actual cost this month from Azure Cost Management. Show one table: source (Copilot or Azure VM), user or VM, this month (with its unit, credits or the billing currency). Then say how much of our Copilot credit balance is left and how current each figure is.",
+  },
+  {
+    label: "Cap Copilot spend per user",
+    sources: [COPILOT],
+    badge: "Preview",
+    prompt:
+      "Should we cap Copilot Credits per user? Show our Copilot spending policies with each one's limit for all its users and per user, and the 5 users who used the most Copilot Credits in the daily per-user reports for the last 7 completed days, by name with their credits this month from their user balance. Then propose a monthly per-user limit on the policy that covers all users, with headroom above the highest user's credits this month, as one change I can approve. Show one table: user, credits this month.",
+  },
+];
+
 // Signed-in prompts, shown first in the third section under its connected
 // label. In the November 2026 audit, signed-in users typed a FinOps assessment
 // report (3 of 8 people, across six chats) and ran the savings-and-Crawl
@@ -146,8 +211,8 @@ const publicPricingPrompts = [
 ];
 
 // The start page shows the public questions as three sections, most important
-// first; once Azure is connected, the price section is titled for the user's
-// own estate and lists the signed-in prompts first. Titles say what the
+// first; once Azure is connected, a section lists its signed-in prompts first,
+// and the price section is titled for the user's own estate. Titles say what the
 // questions help with.
 export const pricingSections = [
   {
@@ -162,13 +227,14 @@ export const pricingSections = [
     label: "Control AI spending",
     icon: "attachMoney",
     prompts: aiPricingPrompts,
-    connectedPrompts: [],
+    connectedPrompts: connectedAiPrompts,
   },
   {
     key: "infrastructure-pricing",
     label: "Compare Azure prices",
     connectedLabel: "Optimize my Azure costs",
     icon: "tag",
+    sources: [AZURE],
     prompts: infrastructurePricingPrompts,
     connectedPrompts: connectedCostPrompts,
   },
@@ -181,7 +247,8 @@ export const pricingCategory = {
   colorClass: "cat-pricing",
   requiresAzure: false,
   publicPrompts: publicPricingPrompts,
-  connectedPrompts: connectedCostPrompts,
+  // Every signed-in start-page prompt, for the live-evaluation catalog.
+  connectedPrompts: [...connectedAiPrompts, ...connectedCostPrompts],
   sections: pricingSections,
   // Backwards-compat: callers that read .prompts get the public list.
   prompts: publicPricingPrompts,
@@ -507,7 +574,7 @@ const maturityCategories = [
       {
         label: "Copilot credits per user",
         prompt:
-          "Who used the most Copilot Credits yesterday? Show the top 10 users and the credits each used, which Copilot services the credits went to, and how much of our tenant credit balance is left. Then show which Foundry model deployments and agents cost the most this month.",
+          "Who used the most Copilot Credits this month? Show the top 10 users by name with the credits each used this month, which Copilot services the credits went to, and how much of our tenant credit balance is left. Then show which Foundry model deployments and agents cost the most this month.",
       },
       {
         label: "Windows Server licensing",

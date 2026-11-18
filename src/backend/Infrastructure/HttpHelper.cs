@@ -85,6 +85,21 @@ public static partial class HttpHelper
 
     private static readonly CostQueryCoordinator CostQueries = new();
 
+    /// <summary>
+    /// How many Microsoft 365 Copilot cost management requests run at once per tenant. The service throttles by request
+    /// rate with a 30-second Retry-After (18 November 2026): about 20 requests sent together drew two 429s, and two at a
+    /// time still drew one at the 13th daily report, so they run one at a time and a throttle pauses the rest too.
+    /// </summary>
+    internal const int CopilotCostConcurrency = 1;
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> CopilotCostGates = new();
+
+    internal static bool IsCopilotCostUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && uri.Host.Equals("graph.microsoft.com", StringComparison.OrdinalIgnoreCase)
+        && (uri.AbsolutePath.StartsWith("/beta/copilot/costManagement", StringComparison.OrdinalIgnoreCase)
+            || uri.AbsolutePath.StartsWith("/v1.0/copilot/costManagement", StringComparison.OrdinalIgnoreCase));
+
     internal static bool IsInteractiveCostQueryUrl(string url) =>
         url.Contains("/Microsoft.CostManagement/query", StringComparison.OrdinalIgnoreCase)
         || url.Contains("/Microsoft.CostManagement/forecast", StringComparison.OrdinalIgnoreCase);
@@ -118,6 +133,13 @@ public static partial class HttpHelper
         Task<string> Send(CancellationToken requestToken) =>
             SendCoreAsync(url, token, activity, telemetryPrefix, method, jsonBody, includeTimestamp, extraHeaders,
                 maxResponseChars, bypassCostManagementGate, mutation ? 1 : maxAttemptsOverride, readOnlyPost && !mutation, requestToken);
+        if (IsCopilotCostUrl(url))
+        {
+            var gate = CopilotCostGates.GetOrAdd(CostQueryCoordinator.TenantKey(token), _ => new SemaphoreSlim(CopilotCostConcurrency));
+            await gate.WaitAsync(cancellation.Token);
+            try { return await Send(cancellation.Token); }
+            finally { gate.Release(); }
+        }
         if (!IsInteractiveCostQueryUrl(url)) return await Send(cancellation.Token);
         return await CostQueries.ExecuteAsync(CostQueryCoordinator.TenantKey(token),
             CostQueryCoordinator.RequestKey(token, (method ?? HttpMethod.Get).Method, url, jsonBody), Send, cancellation.Token,

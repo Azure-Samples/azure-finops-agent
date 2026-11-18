@@ -69,7 +69,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     internal const string ChangeDescription = """
         Applies one change under the signed-in user's permissions. The host shows the exact method, url, body and ifMatch to the user and runs the call only after they approve it in the UI; a rejection returns without sending anything.
         - Azure Resource Manager: one PUT or PATCH (tags, SKU or size, autoscale, budgets, schedules, diagnostic settings and similar non-destructive changes). Read the current resource with QueryAzure first and send the complete intended body for PUT or only the changed properties for PATCH, with the api-version that read used (its _apiVersion.used when the host chose it). A 201 or 202 result is accepted, not complete: poll its Azure-AsyncOperation or Location URL with QueryAzure GET until a terminal status.
-        - Microsoft 365 Copilot cost management, url https://graph.microsoft.com/beta/copilot/costManagement/{operation}, sent with the user's Copilot cost changes consent: POST spendingPolicies creates a spending policy; PATCH spendingPolicies/{id}, POST spendingPolicies/{id}/serviceSettings, PATCH spendingPolicies/{id}/serviceSettings/{serviceId} (state disabled turns a service off), PATCH spendingPolicies/{id}/emailThresholdSettings, POST spendingPolicies/{id}/microsoft.graph.selectedGroupsSpendingPolicy/assignedGroups/$ref and POST spendingPolicies/{id}/emailThresholdSettings/recipients/$ref change one and need ifMatch, the policy's current ETag copied exactly with its weak W/ prefix: the ETag line of a QueryAzure GET of spendingPolicies/{id}, or parentEtag on its service settings; PATCH creditRequests/{id} approves or rejects one credit request (body {"state":"approved"} or {"state":"rejected"}) with ifMatch its own @odata.etag, and POST creditRequests/batchRecordDecisions decides up to 100 (body {"requests":[{"requestId","state","etag"}]}); it is not atomic, so report each item's status, and to retry read the requests again and send only the decisions still wanted. Approving a credit request lets that user consume more credits, so say so before proposing it. Take body shapes from the API reference (https://learn.microsoft.com/microsoft-365/copilot/extensibility/api/admin-settings/cost-management/overview) rather than guessing.
+        - Microsoft 365 Copilot cost management, url https://graph.microsoft.com/beta/copilot/costManagement/{operation}, sent with the user's Copilot cost changes consent: POST spendingPolicies creates a spending policy; PATCH spendingPolicies/{id}, POST spendingPolicies/{id}/serviceSettings, PATCH spendingPolicies/{id}/serviceSettings/{serviceId} (state disabled turns a service off), PATCH spendingPolicies/{id}/emailThresholdSettings, POST spendingPolicies/{id}/microsoft.graph.selectedGroupsSpendingPolicy/assignedGroups/$ref and POST spendingPolicies/{id}/emailThresholdSettings/recipients/$ref change one and need ifMatch, the policy's current ETag copied exactly as the read returned it: its @odata.etag, the ETag line of a QueryAzure GET of spendingPolicies/{id}, or parentEtag on its service settings; PATCH creditRequests/{id} approves or rejects one credit request (body {"state":"approved"} or {"state":"rejected"}) with ifMatch its own @odata.etag, and POST creditRequests/batchRecordDecisions decides up to 100 (body {"requests":[{"requestId","state","etag"}]}); it is not atomic, so report each item's status, and to retry read the requests again and send only the decisions still wanted. Approving a credit request lets that user consume more credits, so say so before proposing it. A policy's limits are periodLimit (all its users together each month) and perUserLimit (each user each month), each {"@odata.type":"#microsoft.graph.limitedCostManagementQuantity","value":<credits>,"unit":"copilotCredit"}, or {"@odata.type":"#microsoft.graph.unlimitedCostManagementQuantity","unit":"copilotCredit"} for no limit; a PATCH body carries only the fields it changes, never id or the created and lastModified fields. Take other body shapes from the API reference (https://learn.microsoft.com/microsoft-365/copilot/extensibility/api/admin-settings/cost-management/overview) rather than guessing.
         Deletions are never available: put destructive Azure steps in a GenerateScript script for the user to review, and the user deletes a Copilot spending policy or alert setting, or removes a group or recipient, in the Microsoft 365 admin center.
         """;
 
@@ -113,7 +113,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         [Description("PUT or PATCH for Azure Resource Manager; POST or PATCH for Copilot cost management.")] string method,
         [Description("The ARM path starting with /, including the api-version your read of the resource used, or a https://graph.microsoft.com/beta/copilot/costManagement/... URL.")] string url,
         [Description("The request body as a native JSON object.")] JsonElement? body = null,
-        [Description("Copilot cost management only: the spending policy's current ETag (the ETag line of a QueryAzure GET of the policy, or parentEtag on its service settings, with its W/ prefix; also for its service settings, alert settings, groups and recipients) or the credit request's strong @odata.etag, copied exactly. Omit it for Azure Resource Manager, for creating a policy and for batchRecordDecisions.")] string ifMatch = "",
+        [Description("Copilot cost management only: the spending policy's current ETag (its @odata.etag, the ETag line of a QueryAzure GET of the policy, or parentEtag on its service settings; also for its service settings, alert settings, groups and recipients) or the credit request's @odata.etag, copied exactly as returned. Omit it for Azure Resource Manager, for creating a policy and for batchRecordDecisions.")] string ifMatch = "",
         CancellationToken cancellationToken = default)
     {
         if (HasDotSegment(url))
@@ -140,8 +140,9 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
 
     // The documented Copilot cost management writes, whether each changes a resource that carries an ETag, and whether that
     // ETag is strong. Creating a policy has none yet, and batchRecordDecisions carries each request's etag in its body;
-    // a policy's ETag is weak (W/"6"), a credit request's strong. Deleting a policy or alert setting and removing a group
-    // or recipient are never available.
+    // the reference shows a policy's ETag as weak (W/"6") but live reads return strong ones, so a policy accepts either,
+    // while a credit request's is strong. Deleting a policy or alert setting and removing a group or recipient are never
+    // available.
     private static readonly (string Method, Regex Path, bool NeedsETag, bool StrongETag)[] CopilotChanges =
     [
         ("POST", CopilotChangePath("spendingPolicies"), false, false),
@@ -182,7 +183,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         if (!operation.NeedsETag && etag.Length > 0)
             return "HTTP 400 BadRequest\nCreating a spending policy and batchRecordDecisions take no ifMatch (batchRecordDecisions carries each request's etag in its body). No request was sent.";
         if (operation.NeedsETag && etag.Length == 0)
-            return "HTTP 400 BadRequest\nThis change needs ifMatch: the spending policy's ETag (the ETag line of a QueryAzure GET of the policy, or parentEtag on its service settings) or the credit request's @odata.etag, copied exactly. No request was sent.";
+            return "HTTP 400 BadRequest\nThis change needs ifMatch: the spending policy's @odata.etag (also the ETag line of a QueryAzure GET of the policy, or parentEtag on its service settings) or the credit request's @odata.etag, copied exactly. No request was sent.";
         if (etag.Length > 256 || etag.Any(char.IsControl) || etag == "*")
             return "HTTP 400 BadRequest\nifMatch must be the ETag your read returned, copied exactly (never *). No request was sent.";
         if (operation.StrongETag && etag.StartsWith("W/", StringComparison.Ordinal))
@@ -538,6 +539,9 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         // Copilot cost management has its own consent tier and token; every other Graph path uses the shared one.
         var copilotCost = IsCopilotCostPath(uri.AbsolutePath);
         var token = copilotCost ? tokens.CopilotCostToken : tokens.GraphToken;
+        // Profiles need only User.Read and User.ReadBasic.All, which the Copilot cost consent includes, so a user who
+        // granted only that consent can still look up their own id and name the users its usage records list by id.
+        if (string.IsNullOrEmpty(token) && !copilotCost && UserProfilePath().IsMatch(uri.AbsolutePath)) token = tokens.CopilotCostToken;
         if (string.IsNullOrEmpty(token))
             return HttpHelper.TokenMissing(copilotCost ? "CopilotCostToken" : "GraphToken", activity, "graph");
         if (!uri.AbsolutePath.StartsWith("/v1.0/", StringComparison.OrdinalIgnoreCase) && !uri.AbsolutePath.StartsWith("/beta/", StringComparison.OrdinalIgnoreCase))
@@ -555,6 +559,9 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
 
     [GeneratedRegex(@"^/(v1\.0|beta)/copilot/costManagement(/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CopilotCostPath();
+
+    [GeneratedRegex(@"^/(v1\.0|beta)/(me|users(/[^/]+)?)/?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex UserProfilePath();
 
     // The Graph POST actions that only read: resolve directory object ids, and list or check a principal's memberships.
     [GeneratedRegex(@"^/(v1\.0|beta)/(directoryObjects/getByIds|(me|(users|groups|servicePrincipals|devices|directoryObjects)/[^/]+)/(getMemberGroups|getMemberObjects|checkMemberGroups|checkMemberObjects))$",
