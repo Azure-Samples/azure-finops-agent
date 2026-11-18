@@ -153,14 +153,14 @@ const connectedAiPrompts = [
     sources: [COPILOT, AGENT_365],
     badge: "Preview",
     prompt:
-      "Show the Services & agents view of Copilot cost management's Consumption for Month to date, as the Microsoft 365 admin center shows it. Take each service's credits from the daily per-service reports for the completed days of this month, and today's use from the raw usage of me and the top users in the daily per-user reports, including services no spending policy governs. Show one table with the admin center's columns and names: Service or agent (each service by its admin center name, such as Code, Cowork, Opal or Copilot Managed Runtime), Active users, Session count, Total credits used, Last activity date, plus the list price in USD at the pay-as-you-go rate per Copilot Credit from the Azure Retail Prices API. Fill Active users and Last activity date from the usage read, saying which users it covers, and write Unavailable only where no read gives a value, as the admin center does. Under the table, compare the credits listed with the month's total by funding class and say how many credits Microsoft Graph has not reported by service yet, and how current each figure is.",
+      "Show the Services & agents view of Copilot cost management's Consumption for Month to date, as the Microsoft 365 admin center shows it. Take each service's credits from the daily per-service reports for the completed days of this month, and today's use from the raw usage of me and the top users in the daily per-user reports, including services that no policy's service settings list. Show one table with the admin center's columns and names: Service or agent (each service by its admin center name, such as Code, Cowork, Opal or Copilot Managed Runtime), Active users, Session count, Total credits used, Last activity date, plus the list price in USD at the pay-as-you-go rate per Copilot Credit from the Azure Retail Prices API. Fill Active users and Last activity date from the usage read, saying which users it covers, and write Unavailable only where no read gives a value, as the admin center does. Under the table, compare the credits listed with the month's total by funding class and say how many credits Microsoft Graph has not reported by service yet, and how current each figure is.",
   },
   {
     label: "What did my Copilot work cost?",
     sources: [COPILOT, AZURE],
     badge: "Preview",
     prompt:
-      "What did my Copilot work cost today? Read my Copilot use today from my raw usage: each session with its start and end time and credits, and the credits per service, including services no spending policy governs, each named as the Microsoft 365 admin center names it (for example Code, Cowork). Price it at the pay-as-you-go list price per Copilot Credit from the Azure Retail Prices API, and look for what Azure Cost Management has billed this month under Microsoft Copilot Studio. Show one table: time (UTC), service, credits, list-price cost in USD rounded to the cent. Then give the total, which services no spending policy governs, my credits this month under my spending policy and its limit, the billed amount, and how current each figure is.",
+      "What did my Copilot work cost today? Read my Copilot use today from my raw usage: each session with its start and end time and credits, and the credits per service, each named as the Microsoft 365 admin center names it (for example Code, Cowork). Price it at the pay-as-you-go list price per Copilot Credit from the Azure Retail Prices API, and look for what Azure Cost Management has billed this month under Microsoft Copilot Studio. Show one table: time (UTC), service, credits, list-price cost in USD rounded to the cent. Then give the total, my credits this month under my spending policy and its limit, the billed amount, and how current each figure is.",
   },
   {
     label: "All our AI spend in one view",
@@ -578,6 +578,17 @@ const maturityCategories = [
         label: "Copilot credits per user",
         prompt:
           "Who used the most Copilot Credits this month? Show the top 10 users by name with the credits each used this month, which Copilot services the credits went to, and how much of our tenant credit balance is left. Then show which Foundry model deployments and agents cost the most this month.",
+      },
+      // The admin center's Consumption views, built from Microsoft Graph with the same names and columns.
+      {
+        label: "Copilot policies",
+        prompt:
+          "Show the Policies view of Copilot cost management's Consumption for Month to date, as the Microsoft 365 admin center shows it: one row per spending policy with the columns Spending policy, Policy status, Applies to, Active users, Credits used, Policy monthly limit, Credit usage rate and Billing method. Take the credits from the daily per-user reports for the completed days of this month and the raw usage of me and those users today, and write Unavailable only where no read gives a value. Then say which users and days the figures cover and how current each figure is.",
+      },
+      {
+        label: "Copilot users & groups",
+        prompt:
+          "Show the Users & groups view of Copilot cost management's Consumption for Month to date, as the Microsoft 365 admin center shows it: one row per user who used Copilot Credits this month (from the daily per-user reports for the completed days of this month, plus me today) with the columns User, Monthly limit, Total credits used, Microsoft Copilot License and Last activity date, then the groups with credits from the daily per-group reports. Write Unavailable only where no read gives a value, and say how current each figure is.",
       },
       // Proposes a change: nothing is sent unless the user approves the exact request.
       {

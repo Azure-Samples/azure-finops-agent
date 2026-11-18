@@ -539,9 +539,11 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         // Copilot cost management has its own consent tier and token; every other Graph path uses the shared one.
         var copilotCost = IsCopilotCostPath(uri.AbsolutePath);
         var token = copilotCost ? tokens.CopilotCostToken : tokens.GraphToken;
-        // Profiles need only User.Read and User.ReadBasic.All, which the Copilot cost consent includes, so a user who
-        // granted only that consent can still look up their own id and name the users its usage records list by id.
-        if (string.IsNullOrEmpty(token) && !copilotCost && UserProfilePath().IsMatch(uri.AbsolutePath)) token = tokens.CopilotCostToken;
+        // Profiles, license details, subscribed SKUs and group names need only User.Read, User.ReadBasic.All,
+        // LicenseAssignment.Read.All and Group.ReadBasic.All, which the Copilot cost consent includes, so a user who
+        // granted only that consent can still build the admin center's Users & groups view (names, Microsoft Copilot
+        // license, group names) for the ids its usage records list.
+        if (string.IsNullOrEmpty(token) && !copilotCost && CopilotCostDirectoryPath().IsMatch(uri.AbsolutePath)) token = tokens.CopilotCostToken;
         if (string.IsNullOrEmpty(token))
             return HttpHelper.TokenMissing(copilotCost ? "CopilotCostToken" : "GraphToken", activity, "graph");
         if (!uri.AbsolutePath.StartsWith("/v1.0/", StringComparison.OrdinalIgnoreCase) && !uri.AbsolutePath.StartsWith("/beta/", StringComparison.OrdinalIgnoreCase))
@@ -560,8 +562,8 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     [GeneratedRegex(@"^/(v1\.0|beta)/copilot/costManagement(/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CopilotCostPath();
 
-    [GeneratedRegex(@"^/(v1\.0|beta)/(me|users(/[^/]+)?)/?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex UserProfilePath();
+    [GeneratedRegex(@"^/(v1\.0|beta)/(me(/licenseDetails)?|users(/[^/]+(/licenseDetails)?)?|subscribedSkus|groups(/[^/]+)?)/?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CopilotCostDirectoryPath();
 
     // The Graph POST actions that only read: resolve directory object ids, and list or check a principal's memberships.
     [GeneratedRegex(@"^/(v1\.0|beta)/(directoryObjects/getByIds|(me|(users|groups|servicePrincipals|devices|directoryObjects)/[^/]+)/(getMemberGroups|getMemberObjects|checkMemberGroups|checkMemberObjects))$",

@@ -64,9 +64,11 @@ public sealed class MicrosoftOAuthOptions
         // Microsoft 365 Copilot cost management (Microsoft Graph beta): Read.All is the only scope for the tenant
         // credit balance and also reads every usage report; UserData adds per-user balances and raw usage; Policy reads
         // the limits, Assignment their groups and CreditReq the users' credit requests. The usage records name users by
-        // id only, so User.ReadBasic.All reads their display names. Its own token, so the shared Graph refresh never asks
-        // for these admin-consented scopes.
+        // id only, so User.ReadBasic.All reads their display names; LicenseAssignment.Read.All and Group.ReadBasic.All
+        // read their Microsoft Copilot licenses and the groups' names, the admin center's Users & groups columns. Its own
+        // token, so the shared Graph refresh never asks for these admin-consented scopes.
         "copilotcost" => ["https://graph.microsoft.com/User.Read", "https://graph.microsoft.com/User.ReadBasic.All",
+            "https://graph.microsoft.com/LicenseAssignment.Read.All", "https://graph.microsoft.com/Group.ReadBasic.All",
             "https://graph.microsoft.com/CopilotCostManagement.Read.All",
             "https://graph.microsoft.com/CopilotCostManagement-UserData.Read.All", "https://graph.microsoft.com/CopilotCostManagement-Policy.Read.All",
             "https://graph.microsoft.com/CopilotCostManagement-Assignment.Read.All", "https://graph.microsoft.com/CopilotCostManagement-CreditReq.Read.All"],

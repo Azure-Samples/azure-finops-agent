@@ -1170,8 +1170,9 @@
                     <div class="scope-row-detail-wrap">
                       <div class="scope-row-detail">
                         <p class="scope-row-desc">
-                          Read Copilot credit use per user (with names), group
-                          &amp; service, the spending limits and credit requests
+                          Read Copilot credit use per user (with names and
+                          Copilot licenses), group &amp; service, the spending
+                          limits and credit requests
                         </p>
                         <div class="scope-row-meta">
                           <span class="scope-badge scope-badge--delegated">
@@ -1182,6 +1183,8 @@
                         </div>
                         <p class="scope-row-perms">
                           User.ReadBasic.All ·
+                          LicenseAssignment.Read.All ·
+                          Group.ReadBasic.All ·
                           CopilotCostManagement.Read.All ·
                           CopilotCostManagement-UserData.Read.All ·
                           CopilotCostManagement-Policy.Read.All ·
