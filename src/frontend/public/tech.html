@@ -211,7 +211,7 @@ h1.hero .w{display:block}
 
 /* Warm-up: one question, five answers. Each lane runs from the question to the score. */
 .lanes{display:flex;flex-direction:column;gap:calc(var(--u) * .7)}
-.lane{position:relative;isolation:isolate;display:grid;grid-template-columns:calc(var(--u) * 2.4) calc(var(--u) * 19.5) calc(var(--u) * 15) minmax(0,1fr) calc(var(--u) * 17.5);gap:calc(var(--u) * 1.1);align-items:center;padding:calc(var(--u) * .55) calc(var(--u) * .9);border-radius:calc(var(--u) * 1.1);background:rgba(255,255,255,.72);border:1px solid var(--bord);box-shadow:var(--shadow-sm)}
+.lane{position:relative;isolation:isolate;display:grid;grid-template-columns:calc(var(--u) * 2.4) calc(var(--u) * 19.5) calc(var(--u) * 15) minmax(0,1fr) calc(var(--u) * 18.5);gap:calc(var(--u) * 1.1);align-items:center;padding:calc(var(--u) * .55) calc(var(--u) * .9);border-radius:calc(var(--u) * 1.1);background:rgba(255,255,255,.72);border:1px solid var(--bord);box-shadow:var(--shadow-sm)}
 .lane.hd{padding-top:0;padding-bottom:0;background:none;border-color:transparent;box-shadow:none;font:700 max(11px,calc(var(--u) * .85))/1 var(--font);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-mute)}
 .lane.hd span:last-child{text-align:right;padding-right:calc(var(--u) * .9)}
 .ln{display:grid;place-items:center;width:calc(var(--u) * 2.4);height:calc(var(--u) * 2.4);border-radius:50%;background:var(--ink);color:#fff;font:800 calc(var(--u) * 1.15)/1 var(--font-d)}
@@ -389,22 +389,23 @@ h1.hero .w{display:block}
 .big2 .now{font:800 calc(var(--u) * 7.4)/1 var(--font-d);letter-spacing:-.045em;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
 .big2 .what{font:700 calc(var(--u) * 1.75)/1.25 var(--font)}
 
-/* Two cost tools, side by side */
-.vs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(var(--u) * 1.6)}
-.side{display:flex;flex-direction:column;gap:calc(var(--u) * 1.1);padding:calc(var(--u) * 1.9) calc(var(--u) * 2.1)}
-.side .top{display:flex;align-items:center;gap:calc(var(--u) * 1)}
-.side .top b{display:block;font:800 calc(var(--u) * 1.75)/1.15 var(--font-d)}
-.side .top small{display:block;margin-top:.2em;font-size:calc(var(--u) * 1.15);color:var(--ink-mute)}
-.job{font:800 calc(var(--u) * 2.4)/1.12 var(--font-d);letter-spacing:-.02em}
-.side.a{background:linear-gradient(160deg,#fff,#F6F1FB);border-color:rgba(92,45,145,.22)}
-.side.b{background:linear-gradient(160deg,#fff,#EEF5FD);border-color:rgba(0,120,212,.25)}
-.side.a .job{color:var(--acc-purple)}
-.side.b .job{color:var(--acc-blue-d)}
-.side ul{display:flex;flex-direction:column;gap:calc(var(--u) * .55)}
-.side li{display:flex;align-items:center;gap:.6em;font-size:calc(var(--u) * 1.45);line-height:1.3;color:var(--ink-dim)}
-.side li svg.i{width:1.1em;height:1.1em;stroke-width:2.2}
-.side.a li svg.i{color:var(--acc-purple)}
-.side.b li svg.i{color:var(--acc-blue)}
+/* Two cost tools, row by row: the admin center's column, then the agent's */
+.ctab{border-radius:var(--r);background:var(--card);border:1px solid var(--bord-2);box-shadow:var(--shadow-sm);overflow:hidden}
+.ct-r{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) minmax(0,1fr);align-items:stretch}
+.ct-r+.ct-r{border-top:1px solid var(--bord)}
+.ct-l{display:flex;align-items:center;padding:calc(var(--u) * .55) calc(var(--u) * 1.5);font:700 calc(var(--u) * 1.65)/1.2 var(--font);color:var(--ink)}
+.ct-c{display:flex;align-items:center;justify-content:center;padding:calc(var(--u) * .55) calc(var(--u) * 1)}
+.ct-c.a{background:rgba(92,45,145,.035)}
+.ct-c.b{background:rgba(0,120,212,.07)}
+.ct-h .ct-c{justify-content:flex-start;gap:calc(var(--u) * .8);padding:calc(var(--u) * 1) calc(var(--u) * 1.2)}
+.ct-h .ct-c.a{background:rgba(92,45,145,.08)}
+.ct-h .ct-c.b{background:rgba(0,120,212,.13)}
+.ct-h b{display:block;font:800 calc(var(--u) * 1.45)/1.15 var(--font-d)}
+.ct-h small{display:block;margin-top:.2em;font-size:calc(var(--u) * 1.05);color:var(--ink-mute)}
+.yes{display:grid;place-items:center;width:calc(var(--u) * 2.4);height:calc(var(--u) * 2.4);border-radius:50%;background:var(--acc-green);color:#fff}
+.yes svg.i{width:60%;height:60%;stroke-width:3}
+.no{font:700 calc(var(--u) * 1.8)/1 var(--font);color:rgba(15,20,40,.22)}
+.soon{padding:.45em .95em;border-radius:999px;background:#FFF4D6;border:1px solid rgba(200,140,0,.38);color:#7A5300;font:800 calc(var(--u) * 1.2)/1 var(--font)}
 .verdict{display:flex;align-items:center;gap:calc(var(--u) * 1);padding:calc(var(--u) * 1) calc(var(--u) * 1.4);border-radius:var(--r);background:linear-gradient(90deg,rgba(16,124,16,.09),rgba(16,124,16,.02));border:1px solid rgba(16,124,16,.25);font:700 calc(var(--u) * 1.55)/1.3 var(--font)}
 .verdict .icnchip{animation:pulseRing 2.4s infinite}
 
@@ -655,7 +656,7 @@ h1.hero .w{display:block}
       <span class="bub u">Weather in Copenhagen?</span>
       <span class="calls"><span class="call bad"><svg class="i ic"><use href="#i-weather"/></svg><svg class="i st"><use href="#i-x"/></svg></span><span class="err">Error</span></span>
       <span class="bub a">I can’t reach the weather service.</span>
-      <span class="score"><span class="q">? / 5</span><span class="vd2 pass fragment" data-fragment-index="9"><b>5<small>/5</small></b>Honest</span></span>
+      <span class="score"><span class="q">? / 5</span><span class="vd2 pass fragment" data-fragment-index="9"><b>4<small>/5</small></b>Honest, no weather</span></span>
     </div>
   </div>
   <div class="judge-foot">
@@ -678,9 +679,10 @@ h1.hero .w{display:block}
     1 gets 5: it asked the weather service, then answered. Right, checked and quick.
     2 gets 0: no tool, no data, so it made the weather up. 21 degrees and sunny in Copenhagen in November gives it away. Sounding sure is not the same as being right.
     3 gets 2: the answer is right, but it asked the weather service four times for one answer: four times the cost and the waiting. My release gate would fail it.
-    4 gets 1: the tool failed and the answer pretends it didn't. Something unknown became a fact.
-    5 gets 5: the tool failed and it said so. "I can't tell you yet" is a good answer when the data is missing.
+    4 gets 1: the tool failed and the answer pretends it didn't. Something unknown became a fact. If someone says that is worse than 2: fair, hiding a failure you saw is deception. It gets 1 only because it at least called the tool.
+    5 gets 4: the tool failed and it said so. That beats any guess by far, but you still have no weather, so it misses one point. A 5 would try once more and then point you to another source, such as dmi.dk.
     Last click: a good answer is right, checked, quick and honest. Every release of my agent must pass 23 real questions scored like this, and that is the next part.
+    If asked for the theory: the four words are task completion, groundedness, efficiency and abstention, and Microsoft Foundry has a built-in evaluator for each (Task Completion, Groundedness, Task Navigation Efficiency, and abstention in its Quality Grader). Anthropic named the goal "helpful, honest and harmless" in 2021. Why honest scores far above a guess: OpenAI showed in 2025 ("Why Language Models Hallucinate") that most tests score "I don't know" like a wrong answer, so models learn to guess.
   </aside>
 </section>
 
@@ -804,7 +806,7 @@ h1.hero .w{display:block}
     A second model, gpt-6.1-sol, judges every answer: accepted, grounded, complete and efficient, with 19 fixed reason codes, like the ones in the warm-up. Code checks override the judge, and the code turns the judge's waste counts into the efficiency score.
     One failure stops the deployment, with no re-run. A failed eval is fixed at its cause: never by re-running it, switching models or loosening the rubric. Then the test slot, production, a smoke test and automatic rollback. After every deploy and every Monday, a quality report runs 15 more evals with an 80% bar.
     The theory: Zheng et al., NeurIPS 2023, "Judging LLM-as-a-Judge": strong LLM judges agree with human preferences over 80% of the time, as often as humans agree with each other. They also favour answers by position, by length and their own style, which is why a different model judges and code checks override it.
-    A real example from this week: the gate stopped my own release. I had added a Microsoft 365 Copilot trial to my test tenant, so one of the 23 questions, which users haven't used Copilot in 30 days, could no longer be answered: the tenant has no usage report yet. The agent said so honestly, the judge marked the answer incomplete, and the release could not ship. That is the gate doing its job. I'll show what it held back in Part 2.
+    A real example from this week: the gate stopped my own release. I had added a Microsoft 365 Copilot trial to my test tenant, so one of the 23 questions, which users haven't used Copilot in 30 days, could no longer be answered: the tenant has no usage report yet. The agent said so honestly, like answer 5 in the warm-up, and the judge marked the answer incomplete, so the release could not ship. Strict, but that is the gate doing its job. I'll show what it held back in Part 2.
   </aside>
 </section>
 
@@ -992,28 +994,31 @@ h1.hero .w{display:block}
 <!-- ============ 15 · Compared with Agent 365 Cost Management ============ -->
 <section class="s-cmp">
   <div class="head">
-    <span class="kicker"><span class="ddot"></span>Part 2 · Compared with Microsoft 365</span>
+    <span class="kicker"><span class="ddot"></span>Part 2 · Compared with Agent 365</span>
     <h2 class="title">Two tools, two jobs. <span class="grad">Use both.</span></h2>
     <div class="tline"></div>
   </div>
-  <div class="vs">
-    <div class="side a card fragment" data-fragment-index="0">
-      <div class="top"><span class="icnchip lg purple"><svg class="i"><use href="#i-window"/></svg></span><div><b>Agent 365 Cost Management</b><small>Microsoft 365 admin center</small></div></div>
-      <p class="job">Sets the limits on AI spend</p>
-      <ul><li><svg class="i"><use href="#i-check"/></svg>Users, services, agents, models</li><li><svg class="i"><use href="#i-check"/></svg>Dollars in Business Analytics (preview)</li></ul>
+  <div class="ctab" role="table" aria-label="Agent 365 Cost Management and Azure FinOps Agent compared">
+    <div class="ct-r ct-h" role="row">
+      <span role="columnheader"></span>
+      <span class="ct-c a" role="columnheader"><span class="icnchip purple"><svg class="i"><use href="#i-window"/></svg></span><span><b>Agent 365 Cost Management</b><small>Microsoft 365 admin center</small></span></span>
+      <span class="ct-c b" role="columnheader"><span class="icnchip"><svg class="i"><use href="#i-spark"/></svg></span><span><b>Azure FinOps Agent</b><small>azure-finops-agent.com</small></span></span>
     </div>
-    <div class="side b card fragment" data-fragment-index="1">
-      <div class="top"><span class="icnchip lg"><svg class="i"><use href="#i-spark"/></svg></span><div><b>Azure FinOps Agent</b><small>Open source, in your tenant</small></div></div>
-      <p class="job">Explains why the bill moved</p>
-      <ul><li><svg class="i"><use href="#i-check"/></svg>Reads Azure, Foundry and Microsoft 365</li><li><svg class="i"><use href="#i-check"/></svg>Shows every call behind the answer</li></ul>
-    </div>
+    <div class="ct-r fragment" data-fragment-index="0" role="row"><span class="ct-l" role="rowheader">Copilot credits per user</span><span class="ct-c a" role="cell"><span class="yes" role="img" aria-label="Yes"><svg class="i"><use href="#i-check"/></svg></span></span><span class="ct-c b" role="cell"><span class="soon">Soon</span></span></div>
+    <div class="ct-r fragment" data-fragment-index="1" role="row"><span class="ct-l" role="rowheader">Limits on Copilot spend</span><span class="ct-c a" role="cell"><span class="yes" role="img" aria-label="Yes"><svg class="i"><use href="#i-check"/></svg></span></span><span class="ct-c b" role="cell"><span class="no" role="img" aria-label="No">—</span></span></div>
+    <div class="ct-r fragment" data-fragment-index="2" role="row"><span class="ct-l" role="rowheader">Azure and Foundry cost</span><span class="ct-c a" role="cell"><span class="no" role="img" aria-label="No">—</span></span><span class="ct-c b" role="cell"><span class="yes" role="img" aria-label="Yes"><svg class="i"><use href="#i-check"/></svg></span></span></div>
+    <div class="ct-r fragment" data-fragment-index="3" role="row"><span class="ct-l" role="rowheader">Machine use (Log Analytics)</span><span class="ct-c a" role="cell"><span class="no" role="img" aria-label="No">—</span></span><span class="ct-c b" role="cell"><span class="yes" role="img" aria-label="Yes"><svg class="i"><use href="#i-check"/></svg></span></span></div>
+    <div class="ct-r fragment" data-fragment-index="4" role="row"><span class="ct-l" role="rowheader">All of it in one overview</span><span class="ct-c a" role="cell"><span class="no" role="img" aria-label="No">—</span></span><span class="ct-c b" role="cell"><span class="yes" role="img" aria-label="Yes"><svg class="i"><use href="#i-check"/></svg></span></span></div>
+    <div class="ct-r fragment" data-fragment-index="5" role="row"><span class="ct-l" role="rowheader">Free and open source</span><span class="ct-c a" role="cell"><span class="no" role="img" aria-label="No">—</span></span><span class="ct-c b" role="cell"><span class="yes" role="img" aria-label="Yes"><svg class="i"><use href="#i-check"/></svg></span></span></div>
   </div>
-  <div class="verdict fragment" data-fragment-index="2"><span class="icnchip green"><svg class="i"><use href="#i-check"/></svg></span><span>Set the limits in the admin center. Ask the agent why.</span></div>
+  <div class="verdict fragment" data-fragment-index="6"><span class="icnchip green"><svg class="i"><use href="#i-check"/></svg></span><span>Set the limits in the admin center. Ask the agent why.</span></div>
   <aside class="notes">
-    Agent 365 Cost Management in the Microsoft 365 admin center, under Copilot, Cost management, is the control plane: spending policies and limits for users, groups and agents, alerts, credit requests, and consumption across users, services, agents and models. Business Analytics adds dollars, in preview: November for Cowork, December for agents.
-    Its Graph API reports Copilot Credits, not currency, and has no prices, invoices or forecasts.
-    The agent is the analyst: it joins Azure Cost Management, Foundry model and agent cost, Microsoft 365 licences and list prices, and from its next release that API too, and every answer shows the calls behind it.
-    They don't compete: set the guardrails in the admin center, and ask the agent why the bill moved and what to change. Sources: the Microsoft 365 Copilot blog and the AI FinOps blog on Tech Community (17 November 2026), and Microsoft Learn, "Microsoft 365 Copilot Cost Management API overview".
+    Click by click: two rows where the admin center leads, then four where the agent does, then the verdict.
+    Agent 365 Cost Management, in the Microsoft 365 admin center under Copilot, Cost management, is the control plane for Copilot Credits: who uses them, spending policies and limits for users, groups and agents, alerts and credit requests. Everything there is in Copilot Credits, not currency. Business Analytics adds dollars, in preview: November for Cowork, December for agents.
+    The agent is the analyst. Azure Cost Management already shows Copilot pay-as-you-go and pre-purchase charges in money, under Microsoft Copilot Studio (prepaid capacity packs are not there). The agent reads that next to all Azure and Foundry cost, machine utilization from Log Analytics, Microsoft 365 licences and Copilot usage, Advisor and list prices, joins it in one overview, and every answer shows the calls behind it. Credits per user come with its next release.
+    It is free and open source under the MIT licence: you pay only for the Azure it runs on, and anyone can read every line. Trust can't be sold.
+    They don't compete: set the limits in the admin center, then ask the agent why the bill moved and what to change.
+    Sources: Microsoft Learn, "Usage-based billing: what you see in the Microsoft 365 admin center vs. your Azure bill" and "Microsoft 365 Copilot Cost Management API overview"; the Microsoft 365 Copilot blog and the AI FinOps blog on Tech Community, 17 November 2026.
   </aside>
 </section>
 
