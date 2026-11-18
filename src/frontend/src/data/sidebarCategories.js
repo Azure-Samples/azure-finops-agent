@@ -583,7 +583,7 @@ const maturityCategories = [
       {
         label: "Copilot policies",
         prompt:
-          "Show the Policies view of Copilot cost management's Consumption for Month to date, as the Microsoft 365 admin center shows it: one row per spending policy with the columns Spending policy, Policy status, Applies to, Active users, Credits used, Policy monthly limit, Credit usage rate and Billing method. Take the credits from the daily per-user reports for the completed days of this month and the raw usage of me and those users today, and write Unavailable only where no read gives a value. Then say which users and days the figures cover and how current each figure is.",
+          "Show the Policies view of Copilot cost management's Consumption for Month to date, as the Microsoft 365 admin center shows it: one row per spending policy with the columns Spending policy, Policy status, Applies to, Active users, Credits used, Policy monthly limit, Credit usage rate and Billing method. Take the credits as the admin center counts them: for a policy that governs all use, the month's total by funding class; otherwise the daily per-user reports for the completed days of this month and the raw usage of me and those users today. Write Unavailable only where no read gives a value. Then say which users and days the figures cover and how current each figure is.",
       },
       {
         label: "Copilot users & groups",
