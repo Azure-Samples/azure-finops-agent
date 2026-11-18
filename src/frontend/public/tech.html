@@ -555,7 +555,7 @@ h1.hero .w{display:block}
 </header>
 
 <footer class="chrome-bot" aria-hidden="true">
-  <div class="left"><span class="pdot"></span><span>Azure FinOps Agent · slides at azure-finops-agent.com/tech · code at github.com/Azure-Samples/azure-finops-agent</span></div>
+  <div class="left"><span class="pdot"></span><span>Azure FinOps Agent · azure-finops-agent.com · github.com/Azure-Samples/azure-finops-agent</span></div>
   <div class="right"><span id="slideNum">01 / 12</span></div>
 </footer>
 
@@ -804,6 +804,7 @@ h1.hero .w{display:block}
     A second model, gpt-6.1-sol, judges every answer: accepted, grounded, complete and efficient, with 19 fixed reason codes, like the ones in the warm-up. Code checks override the judge, and the code turns the judge's waste counts into the efficiency score.
     One failure stops the deployment, with no re-run. A failed eval is fixed at its cause: never by re-running it, switching models or loosening the rubric. Then the test slot, production, a smoke test and automatic rollback. After every deploy and every Monday, a quality report runs 15 more evals with an 80% bar.
     The theory: Zheng et al., NeurIPS 2023, "Judging LLM-as-a-Judge": strong LLM judges agree with human preferences over 80% of the time, as often as humans agree with each other. They also favour answers by position, by length and their own style, which is why a different model judges and code checks override it.
+    A real example from this week: the gate stopped my own release. I had added a Microsoft 365 Copilot trial to my test tenant, so one of the 23 questions, which users haven't used Copilot in 30 days, could no longer be answered: the tenant has no usage report yet. The agent said so honestly, the judge marked the answer incomplete, and the release could not ship. That is the gate doing its job. I'll show what it held back in Part 2.
   </aside>
 </section>
 
@@ -970,7 +971,7 @@ h1.hero .w{display:block}
 <section class="s-new">
   <div class="head">
     <span class="kicker"><span class="ddot"></span>Part 2 · New at Ignite 2026</span>
-    <h2 class="title">AI spend per user and model. <span class="grad">Now in the agent.</span></h2>
+    <h2 class="title">AI spend per user and model. <span class="grad">Coming to the agent.</span></h2>
     <div class="tline"></div>
   </div>
   <div class="tiles t3">
@@ -978,13 +979,13 @@ h1.hero .w{display:block}
     <div class="tile card accent c4 fragment" data-fragment-index="1"><span class="icnchip lg"><svg class="i"><use href="#i-token"/></svg></span><b>Per model</b><small>Foundry cost</small><span class="tag blue"><svg class="i"><use href="#i-tag"/></svg>deployment tag</span></div>
     <div class="tile card accent c3 fragment" data-fragment-index="2"><span class="icnchip lg amber"><svg class="i"><use href="#i-bot"/></svg></span><b>Per agent</b><small>Foundry cost</small><span class="tag warn"><svg class="i"><use href="#i-tag"/></svg>agent.name tag</span></div>
   </div>
-  <div class="allfour fragment" data-fragment-index="3"><span>Ask it:</span><span class="ask"><svg class="i"><use href="#i-chat"/></svg><span>Who used the most Copilot credits yesterday<span class="qk">?</span></span></span></div>
+  <div class="allfour fragment" data-fragment-index="3"><span>Soon you can ask:</span><span class="ask"><svg class="i"><use href="#i-chat"/></svg><span>Who used the most Copilot credits yesterday<span class="qk">?</span></span></span></div>
   <aside class="notes">
     New this week. At Ignite on 17 November, Microsoft announced Agent 365 Cost Management in the Microsoft 365 admin center. It tracks AI consumption across users, services, agents and models, and the new Agent 365 Business Analytics app (Frontier preview) breaks it down in dollars.
     Its Microsoft Graph API (beta, under /copilot/costManagement) gives Copilot Credits per user, security group and service for each completed day, a month by funding class, the tenant credit balance and the spending policies. It reports credits, not currency, and has no model or agent breakdown.
-    The agent now reads it through a new read-only consent in the sidebar, Copilot Cost Management: three read scopes, which need admin consent. It has its own token, so existing licence and chargeback sign-ins are untouched.
+    The agent's next release reads it through a new read-only consent in the sidebar, Copilot Cost Management: three read scopes, which need admin consent. It has its own token, so existing licence and chargeback sign-ins are untouched.
     Per model and per agent, in dollars, comes from Azure Cost Management: Foundry tags model usage with the deployment, and from November with agent.name when an agent made the call, next to the project tag.
-    Demo, if the lab tenant has Copilot Credits usage: Prompts, then "Copilot credits per user".
+    It is built, but not live yet: this is the release the gate held back this week. Show the slide; don't demo it on azure-finops-agent.com.
   </aside>
 </section>
 
@@ -1004,14 +1005,14 @@ h1.hero .w{display:block}
     <div class="side b card fragment" data-fragment-index="1">
       <div class="top"><span class="icnchip lg"><svg class="i"><use href="#i-spark"/></svg></span><div><b>Azure FinOps Agent</b><small>Open source, in your tenant</small></div></div>
       <p class="job">Explains why the bill moved</p>
-      <ul><li><svg class="i"><use href="#i-check"/></svg>Reads its API, plus Azure and Foundry</li><li><svg class="i"><use href="#i-check"/></svg>Shows every call behind the answer</li></ul>
+      <ul><li><svg class="i"><use href="#i-check"/></svg>Reads Azure, Foundry and Microsoft 365</li><li><svg class="i"><use href="#i-check"/></svg>Shows every call behind the answer</li></ul>
     </div>
   </div>
   <div class="verdict fragment" data-fragment-index="2"><span class="icnchip green"><svg class="i"><use href="#i-check"/></svg></span><span>Set the limits in the admin center. Ask the agent why.</span></div>
   <aside class="notes">
     Agent 365 Cost Management in the Microsoft 365 admin center, under Copilot, Cost management, is the control plane: spending policies and limits for users, groups and agents, alerts, credit requests, and consumption across users, services, agents and models. Business Analytics adds dollars, in preview: November for Cowork, December for agents.
     Its Graph API reports Copilot Credits, not currency, and has no prices, invoices or forecasts.
-    The agent is the analyst: it reads that API and joins it with Azure Cost Management, Foundry model and agent cost, Microsoft 365 licences and list prices, and every answer shows the calls behind it.
+    The agent is the analyst: it joins Azure Cost Management, Foundry model and agent cost, Microsoft 365 licences and list prices, and from its next release that API too, and every answer shows the calls behind it.
     They don't compete: set the guardrails in the admin center, and ask the agent why the bill moved and what to change. Sources: the Microsoft 365 Copilot blog and the AI FinOps blog on Tech Community (17 November 2026), and Microsoft Learn, "Microsoft 365 Copilot Cost Management API overview".
   </aside>
 </section>
@@ -1125,7 +1126,7 @@ h1.hero .w{display:block}
     3. Switch to the signed-in window and click "Where can I save money?": savings from the tenant's own data and the Crawl maturity score.
     4. Open Agent activity on any answer: every call, its URL and its timing. That is how a customer checks the numbers, just like the judge in the warm-up.
     5. Ask "Delete my unused disks": it cannot delete, so it offers a script to review. To show an approval, ask for a monthly budget with an 80% alert on the lab subscription, show the exact request, then click Reject.
-    Optional, only if the lab tenant has Copilot Credits usage and you granted Copilot Cost Management under Add scopes beforehand (it needs admin consent): Prompts, then "Copilot credits per user". The new Graph API answers in credits per user and service, and Foundry cost tags give each model deployment and agent in dollars.
+    Leave the Copilot credits feature from slide 14 out of the demo: it is not on azure-finops-agent.com until the release gate passes.
     If an answer is slow or fails, open the finished conversation from Sessions: every answer is saved. End on this slide for questions; the QR codes open the site and the repo.
   </aside>
 </section>
