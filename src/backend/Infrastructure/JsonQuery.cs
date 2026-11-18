@@ -157,6 +157,8 @@ internal static partial class JsonQuery
                 else if (MissingMember().Match(message) is { Success: true } scoped && shape.Properties.ContainsKey(scoped.Groups["member"].Value)
                     && scoped.Groups["type"].Value != shape.Clr!.Name && scoped.Groups["type"].Value != shape.Clr.FullName)
                     message += $". Inside a lambda a name is read from the lambda's item; read the response's {scoped.Groups["member"].Value} as root.{scoped.Groups["member"].Value}";
+                if (MissingMember().Match(message) is { Success: true } column && TableColumns(shape, column.Groups["type"].Value) is { } columns)
+                    message += $". Each row of this table holds exactly its columns: {string.Join(", ", columns)}";
                 if (error.Position >= 0) message += $" (at character {error.Position + 1}: {Excerpt(text, error.Position)})";
                 throw new ArgumentException(absent.Count == 0 ? message : $"{message}. {Absent(absent)}", error);
             }
@@ -267,7 +269,9 @@ internal static partial class JsonQuery
             {
                 var observed = node.Members is not null && (node.Clr!.Name == type || node.Clr.FullName == type);
                 var unknown = type == "String" && node.Clr == typeof(string) && node.Unknown && (Segment(path) is not { } name || reads.Contains(name + "." + member));
-                if (!observed && !unknown || node.Properties.ContainsKey(member)
+                // A table row holds exactly its columns, so a column it lacks is misnamed and fails instead of reading as null
+                // (an assessment read a TagKey grouping's r.CostCenter as null and reported its cost as untagged, 18 November 2026).
+                if (!observed && !unknown || node.Closed || node.Properties.ContainsKey(member)
                     || node.Members?.Values.Any(known => known.Identifier.Equals(member, StringComparison.OrdinalIgnoreCase)) == true)
                     continue;
                 node.Properties[member] = new Node();
@@ -533,9 +537,14 @@ internal static partial class JsonQuery
         public bool ForceMap;
         public bool ForceList;
         public Node? Value;
+        // Row objects built from a column/row table (Tabulate). Each holds exactly the table's columns.
+        public int TableRows;
 
         // Nothing but null was seen here (an empty list's items, a null or absent member), so a query may read it as anything.
         public bool Unknown => Strings + Numbers + Bools + Objects + Arrays == 0;
+
+        // Every object seen here is a table row, so a member it lacks is a misnamed column, never an optional one.
+        public bool Closed => TableRows > 0 && TableRows == Objects;
     }
 
     private static Node Infer(JsonNode root, IReadOnlySet<string>? numeric = null)
@@ -558,6 +567,7 @@ internal static partial class JsonQuery
                     if (!node.Properties.TryGetValue(name, out var property)) node.Properties[name] = property = new Node();
                     Observe(child, property, depth + 1);
                 }
+                if (TabulatedRows(item) is { } rows && node.Properties["rows"].Element is { } row) row.TableRows += rows;
                 break;
             case JsonArray list when depth < MaxDepth:
                 node.Arrays++;
@@ -641,6 +651,7 @@ internal static partial class JsonQuery
         into.Objects += from.Objects;
         into.Arrays += from.Arrays;
         into.Nulls += from.Nulls;
+        into.TableRows += from.TableRows;
         into.Items += from.Items;
         into.MaxItems = Math.Max(into.MaxItems, from.MaxItems);
         into.Min = Math.Min(into.Min, from.Min);
@@ -712,6 +723,18 @@ internal static partial class JsonQuery
         foreach (var (_, child) in item) { if (child is not null) Tabulate(child); }
         return node;
     }
+
+    // The row count of a table Tabulate built: named columns, and rows that are objects holding exactly those columns.
+    private static int? TabulatedRows(JsonObject item) =>
+        item["columns"] is JsonArray { Count: > 0 } columns && item["rows"] is JsonArray rows
+        && columns.All(column => column is JsonObject named && named["name"] is JsonValue)
+        && rows.All(row => row is JsonObject cells && cells.Count == columns.Count) ? rows.Count : null;
+
+    // The columns of the table whose rows have this type, for an error that names a column the table lacks.
+    private static List<string>? TableColumns(Node shape, string type) =>
+        Walk(shape, "it").Select(entry => entry.Node)
+            .FirstOrDefault(node => node.Closed && node.Members is not null && (node.Clr!.Name == type || node.Clr.FullName == type))
+            ?.Members!.Values.Select(member => member.Identifier).ToList();
 
     // ---- schema text -----------------------------------------------------------------------------------------------
 

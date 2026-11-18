@@ -76,6 +76,22 @@ public sealed class JsonQueryTests
         Assert.Equal("2", Run("""[{"a":1},{"a":2}]""", "Max(x => x.a)"));
     }
 
+    // 18 November 2026: an assessment read a TagKey grouping's r.CostCenter, which no row has, as null and reported the
+    // month's cost as untagged; the rows carry the tag in TagKey and TagValue. A table's rows hold exactly its columns.
+    [Fact]
+    public void AColumnATableLacksFailsNamingItsColumnsInsteadOfReadingAsNull()
+    {
+        const string byTag = """{"properties":{"columns":[{"name":"PreTaxCost","type":"Number"},{"name":"TagKey","type":"String"},{"name":"TagValue","type":"String"},{"name":"Currency","type":"String"}],"rows":[[1313.58,"costcenter","","USD"]]}}""";
+
+        var error = Assert.Throws<ArgumentException>(() =>
+            Run(byTag, "new { groups = properties.rows.Select(r => new { r.CostCenter, r.Currency, cost = Math.Round(r.PreTaxCost ?? 0, 2) }) }"));
+
+        Assert.Contains("'CostCenter'", error.Message);
+        Assert.Contains("Each row of this table holds exactly its columns: PreTaxCost, TagKey, TagValue, Currency", error.Message);
+        Assert.Equal("""[{"TagKey":"costcenter","TagValue":"","cost":1313.58}]""",
+            Run(byTag, "properties.rows.Select(r => new { r.TagKey, r.TagValue, cost = Math.Round(r.PreTaxCost ?? 0, 2) })"));
+    }
+
     // An observed page search tried IndexOf and an indexed Select, then refetched the page to bisect Skip/Take ranges.
     [Theory]
     [InlineData("lines.IndexOf(\"WS2 plan\")")]
