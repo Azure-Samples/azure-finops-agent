@@ -268,6 +268,10 @@ h1.hero .w{display:block}
 .s-judge:has(.vd2.visible) .vote{opacity:0}
 .ck{display:inline-flex;align-items:center;gap:.45em;padding:.5em 1.05em;border-radius:999px;background:#fff;border:1px solid rgba(16,124,16,.3);box-shadow:var(--shadow-sm);font:800 calc(var(--u) * 1.5)/1 var(--font-d);color:var(--ink)}
 .ck svg.i{width:1.05em;height:1.05em;color:var(--acc-green);stroke-width:2.6}
+/* Under each word, its name among Microsoft Foundry's built-in evaluators */
+.ck-t{display:flex;flex-direction:column;align-items:flex-start;gap:.28em}
+.ck-t small{font:600 max(11px,calc(var(--u) * .95))/1 var(--font);letter-spacing:0;color:var(--ink-mute)}
+.ck-src{font:600 max(11px,calc(var(--u) * .9))/1.3 var(--font);color:var(--ink-mute)}
 
 /* Agenda */
 .agenda{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u) * 1.6)}
@@ -666,10 +670,11 @@ h1.hero .w{display:block}
     </div>
     <div class="pills fragment" data-fragment-index="10">
       <span class="label">A good answer is</span>
-      <span class="ck"><svg class="i"><use href="#i-check"/></svg>Right</span>
-      <span class="ck"><svg class="i"><use href="#i-check"/></svg>Checked</span>
-      <span class="ck"><svg class="i"><use href="#i-check"/></svg>Quick</span>
-      <span class="ck"><svg class="i"><use href="#i-check"/></svg>Honest</span>
+      <span class="ck"><svg class="i"><use href="#i-check"/></svg><span class="ck-t">Right<small>Task Completion</small></span></span>
+      <span class="ck"><svg class="i"><use href="#i-check"/></svg><span class="ck-t">Checked<small>Groundedness</small></span></span>
+      <span class="ck"><svg class="i"><use href="#i-check"/></svg><span class="ck-t">Quick<small>Efficiency</small></span></span>
+      <span class="ck"><svg class="i"><use href="#i-check"/></svg><span class="ck-t">Honest<small>Task Adherence</small></span></span>
+      <span class="ck-src">Microsoft Foundry<br>evaluator names</span>
     </div>
   </div>
   <aside class="notes">
@@ -682,7 +687,7 @@ h1.hero .w{display:block}
     4 gets 1: the tool failed and the answer pretends it didn't. Something unknown became a fact. If someone says that is worse than 2: fair, hiding a failure you saw is deception. It gets 1 only because it at least called the tool.
     5 gets 3: the tool failed and it said so. Honest beats any guess, but it didn't solve the problem: you still have no weather. A 5 would try once more and then point you to another source, such as dmi.dk. If someone asks why it scores above answer 3, which did give the weather: answer 3 pays four times for every question, while answer 5 met a broken tool once and told the truth.
     Last click: a good answer is right, checked, quick and honest. Every release of my agent must pass 23 real questions scored like this, and that is the next part.
-    If asked for the theory: the four words are task completion, groundedness, efficiency and abstention, and Microsoft Foundry has a built-in evaluator for each (Task Completion, Groundedness, Task Navigation Efficiency, and abstention in its Quality Grader). Anthropic named the goal "helpful, honest and harmless" in 2021. Why honest scores above a guess but below a real answer: OpenAI showed in 2025 ("Why Language Models Hallucinate") that most tests score "I don't know" like a wrong answer, so models learn to guess.
+    The small names under the four words are Microsoft Foundry's built-in evaluators, judges anyone can run on their own agents. Right is Task Completion: a usable result. Checked is Groundedness: every claim backed by what the tool returned. Quick is Efficiency, in full Task Navigation Efficiency: no wasted steps. Honest is Task Adherence: the agent kept to its instructions, here check the tool, never guess, and say when it fails. So answer 2 fails Groundedness, 3 Efficiency, 4 Task Adherence and 5 Task Completion. Researchers call an honest "I don't know" abstention, and Anthropic named the overall goal "helpful, honest and harmless" in 2021. Why honest scores above a guess but below a real answer: OpenAI showed in 2025 ("Why Language Models Hallucinate") that most tests score "I don't know" like a wrong answer, so models learn to guess.
   </aside>
 </section>
 
