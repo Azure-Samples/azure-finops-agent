@@ -13,7 +13,7 @@ Each conversation record holds what a judge needs to decide whether the agent se
 Sources, all read-only: the transcripts and turn records in App Service storage (Kudu), the agent runs in
 Application Insights, linked to each turn through the ChatRequest span's request.id, and the browser's own
 telemetry, whose location gives the client country. --diagnostics adds what a rating does not need but a root-cause
-analysis does: the stored model context from the Foundry project Responses API (system prompt, tool definitions,
+analysis does: the stored model context from the Foundry Responses API (system prompt, tool definitions,
 every model input item), each model call and tool span, server warnings and exceptions, and every browser event.
 
 Left out by default: the maintainer's own use (browser telemetry from Denmark, plus that browser's and that owner's
@@ -321,7 +321,7 @@ class Exporter:
         self.tokens = Tokens(self.subscription)
         self.http = Http(self.tokens)
         self.p = Pseudonymizer(not args.no_redact_content, args.keep_mapping)
-        self.project = self._project_endpoint(env["AZURE_OPENAI_ENDPOINT"], env.get("AZURE_AI_PROJECT_NAME")) if args.diagnostics else None
+        self.bases = self._responses_bases(env["AZURE_OPENAI_ENDPOINT"], env.get("AZURE_AI_PROJECT_NAME")) if args.diagnostics else []
         workspace = env["AZURE_LOG_ANALYTICS_WORKSPACE_ID"]
         site = ["--subscription", self.subscription, "-g", self.group, "-n", self.app]
         resources = ["https://management.azure.com", "https://api.loganalytics.io"] + (["https://ai.azure.com"] if args.diagnostics else [])
@@ -352,6 +352,7 @@ class Exporter:
             raise SystemExit("AGENT_HOME is not under /home, so Kudu cannot read it")
         self.home = home[len("/home/"):].strip("/")
         self.responses: dict[str, dict] = {}
+        self.response_bases: dict[str, str] = {}
         self.items: dict[str, list | None] = {}
         self.cache_lock = threading.Lock()
         self.prompts: dict[str, str] = {}
@@ -364,13 +365,17 @@ class Exporter:
         log(f"{phase}: {self.phases[phase]} s")
 
     @staticmethod
-    def _project_endpoint(endpoint: str, project: str | None) -> str:
+    def _responses_bases(endpoint: str, project: str | None) -> list[str]:
+        """The Foundry account's Responses API, which the agent calls, then the Foundry project API it called until
+        November 2026: the two keep separate stores, so responses from before the switch (kept about 30 days) are only
+        in the project's."""
         uri = urllib.parse.urlparse(endpoint.strip())
+        bases = [f"https://{uri.netloc}/openai/v1"]
         if "/api/projects/" in uri.path.lower():
-            return f"https://{uri.netloc}{uri.path.rstrip('/')}"
-        if not project:
-            raise SystemExit("Set AZURE_AI_PROJECT_NAME or use a project endpoint")
-        return f"https://{uri.netloc.split('.')[0]}.services.ai.azure.com/api/projects/{urllib.parse.quote(project)}"
+            bases.append(f"https://{uri.netloc}{uri.path.rstrip('/')}/openai/v1")
+        elif project:
+            bases.append(f"https://{uri.netloc.split('.')[0]}.services.ai.azure.com/api/projects/{urllib.parse.quote(project)}/openai/v1")
+        return bases
 
     # ---------- App Service storage through Kudu (GET only) ----------
     def scm(self, api: str, path: str) -> bytes | None:
@@ -538,25 +543,33 @@ union
         log(f"server warnings and exceptions: {len(rows)} in {len(by_request)} turns")
         return by_request
 
-    # ---------- Foundry project Responses API (diagnostics) ----------
+    # ---------- Foundry Responses API (diagnostics) ----------
     def response(self, response_id: str) -> dict:
         with self.cache_lock:
             if response_id in self.responses:
                 return self.responses[response_id]
-        try:
-            value = self.http.json(f"{self.project}/openai/v1/responses/{response_id}", "https://ai.azure.com")
-        except urllib.error.HTTPError as error:
-            value = {"_error": error.code}
+        value: dict = {"_error": 404}
+        for base in self.bases:
+            try:
+                value = self.http.json(f"{base}/responses/{response_id}", "https://ai.azure.com")
+                with self.cache_lock:
+                    self.response_bases[response_id] = base
+                break
+            except urllib.error.HTTPError as error:
+                value = {"_error": error.code}
+                if error.code != 404:
+                    break
         with self.cache_lock:
             self.responses[response_id] = value
         return value
 
     def input_items(self, response_id: str) -> list | None:
         items, after = [], None
+        base = self.response_bases.get(response_id, self.bases[0] if self.bases else "")
         try:
             while True:
                 query = "limit=100&order=asc" + (f"&after={after}" if after else "")
-                page = self.http.json(f"{self.project}/openai/v1/responses/{response_id}/input_items?{query}", "https://ai.azure.com")
+                page = self.http.json(f"{base}/responses/{response_id}/input_items?{query}", "https://ai.azure.com")
                 items.extend(page.get("data") or [])
                 after = page.get("last_id")
                 if not page.get("has_more") or not after:

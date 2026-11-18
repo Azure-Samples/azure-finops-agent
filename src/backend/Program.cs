@@ -29,14 +29,14 @@ var azureOpenAIEndpoint = builder.Configuration["AzureOpenAI:Endpoint"];
 if (string.IsNullOrWhiteSpace(azureOpenAIEndpoint))
     throw new InvalidOperationException(
         "AzureOpenAI:Endpoint is required. " +
-        "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-ACCOUNT.services.ai.azure.com/api/projects/YOUR-PROJECT\" " +
-        "(run from src/backend). " +
+        "For local dev: dotnet user-secrets set \"AzureOpenAI:Endpoint\" \"https://YOUR-ACCOUNT.services.ai.azure.com\" " +
+        "(run from src/backend; a Foundry project endpoint also works, and its account is used). " +
         "For production: set the AzureOpenAI__Endpoint environment variable.");
 var azureOpenAIDeployment = builder.Configuration["AzureOpenAI:DeploymentName"] ?? "gpt-6.1-terra";
 // Optional: pin the local credential to the Foundry resource's tenant. Needed
 // when the az CLI's default account lives in a different tenant.
 var azureOpenAITenantId = builder.Configuration["AzureOpenAI:TenantId"];
-var foundryProjectEndpoint = AgentSessionFactory.ResolveProjectEndpoint(azureOpenAIEndpoint, builder.Configuration["AzureOpenAI:ProjectName"]);
+var foundryEndpoint = AgentSessionFactory.ResolveFoundryEndpoint(azureOpenAIEndpoint);
 // Hosted web search (Bing grounding) is opt-in: it sits outside the Azure data boundary, and QueryAzure already reads public pages.
 var webSearchEnabled = builder.Configuration.GetValue("AzureOpenAI:WebSearch", AgentSessionFactory.DefaultWebSearch);
 var azureOpenAIReasoningEffort = builder.Configuration["AzureOpenAI:ReasoningEffort"] ?? "medium";
@@ -129,7 +129,7 @@ AzureFinOps.Dashboard.Infrastructure.HttpHelper.Logger =
 
 await using var agentFactory = AgentSessionFactory.Create(
     telemetry, app.Services.GetRequiredService<PersistentIdentity>(),
-    foundryProjectEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort,
+    foundryEndpoint, azureOpenAIDeployment, azureOpenAIReasoningEffort,
     loggerFactory, azureOpenAITenantId, webSearchEnabled, microsoftLearnEnabled);
 
 // Start the janitor now that the factory exists; tie its lifecycle to the host.

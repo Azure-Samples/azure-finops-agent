@@ -15,8 +15,6 @@ param serviceTier string = 'Default'
 param existingAoaiResourceId string
 @description('When reusing an existing account, also create or update the model deployment on it. Requires deployment permission and available model-specific quota on that account.')
 param deployModelOnExistingAccount bool = false
-@description('Foundry project on the reused account. The app calls the project Responses endpoint, so reuse requires an existing project.')
-param existingProjectName string = ''
 
 var useExisting = !empty(existingAoaiResourceId)
 
@@ -68,27 +66,6 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2026-
   }
 }
 
-// Foundry project — the app's Agent Framework runtime calls this project's
-// Responses endpoint. Only created for a new account; a reused account supplies
-// its own existing project through `existingProjectName`.
-resource project 'Microsoft.CognitiveServices/accounts/projects@2026-03-01' = if (!useExisting) {
-  parent: newAccount
-  name: 'proj-finops-${resourceToken}'
-  location: aoaiLocation
-  // A Cognitive Services account serializes control-plane operations, but ARM
-  // creates sibling children in parallel — so without this the project races the
-  // model deployment and the whole `azd up` fails with "RequestConflict: Another
-  // operation is in progress on the resource". Ordering them is the only fix.
-  dependsOn: [modelDeployment]
-  identity: {
-    type: 'SystemAssigned'
-  }
-  properties: {
-    displayName: 'Azure FinOps Agent'
-    description: 'Azure FinOps Agent Foundry project'
-  }
-}
-
 resource existingAccount 'Microsoft.CognitiveServices/accounts@2026-03-01' existing = if (useExisting) {
   name: existingName
   scope: resourceGroup(existingSubId, existingRg)
@@ -109,18 +86,16 @@ module existingModelDeployment 'aoai-deployment.bicep' = if (useExisting && depl
 
 var accountProperties = useExisting ? existingAccount!.properties : newAccount!.properties
 var serviceEndpoints object = accountProperties.?endpoints ?? {}
+var accountKind = useExisting ? existingAccount!.kind : 'AIServices'
 
-// AIServices.endpoint is the generic route, not the published OpenAI inference route.
-output endpoint string = serviceEndpoints[?'OpenAI Language Model Instance API'] ?? accountProperties.endpoint
 output accountName string = useExisting ? existingName : newAccount!.name
 output deploymentName string = useExisting && deployModelOnExistingAccount
   ? existingModelDeployment!.outputs.deploymentName
   : deploymentName
 output resourceGroup string = useExisting ? existingRg : resourceGroup().name
 output subscriptionId string = useExisting ? existingSubId : subscription().subscriptionId
-var projectName = useExisting ? existingProjectName : project.name
-output projectName string = projectName
-// Without a project (reuse mode with no project name) the app fails fast at startup with a clear error.
-output projectEndpoint string = empty(projectName)
-  ? (serviceEndpoints[?'OpenAI Language Model Instance API'] ?? accountProperties.endpoint)
-  : 'https://${accountProperties.customSubDomainName}.services.ai.azure.com/api/projects/${projectName}'
+// The app calls the account's own Responses API (https://{host}/openai/v1), so no Foundry project is needed: a Foundry
+// (AIServices) account serves it on its services.ai.azure.com host, a legacy Azure OpenAI account on its OpenAI route.
+output foundryEndpoint string = accountKind == 'AIServices'
+  ? 'https://${accountProperties.customSubDomainName}.services.ai.azure.com'
+  : (serviceEndpoints[?'OpenAI Language Model Instance API'] ?? accountProperties.endpoint)

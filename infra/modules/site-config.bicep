@@ -43,7 +43,7 @@ func buildSiteConfig(
     // after a pull can exceed the 230s default. Allow up to 30 min to warm up.
     { name: 'WEBSITES_CONTAINER_START_TIME_LIMIT', value: '1800' }
     { name: 'DOCKER_REGISTRY_SERVER_URL', value: 'https://${acrLoginServer}' }
-    // Foundry project endpoint and model deployment (Program.cs fail-fast key).
+    // Foundry account endpoint and model deployment (Program.cs fail-fast key).
     // Inference authenticates with the running site's managed identity.
     { name: 'AzureOpenAI__Endpoint', value: aoaiEndpoint }
     { name: 'AzureOpenAI__DeploymentName', value: aoaiDeploymentName }

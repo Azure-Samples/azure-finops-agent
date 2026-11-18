@@ -1,7 +1,9 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using Azure.AI.Projects;
+using System.Security.Cryptography;
+using System.Text;
 using Azure.Core;
 using Azure.Identity;
 using AzureFinOps.Dashboard.AI.Runtime;
@@ -158,10 +160,17 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     /// <summary>The single agent shared by every conversation; per-user tools are supplied per run.</summary>
     internal AIAgent Agent { get; }
 
+    /// <summary>
+    /// Names the Responses API store this agent's response chains live in: a fingerprint of the Responses endpoint, never
+    /// the endpoint itself. A chain saved in another store cannot be continued (see <see cref="AgentConversation.Open"/>).
+    /// </summary>
+    internal string ResponsesStore { get; }
+
     private AgentSessionFactory(
         AiTelemetry telemetry,
         PersistentIdentity identity,
-        AIProjectClient project,
+        IChatClient responses,
+        string responsesStore,
         string deployment,
         string? reasoningEffort,
         bool webSearch,
@@ -171,18 +180,18 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     {
         _telemetry = telemetry;
         _identity = identity;
+        ResponsesStore = responsesStore;
         _deployment = deployment;
         _reasoning = reasoningEffort is not null;
         _sharedTools = sharedTools;
         _learn = learn;
         _logger = loggerFactory.CreateLogger("AzureFinOps.AI");
-        Agent = project
-            .AsAIAgent(new ChatClientAgentOptions
+        Agent = new ChatClientAgent(new ModelStreamRetryChatClient(responses, _logger), new ChatClientAgentOptions
             {
                 Name = "azure-finops-agent",
                 ChatOptions = AgentChatOptions(deployment, reasoningEffort, webSearch),
                 AllowConcurrentInvocation = true,
-            }, clientFactory: inner => new ModelStreamRetryChatClient(inner, _logger), loggerFactory: loggerFactory)
+            }, loggerFactory, null)
             .AsBuilder()
             .UseOpenTelemetry(AiTelemetry.AgentSourceName)
             .Build();
@@ -216,7 +225,7 @@ public sealed class AgentSessionFactory : IAsyncDisposable
                 }
             };
         }
-        _titleAgent = project.AsAIAgent(deployment, TitleInstructions, name: "title");
+        _titleAgent = new ChatClientAgent(responses, TitleInstructions, "title", null, null, null, null);
     }
 
     private static ReasoningEffort ParseEffort(string effort) => effort.Trim().ToLowerInvariant() switch
@@ -230,40 +239,61 @@ public sealed class AgentSessionFactory : IAsyncDisposable
     };
 
     /// <summary>
-    /// Resolves the Foundry project endpoint. Accepts a project endpoint
-    /// (<c>https://{account}.services.ai.azure.com/api/projects/{project}</c>) or an
-    /// account endpoint plus a project name.
+    /// Resolves the Foundry account the agent calls from an account endpoint (<c>https://{account}.services.ai.azure.com</c>
+    /// or <c>https://{account}.openai.azure.com</c>) or a project endpoint (<c>https://{account}.services.ai.azure.com/api/projects/{project}</c>),
+    /// whose account is used, so configuration written for the project API keeps working.
     /// </summary>
-    internal static Uri ResolveProjectEndpoint(string endpoint, string? projectName)
+    internal static Uri ResolveFoundryEndpoint(string endpoint)
     {
         if (!Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("The Foundry endpoint must be an absolute https URL.");
-        if (uri.AbsolutePath.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase))
-            return new Uri(uri.GetLeftPart(UriPartial.Path).TrimEnd('/'));
-        if (string.IsNullOrWhiteSpace(projectName))
-            throw new InvalidOperationException(
-                "Set AzureOpenAI:Endpoint to the Foundry project endpoint (https://{account}.services.ai.azure.com/api/projects/{project}) or also set AzureOpenAI:ProjectName.");
-        var account = uri.Host.Split('.')[0];
-        return new Uri($"https://{account}.services.ai.azure.com/api/projects/{Uri.EscapeDataString(projectName.Trim())}");
+        return new Uri($"https://{uri.Host}");
+    }
+
+    private static Uri ResponsesBase(Uri foundryEndpoint) => new($"https://{foundryEndpoint.Host}/openai/v1");
+
+    internal static string ResponsesStoreOf(Uri foundryEndpoint) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(ResponsesBase(foundryEndpoint).AbsoluteUri)))[..16];
+
+    /// <summary>
+    /// The chat client over the Foundry account's own Responses API (<c>https://{host}/openai/v1</c>), as Microsoft Learn's
+    /// Responses samples use it. The agent called the Foundry project's Responses API until November 2026 and used the
+    /// project for nothing else (no hosted agent, project connection or Foundry tracing: telemetry goes to Application
+    /// Insights); that API rejected gpt-6.2-sol (hosted web search, reasoning effort and any input over 10,000 tokens)
+    /// while the account's accepted it with the same deployment and token.
+    /// </summary>
+    internal static IChatClient ResponsesChatClient(Uri foundryEndpoint, TokenCredential credential, string deployment,
+        PipelineTransport? transport = null)
+    {
+        // A Foundry host takes the Foundry audience; an Azure OpenAI host keeps the Cognitive Services one (both routes
+        // accepted either audience when probed on 18 November 2026).
+        var scope = foundryEndpoint.Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase)
+            ? "https://ai.azure.com/.default"
+            : "https://cognitiveservices.azure.com/.default";
+#pragma warning disable OPENAI001 // ResponsesClient is the Responses API client of the OpenAI .NET SDK.
+        var options = new ResponsesClientOptions { Endpoint = ResponsesBase(foundryEndpoint) };
+        if (transport is not null) options.Transport = transport;
+        return new ResponsesClient(new BearerTokenPolicy(credential, scope), options).AsIChatClient(deployment);
+#pragma warning restore OPENAI001
     }
 
     public static AgentSessionFactory Create(
         AiTelemetry telemetry,
         PersistentIdentity identity,
-        Uri projectEndpoint,
+        Uri foundryEndpoint,
         string deployment,
         string? reasoningEffort,
         ILoggerFactory loggerFactory,
         string? tenantId = null,
         bool webSearch = DefaultWebSearch,
         bool microsoftLearn = true) =>
-        Create(null, telemetry, identity, projectEndpoint, deployment, reasoningEffort, loggerFactory, tenantId, webSearch, microsoftLearn);
+        Create(null, telemetry, identity, foundryEndpoint, deployment, reasoningEffort, loggerFactory, tenantId, webSearch, microsoftLearn);
 
     internal static AgentSessionFactory Create(
         TokenCredential? credential,
         AiTelemetry telemetry,
         PersistentIdentity identity,
-        Uri projectEndpoint,
+        Uri foundryEndpoint,
         string deployment,
         string? reasoningEffort,
         ILoggerFactory loggerFactory,
@@ -291,9 +321,9 @@ public sealed class AgentSessionFactory : IAsyncDisposable
         // gpt-6.1-sol at xhigh effort, measured 16 November 2026), so a longer silence is a stream that died on the
         // wire. The SDK retries a request whose response never started; ModelStreamRetryChatClient resends one whose
         // stream stopped before it answered. A 10-minute timeout used to hold such a turn for 10 minutes.
-        var projectClient = new AIProjectClient(projectEndpoint, credential);
-        var factory = new AgentSessionFactory(telemetry, identity, projectClient,
-            deployment, effort, webSearch, sharedTools, microsoftLearn ? new MicrosoftLearnMcp(loggerFactory) : null, loggerFactory);
+        var factory = new AgentSessionFactory(telemetry, identity, ResponsesChatClient(foundryEndpoint, credential, deployment),
+            ResponsesStoreOf(foundryEndpoint), deployment, effort, webSearch, sharedTools,
+            microsoftLearn ? new MicrosoftLearnMcp(loggerFactory) : null, loggerFactory);
         factory._logger.LogInformation("Agent runtime ready; deployment={Deployment} effort={Effort} webSearch={WebSearch} microsoftLearn={MicrosoftLearn}",
             deployment, effort ?? "<model default>", webSearch, microsoftLearn);
         return factory;

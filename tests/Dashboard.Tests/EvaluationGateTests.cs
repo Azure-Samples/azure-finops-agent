@@ -586,13 +586,12 @@ public sealed class EvaluationGateTests
     }
 
     [Fact]
-    public void JudgeCallsTheSameProjectResponsesEndpointAsTheAgent()
+    public void JudgeCallsTheSameAccountResponsesEndpointAsTheAgent()
     {
         using var http = new HttpClient();
         var project = new JudgeClient(http, new JudgeCredential(),
             new Uri("https://example.services.ai.azure.com/api/projects/example-project"), "test-model");
-        Assert.Equal("https://example.services.ai.azure.com/api/projects/example-project/openai/v1/responses",
-            project.RequestUri.AbsoluteUri);
+        Assert.Equal("https://example.services.ai.azure.com/openai/v1/responses", project.RequestUri.AbsoluteUri);
         Assert.Equal("https://ai.azure.com/.default", project.Scope);
 
         var account = new JudgeClient(http, new JudgeCredential(), new Uri("https://example.openai.azure.com/"), "test-model");

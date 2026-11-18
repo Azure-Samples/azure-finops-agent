@@ -69,7 +69,12 @@ public sealed class AgentConversation : IAsyncDisposable
     internal static AgentConversation? Open(AgentSessionFactory factory, long userId, string workingDirectory, string sessionId)
     {
         var meta = ReadMeta(workingDirectory, sessionId);
-        return meta is null ? null : new AgentConversation(factory, userId, workingDirectory, sessionId, meta);
+        if (meta is null) return null;
+        // A response chain lives in the store of the Responses API that created it: the Foundry project API the agent
+        // used until November 2026 and the account API keep separate stores, and so do two accounts. A chain saved in
+        // another store would fail its next request with previous_response_not_found, so that turn starts from a recap.
+        if (meta.AgentSession is not null && meta.ResponsesStore != factory.ResponsesStore) meta.DropChain("other_store");
+        return new AgentConversation(factory, userId, workingDirectory, sessionId, meta);
     }
 
     /// <param name="repairSummary">Reads the first question from the transcript for a conversation saved without a usable summary.</param>
@@ -139,7 +144,7 @@ public sealed class AgentConversation : IAsyncDisposable
                 tags: new System.Diagnostics.ActivityTagsCollection
                 {
                     ["finops.context.input_tokens"] = _meta.ContextTokens,
-                    ["finops.context.reason"] = _meta.RecapNextTurn is true ? "response_failed_after_answer" : "size",
+                    ["finops.context.reason"] = _meta.RecapNextTurn is true ? _meta.RecapReason ?? "response_failed_after_answer" : "size",
                 }));
         }
         await PublishAsync(new UserMessageEvent(prompt));
@@ -585,12 +590,15 @@ public sealed class AgentConversation : IAsyncDisposable
                 // where it was and the next turn starts from a recap, which carries this answer and its evidence.
                 _factory.LogAnswerKeptAfterServiceError(completion.Trail);
                 _meta.RecapNextTurn = true;
+                _meta.RecapReason = "response_failed_after_answer";
             }
             else
             {
                 _meta.AgentSession = await agent.SerializeSessionAsync(session, cancellationToken: cancellationToken);
+                _meta.ResponsesStore = _factory.ResponsesStore;
                 _meta.ContextTokens = contextTokens;
                 _meta.RecapNextTurn = null;
+                _meta.RecapReason = null;
             }
             _meta.PendingApprovals = surfaced.Count > 0 ? surfaced : null;
             _meta.InterruptedApproval = null;
@@ -615,16 +623,11 @@ public sealed class AgentConversation : IAsyncDisposable
             await FlushMessageAsync();
             await CompleteOpenCallsAsync();
             _meta.InterruptedApproval = approvedRequest ?? _meta.InterruptedApproval;
-            // Stored responses expire (30 days by default). Drop an expired chain so the
-            // next turn starts a fresh model context instead of failing forever.
+            // Stored responses expire (30 days by default). Drop an expired chain so the next turn
+            // starts a fresh model context from a recap instead of failing forever.
             if (exception is ClientResultException { Status: 400 or 404 } expired
                 && expired.Message.Contains("previous response", StringComparison.OrdinalIgnoreCase))
-            {
-                _meta.AgentSession = null;
-                _meta.ContextTokens = null;
-                _meta.PendingApprovals = null;
-                _meta.InterruptedApproval = null;
-            }
+                _meta.DropChain("chain_expired");
             await PublishAsync(new TurnErrorEvent(_factory.DescribeFailure(exception), "model_error"));
         }
         finally
@@ -712,8 +715,24 @@ public sealed class AgentConversation : IAsyncDisposable
         public string? InterruptedApproval { get; set; }
         /// <summary>Names of images the user attached; a compacted context no longer shows them, so its recap names them.</summary>
         public List<string>? Attachments { get; set; }
-        /// <summary>The last turn's final response failed after its answer was whole, so it is not in the chain and the next turn starts from a recap.</summary>
+        /// <summary>The last turn's chain cannot continue (see <see cref="RecapReason"/>), so the next turn starts from a recap.</summary>
         public bool? RecapNextTurn { get; set; }
+        /// <summary>Why the next turn starts from a recap: response_failed_after_answer, chain_expired or other_store.</summary>
+        public string? RecapReason { get; set; }
+        /// <summary>The Responses API store the saved chain lives in (<see cref="AgentSessionFactory.ResponsesStore"/>).</summary>
+        public string? ResponsesStore { get; set; }
+
+        /// <summary>Forgets a response chain that cannot continue, with the approvals it held, so the next turn starts from a recap.</summary>
+        public void DropChain(string reason)
+        {
+            AgentSession = null;
+            ResponsesStore = null;
+            ContextTokens = null;
+            PendingApprovals = null;
+            InterruptedApproval = null;
+            RecapNextTurn = true;
+            RecapReason = reason;
+        }
     }
 
     private sealed class Subscription(AgentConversation owner, Func<AgentEvent, Task> handler) : IDisposable

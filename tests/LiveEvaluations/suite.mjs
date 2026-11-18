@@ -1036,8 +1036,9 @@ export async function runCases(
                     row: { failures, result: published },
                     color: environment.GITHUB_ACTIONS === "true" || Boolean(environment.FORCE_COLOR),
                 }));
-                // The gate already failed; fail-fast starts no further case in any lane.
-                if (failFast && failures.length > 0) {
+                // The run already failed; fail-fast starts no further case in any lane. A documented limitation that
+                // fails only for its documented reason (amber) is not a failed eval and never stops the run.
+                if (failFast && statusOf(scenario, { failures }) === "fail") {
                     failedFast ??= scenario.id;
                     return;
                 }

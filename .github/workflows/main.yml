@@ -48,9 +48,9 @@ jobs:
     needs: [regressions, live-evaluations]
     runs-on: ubuntu-latest
     env:
-      # The Foundry project endpoint the live gate evaluated (checked by
-      # fingerprint below). The legacy AZURE_PROD_OPENAI_ENDPOINT secret holds
-      # the Copilot-era account endpoint, which the runtime rejects at startup.
+      # The Foundry endpoint the live gate evaluated (checked by fingerprint
+      # below). The legacy AZURE_PROD_OPENAI_ENDPOINT secret holds another
+      # endpoint, which the fingerprint check would reject.
       AOAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
       EVALUATED_MODEL: ${{ needs.live-evaluations.outputs.model }}
       EVALUATED_REASONING_EFFORT: ${{ needs.live-evaluations.outputs.reasoning_effort }}

@@ -15,7 +15,6 @@ param aoaiReasoningEffort string
 param aoaiWebSearch bool = true
 param existingAoaiResourceId string
 param deployModelOnExistingAccount bool
-param existingAoaiProjectName string = ''
 param entraAppId string
 @secure()
 param entraClientSecret string
@@ -67,7 +66,6 @@ module aoai 'modules/aoai.bicep' = {
     serviceTier: aoaiServiceTier
     existingAoaiResourceId: existingAoaiResourceId
     deployModelOnExistingAccount: deployModelOnExistingAccount
-    existingProjectName: existingAoaiProjectName
   }
 }
 
@@ -81,7 +79,7 @@ module appservice 'modules/appservice.bicep' = {
     acrLoginServer: acr.outputs.loginServer
     containerImageName: containerImageName
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
-    aoaiEndpoint: aoai.outputs.projectEndpoint
+    aoaiEndpoint: aoai.outputs.foundryEndpoint
     aoaiDeploymentName: aoai.outputs.deploymentName
     aoaiReasoningEffort: aoaiReasoningEffort
     aoaiWebSearch: aoaiWebSearch
@@ -105,7 +103,7 @@ module preview 'modules/preview.bicep' = if (!empty(previewSlotName)) {
     acrLoginServer: acr.outputs.loginServer
     containerImageName: containerImageName
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
-    aoaiEndpoint: aoai.outputs.projectEndpoint
+    aoaiEndpoint: aoai.outputs.foundryEndpoint
     aoaiDeploymentName: aoai.outputs.deploymentName
     aoaiReasoningEffort: aoaiReasoningEffort
     aoaiWebSearch: aoaiWebSearch
@@ -169,9 +167,8 @@ output webAppSlotName string = previewSlotName
 output webAppSlotHostname string = empty(previewSlotName) ? '' : preview!.outputs.slotHostname
 output webAppSlotPrincipalId string = empty(previewSlotName) ? '' : preview!.outputs.slotPrincipalId
 output previewDeployClientId string = empty(previewSlotName) ? '' : preview!.outputs.deployClientId
-output aoaiEndpoint string = aoai.outputs.projectEndpoint
+output aoaiEndpoint string = aoai.outputs.foundryEndpoint
 output aoaiDeploymentName string = aoai.outputs.deploymentName
-output aiProjectName string = aoai.outputs.projectName
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output logAnalyticsWorkspaceId string = monitoring.outputs.logAnalyticsWorkspaceId
 output customDomainName string = customDomainName

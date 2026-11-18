@@ -61,7 +61,7 @@ workflow restores the image and three model settings recorded before its writes
 and fails. Production uses the same gate and rollback.
 
 The test environment is a deployment slot on the production web app and App
-Service plan, in the same resource group, tenant and Foundry project. A slot has
+Service plan, in the same resource group, tenant and Foundry account. A slot has
 its own system-assigned identity, separate from the web app's, and a managed
 identity cannot be granted Foundry access in another tenant. Before
 `azd provision`, set `azd env set AZURE_PREVIEW_SLOT_NAME test` (the plan must be
@@ -122,11 +122,11 @@ dotnet run --urls "http://localhost:5000"
 
 ### Local model authorization
 
-The backend uses the local Azure CLI identity for model inference, independently of the user's browser consent for Cost Management and other tools. Verify the tenant, the configured project endpoint and the deployment before troubleshooting an inference `401` or `403`.
+The backend uses the local Azure CLI identity for model inference, independently of the user's browser consent for Cost Management and other tools. Verify the tenant, the configured Foundry endpoint and the deployment before troubleshooting an inference `401` or `403`.
 
-`AzureOpenAI:Endpoint` is the Foundry project endpoint (`https://{account}.services.ai.azure.com/api/projects/{project}`); read the account's `customSubDomainName` and the project name instead of guessing the hostname.
+`AzureOpenAI:Endpoint` is the Foundry account endpoint (`https://{account}.services.ai.azure.com`); the agent calls its Responses API (`/openai/v1`). A project endpoint (`…/api/projects/{project}`) still works and names its account. Read the account's `customSubDomainName` instead of guessing the hostname.
 
-Have an authorized account owner grant **Foundry User** (formerly Azure AI User) to the CLI identity in the account's tenant, at that account's resource scope only. **Cognitive Services OpenAI User** covers only the account's OpenAI endpoints; a caller with only that role is denied on the project Responses endpoint. Management-plane Owner access alone does not grant inference. Do not substitute API keys, broaden the grant to a subscription, or commit account/principal identifiers. [Role assignments can take up to five minutes to become effective](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/managed-identity#assign-role); verify a small synthetic inference request before retrying tenant cost queries.
+Have an authorized account owner grant **Foundry User** (formerly Azure AI User) to the CLI identity in the account's tenant, at that account's resource scope only. Management-plane Owner access alone does not grant inference. Do not substitute API keys, broaden the grant to a subscription, or commit account/principal identifiers. [Role assignments can take up to five minutes to become effective](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/managed-identity#assign-role); verify a small synthetic inference request before retrying tenant cost queries.
 
 For privately managed developer access, the equivalent Bicep fragment below assumes your template already declares the existing model account as `modelAccount`. Supply the principal ID locally; do not add a maintainer identity to the sample's shared deployment.
 

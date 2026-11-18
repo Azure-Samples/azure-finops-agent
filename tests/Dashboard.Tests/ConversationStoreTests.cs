@@ -148,6 +148,27 @@ public sealed class ConversationStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AChainSavedInAnotherResponsesStoreStartsTheNextTurnFromARecap()
+    {
+        var owner = Guid.NewGuid().ToString();
+        var userId = PersistentIdentity.DeriveUserId(Tenant, owner);
+        var conversation = await _factory.CreateNewAsync(userId, "synthetic", Tenant, owner);
+        var metaPath = Path.Combine(conversation.WorkingDirectory, "sessions", conversation.SessionId, "session.json");
+        var meta = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(metaPath))!;
+        meta["agentSession"] = new System.Text.Json.Nodes.JsonObject { ["previousResponseId"] = "resp_synthetic" };
+
+        meta["responsesStore"] = _factory.ResponsesStore;
+        File.WriteAllText(metaPath, meta.ToJsonString());
+        Assert.False(AgentConversation.Open(_factory, userId, conversation.WorkingDirectory, conversation.SessionId)!.StartsFreshContext);
+
+        // Saved by the Foundry project API before chains recorded their store, or by another account: its next request
+        // would fail with previous_response_not_found, so the turn starts a fresh context from a recap instead.
+        meta.AsObject().Remove("responsesStore");
+        File.WriteAllText(metaPath, meta.ToJsonString());
+        Assert.True(AgentConversation.Open(_factory, userId, conversation.WorkingDirectory, conversation.SessionId)!.StartsFreshContext);
+    }
+
+    [Fact]
     public void EachRunExposesPlainToolsAndOnlyChangesNeedApproval()
     {
         var options = _factory.RunOptions(101, lightweight: false);

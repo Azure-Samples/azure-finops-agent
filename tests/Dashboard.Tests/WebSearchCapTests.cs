@@ -2,13 +2,10 @@ using System.ClientModel.Primitives;
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
-using Azure.AI.Projects;
 using Azure.Core;
 using AzureFinOps.Dashboard.AI;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
-
-#pragma warning disable OPENAI001 // The Responses client Agent Framework's Foundry agent uses underneath.
 
 namespace Dashboard.Tests;
 
@@ -55,10 +52,10 @@ public sealed class WebSearchCapTests
 
     private static AIAgent Agent(List<JsonObject> bodies, bool webSearch)
     {
-        // The same construction as production: the Foundry project client's agent over its Responses API.
-        var project = new AIProjectClient(new Uri("https://account.services.ai.azure.com/api/projects/project"), new FakeCredential(),
-            new AIProjectClientOptions { Transport = new HttpClientPipelineTransport(new HttpClient(new FakeResponses(bodies))) });
-        return project.AsAIAgent(new ChatClientAgentOptions { ChatOptions = AgentSessionFactory.AgentChatOptions("gpt-6-sol", null, webSearch) });
+        // The same construction as production: an agent over the Foundry account's Responses API.
+        var chat = AgentSessionFactory.ResponsesChatClient(new Uri("https://account.services.ai.azure.com"), new FakeCredential(), "gpt-6-sol",
+            new HttpClientPipelineTransport(new HttpClient(new FakeResponses(bodies))));
+        return new ChatClientAgent(chat, new ChatClientAgentOptions { ChatOptions = AgentSessionFactory.AgentChatOptions("gpt-6-sol", null, webSearch) });
     }
 
     private sealed class FakeCredential : TokenCredential

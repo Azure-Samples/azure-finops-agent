@@ -108,9 +108,6 @@ param existingAoaiResourceId string = ''
 @description('When reusing an existing account, create or update the configured model deployment on it. Requires deployment rights and unallocated model-specific quota on that account.')
 param deployModelOnExistingAccount bool = false
 
-@description('Foundry project on the reused account (`existingAoaiResourceId`). The app calls that project\'s Responses endpoint; ignored when a new account and project are created.')
-param existingAoaiProjectName string = ''
-
 @description('Entra ID multi-tenant app registration client ID. Created automatically by the preprovision hook if empty.')
 param entraAppId string = ''
 
@@ -187,7 +184,6 @@ module resources 'main-resources.bicep' = {
     aoaiWebSearch: aoaiWebSearch
     existingAoaiResourceId: existingAoaiResourceId
     deployModelOnExistingAccount: deployModelOnExistingAccount
-    existingAoaiProjectName: existingAoaiProjectName
     entraAppId: entraAppId
     entraClientSecret: entraClientSecret
     entraTenantId: entraTenantId
@@ -231,7 +227,6 @@ output PREVIEW_DEPLOY_CLIENT_ID string = resources.outputs.previewDeployClientId
 
 output AZURE_OPENAI_ENDPOINT string = resources.outputs.aoaiEndpoint
 output AZURE_OPENAI_DEPLOYMENT_NAME string = resources.outputs.aoaiDeploymentName
-output AZURE_AI_PROJECT_NAME string = resources.outputs.aiProjectName
 
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = resources.outputs.appInsightsConnectionString
 output AZURE_LOG_ANALYTICS_WORKSPACE_ID string = resources.outputs.logAnalyticsWorkspaceId

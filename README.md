@@ -125,7 +125,7 @@ flowchart LR
     API --> Agent[Microsoft Agent Framework]
     API --> Jobs[Job scheduler]
     Jobs --> Agent
-    Agent --> Model[Foundry project Responses API]
+    Agent --> Model[Foundry Responses API]
     Agent --> Tools[Host tools]
     Tools --> ARM[ARM and Cost Management]
     Tools --> Graph[Microsoft Graph]
@@ -134,7 +134,7 @@ flowchart LR
     Entra[Microsoft Entra ID] --> API
 ```
 
-The app runs as one Linux container on Azure App Service. The Azure Developer CLI provisions Azure Container Registry, a Microsoft Foundry account and project, monitoring, managed identities, role assignments, App Service and, optionally, the Entra app registration for sign-in.
+The app runs as one Linux container on Azure App Service. The Azure Developer CLI provisions Azure Container Registry, a Microsoft Foundry account with the model deployment, monitoring, managed identities, role assignments, App Service and, optionally, the Entra app registration for sign-in. The agent calls the Foundry account's own Responses API, so no Foundry project is needed.
 
 The agent can use only its registered tools, plus the model's hosted web search for recent public information (on by default). Search queries leave the Azure data boundary; set `AZURE_OPENAI_WEB_SEARCH=false` before `azd up` to turn it off. There is no shell, file system or code execution. Run one active instance, because session and throttling coordination is process-local.
 
@@ -170,22 +170,21 @@ azd down --purge
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Node.js 22+](https://nodejs.org/)
-- Azure CLI signed in to the tenant that hosts your Microsoft Foundry project
+- Azure CLI signed in to the tenant that hosts your Microsoft Foundry account
 
-Your Azure CLI identity also needs **Foundry User** (formerly Azure AI User) on the Foundry account that hosts the project. **Cognitive Services OpenAI User** covers only the account's OpenAI endpoints, not the project Responses endpoint, and management roles such as Owner don't include model-inference permissions. This is separate from signing in to your Azure tenant in the browser; see [local model authorization](CONTRIBUTING.md#local-model-authorization).
+Your Azure CLI identity also needs **Foundry User** (formerly Azure AI User) on the Foundry account. Management roles such as Owner don't include model-inference permissions. This is separate from signing in to your Azure tenant in the browser; see [local model authorization](CONTRIBUTING.md#local-model-authorization).
 
 ### Configure
 
 ```powershell
 cd src\backend
-dotnet user-secrets set "AzureOpenAI:Endpoint" "https://<account>.services.ai.azure.com/api/projects/<project>"
+dotnet user-secrets set "AzureOpenAI:Endpoint" "https://<account>.services.ai.azure.com"
 dotnet user-secrets set "AzureOpenAI:DeploymentName" "<your-deployment>"
 ```
 
 Optional settings:
 
 - `AzureOpenAI:TenantId` when the model is in a different tenant from the Azure CLI default
-- `AzureOpenAI:ProjectName` if `AzureOpenAI:Endpoint` is the account endpoint rather than the project endpoint
 - `Microsoft:ClientId`, `Microsoft:ClientSecret` and `Microsoft:TenantId` to enable Azure sign-in locally
 - `ApplicationInsights:ConnectionString` for telemetry
 

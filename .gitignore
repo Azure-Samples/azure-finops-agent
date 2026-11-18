@@ -108,3 +108,10 @@ docs/local/
 # Python bytecode cache
 __pycache__/
 *.py[cod]
+
+# Azurite (local Azure Storage emulator) state, created wherever it starts
+__azurite_db_*__.json
+__blobstorage__/
+__queuestorage__/
+__tablestorage__/
+AzuriteConfig

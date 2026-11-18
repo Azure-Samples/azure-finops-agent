@@ -29,7 +29,7 @@ It leaves out, and counts in `summary.json`:
 - the post-deployment smoke check (`--include-probes` keeps it) and conversations their users deleted;
 - records over `--max-chars` (300,000 characters, about 75,000 tokens): chats kept open for days with too many turns for one judge call. Report how many turns they hold.
 
-`--diagnostics` (about a minute) adds what root-cause analysis needs and rating does not: the stored model context from the Foundry project Responses API (the exact system prompt, tool definitions and every model input item, kept about 30 days), each model call and tool span, server warnings and exceptions per turn, and every browser event. Application Insights holds no message content for the current runtime, so the Responses API is the only source of the system prompt and model-side items. Conversations of the retired Copilot SDK runtime are not exported.
+`--diagnostics` (about a minute) adds what root-cause analysis needs and rating does not: the stored model context from the Foundry Responses API (the exact system prompt, tool definitions and every model input item, kept about 30 days; read from the account's API, which the agent has called since 19 November 2026, and for older conversations from the Foundry project's, which kept its own store), each model call and tool span, server warnings and exceptions per turn, and every browser event. Application Insights holds no message content for the current runtime, so the Responses API is the only source of the system prompt and model-side items. Conversations of the retired Copilot SDK runtime are not exported.
 
 Report conversations, turns, distinct owners, countries and every exclusion.
 

@@ -103,7 +103,7 @@ internal static class Program
             ? webSearchSetting : AgentSessionFactory.DefaultWebSearch;
         state.AgentProfile = $"{model}, reasoning effort {reasoningEffort}, web search {(webSearch ? "on" : "off")}";
         await using var factory = AgentSessionFactory.Create(credential, telemetry, identity,
-            AgentSessionFactory.ResolveProjectEndpoint(endpoint, null), model, reasoningEffort, logging, tenant, webSearch,
+            AgentSessionFactory.ResolveFoundryEndpoint(endpoint), model, reasoningEffort, logging, tenant, webSearch,
             microsoftLearn: true);
         app.UseSession();
         app.Use(async (context, next) =>

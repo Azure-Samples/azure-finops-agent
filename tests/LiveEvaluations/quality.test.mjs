@@ -553,6 +553,43 @@ test("with fail-fast off (EVAL_FAIL_FAST=false, a local full run), the extended 
     }
 });
 
+// 18 November 2026: an amber eval (a documented limitation that failed only on the judge's inefficiency verdict) stopped a
+// fail-fast quality run, whose stage then cancelled the other stages, so 7 of 15 evals showed as not run and the board was red.
+test("fail-fast never stops on a known limitation that failed only on inefficiency", async () => {
+    const directory = await createDirectory();
+    try {
+        const flagged = extended.find((scenario) => scenario.knownIssue);
+        const [first, last] = extended.filter((scenario) => !scenario.knownIssue);
+        const planned = [first, flagged, last];
+        const executed = [];
+        const verdict = await runCases(
+            planned, directory, sha, suiteHash,
+            async (scenario, path) => {
+                executed.push(scenario.id);
+                const result = pass(scenario);
+                if (scenario === flagged) {
+                    Object.assign(result, { accepted: false, reasons: ["Judge rated the session inefficient (2/5): a web search after Learn answered."] });
+                    Object.assign(result.judge, { efficient: false, efficiencyScore: 2, avoidableCalls: 2 });
+                }
+                await writeFile(path, JSON.stringify(result));
+                return scenario === flagged ? 1 : 0;
+            },
+            async () => {}, true, 0,
+            {
+                environment: {},
+                failFast: true,
+                evaluate: (cases, rows, commit, hash) => evaluateQuality(cases, rows, commit, hash, { expected: extended, threshold: 0.8 }),
+                presentation: presentationFor(planned, 0.8, true),
+            },
+        );
+        assert.deepEqual(executed, planned.map((scenario) => scenario.id), "the amber eval did not stop the run");
+        assert.equal(verdict.accepted, true);
+        assert.equal(verdict.knownLimitations, 1);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test("the gate run also produces the dashboard and keeps failing closed", async () => {
     const directory = await createDirectory();
     try {

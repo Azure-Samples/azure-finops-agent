@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rate every exported conversation from 0 to 10, with the deployment's own model as the judge.
 
-Reads the records export_sessions.py wrote, sends each conversation with a fixed rubric to the Foundry project
+Reads the records export_sessions.py wrote, sends each conversation with a fixed rubric to the Foundry account's
 Responses API (store=false, so the service keeps no copy) and writes:
 
 * ratings.jsonl: one verdict per conversation (score, classification, the user's goal, a summary, and every problem
@@ -152,8 +152,8 @@ def main():
         if "=" in line:
             key, value = line.split("=", 1)
             env[key] = value.strip().strip('"')
-    project = Exporter._project_endpoint(env["AZURE_OPENAI_ENDPOINT"], env.get("AZURE_AI_PROJECT_NAME"))
     model = args.model or env["AZURE_OPENAI_DEPLOYMENT_NAME"]
+    responses = Exporter._responses_bases(env["AZURE_OPENAI_ENDPOINT"], None)[0] + "/responses"
     http = Http(Tokens(env["AZURE_SUBSCRIPTION_ID"]), timeout=900)
 
     ratings_path = export / "ratings.jsonl"
@@ -181,7 +181,7 @@ def main():
         }
         begun = time.time()
         try:
-            response = http.json(f"{project}/openai/v1/responses", "https://ai.azure.com", body)
+            response = http.json(responses, "https://ai.azure.com", body)
             text = next(part["text"] for item in response.get("output") or [] if item.get("type") == "message"
                         for part in item.get("content") or [] if part.get("type") == "output_text")
             verdict = json.loads(text)
