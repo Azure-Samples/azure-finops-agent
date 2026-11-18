@@ -3578,6 +3578,19 @@ function consentTierGranted(tier) {
     copilotchanges: copilotChangesEnabled.value,
   }[tier] === true;
 }
+// The host asks for consent during a turn only when it has no usable token for that access (consent revoked, or scopes
+// added since it was granted), so the access is offered again instead of showing as consented with no way to re-grant.
+function markConsentNeeded(tier) {
+  const flag = {
+    loganalytics: logAnalyticsEnabled,
+    storage: storageEnabled,
+    licenses: licensesEnabled,
+    chargeback: chargebackEnabled,
+    copilotcost: copilotCostEnabled,
+    copilotchanges: copilotChangesEnabled,
+  }[tier];
+  if (flag) flag.value = false;
+}
 function setNotice(kind, text, progress = null) {
   sessionNotice.value = { kind, text, progress };
 }
@@ -8927,10 +8940,10 @@ async function send() {
             break;
 
           case "consent_required": {
-            sessionConsentActions.set(
-              streamingId,
-              allowedConsentActions(data.actions),
-            );
+            const actions = allowedConsentActions(data.actions);
+            sessionConsentActions.set(streamingId, actions);
+            for (const action of actions)
+              markConsentNeeded(action.href.split("tier=")[1]);
             break;
           }
 

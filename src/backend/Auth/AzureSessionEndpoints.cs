@@ -75,6 +75,31 @@ public static class AzureSessionEndpoints
     }
 
     /// <summary>
+    /// The consented add-on tiers, without any whose token is missing while a failed refresh backs off (consent revoked,
+    /// or scopes added since it was granted): the page then offers that consent again instead of showing it as granted.
+    /// </summary>
+    internal static string UsableGraphTiers(ISession session)
+    {
+        var tiers = (session.GetString("graph_tier") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return string.Join(",", tiers.Where(tier =>
+        {
+            var tokenKey = tier switch
+            {
+                "licenses" or "chargeback" => "graph_token",
+                "loganalytics" => "loganalytics_token",
+                "storage" => "storage_token",
+                "copilotcost" => "copilotcost_token",
+                "copilotchanges" => "copilotchanges_token",
+                _ => null
+            };
+            return tokenKey is null
+                || session.GetString(tokenKey) is not null
+                || !DateTimeOffset.TryParse(session.GetString(tokenKey + "_unavailable_until"), out var until)
+                || until <= DateTimeOffset.UtcNow;
+        }));
+    }
+
+    /// <summary>
     /// The scopes the agent's connection context names, bounded so very large estates do not bloat every model prompt.
     /// The owner fields bind a cached copy to its Entra principal and are never shown to the model.
     /// </summary>
@@ -190,7 +215,7 @@ public static class AzureSessionEndpoints
                 managementGroups,
                 apis = connectedApis,
                 graphEnabled = ctx.Session.GetString("graph_token") is not null,
-                graphTier = ctx.Session.GetString("graph_tier") ?? "",
+                graphTier = UsableGraphTiers(ctx.Session),
                 logAnalyticsEnabled = ctx.Session.GetString("loganalytics_token") is not null,
                 storageEnabled = ctx.Session.GetString("storage_token") is not null
             });
