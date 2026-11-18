@@ -398,6 +398,7 @@ public static partial class HttpHelper
         {
             "LogAnalyticsToken" => new[] { "loganalytics" },
             "StorageToken" => ["storage"],
+            "CopilotCostToken" => ["copilotcost"],
             "GraphToken" => graphTier switch
             {
                 null => ["licenses", "chargeback"],
@@ -421,7 +422,8 @@ public static partial class HttpHelper
         ["loganalytics"] = "Grant Log Analytics access",
         ["storage"] = "Grant Storage access",
         ["licenses"] = "Grant license reporting access",
-        ["chargeback"] = "Grant cost allocation access"
+        ["chargeback"] = "Grant cost allocation access",
+        ["copilotcost"] = "Grant Copilot cost access"
     };
 
     internal static string ConsentLabel(string tier) => ConsentLabels[tier];

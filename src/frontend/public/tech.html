@@ -1,0 +1,1256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Azure FinOps Agent · Tech Intensity DK · 20 November 2026</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="https://unpkg.com/reveal.js@5.2.1/dist/reveal.css" integrity="sha384-tK61vs+AeByBmiQ/i6CLgp/PbaaoB/k7M4J5mlX70GVtBPGUk5avjbXhSwhsf3fS" crossorigin="anonymous">
+<style>
+/* =====================================================================
+   Azure FinOps Agent · Tech Intensity DK · The Tooling Box
+   Theme: Microsoft Fluent (Light). Every size derives from --u, 1% of the
+   widest 16:9 box that fits the screen, so the deck reads the same on a
+   1280x720 laptop, a 1080p projector and a 4K display.
+   ===================================================================== */
+
+/* 1. Tokens */
+:root{
+  --bg-0:#F7F8FC;--bg-1:#FFFFFF;
+  --ink:#0E1118;--ink-dim:#2E3340;--ink-mute:#646B7C;
+  --acc-blue:#0078D4;--acc-blue-d:#0A5BA6;--acc-cyan:#50E6FF;
+  --acc-amber:#FFB900;--acc-green:#107C10;--acc-red:#E81123;
+  --acc-purple:#5C2D91;--acc-pink:#C239B3;
+  --good:#107C10;--warn:#FFB900;--bad:#E81123;
+  --card:#FFFFFF;
+  --bord:rgba(15,20,40,0.07);--bord-2:rgba(15,20,40,0.13);
+  --shadow-sm:0 1px 2px rgba(15,20,40,.05),0 4px 14px rgba(15,20,40,.04);
+  --shadow:0 8px 24px rgba(15,20,40,.06),0 28px 60px rgba(15,20,40,.08);
+  --shadow-lg:0 12px 40px rgba(15,20,40,.10),0 40px 120px rgba(15,20,40,.10);
+  --ease:cubic-bezier(0.22,1,0.36,1);
+  --grad:linear-gradient(120deg,var(--acc-blue),var(--acc-purple),var(--acc-pink));
+  --font:'Segoe UI Variable Text','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+  --font-d:'Segoe UI Variable Display','Segoe UI Variable','Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+  --mono:'JetBrains Mono','Cascadia Code',Consolas,'SFMono-Regular',monospace;
+  --u:min(1vw,calc(100vh / 56.25));
+  --r:calc(var(--u) * 1.05);
+}
+
+/* 2. Canvas and atmosphere: drifting colour, a soft wash, floating shapes */
+html,body,body.reveal-viewport{margin:0;height:100%;background:var(--bg-0)}
+body{color:var(--ink);font-family:var(--font);font-weight:400;letter-spacing:-.005em;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;overflow:hidden}
+body::before{content:"";position:fixed;inset:-12%;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(34% 40% at 14% 20%,rgba(0,120,212,.16),transparent 70%),
+    radial-gradient(30% 36% at 86% 16%,rgba(80,230,255,.14),transparent 70%),
+    radial-gradient(36% 40% at 80% 84%,rgba(92,45,145,.13),transparent 70%),
+    radial-gradient(32% 38% at 18% 86%,rgba(194,57,179,.12),transparent 70%);
+  filter:blur(60px);animation:drift 32s var(--ease) infinite alternate}
+body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:radial-gradient(60% 38% at 50% -8%,rgba(0,120,212,.10),transparent 70%),linear-gradient(180deg,rgba(255,255,255,.55),rgba(255,255,255,0) 42%)}
+@keyframes drift{0%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(3%,-2%,0) scale(1.06)}100%{transform:translate3d(-3%,2%,0) scale(1.03)}}
+.shape{position:fixed;z-index:1;pointer-events:none;opacity:.32;animation:floatY 22s ease-in-out infinite alternate}
+.shape.sq{width:14px;height:14px;border-radius:3px;background:var(--acc-blue)}
+.shape.ci{width:18px;height:18px;border-radius:50%;border:2px solid var(--acc-cyan)}
+.shape.dt{width:8px;height:8px;border-radius:50%;background:var(--acc-purple)}
+@keyframes floatY{0%{transform:translateY(0) rotate(0)}100%{transform:translateY(-40px) rotate(45deg)}}
+@keyframes spinOrb{to{transform:rotate(360deg)}}
+@keyframes floatChip{0%{transform:translateY(0)}100%{transform:translateY(-10px)}}
+@keyframes pulseDot{0%{box-shadow:0 0 0 0 rgba(232,17,35,.5)}70%{box-shadow:0 0 0 8px rgba(232,17,35,0)}100%{box-shadow:0 0 0 0 rgba(232,17,35,0)}}
+@keyframes pulseBlue{0%{box-shadow:0 0 0 0 rgba(0,120,212,.45)}70%{box-shadow:0 0 0 9px rgba(0,120,212,0)}100%{box-shadow:0 0 0 0 rgba(0,120,212,0)}}
+@keyframes pulsePink{0%{box-shadow:0 0 0 0 rgba(194,57,179,.45)}70%{box-shadow:0 0 0 10px rgba(194,57,179,0)}100%{box-shadow:0 0 0 0 rgba(194,57,179,0)}}
+@keyframes pulseAmber{0%{box-shadow:0 0 0 0 rgba(255,185,0,.55)}70%{box-shadow:0 0 0 8px rgba(255,185,0,0)}100%{box-shadow:0 0 0 0 rgba(255,185,0,0)}}
+@keyframes pulseRing{0%{box-shadow:0 0 0 0 rgba(16,124,16,.35)}70%{box-shadow:0 0 0 12px rgba(16,124,16,0)}100%{box-shadow:0 0 0 0 rgba(16,124,16,0)}}
+
+/* 3. Chrome: Microsoft mark and event at the top, tagline and counter at the bottom */
+.chrome-top,.chrome-bot{position:fixed;left:0;right:0;z-index:40;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:18px 32px;color:var(--ink-dim);pointer-events:none}
+.chrome-top{top:0;font:600 13px/1 var(--font);text-transform:uppercase;letter-spacing:.05em;background:linear-gradient(180deg,rgba(247,248,252,.85),rgba(247,248,252,0));border-bottom:1px solid var(--bord)}
+.chrome-bot{bottom:0;font:400 12px/1 var(--font);background:linear-gradient(0deg,rgba(247,248,252,.85),rgba(247,248,252,0));border-top:1px solid var(--bord)}
+.chrome-top .left,.chrome-top .right,.chrome-bot .left,.chrome-bot .right{display:flex;align-items:center;gap:12px}
+.chrome-top .sep{opacity:.45}
+.chrome-top .ms-mark{display:inline-flex;align-items:center;gap:10px}
+.chrome-top .ms-tiles{display:grid;grid-template-columns:repeat(2,10px);grid-template-rows:repeat(2,10px);gap:2px}
+.chrome-top .ms-tiles>i{display:block;width:10px;height:10px}
+.chrome-top .ms-tiles>i:nth-child(1){background:#F25022}
+.chrome-top .ms-tiles>i:nth-child(2){background:#7FBA00}
+.chrome-top .ms-tiles>i:nth-child(3){background:#00A4EF}
+.chrome-top .ms-tiles>i:nth-child(4){background:#FFB900}
+.live{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border-radius:999px;background:rgba(232,17,35,.08);border:1px solid rgba(232,17,35,.22);color:#B00E1C;font-weight:700;opacity:0;transform:translateY(-4px);transition:opacity .5s var(--ease),transform .5s var(--ease)}
+.live.on{opacity:1;transform:none}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--acc-red);animation:pulseDot 1.6s infinite}
+.pdot{width:8px;height:8px;border-radius:50%;background:var(--acc-blue);animation:pulseBlue 2s infinite}
+.chrome-bot .internal{padding:4px 9px;border-radius:999px;border:1px solid var(--bord-2);font-weight:600;letter-spacing:.04em}
+#slideNum{font-family:var(--mono);font-feature-settings:"tnum";letter-spacing:.04em;color:var(--ink)}
+
+/* Up and Down arrows on screen do what the Up and Down keys do: enter and leave full screen */
+.fs-btn{position:fixed;left:50%;z-index:50;display:grid;place-items:center;width:48px;height:30px;margin-left:-24px;padding:0;border:0;border-radius:8px;background:none;color:var(--acc-blue);cursor:pointer;opacity:.9;transition:opacity .25s var(--ease),transform .25s var(--ease)}
+.fs-btn svg{width:34px;height:34px;fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.fs-up{top:10px}
+.fs-down{bottom:10px}
+.fs-up:hover{transform:translateY(-2px)}
+.fs-down:hover{transform:translateY(2px)}
+.fs-btn[aria-disabled="true"]{opacity:.22;cursor:default;transform:none}
+.fs-btn:focus-visible{outline:2px solid var(--acc-blue);outline-offset:2px}
+
+/* 4. Reveal frame */
+.reveal{position:relative;z-index:2;font-family:var(--font);font-size:calc(var(--u) * 1.42);line-height:1.35;color:var(--ink)}
+.reveal .slides{text-align:left}
+.reveal .slides>section{box-sizing:border-box;height:100%;padding:max(64px,calc(var(--u) * 4.4)) calc(var(--u) * 5) max(66px,calc(var(--u) * 4.8));flex-direction:column;justify-content:center;gap:calc(var(--u) * 1.8)}
+.reveal p,.reveal ol,.reveal ul,.reveal figure,.reveal h1,.reveal h2{margin:0}
+.reveal ol,.reveal ul{padding:0;list-style:none}
+.reveal .controls{color:var(--acc-blue)}
+.reveal .progress{height:4px;background:rgba(15,20,40,.06);color:var(--acc-blue);z-index:45}
+.reveal a{color:inherit}
+
+/* 5. Type */
+.head{display:flex;flex-direction:column;align-items:flex-start;gap:calc(var(--u) * .9)}
+.kicker{display:inline-flex;align-items:center;gap:10px;padding:calc(var(--u) * .42) calc(var(--u) * .95);border-radius:999px;background:rgba(0,120,212,.09);border:1px solid rgba(0,120,212,.16);color:var(--acc-blue-d);font:700 max(11px,calc(var(--u) * .9))/1 var(--font);letter-spacing:.22em;text-transform:uppercase}
+.ddot{width:7px;height:7px;border-radius:50%;background:var(--acc-blue);animation:pulseBlue 2s infinite}
+h1.hero{font:800 calc(var(--u) * 7.2)/.98 var(--font-d);letter-spacing:-.035em;color:var(--ink)}
+h2.title{font:800 calc(var(--u) * 3.9)/1.06 var(--font-d);letter-spacing:-.03em;max-width:calc(var(--u) * 88);text-wrap:balance}
+.grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.subhead{font-size:calc(var(--u) * 1.45);line-height:1.45;color:var(--ink-mute);max-width:calc(var(--u) * 50)}
+.tline{width:calc(var(--u) * 4.6);height:4px;border-radius:4px;background:linear-gradient(90deg,var(--acc-blue),var(--acc-pink))}
+.mono{font-family:var(--mono);font-feature-settings:"tnum"}
+.label{font:700 max(11px,calc(var(--u) * .9))/1.2 var(--font);letter-spacing:.18em;text-transform:uppercase;color:var(--ink-mute)}
+
+/* 6. Fragments: everything fades up on the signature easing */
+.reveal .fragment{opacity:0;transform:translateY(28px);transition:opacity .85s var(--ease),transform .85s var(--ease),visibility 0s linear .85s}
+.reveal .fragment.visible{opacity:1;transform:none;transition:opacity .85s var(--ease),transform .85s var(--ease),visibility 0s}
+.reveal .fragment.fade-only{transform:none}
+.reveal .fragment.fade-scale{transform:scale(.94);transform-origin:bottom left}
+.reveal .fragment.fade-scale.visible{transform:none}
+.draw .draw-path{stroke-dasharray:100;stroke-dashoffset:100;transition:stroke-dashoffset 1.6s var(--ease) .1s}
+.draw.visible .draw-path{stroke-dashoffset:0}
+.bar{height:10px;border-radius:999px;background:rgba(15,20,40,.06);overflow:hidden}
+.bar>i{display:block;height:100%;width:0;border-radius:inherit;background:linear-gradient(90deg,var(--acc-blue),var(--acc-cyan));transition:width 1.4s var(--ease) .15s}
+.bar-grow.visible .bar>i{width:var(--w)}
+
+/* 7. Shared components */
+.card{position:relative;background:var(--card);border:1px solid var(--bord);border-radius:var(--r);box-shadow:var(--shadow-sm);padding:calc(var(--u) * 1.2) calc(var(--u) * 1.35);transition:transform .5s var(--ease),box-shadow .5s var(--ease),border-color .5s var(--ease)}
+.card:hover{transform:translateY(-3px);box-shadow:var(--shadow);border-color:var(--bord-2)}
+.card.accent::before{content:"";position:absolute;left:-1px;right:-1px;top:-1px;height:4px;border-radius:var(--r) var(--r) 0 0;background:var(--bar,linear-gradient(90deg,var(--acc-blue),var(--acc-pink)));transform:scaleX(0);transform-origin:left;transition:transform 1.2s var(--ease) .25s}
+.card.accent.visible::before,.visible .card.accent::before,.card.accent.static::before{transform:scaleX(1)}
+svg.i{width:1em;height:1em;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.icnchip{flex:none;display:grid;place-items:center;width:calc(var(--u) * 2.5);height:calc(var(--u) * 2.5);border-radius:calc(var(--u) * .7);background:rgba(0,120,212,.09);border:1px solid rgba(0,120,212,.18);color:var(--acc-blue)}
+.icnchip.lg{width:calc(var(--u) * 3.3);height:calc(var(--u) * 3.3);border-radius:calc(var(--u) * .85)}
+.icnchip svg.i{width:56%;height:56%}
+.icnchip.cyan{background:rgba(80,230,255,.16);border-color:rgba(0,150,190,.25);color:#0086A8}
+.icnchip.amber{background:rgba(255,185,0,.14);border-color:rgba(200,140,0,.28);color:#9A6A00}
+.icnchip.green{background:rgba(16,124,16,.09);border-color:rgba(16,124,16,.22);color:var(--acc-green)}
+.icnchip.red{background:rgba(232,17,35,.08);border-color:rgba(232,17,35,.2);color:#B00E1C}
+.icnchip.purple{background:rgba(92,45,145,.09);border-color:rgba(92,45,145,.2);color:var(--acc-purple)}
+.icnchip.pink{background:rgba(194,57,179,.09);border-color:rgba(194,57,179,.2);color:#A02C93}
+.tag{display:inline-flex;align-items:center;gap:.5em;padding:.45em .9em;border-radius:999px;font:700 max(11px,calc(var(--u) * 1.05))/1.15 var(--font);background:rgba(15,20,40,.05);border:1px solid rgba(15,20,40,.1);color:var(--ink-dim);white-space:nowrap}
+.tag svg.i{width:1.2em;height:1.2em}
+.tag.good{background:rgba(16,124,16,.09);border-color:rgba(16,124,16,.22);color:#0B5A0B}
+.tag.warn{background:rgba(255,185,0,.15);border-color:rgba(200,140,0,.3);color:#7A5300}
+.tag.bad{background:rgba(232,17,35,.08);border-color:rgba(232,17,35,.22);color:#A00C19}
+.tag.blue{background:rgba(0,120,212,.09);border-color:rgba(0,120,212,.22);color:var(--acc-blue-d)}
+.tag.pink{background:rgba(194,57,179,.09);border-color:rgba(194,57,179,.22);color:#8E2683}
+.tag.purple{background:rgba(92,45,145,.09);border-color:rgba(92,45,145,.22);color:var(--acc-purple)}
+.chip{display:inline-flex;align-items:center;gap:.5em;padding:.45em .85em;border-radius:999px;background:#fff;border:1px solid var(--bord-2);box-shadow:var(--shadow-sm);font:600 max(11px,calc(var(--u) * 1.15))/1.2 var(--font);color:var(--ink-dim);white-space:nowrap}
+.chip svg.i{width:1.25em;height:1.25em;color:var(--acc-blue)}
+.chip code{font-family:var(--mono);font-weight:700;color:var(--ink)}
+
+/* S1 · Hero: the name, two awards and a spinning orb */
+.hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:calc(var(--u) * 3.3);align-items:center}
+.hero-left{display:flex;flex-direction:column;align-items:flex-start;gap:calc(var(--u) * 2)}
+h1.hero .w{display:block}
+.reveal h1.hero .w.fragment:nth-child(2){transition-delay:.16s}
+.reveal h1.hero .w.fragment:nth-child(3){transition-delay:.32s}
+.awards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(var(--u) * 1);width:min(100%,calc(var(--u) * 54))}
+.award{display:flex;align-items:center;gap:calc(var(--u) * .9);padding:calc(var(--u) * 1.05) calc(var(--u) * 1.2);border-radius:var(--r);background:linear-gradient(160deg,#fff,#EDF4FC);border:1px solid rgba(0,120,212,.24);box-shadow:var(--shadow)}
+.award.win{background:linear-gradient(160deg,#fff,#FBF0FA);border-color:rgba(194,57,179,.3)}
+.award .icnchip{animation:pulseBlue 2.6s infinite}
+.award.win .icnchip{animation-name:pulsePink}
+.award b{display:block;font:800 calc(var(--u) * 1.6)/1.1 var(--font-d);letter-spacing:-.015em}
+.award .sub{display:block;margin-top:.35em;font-size:calc(var(--u) * 1);line-height:1.3;color:var(--ink-mute)}
+.orb-stage{position:relative;justify-self:center;width:min(calc(var(--u) * 30),100%);aspect-ratio:1}
+.orb{position:absolute;inset:17%;border-radius:50%;background:conic-gradient(from 200deg,#0078D4,#50E6FF,#C239B3,#5C2D91,#0078D4);box-shadow:0 30px 90px rgba(0,120,212,.28),0 10px 30px rgba(92,45,145,.18);animation:spinOrb 26s linear infinite}
+.orb::after{content:"";position:absolute;inset:0;border-radius:50%;background:radial-gradient(58% 58% at 30% 26%,rgba(255,255,255,.6),rgba(255,255,255,0) 62%)}
+.orb-core{position:absolute;inset:35%;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.8);border:1px solid rgba(255,255,255,.9);box-shadow:0 12px 40px rgba(15,20,40,.18);color:var(--acc-blue)}
+.orb-core svg.i{width:46%;height:46%;stroke-width:1.4}
+.orb-ring{position:absolute;border-radius:50%;pointer-events:none}
+.orb-ring.r1{inset:9%;border:1.5px solid rgba(0,120,212,.25);animation:spinOrb 64s linear infinite}
+.orb-ring.r2{inset:2%;border:1.5px dashed rgba(92,45,145,.3);animation:spinOrb 96s linear infinite reverse}
+.orb-ring.r3{inset:-6%;border:1.5px dotted rgba(194,57,179,.38);animation:spinOrb 130s linear infinite}
+.orb-orbit{position:absolute;inset:9%;border-radius:50%;animation:spinOrb 22s linear infinite}
+.orb-orbit.o2{inset:2%;animation-duration:38s;animation-direction:reverse}
+.orb-orbit.o3{inset:-6%;animation-duration:54s}
+.orb-dot{position:absolute;top:0;left:50%;width:calc(var(--u) * .75);height:calc(var(--u) * .75);border-radius:50%;transform:translate(-50%,-50%);background:var(--acc-blue);box-shadow:0 0 0 calc(var(--u) * .3) rgba(0,120,212,.16)}
+.o2 .orb-dot{background:var(--acc-pink);box-shadow:0 0 0 calc(var(--u) * .3) rgba(194,57,179,.16)}
+.o3 .orb-dot{background:var(--acc-cyan);box-shadow:0 0 0 calc(var(--u) * .3) rgba(80,230,255,.28)}
+.orb-chip{position:absolute;display:inline-flex;align-items:center;gap:.5em;padding:.55em .95em;border-radius:999px;background:rgba(255,255,255,.88);border:1px solid var(--bord-2);box-shadow:var(--shadow);font:700 max(11px,calc(var(--u) * .88))/1 var(--font);color:var(--ink-dim);white-space:nowrap;animation:floatChip 7s ease-in-out infinite alternate}
+.orb-chip svg.i{width:1.35em;height:1.35em;color:var(--acc-blue)}
+.oc1{top:5%;left:-7%}
+.oc2{top:31%;right:-11%;animation-delay:-2.5s}
+.oc2 svg.i{color:var(--acc-purple)}
+.oc3{bottom:17%;left:-13%;animation-delay:-4.5s}
+.oc3 svg.i{color:#9A6A00}
+.oc4{bottom:1%;right:0;animation-delay:-6s}
+.oc4 svg.i{color:#A02C93}
+
+/* Shared: pills, step numbers, and step rails with a blue chevron between the cards */
+.pills{display:flex;flex-wrap:wrap;align-items:center;gap:calc(var(--u) * .9)}
+.pills.center{justify-content:center}
+.pills .label{margin-right:calc(var(--u) * .3)}
+.pill{display:inline-flex;align-items:center;gap:.55em;padding:.55em 1.05em;border-radius:999px;background:#fff;border:1px solid var(--bord-2);box-shadow:var(--shadow-sm);font:700 calc(var(--u) * 1.4)/1.1 var(--font);color:var(--ink);white-space:nowrap}
+.pill svg.i{width:1.2em;height:1.2em;color:var(--acc-blue)}
+.pill.good{background:rgba(16,124,16,.07);border-color:rgba(16,124,16,.28);color:#0B5A0B}
+.pill.good svg.i{color:var(--acc-green)}
+.pill.purple{background:rgba(92,45,145,.07);border-color:rgba(92,45,145,.25);color:var(--acc-purple)}
+.pill.purple svg.i{color:var(--acc-purple)}
+.pill.cu{font-size:calc(var(--u) * 1.3);color:var(--ink-dim)}
+.bn{flex:none;display:grid;place-items:center;width:calc(var(--u) * 2.6);height:calc(var(--u) * 2.6);border-radius:50%;border:2px solid var(--acc-blue);color:var(--acc-blue-d);font:800 calc(var(--u) * 1.1)/1 var(--mono)}
+.rail{--gap:calc(var(--u) * 2.2);display:grid;grid-template-columns:repeat(var(--n,4),minmax(0,1fr));gap:var(--gap)}
+.rail>li{position:relative}
+.rail>li:not(:last-child)::after{content:"";position:absolute;top:50%;right:calc(var(--gap) / -2);width:calc(var(--u) * 1.6);height:calc(var(--u) * 1.6);transform:translate(50%,-50%);background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230078D4' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 5l7 7-7 7'/%3E%3C/svg%3E") no-repeat center/contain}
+.ask{display:inline-flex;align-items:center;gap:.6em;padding:.6em 1.15em;border-radius:999px;background:#fff;border:1px solid rgba(0,120,212,.25);box-shadow:var(--shadow-sm);font:700 calc(var(--u) * 1.4)/1.2 var(--font);color:var(--acc-blue-d)}
+.ask svg.i{width:1.3em;height:1.3em}
+
+/* Warm-up: one question, five answers. Each lane runs from the question to the score. */
+.lanes{display:flex;flex-direction:column;gap:calc(var(--u) * .7)}
+.lane{position:relative;isolation:isolate;display:grid;grid-template-columns:calc(var(--u) * 2.4) calc(var(--u) * 19.5) calc(var(--u) * 15) minmax(0,1fr) calc(var(--u) * 17.5);gap:calc(var(--u) * 1.1);align-items:center;padding:calc(var(--u) * .55) calc(var(--u) * .9);border-radius:calc(var(--u) * 1.1);background:rgba(255,255,255,.72);border:1px solid var(--bord);box-shadow:var(--shadow-sm)}
+.lane.hd{padding-top:0;padding-bottom:0;background:none;border-color:transparent;box-shadow:none;font:700 max(11px,calc(var(--u) * .85))/1 var(--font);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-mute)}
+.lane.hd span:last-child{text-align:right;padding-right:calc(var(--u) * .9)}
+.ln{display:grid;place-items:center;width:calc(var(--u) * 2.4);height:calc(var(--u) * 2.4);border-radius:50%;background:var(--ink);color:#fff;font:800 calc(var(--u) * 1.15)/1 var(--font-d)}
+.bub{justify-self:start;max-width:100%;padding:calc(var(--u) * .6) calc(var(--u) * .95);border-radius:calc(var(--u) * 1.1) calc(var(--u) * 1.1) calc(var(--u) * 1.1) 4px;font:600 calc(var(--u) * 1.5)/1.25 var(--font)}
+.bub.u{background:rgba(0,120,212,.1);border:1px solid rgba(0,120,212,.22);color:var(--acc-blue-d);white-space:nowrap}
+.bub.a{background:#fff;border:1px solid var(--bord-2);box-shadow:var(--shadow-sm);color:var(--ink)}
+.calls{display:flex;align-items:center;gap:calc(var(--u) * .55)}
+.call{position:relative;flex:none;display:grid;place-items:center;width:calc(var(--u) * 3);height:calc(var(--u) * 3);border-radius:calc(var(--u) * .75);background:rgba(80,230,255,.16);border:1px solid rgba(0,150,190,.3);color:#0086A8}
+.call .ic{width:62%;height:62%}
+.call .st{position:absolute;right:calc(var(--u) * -.45);bottom:calc(var(--u) * -.45);width:calc(var(--u) * 1.45);height:calc(var(--u) * 1.45);padding:calc(var(--u) * .22);box-sizing:border-box;border-radius:50%;background:var(--acc-green);border:2px solid #fff;color:#fff;stroke-width:3.2}
+.call.bad{background:rgba(232,17,35,.07);border-color:rgba(232,17,35,.3);color:#B00E1C}
+.call.bad .st{background:var(--acc-red)}
+.err{font:700 calc(var(--u) * 1.15)/1 var(--font);color:#B00E1C}
+.none{padding:.5em .85em;border-radius:999px;border:2px dashed var(--bord-2);font:600 calc(var(--u) * 1.1)/1 var(--font);color:var(--ink-mute)}
+.q{display:grid;place-items:center;width:calc(var(--u) * 6.4);height:calc(var(--u) * 2.6);border-radius:999px;border:2px dashed rgba(0,120,212,.45);color:var(--acc-blue-d);font:800 calc(var(--u) * 1.2)/1 var(--mono);transition:opacity .3s var(--ease),transform .3s var(--ease)}
+/* In each lane the tool calls pop in one by one, then the answer arrives */
+.lane.fragment .call{opacity:0;transform:scale(.6);transition:opacity .35s var(--ease),transform .45s var(--ease)}
+.lane.fragment.visible .call{opacity:1;transform:none}
+.lane.fragment.visible .call:nth-child(2){transition-delay:.18s}
+.lane.fragment.visible .call:nth-child(3){transition-delay:.36s}
+.lane.fragment.visible .call:nth-child(4){transition-delay:.54s}
+.lane.fragment .bub.a{opacity:0;transition:opacity .5s var(--ease)}
+.lane.fragment.visible .bub.a{opacity:1;transition-delay:.75s}
+.vote{display:flex;flex-wrap:wrap;align-items:center;gap:calc(var(--u) * 1);font-size:calc(var(--u) * 1.35);color:var(--ink-dim)}
+.fingers{display:inline-flex;gap:.45em}
+.fingers span{display:grid;place-items:center;width:2.1em;height:2.1em;border-radius:50%;background:#fff;border:1px solid var(--bord-2);box-shadow:var(--shadow-sm);font:800 calc(var(--u) * 1.15)/1 var(--mono);color:var(--ink)}
+
+/* Warm-up: the judge's score lands on each lane like a stamp, and the lane takes its colour */
+.score{display:grid;justify-items:end;align-items:center}
+.score>*{grid-area:1 / 1}
+.lane:has(.vd2.visible) .q{opacity:0;transform:scale(.6)}
+.vd2{display:inline-flex;align-items:center;gap:.55em;padding:.28em .95em .28em .3em;border-radius:999px;font:700 calc(var(--u) * 1.2)/1 var(--font);white-space:nowrap;box-shadow:var(--shadow)}
+.vd2 b{display:inline-flex;align-items:baseline;justify-content:center;min-width:2.4em;padding:.32em .5em;border-radius:999px;color:#fff;font:800 calc(var(--u) * 1.45)/1 var(--font-d);letter-spacing:-.02em}
+.vd2 b small{margin-left:.05em;font-size:.6em;opacity:.85}
+.vd2.pass{background:#EAF6EA;border:1px solid rgba(16,124,16,.32);color:#0B5A0B}
+.vd2.pass b{background:var(--acc-green)}
+.vd2.warn{background:#FFF4D6;border:1px solid rgba(200,140,0,.38);color:#7A5300}
+.vd2.warn b{background:#C98A00}
+.vd2.fail{background:#FDECEE;border:1px solid rgba(232,17,35,.3);color:#A00C19}
+.vd2.fail b{background:var(--acc-red)}
+.reveal .vd2.fragment{transform:scale(1.7) rotate(-9deg);transform-origin:right center;transition:opacity .25s ease,transform .6s cubic-bezier(.34,1.56,.64,1),visibility 0s linear .6s}
+.reveal .vd2.fragment.visible{transform:none;transition:opacity .25s ease,transform .6s cubic-bezier(.34,1.56,.64,1),visibility 0s}
+.lane::before{content:"";position:absolute;inset:-1px;z-index:-1;border-radius:inherit;border:2px solid var(--vc,transparent);background:var(--vb,none);opacity:0;transition:opacity .6s var(--ease) .15s}
+.lane::after{content:"";position:absolute;left:-1px;top:18%;bottom:18%;width:5px;border-radius:0 5px 5px 0;background:var(--vs,transparent);transform:scaleY(0);transition:transform .5s var(--ease) .15s}
+.lane.v-pass{--vs:var(--acc-green);--vc:rgba(16,124,16,.4);--vb:linear-gradient(90deg,rgba(16,124,16,.08),rgba(16,124,16,.015) 70%)}
+.lane.v-warn{--vs:#C98A00;--vc:rgba(201,138,0,.5);--vb:linear-gradient(90deg,rgba(255,185,0,.13),rgba(255,185,0,.02) 70%)}
+.lane.v-fail{--vs:var(--acc-red);--vc:rgba(232,17,35,.38);--vb:linear-gradient(90deg,rgba(232,17,35,.07),rgba(232,17,35,.015) 70%)}
+.lane:has(.vd2.visible)::before{opacity:1}
+.lane:has(.vd2.visible)::after{transform:none}
+/* The vote prompt gives way to what a good answer is */
+.judge-foot{display:grid;align-items:center}
+.judge-foot>*{grid-area:1 / 1}
+.vote{transition:opacity .4s var(--ease)}
+.s-judge:has(.vd2.visible) .vote{opacity:0}
+.ck{display:inline-flex;align-items:center;gap:.45em;padding:.5em 1.05em;border-radius:999px;background:#fff;border:1px solid rgba(16,124,16,.3);box-shadow:var(--shadow-sm);font:800 calc(var(--u) * 1.5)/1 var(--font-d);color:var(--ink)}
+.ck svg.i{width:1.05em;height:1.05em;color:var(--acc-green);stroke-width:2.6}
+
+/* Agenda */
+.agenda{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u) * 1.6)}
+.agenda li{display:flex;flex-direction:column;gap:calc(var(--u) * .7);padding:calc(var(--u) * 2)}
+.ag-n{align-self:flex-start;font:800 calc(var(--u) * 6)/1 var(--font-d);background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.ag-t{font:800 calc(var(--u) * 2.4)/1.1 var(--font-d);letter-spacing:-.02em}
+.ag-d{font-size:calc(var(--u) * 1.4);line-height:1.35;color:var(--ink-mute)}
+
+/* Where the questions come from: three numbers, then the top needs */
+.flow3{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr);gap:calc(var(--u) * 1.2);align-items:stretch}
+.fn{display:flex;flex-direction:column;align-items:flex-start;gap:calc(var(--u) * .7);padding:calc(var(--u) * 1.7) calc(var(--u) * 1.9)}
+.fn-n{font:800 calc(var(--u) * 6.4)/1 var(--font-d);letter-spacing:-.045em}
+.fn-l{font:700 calc(var(--u) * 1.6)/1.2 var(--font);color:var(--ink-dim)}
+.fn.hl{background:var(--grad);border-color:transparent;color:#fff;box-shadow:0 18px 50px rgba(92,45,145,.3)}
+.fn.hl .fn-l{color:#fff}
+.fn.hl .icnchip{background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.4);color:#fff}
+.fa{align-self:center;display:grid;place-items:center;color:var(--acc-blue)}
+.fa svg.i{width:calc(var(--u) * 2.4);height:calc(var(--u) * 2.4);stroke-width:2}
+
+/* Architecture: you, the agent, your Azure, and the model under the agent */
+.arch2{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1.1fr) auto minmax(0,1fr);column-gap:calc(var(--u) * 1.2);align-items:center}
+.node{display:flex;flex-direction:column;align-items:center;gap:calc(var(--u) * .6);padding:calc(var(--u) * 1.6) calc(var(--u) * 1.4);text-align:center}
+.node b{font:800 calc(var(--u) * 2.1)/1.1 var(--font-d);letter-spacing:-.02em}
+.node small{font-size:calc(var(--u) * 1.3);line-height:1.3;color:var(--ink-mute)}
+.node.main{background:linear-gradient(160deg,#fff,#EEF5FD);border-color:rgba(0,120,212,.3);box-shadow:var(--shadow)}
+.link{display:grid;place-items:center;color:var(--acc-blue)}
+.link svg.i{width:calc(var(--u) * 2.6);height:calc(var(--u) * 2.6);stroke-width:2}
+.model{grid-column:3;display:flex;flex-direction:column;align-items:center}
+.vlink{width:3px;height:calc(var(--u) * 2.2);border-radius:2px;background:linear-gradient(180deg,var(--acc-blue),var(--acc-purple))}
+.node.sm{flex-direction:row;gap:calc(var(--u) * .9);padding:calc(var(--u) * 1) calc(var(--u) * 1.5);text-align:left}
+.node.sm b{display:block;font-size:calc(var(--u) * 1.7)}
+.node.sm small{display:block;margin-top:.15em;font-size:calc(var(--u) * 1.15)}
+
+/* GenAIOps: three stages and the loop back */
+.stage{display:flex;flex-direction:column;align-items:flex-start;gap:calc(var(--u) * .9);padding:calc(var(--u) * 1.8) calc(var(--u) * 1.9)}
+.st-n{position:absolute;top:calc(var(--u) * 1);right:calc(var(--u) * 1.5);font:800 calc(var(--u) * 4.4)/1 var(--font-d);color:rgba(15,20,40,.07)}
+.st-t{font:800 calc(var(--u) * 2.1)/1.12 var(--font-d);letter-spacing:-.02em}
+.loopbar{display:flex;align-items:center;gap:calc(var(--u) * 1.1);padding:calc(var(--u) * 1.1) calc(var(--u) * 1.5);border-radius:var(--r);background:linear-gradient(90deg,rgba(0,120,212,.1),rgba(194,57,179,.07));border:1px solid rgba(0,120,212,.22);font:600 calc(var(--u) * 1.6)/1.3 var(--font)}
+.loopbar .icnchip svg.i{animation:spinOrb 8s linear infinite}
+.src{font-size:calc(var(--u) * 1);color:var(--ink-mute)}
+
+/* Offline evaluation: the release pipeline, the stop rule and the theory */
+.pp{display:flex;flex-direction:column;align-items:flex-start;gap:calc(var(--u) * .9);padding:calc(var(--u) * 1.7)}
+.pp b{font:800 calc(var(--u) * 1.9)/1.15 var(--font-d);letter-spacing:-.015em}
+.pp.ok{background:linear-gradient(180deg,#fff,#F2FBF2);border-color:rgba(16,124,16,.28)}
+.off2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:calc(var(--u) * 1.4);align-items:stretch}
+.stop{display:flex;align-items:center;gap:calc(var(--u) * 1);padding:calc(var(--u) * 1.2) calc(var(--u) * 1.5);border-radius:var(--r);background:linear-gradient(90deg,rgba(255,185,0,.18),rgba(255,185,0,.05));border:1px solid rgba(200,140,0,.35);font:600 calc(var(--u) * 1.6)/1.3 var(--font)}
+.stat{display:flex;align-items:center;gap:calc(var(--u) * 1.4);padding:calc(var(--u) * 1.2) calc(var(--u) * 1.5);border-radius:var(--r);background:linear-gradient(160deg,#fff,#F6F1FB);border:1px solid rgba(92,45,145,.22);box-shadow:var(--shadow-sm)}
+.stat>b{flex:none;font:800 calc(var(--u) * 3.8)/1 var(--font-d);letter-spacing:-.03em;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat>span{font-size:calc(var(--u) * 1.35);line-height:1.35;color:var(--ink-dim)}
+.stat small{display:block;margin-top:.35em;font-size:calc(var(--u) * 1);color:var(--ink-mute)}
+
+/* Online evaluation: the audit loop and the latest audit */
+.cy{display:flex;align-items:center;gap:calc(var(--u) * 1);padding:calc(var(--u) * 1.5) calc(var(--u) * 1.4)}
+.cy b{font:800 calc(var(--u) * 1.75)/1.2 var(--font-d);letter-spacing:-.01em}
+.audit2{display:grid;grid-template-columns:repeat(3,auto) minmax(0,1fr);column-gap:calc(var(--u) * 2.2);row-gap:calc(var(--u) * .9);align-items:center;padding:calc(var(--u) * 1.4) calc(var(--u) * 1.8);border-radius:var(--r);background:#fff;border:1px solid var(--bord);box-shadow:var(--shadow-sm)}
+.audit2 .label{grid-column:1 / -1}
+.ak b{display:block;font:800 calc(var(--u) * 4.4)/1 var(--font-d);letter-spacing:-.03em;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.ak small{display:block;margin-top:.25em;font-size:calc(var(--u) * 1.25);color:var(--ink-mute)}
+.ak-r{display:flex;align-items:center;gap:.6em;padding-left:calc(var(--u) * 2);border-left:1px solid var(--bord-2);font:600 calc(var(--u) * 1.5)/1.3 var(--font)}
+.ak-r svg.i{width:1.3em;height:1.3em;color:var(--acc-green);stroke-width:2.4}
+
+/* Running cost: four levers on tokens and price */
+.levers2{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:calc(var(--u) * 1.3)}
+.lv{display:flex;flex-direction:column;align-items:flex-start;gap:calc(var(--u) * .6);padding:calc(var(--u) * 1.7) calc(var(--u) * 1.6)}
+.lv .icnchip{margin-bottom:calc(var(--u) * .3)}
+.lv-t{font:800 calc(var(--u) * 2)/1.1 var(--font-d);letter-spacing:-.02em}
+.lv-n{font:800 calc(var(--u) * 5.4)/1 var(--font-d);letter-spacing:-.045em;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lv-d{font-size:calc(var(--u) * 1.35);line-height:1.3;color:var(--ink-mute)}
+.foot{display:flex;align-items:center;gap:.6em;font-size:calc(var(--u) * 1.3);color:var(--ink-mute)}
+.foot svg.i{width:1.3em;height:1.3em;color:var(--acc-blue)}
+
+/* Tiles: trust and the four AI meters */
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:calc(var(--u) * 1.3)}
+.tile{display:flex;flex-direction:column;align-items:flex-start;gap:calc(var(--u) * .8);padding:calc(var(--u) * 1.8) calc(var(--u) * 1.6)}
+.tile b{font:800 calc(var(--u) * 2)/1.12 var(--font-d);letter-spacing:-.02em}
+.tile small{font-size:calc(var(--u) * 1.35);line-height:1.3;color:var(--ink-mute)}
+.tile.c1{--bar:linear-gradient(90deg,var(--acc-purple),var(--acc-pink))}
+.tile.c2{--bar:linear-gradient(90deg,var(--acc-green),#6CC24A)}
+.tile.c3{--bar:linear-gradient(90deg,#C98A00,var(--acc-amber))}
+.tile.c4{--bar:linear-gradient(90deg,var(--acc-blue),var(--acc-cyan))}
+.allfour{display:flex;flex-wrap:wrap;align-items:center;gap:calc(var(--u) * .9);font-size:calc(var(--u) * 1.35);color:var(--ink-dim)}
+
+/* New at Ignite: spend per user, model and agent, each with its source */
+.tiles.t3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.tiles.t3 .tile{padding:calc(var(--u) * 2) calc(var(--u) * 1.9)}
+.tiles.t3 .tile b{font-size:calc(var(--u) * 2.9)}
+.tiles.t3 .tile small{font-size:calc(var(--u) * 1.55)}
+.tile .tag{margin-top:auto}
+
+/* What it does: six sources joined by one agent */
+.hub{position:relative;width:100%;aspect-ratio:1000/333}
+.flines{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.flines .fl{fill:none;stroke:url(#hubGrad);stroke-width:2.6;stroke-linecap:round}
+.flines .flow{fill:#fff;stroke:var(--acc-blue);stroke-width:3}
+.flines .flow.p{stroke:var(--acc-pink)}
+.sat-pos{position:absolute;width:25%;transform:translateY(-50%)}
+.sat-pos.l{left:0}
+.sat-pos.r{right:0}
+.sat-pos.t{top:16.67%}
+.sat-pos.m{top:50%}
+.sat-pos.b{top:83.33%}
+.sat{display:flex;align-items:center;gap:calc(var(--u) * .9);padding:calc(var(--u) * .85) calc(var(--u) * 1.1)}
+.sat b{display:block;font:800 calc(var(--u) * 1.45)/1.15 var(--font-d)}
+.sat small{display:block;margin-top:.2em;font-size:calc(var(--u) * 1.1);line-height:1.25;color:var(--ink-mute)}
+.fcore-pos{position:absolute;left:50%;top:50%;width:24.4%;aspect-ratio:1;transform:translate(-50%,-50%)}
+.fcore{position:relative;width:100%;height:100%;box-sizing:border-box;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.35em;text-align:center;background:radial-gradient(circle at 30% 25%,#fff,#EDF4FC);border:1px solid rgba(0,120,212,.25);box-shadow:var(--shadow),0 0 0 10px rgba(0,120,212,.05)}
+.fcore::before{content:"";position:absolute;inset:-9%;border-radius:50%;border:1.5px dashed rgba(0,120,212,.38);animation:spinOrb 40s linear infinite}
+.fcore::after{content:"";position:absolute;inset:-19%;border-radius:50%;border:1.5px dotted rgba(194,57,179,.4);animation:spinOrb 70s linear infinite reverse}
+.fcore svg.i{width:26%;height:26%;color:var(--acc-blue)}
+.fcore b{font:800 calc(var(--u) * 1.6)/1.12 var(--font-d);padding:0 12%}
+.example{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:calc(var(--u) * .9);font-size:calc(var(--u) * 1.35);color:var(--ink-dim)}
+
+/* Customer value: two big numbers */
+.kpi2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(var(--u) * 1.6)}
+.big2{display:flex;flex-direction:column;align-items:flex-start;gap:calc(var(--u) * .55);padding:calc(var(--u) * 2) calc(var(--u) * 2.3)}
+.big2 .pre{font:700 calc(var(--u) * 1.45)/1.2 var(--font);color:var(--ink-mute)}
+.big2 .pre s{text-decoration-color:rgba(232,17,35,.7);text-decoration-thickness:3px}
+.big2 .now{font:800 calc(var(--u) * 7.4)/1 var(--font-d);letter-spacing:-.045em;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.big2 .what{font:700 calc(var(--u) * 1.75)/1.25 var(--font)}
+
+/* Two cost tools, side by side */
+.vs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(var(--u) * 1.6)}
+.side{display:flex;flex-direction:column;gap:calc(var(--u) * 1.1);padding:calc(var(--u) * 1.9) calc(var(--u) * 2.1)}
+.side .top{display:flex;align-items:center;gap:calc(var(--u) * 1)}
+.side .top b{display:block;font:800 calc(var(--u) * 1.75)/1.15 var(--font-d)}
+.side .top small{display:block;margin-top:.2em;font-size:calc(var(--u) * 1.15);color:var(--ink-mute)}
+.job{font:800 calc(var(--u) * 2.4)/1.12 var(--font-d);letter-spacing:-.02em}
+.side.a{background:linear-gradient(160deg,#fff,#F6F1FB);border-color:rgba(92,45,145,.22)}
+.side.b{background:linear-gradient(160deg,#fff,#EEF5FD);border-color:rgba(0,120,212,.25)}
+.side.a .job{color:var(--acc-purple)}
+.side.b .job{color:var(--acc-blue-d)}
+.side ul{display:flex;flex-direction:column;gap:calc(var(--u) * .55)}
+.side li{display:flex;align-items:center;gap:.6em;font-size:calc(var(--u) * 1.45);line-height:1.3;color:var(--ink-dim)}
+.side li svg.i{width:1.1em;height:1.1em;stroke-width:2.2}
+.side.a li svg.i{color:var(--acc-purple)}
+.side.b li svg.i{color:var(--acc-blue)}
+.verdict{display:flex;align-items:center;gap:calc(var(--u) * 1);padding:calc(var(--u) * 1) calc(var(--u) * 1.4);border-radius:var(--r);background:linear-gradient(90deg,rgba(16,124,16,.09),rgba(16,124,16,.02));border:1px solid rgba(16,124,16,.25);font:700 calc(var(--u) * 1.55)/1.3 var(--font)}
+.verdict .icnchip{animation:pulseRing 2.4s infinite}
+
+/* The story so far: a gradient line that grows to the newest milestone */
+.tl{position:relative;--gap:calc(var(--u) * 1.2);--node:calc(var(--u) * 1.6);margin-top:calc(var(--u) * 1)}
+.tl-track{position:absolute;top:calc(var(--node) / 2 - 2px);left:calc(var(--node) / 2);width:calc((100% + var(--gap)) * 5 / 6);height:4px;border-radius:4px;background:rgba(15,20,40,.08);overflow:hidden}
+.tl-fill{position:absolute;inset:0;border-radius:inherit;background:linear-gradient(90deg,var(--acc-blue),var(--acc-purple),var(--acc-pink));transform-origin:left;transform:scaleX(var(--p,0));transition:transform 1.1s var(--ease)}
+.tl-list{position:relative;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:var(--gap)}
+.tl-item{display:flex;flex-direction:column}
+.tl-node{position:relative;z-index:1;display:block;box-sizing:border-box;width:var(--node);height:var(--node);border-radius:50%;background:#fff;border:3px solid var(--acc-blue);box-shadow:0 0 0 6px rgba(0,120,212,.1)}
+.tl-item.win .tl-node{border-color:var(--acc-pink);background:var(--acc-pink);animation:pulsePink 2.2s infinite}
+.tl-date{margin-top:calc(var(--u) * 1);font:700 calc(var(--u) * 1.05)/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--acc-blue-d)}
+.tl-item.win .tl-date{color:#A02C93}
+.tl-card{flex:1;margin-top:calc(var(--u) * .8);display:flex;flex-direction:column;gap:calc(var(--u) * .6);padding:calc(var(--u) * 1.3) calc(var(--u) * 1.25)}
+.tl-t{font:800 calc(var(--u) * 1.6)/1.15 var(--font-d);letter-spacing:-.015em}
+.tl-d{font-size:calc(var(--u) * 1.15);line-height:1.35;color:var(--ink-mute)}
+.tl-item.win .tl-card{background:linear-gradient(180deg,#fff,#FBF2FA);border-color:rgba(194,57,179,.28);box-shadow:var(--shadow)}
+
+/* Reach: dotted world map and three numbers */
+.reach{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(0,1fr);gap:calc(var(--u) * 1.8);align-items:center}
+.map{padding:calc(var(--u) * 1) calc(var(--u) * 1.1) calc(var(--u) * .9)}
+.worldmap{display:block;width:100%;height:auto}
+.worldmap .land{fill:none;stroke:rgba(46,51,64,.17);stroke-width:6;stroke-linecap:round}
+.worldmap .hl{fill:none;stroke-width:7.5;stroke-linecap:round}
+.worldmap .hl.ask{stroke:var(--acc-blue)}
+.worldmap .hl.star{stroke:#4FB0E6}
+.worldmap .mk .core{fill:var(--acc-blue);stroke:#fff;stroke-width:4}
+.worldmap .mk.star .core{fill:#2A9BD8}
+.worldmap .mk.home .core{fill:var(--acc-pink)}
+.worldmap .mk .ring{fill:none;stroke:var(--acc-blue);stroke-width:3;transform-box:fill-box;transform-origin:center;animation:mkPulse 2.8s ease-out infinite;animation-delay:var(--d,0s)}
+.worldmap .mk.star .ring{stroke:#2A9BD8}
+.worldmap .mk.home .ring{stroke:var(--acc-pink)}
+.worldmap .mk-label{font:800 30px/1 var(--font-d);fill:#8E2683;paint-order:stroke;stroke:#fff;stroke-width:8px;stroke-linejoin:round}
+@keyframes mkPulse{0%{transform:scale(1);opacity:.85}100%{transform:scale(3.4);opacity:0}}
+.legend{display:flex;flex-wrap:wrap;gap:calc(var(--u) * 1.4);margin-top:calc(var(--u) * .6);font-size:calc(var(--u) * 1.05);color:var(--ink-mute)}
+.legend i{display:inline-block;width:.8em;height:.8em;margin-right:.45em;border-radius:50%;vertical-align:-.05em}
+.rkpis{display:flex;flex-direction:column;gap:calc(var(--u) * 1)}
+.rkpi{display:flex;flex-direction:column;gap:calc(var(--u) * .3);padding:calc(var(--u) * 1.2) calc(var(--u) * 1.5)}
+.rkpi .big{font:800 calc(var(--u) * 3.9)/1 var(--font-d);letter-spacing:-.035em;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.rkpi p:not(.big){font-size:calc(var(--u) * 1.4);line-height:1.3;color:var(--ink-dim)}
+
+/* Live demo: five questions and the ways to try it */
+.asks{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:calc(var(--u) * 1.1)}
+.asks li{display:flex;flex-direction:column;align-items:flex-start;gap:calc(var(--u) * .9);padding:calc(var(--u) * 1.4) calc(var(--u) * 1.35);font:700 calc(var(--u) * 1.6)/1.25 var(--font);color:var(--acc-blue-d)}
+.asks li.safe{background:linear-gradient(180deg,#fff,#F2FBF2);border-color:rgba(16,124,16,.28);color:#0B5A0B}
+.asks li.safe .bn{border-color:var(--acc-green);color:var(--acc-green)}
+/* Segoe leaves a wide gap between "y" and "?" */
+.qk{margin-left:-.06em}
+.cta{display:flex;flex-wrap:wrap;align-items:center;gap:calc(var(--u) * 1.4)}
+.qr{display:flex;align-items:center;gap:calc(var(--u) * 1);padding:calc(var(--u) * .75) calc(var(--u) * 1.3) calc(var(--u) * .75) calc(var(--u) * .75)}
+.qr svg{display:block;flex:none;width:calc(var(--u) * 6.4);height:calc(var(--u) * 6.4);border-radius:6px}
+.qr b{display:block;font:800 calc(var(--u) * 1.6)/1.1 var(--font-d)}
+.qr span{display:block;margin-top:.35em;font:500 max(10px,calc(var(--u) * .9))/1.35 var(--mono);color:var(--ink-mute)}
+.runit{display:flex;flex-direction:column;gap:calc(var(--u) * .5)}
+.runit code{align-self:flex-start;padding:.4em .75em;border-radius:8px;background:var(--ink);color:#fff;font:700 calc(var(--u) * 1.5)/1 var(--mono)}
+.see-live{margin-left:auto;display:inline-flex;align-items:center;gap:.6em;padding:.8em 1.6em;border-radius:999px;background:var(--grad);color:#fff !important;font:800 calc(var(--u) * 1.5)/1 var(--font-d);text-decoration:none;box-shadow:0 12px 32px rgba(92,45,145,.32);animation:pulseBlue 2.4s infinite}
+.see-live svg.i{width:1.2em;height:1.2em;stroke-width:2.2;transition:transform .3s var(--ease)}
+.see-live:hover svg.i{transform:translateX(4px)}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none !important}
+  .reveal .fragment{transition:opacity .3s linear,visibility 0s !important;transform:none !important}
+  .lane.fragment .call,.lane.fragment .bub.a{transition:none !important}
+}
+</style>
+</head>
+<body>
+
+<!-- Icon library: every symbol is a 24x24 outline that inherits its colour -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7.5 18.5h9.5a4.25 4.25 0 0 0 .7-8.44A6 6 0 0 0 6.1 9.2 4.7 4.7 0 0 0 7.5 18.5z"/></symbol>
+    <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4.5" y="8" width="15" height="11.5" rx="3.2"/><path d="M12 4.6V8M9 12.8v1.4M15 12.8v1.4M9.6 16.6h4.8"/><circle cx="12" cy="3.6" r="1.1"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7.5 3.2v5.6c0 4.5-3.1 8-7.5 9.7-4.4-1.7-7.5-5.2-7.5-9.7V6.2z"/><path d="M8.8 12.2l2.2 2.2 4.3-4.6"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20h16M7 16.5V12M12 16.5V7.5M17 16.5V10.5"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2.2"/><path d="M11 17.5h2"/></symbol>
+    <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9.5 3.5h5M10.5 3.5v5.2L5.6 17.6a2 2 0 0 0 1.8 2.9h9.2a2 2 0 0 0 1.8-2.9l-4.9-8.9V3.5M7.6 14.5h8.8"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5c.7 4.4 3.1 6.8 7.5 7.5-4.4.7-6.8 3.1-7.5 7.5-.7-4.4-3.1-6.8-7.5-7.5 4.4-.7 6.8-3.1 7.5-7.5z"/><path d="M19 3.2v3.2M17.4 4.8h3.2"/></symbol>
+    <symbol id="i-judge" viewBox="0 0 24 24"><path d="M12 4v16M8 20h8M5 7.5h14"/><path d="M5 7.5l-2.6 5.6a2.6 2.6 0 0 0 5.2 0zM19 7.5l-2.6 5.6a2.6 2.6 0 0 0 5.2 0z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7"/></symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M8 4h8v5.5a4 4 0 0 1-8 0z"/><path d="M8 6H5.2a2.8 2.8 0 0 0 2.9 3.6M16 6h2.8a2.8 2.8 0 0 1-2.9 3.6M12 13.5V17M8.5 20.5h7M9.8 17h4.4"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="M8.5 8l-4 4 4 4M15.5 8l4 4-4 4M13.5 5l-3 14"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+    <symbol id="i-stack" viewBox="0 0 24 24"><path d="M12 3.5l8.5 4.5-8.5 4.5L3.5 8z"/><path d="M3.5 12l8.5 4.5 8.5-4.5M3.5 16l8.5 4.5 8.5-4.5"/></symbol>
+    <symbol id="i-people" viewBox="0 0 24 24"><circle cx="9" cy="8.2" r="3.1"/><path d="M3.2 19.5a5.8 5.8 0 0 1 11.6 0"/><circle cx="17" cy="9.2" r="2.5"/><path d="M15.6 14.1a4.6 4.6 0 0 1 5.4 4.5"/></symbol>
+    <symbol id="i-fix" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></symbol>
+    <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M13.5 15.5l-5-5C10.2 6 13.5 3 19.6 2.6 19.2 8.6 16.1 12 13.5 15.5z"/><path d="M8.5 10.5H5.2l2.4-3.3h3.6M13.5 15.5v3.3l3.3-2.4v-3.6M6.4 17.6c-1.4.4-2.1 2-2.1 2s1.6-.7 2-2.1"/></symbol>
+    <symbol id="i-pr" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M6 8.2v7.6M18 15.8V9.5a3 3 0 0 0-3-3h-3.5M13.5 4.5l-2 2 2 2"/></symbol>
+    <symbol id="i-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M14.6 9.3c-.4-.9-1.4-1.5-2.6-1.5-1.5 0-2.6.8-2.6 2 0 2.8 5.4 1.4 5.4 4.2 0 1.2-1.2 2.1-2.8 2.1-1.3 0-2.3-.6-2.8-1.5M12 6.3v1.5M12 16.1v1.6"/></symbol>
+    <symbol id="i-graph" viewBox="0 0 24 24"><circle cx="6" cy="6.5" r="2.3"/><circle cx="18" cy="7.5" r="2.3"/><circle cx="12" cy="18" r="2.3"/><path d="M8.3 6.7l7.4.6M7.2 8.5l3.7 7.4M16.9 9.6l-3.8 6.4"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3.5 12.4V4.6a1.1 1.1 0 0 1 1.1-1.1h7.8l8.1 8.1-9 9z"/><circle cx="8" cy="8" r="1.4"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.3"/><path d="M15.5 15.5l5 5"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 6.6C10 5.1 7 4.6 3.5 5.1v13c3.5-.5 6.5 0 8.5 1.5 2-1.5 5-2 8.5-1.5v-13C17 4.6 14 5.1 12 6.6zM12 6.6v13"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5M12 14.5v2.2"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6.5" cy="5.5" r="2.2"/><circle cx="6.5" cy="18.5" r="2.2"/><circle cx="17.5" cy="7.5" r="2.2"/><path d="M6.5 7.7v8.6M17.5 9.7c0 4.3-6.6 3.2-10.3 6.9"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.5 3.6 5.3 3.6 8.5s-1.2 6-3.6 8.5c-2.4-2.5-3.6-5.3-3.6-8.5s1.2-6 3.6-8.5z"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15.5" r="4"/><path d="M10.9 12.6l8.6-8.6M15.8 7.2l2.5 2.5M13.6 9.4l1.9 1.9"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9.5L5 19.5V16H4z"/><path d="M8 9.5h8M8 12.5h5"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M3.8 16.5a8.2 8.2 0 1 1 16.4 0"/><path d="M12 16.5l4.2-5.2"/><circle cx="12" cy="16.5" r="1.3"/></symbol>
+    <symbol id="i-token" viewBox="0 0 24 24"><path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/><path d="M12 8l3.5 2v4L12 16l-3.5-2v-4z"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="M19.5 10.5A7.8 7.8 0 0 0 5.6 7.4L4 9.2M4 4.5v4.7h4.7M4.5 13.5a7.8 7.8 0 0 0 13.9 3.1l1.6-1.8M20 19.5v-4.7h-4.7"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="1.6"/><rect x="4" y="13" width="16" height="7" rx="1.6"/><path d="M8 7.5h.01M8 16.5h.01M12 7.5h4M12 16.5h4"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.8l2.5 5.2 5.7.8-4.1 4 1 5.6L12 16.8l-5.1 2.6 1-5.6-4.1-4 5.7-.8z"/></symbol>
+    <symbol id="i-fork" viewBox="0 0 24 24"><circle cx="6.5" cy="5" r="2.1"/><circle cx="17.5" cy="5" r="2.1"/><circle cx="12" cy="19" r="2.1"/><path d="M6.5 7.1v1.4A3.5 3.5 0 0 0 10 12h4a3.5 3.5 0 0 0 3.5-3.5V7.1M12 12v4.9"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2.2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15H17"/></symbol>
+    <symbol id="i-medal" viewBox="0 0 24 24"><circle cx="12" cy="15" r="5.2"/><path d="M8.6 10.6L6 3.5h4l2 4.6 2-4.6h4l-2.6 7.1"/><path d="M12 12.4l.9 1.8 2 .3-1.4 1.4.3 2-1.8-.9-1.8.9.3-2-1.4-1.4 2-.3z"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4M5 4.5h11.5l-2 4 2 4H5"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7.2L19 7.8V21H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></symbol>
+    <symbol id="i-window" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.2"/><path d="M3.5 9h17M7.5 13h4M7.5 16h7M6.5 6.8h.01M8.8 6.8h.01"/></symbol>
+    <symbol id="i-id" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2.2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16.2a3.3 3.3 0 0 1 6.4 0M14.5 10h3.5M14.5 13.5h3.5"/></symbol>
+    <symbol id="i-compress" viewBox="0 0 24 24"><path d="M4 9.5h5.5V4M20 9.5h-5.5V4M4 14.5h5.5V20M20 14.5h-5.5V20"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><path d="M4.5 6.5h15M4.5 10.5h15M4.5 14.5h10M4.5 18.5h6"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6 6l12 12"/></symbol>
+    <symbol id="i-weather" viewBox="0 0 24 24"><path d="M7.5 15.5h9.5a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7 8.8a3.4 3.4 0 0 0 .5 6.7z"/><path d="M9 18.5l-1 2M13 18.5l-1 2M17 18.5l-1 2"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.3" r="3.6"/><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0"/></symbol>
+  </defs>
+</svg>
+
+<!-- Floating shapes -->
+<div class="shape sq" style="top:14%;left:4%;animation-delay:-2s"></div>
+<div class="shape ci" style="top:72%;left:3%;animation-delay:-9s"></div>
+<div class="shape dt" style="top:22%;left:47%;animation-delay:-5s"></div>
+<div class="shape sq" style="top:93%;left:66%;animation-delay:-13s;background:var(--acc-purple)"></div>
+<div class="shape ci" style="top:10%;left:91%;animation-delay:-4s"></div>
+<div class="shape dt" style="top:58%;left:96%;animation-delay:-11s;background:var(--acc-blue)"></div>
+<div class="shape sq" style="top:40%;left:1.5%;animation-delay:-16s;background:var(--acc-cyan)"></div>
+<div class="shape ci" style="top:90%;left:30%;animation-delay:-7s;border-color:var(--acc-purple)"></div>
+
+<header class="chrome-top" aria-hidden="true">
+  <div class="left">
+    <span class="ms-mark">
+      <span class="ms-tiles"><i></i><i></i><i></i><i></i></span>
+      Microsoft
+    </span>
+    <span class="sep">·</span>
+    <span>Tech Intensity DK · The Tooling Box</span>
+  </div>
+  <div class="right">
+    <span class="live" id="livePill"><i></i>Live demo</span>
+    <span>20 November 2026</span>
+  </div>
+</header>
+
+<footer class="chrome-bot" aria-hidden="true">
+  <div class="left"><span class="pdot"></span><span>Azure FinOps Agent · slides at azure-finops-agent.com/tech · code at github.com/Azure-Samples/azure-finops-agent</span></div>
+  <div class="right"><span id="slideNum">01 / 12</span></div>
+</footer>
+
+<button type="button" class="fs-btn fs-up" id="fsUp" aria-label="Enter full screen (Up arrow)" title="Full screen (Up arrow)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15l7-7 7 7"/></svg></button>
+<button type="button" class="fs-btn fs-down" id="fsDown" aria-label="Exit full screen (Down arrow)" title="Exit full screen (Down arrow)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9l7 7 7-7"/></svg></button>
+
+<div class="reveal">
+  <div class="slides">
+<!-- ============ 1 · Hero ============ -->
+<section class="s-hero">
+  <div class="hero-grid">
+    <div class="hero-left">
+      <h1 class="hero">
+        <span class="w fragment fade-only" data-fragment-index="0">Azure</span>
+        <span class="w fragment fade-only grad" data-fragment-index="0">FinOps</span>
+        <span class="w fragment fade-only" data-fragment-index="0">Agent</span>
+      </h1>
+      <div class="awards">
+        <div class="award win fragment" data-fragment-index="1">
+          <span class="icnchip lg pink"><svg class="i"><use href="#i-trophy"/></svg></span>
+          <div><b>Europe North winner</b><span class="sub">EMEA Dragon’s Den AI Agent Challenge</span></div>
+        </div>
+        <div class="award fragment" data-fragment-index="1" style="transition-delay:.15s">
+          <span class="icnchip lg"><svg class="i"><use href="#i-medal"/></svg></span>
+          <div><b>FY27 CSU Pace Setter</b><span class="sub">Selected from 1,200+ peer nominations</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="orb-stage" aria-hidden="true">
+      <div class="orb-ring r3"></div>
+      <div class="orb-ring r2"></div>
+      <div class="orb-ring r1"></div>
+      <div class="orb"></div>
+      <div class="orb-core"><svg class="i"><use href="#i-spark"/></svg></div>
+      <div class="orb-orbit"><span class="orb-dot"></span></div>
+      <div class="orb-orbit o2"><span class="orb-dot"></span></div>
+      <div class="orb-orbit o3"><span class="orb-dot"></span></div>
+      <span class="orb-chip oc1"><svg class="i"><use href="#i-coin"/></svg>Cost Management</span>
+      <span class="orb-chip oc2"><svg class="i"><use href="#i-token"/></svg>Foundry tokens</span>
+      <span class="orb-chip oc3"><svg class="i"><use href="#i-tag"/></svg>Retail Prices</span>
+      <span class="orb-chip oc4"><svg class="i"><use href="#i-people"/></svg>Microsoft Graph</span>
+    </div>
+  </div>
+  <aside class="notes">
+    Introduce yourself: a Cloud Solution Architect in Denmark who built this agent.
+    This is the Azure FinOps Agent. It is open source, it answers cost questions about Azure and AI from the customer's own data, and it shows every API call behind each answer.
+    It won Europe North in the EMEA Dragon's Den AI Agent Challenge, and it was the evidence for my FY27 CSU Pace Setter selection, from more than 1,200 peer nominations.
+    Plan: a short warm-up game, then how it is built and tested, what customers get, and a live demo.
+    Keys: right arrow or a click moves on, up arrow goes full screen, S opens these notes.
+  </aside>
+</section>
+
+<!-- ============ 2 · Be the judge ============ -->
+<section class="s-judge">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Warm-up · same question, five answers</span>
+    <h2 class="title">Score each answer <span class="grad">from 0 to 5.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="lanes">
+    <div class="lane hd" aria-hidden="true"><span></span><span>User asks</span><span>Tool calls</span><span>AI answers</span><span>Score</span></div>
+    <div class="lane v-pass fragment" data-fragment-index="0">
+      <span class="ln">1</span>
+      <span class="bub u">Weather in Copenhagen?</span>
+      <span class="calls"><span class="call"><svg class="i ic"><use href="#i-weather"/></svg><svg class="i st"><use href="#i-check"/></svg></span></span>
+      <span class="bub a">7&nbsp;°C and light rain.</span>
+      <span class="score"><span class="q">? / 5</span><span class="vd2 pass fragment" data-fragment-index="5"><b>5<small>/5</small></b>Checked first</span></span>
+    </div>
+    <div class="lane v-fail fragment" data-fragment-index="1">
+      <span class="ln">2</span>
+      <span class="bub u">Weather in Copenhagen?</span>
+      <span class="calls"><span class="none">No tool</span></span>
+      <span class="bub a">21&nbsp;°C and sunny.</span>
+      <span class="score"><span class="q">? / 5</span><span class="vd2 fail fragment" data-fragment-index="6"><b>0<small>/5</small></b>Made it up</span></span>
+    </div>
+    <div class="lane v-warn fragment" data-fragment-index="2">
+      <span class="ln">3</span>
+      <span class="bub u">Weather in Copenhagen?</span>
+      <span class="calls">
+        <span class="call"><svg class="i ic"><use href="#i-weather"/></svg><svg class="i st"><use href="#i-check"/></svg></span>
+        <span class="call"><svg class="i ic"><use href="#i-weather"/></svg><svg class="i st"><use href="#i-check"/></svg></span>
+        <span class="call"><svg class="i ic"><use href="#i-weather"/></svg><svg class="i st"><use href="#i-check"/></svg></span>
+        <span class="call"><svg class="i ic"><use href="#i-weather"/></svg><svg class="i st"><use href="#i-check"/></svg></span>
+      </span>
+      <span class="bub a">7&nbsp;°C and light rain.</span>
+      <span class="score"><span class="q">? / 5</span><span class="vd2 warn fragment" data-fragment-index="7"><b>2<small>/5</small></b>Too many calls</span></span>
+    </div>
+    <div class="lane v-fail fragment" data-fragment-index="3">
+      <span class="ln">4</span>
+      <span class="bub u">Weather in Copenhagen?</span>
+      <span class="calls"><span class="call bad"><svg class="i ic"><use href="#i-weather"/></svg><svg class="i st"><use href="#i-x"/></svg></span><span class="err">Error</span></span>
+      <span class="bub a">No rain today.</span>
+      <span class="score"><span class="q">? / 5</span><span class="vd2 fail fragment" data-fragment-index="8"><b>1<small>/5</small></b>Hid the error</span></span>
+    </div>
+    <div class="lane v-pass fragment" data-fragment-index="4">
+      <span class="ln">5</span>
+      <span class="bub u">Weather in Copenhagen?</span>
+      <span class="calls"><span class="call bad"><svg class="i ic"><use href="#i-weather"/></svg><svg class="i st"><use href="#i-x"/></svg></span><span class="err">Error</span></span>
+      <span class="bub a">I can’t reach the weather service.</span>
+      <span class="score"><span class="q">? / 5</span><span class="vd2 pass fragment" data-fragment-index="9"><b>5<small>/5</small></b>Honest</span></span>
+    </div>
+  </div>
+  <div class="judge-foot">
+    <div class="vote">
+      <span>Hold up your fingers, or type in the chat:</span>
+      <span class="fingers"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></span>
+    </div>
+    <div class="pills fragment" data-fragment-index="10">
+      <span class="label">A good answer is</span>
+      <span class="ck"><svg class="i"><use href="#i-check"/></svg>Right</span>
+      <span class="ck"><svg class="i"><use href="#i-check"/></svg>Checked</span>
+      <span class="ck"><svg class="i"><use href="#i-check"/></svg>Quick</span>
+      <span class="ck"><svg class="i"><use href="#i-check"/></svg>Honest</span>
+    </div>
+  </div>
+  <aside class="notes">
+    Warm-up, about four minutes. Five AI assistants got the same question: what is the weather in Copenhagen?
+    Clicks 1 to 5 reveal one lane at a time. Ask the room to hold up 0 to 5 fingers, or type the score in the Teams chat. Point at the tool calls column: that is the evidence. Don't explain anything yet; most people score 2 and 4 too high because the answers sound sure, and 5 too low because it gives no weather.
+    Clicks 6 to 10 stamp the judge's score on each lane. Compare it with the room.
+    1 gets 5: it asked the weather service, then answered. Right, checked and quick.
+    2 gets 0: no tool, no data, so it made the weather up. 21 degrees and sunny in Copenhagen in November gives it away. Sounding sure is not the same as being right.
+    3 gets 2: the answer is right, but it asked the weather service four times for one answer: four times the cost and the waiting. My release gate would fail it.
+    4 gets 1: the tool failed and the answer pretends it didn't. Something unknown became a fact.
+    5 gets 5: the tool failed and it said so. "I can't tell you yet" is a good answer when the data is missing.
+    Last click: a good answer is right, checked, quick and honest. Every release of my agent must pass 23 real questions scored like this, and that is the next part.
+  </aside>
+</section>
+
+<!-- ============ 3 · Agenda ============ -->
+<section class="s-agenda">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Today</span>
+    <h2 class="title">How it’s built. What it gives. <span class="grad">Then live.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <ol class="agenda">
+    <li class="card fragment" data-fragment-index="0"><span class="ag-n">1</span><p class="ag-t">How it’s built</p><p class="ag-d">Questions, architecture, tests</p></li>
+    <li class="card fragment" data-fragment-index="1"><span class="ag-n">2</span><p class="ag-t">What customers get</p><p class="ag-d">Savings, trust, AI costs</p></li>
+    <li class="card fragment" data-fragment-index="2"><span class="ag-n">3</span><p class="ag-t">Live demo</p><p class="ag-d">Real questions, real answers</p></li>
+  </ol>
+  <aside class="notes">
+    Three parts. First how it is built and how I keep its quality: the part you can reuse for your own AI projects. Then what it gives customers. Then a live demo.
+  </aside>
+</section>
+
+<!-- ============ 4 · Where the questions come from ============ -->
+<section class="s-ucr">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 1 · How it’s built</span>
+    <h2 class="title">The questions come from <span class="grad">real customers.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="flow3">
+    <div class="fn card fragment" data-fragment-index="0"><span class="icnchip lg"><svg class="i"><use href="#i-doc"/></svg></span><p class="fn-n"><span data-count="5054">5,054</span></p><p class="fn-l">customer requests</p></div>
+    <span class="fa fragment fade-only" data-fragment-index="1"><svg class="i"><use href="#i-arrow"/></svg></span>
+    <div class="fn card fragment" data-fragment-index="1"><span class="icnchip lg purple"><svg class="i"><use href="#i-spark"/></svg></span><p class="fn-n"><span data-count="938">938</span></p><p class="fn-l">about AI</p></div>
+    <span class="fa fragment fade-only" data-fragment-index="2"><svg class="i"><use href="#i-arrow"/></svg></span>
+    <div class="fn card hl fragment" data-fragment-index="2"><span class="icnchip lg"><svg class="i"><use href="#i-chat"/></svg></span><p class="fn-n">15</p><p class="fn-l">start-page questions</p></div>
+  </div>
+  <div class="pills fragment" data-fragment-index="3">
+    <span class="label">Top needs</span>
+    <span class="pill"><svg class="i"><use href="#i-shield"/></svg>Govern AI agents</span>
+    <span class="pill"><svg class="i"><use href="#i-coin"/></svg>Control AI spending</span>
+    <span class="pill"><svg class="i"><use href="#i-tag"/></svg>Compare Azure prices</span>
+  </div>
+  <aside class="notes">
+    Before I wrote the start page, I checked what customers actually ask. I exported 5,054 Unified Support requests from October 2025 to October 2026 and classified the 4,212 in my snapshot, from 93 countries.
+    An LLM labelled every request against a fixed list of themes, in batches with strict JSON: is it about AI, which theme, which stage, and up to three needs. The summaries contain no customer names. A simple keyword classifier agreed with the LLM on 98.8% of requests, which gave me confidence in the labels.
+    938 requests, 22%, were about AI. Agents and securing Copilot data are 42% of them, so governing AI agents leads the start page. 17% need help with cost or proving value: that became Control AI spending. Comparing Azure prices is the FinOps core.
+    Then real usage re-ranks the cards: that is the online evaluation later in this part.
+  </aside>
+</section>
+
+<!-- ============ 5 · Architecture ============ -->
+<section class="s-arch">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 1 · How it’s built</span>
+    <h2 class="title">One agent, a few tools, <span class="grad">safety in code.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="arch2">
+    <div class="node card fragment" data-fragment-index="0"><span class="icnchip lg"><svg class="i"><use href="#i-user"/></svg></span><b>You</b><small>Ask in plain words</small></div>
+    <span class="link fragment fade-only" data-fragment-index="1"><svg class="i"><use href="#i-arrow"/></svg></span>
+    <div class="node main card fragment" data-fragment-index="1"><span class="icnchip lg"><svg class="i"><use href="#i-spark"/></svg></span><b>The agent</b><small>Picks the data to read</small></div>
+    <span class="link fragment fade-only" data-fragment-index="2"><svg class="i"><use href="#i-arrow"/></svg></span>
+    <div class="node card fragment" data-fragment-index="2"><span class="icnchip lg cyan"><svg class="i"><use href="#i-cloud"/></svg></span><b>Your Azure</b><small>Costs, resources, prices</small></div>
+    <div class="model fragment" data-fragment-index="3"><span class="vlink"></span><div class="node sm card"><span class="icnchip purple"><svg class="i"><use href="#i-bot"/></svg></span><div><b>AI model</b><small>in Microsoft Foundry</small></div></div></div>
+  </div>
+  <div class="pills center fragment" data-fragment-index="4">
+    <span class="pill good"><svg class="i"><use href="#i-key"/></svg>Your own access</span>
+    <span class="pill good"><svg class="i"><use href="#i-ban"/></svg>Never deletes</span>
+    <span class="pill good"><svg class="i"><use href="#i-eye"/></svg>Shows every call</span>
+    <span class="pill purple"><svg class="i"><use href="#i-code"/></svg>Built with GitHub Copilot</span>
+  </div>
+  <aside class="notes">
+    Three boxes. You ask in plain words. The agent is a .NET 10 app on Azure App Service, built on Microsoft Agent Framework: one agent serves every chat, using each user's own sign-in. It thinks with a model in Microsoft Foundry, today gpt-6.1-terra through the Responses API, called with a managed identity.
+    The model writes each API call itself, and the tools stay thin: QueryAzure reads Azure Resource Manager, Microsoft Graph, Log Analytics, the Retail Prices API and documentation. Microsoft Learn comes through its MCP server. GenerateScript and GenerateDataReport make files, and ApplyAzureChange only runs after the user approves the exact request.
+    The safety rules live in the code, not in the prompt: DELETE is blocked, POST is allow-listed, writes wait for approval, and every answer shows its calls.
+    Built with GitHub Copilot: 664 commits since 15 March, 264 of them co-authored with Copilot, and 13 repo skills that deploy, release, evaluate sessions and investigate logs.
+  </aside>
+</section>
+
+<!-- ============ 6 · GenAIOps ============ -->
+<section class="s-ops">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 1 · GenAIOps</span>
+    <h2 class="title">Test before release. <span class="grad">Keep testing after.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <ol class="rail" style="--n:3">
+    <li class="stage card fragment" data-fragment-index="0"><span class="st-n">1</span><span class="icnchip lg"><svg class="i"><use href="#i-sliders"/></svg></span><p class="st-t">Pick the model</p><span class="tag">Choose</span></li>
+    <li class="stage card fragment" data-fragment-index="1"><span class="st-n">2</span><span class="icnchip lg purple"><svg class="i"><use href="#i-flask"/></svg></span><p class="st-t">Test before release</p><span class="tag blue">Offline</span></li>
+    <li class="stage card fragment" data-fragment-index="2"><span class="st-n">3</span><span class="icnchip lg pink"><svg class="i"><use href="#i-eye"/></svg></span><p class="st-t">Watch real use</p><span class="tag pink">Online</span></li>
+  </ol>
+  <div class="loopbar fragment" data-fragment-index="3"><span class="icnchip"><svg class="i"><use href="#i-loop"/></svg></span><span>What fails online <b>becomes a new test.</b></span></div>
+  <p class="src fragment" data-fragment-index="3">The three stages come from Microsoft Learn: “Observability in generative AI”.</p>
+  <aside class="notes">
+    The theory has a name: GenAIOps, or LLMOps, which is DevOps for AI apps. Not AIOps, which means AI for IT operations.
+    Microsoft Learn's "Observability in generative AI" names three stages: base model selection, pre-production evaluation and post-production monitoring.
+    1. Pick the model: every candidate model runs the same 23-question gate. gpt-6.1-terra won: 41% of the cost per answer and twice as fast.
+    2. Test before release: the offline evaluation in my deploy workflow, next slide.
+    3. Watch real use: OpenTelemetry traces in Application Insights, and scoring real conversations, the slide after.
+    The flywheel: what fails online becomes an offline test case, so every later release is checked for it.
+  </aside>
+</section>
+
+<!-- ============ 7 · Offline evaluation ============ -->
+<section class="s-off">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 1 · Offline evaluation</span>
+    <h2 class="title">Nothing ships until <span class="grad">23 questions pass.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <ol class="rail" style="--n:4">
+    <li class="pp card fragment" data-fragment-index="0"><span class="icnchip lg"><svg class="i"><use href="#i-pr"/></svg></span><b>Push code</b></li>
+    <li class="pp card fragment" data-fragment-index="1"><span class="icnchip lg cyan"><svg class="i"><use href="#i-chat"/></svg></span><b>Ask 23 real questions</b></li>
+    <li class="pp card fragment" data-fragment-index="2"><span class="icnchip lg purple"><svg class="i"><use href="#i-judge"/></svg></span><b>An AI judge scores each</b></li>
+    <li class="pp card ok fragment" data-fragment-index="3"><span class="icnchip lg green"><svg class="i"><use href="#i-rocket"/></svg></span><b>Release</b></li>
+  </ol>
+  <div class="off2">
+    <div class="stop fragment" data-fragment-index="4"><span class="icnchip amber"><svg class="i"><use href="#i-ban"/></svg></span><span>One failure <b>stops the release.</b></span></div>
+    <div class="stat fragment" data-fragment-index="5"><b>80%+</b><span>AI judges agree with people as often as people agree with each other.<small>Zheng et al., NeurIPS 2023</small></span></div>
+  </div>
+  <aside class="notes">
+    Every push runs 339 C# tests and desktop and mobile browser tests. Then the live gate: 23 real questions, each in a fresh process, on the real model and real Azure tools.
+    A second model, gpt-6.1-sol, judges every answer: accepted, grounded, complete and efficient, with 19 fixed reason codes, like the ones in the warm-up. Code checks override the judge, and the code turns the judge's waste counts into the efficiency score.
+    One failure stops the deployment, with no re-run. A failed eval is fixed at its cause: never by re-running it, switching models or loosening the rubric. Then the test slot, production, a smoke test and automatic rollback. After every deploy and every Monday, a quality report runs 15 more evals with an 80% bar.
+    The theory: Zheng et al., NeurIPS 2023, "Judging LLM-as-a-Judge": strong LLM judges agree with human preferences over 80% of the time, as often as humans agree with each other. They also favour answers by position, by length and their own style, which is why a different model judges and code checks override it.
+  </aside>
+</section>
+
+<!-- ============ 8 · Online evaluation ============ -->
+<section class="s-on">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 1 · Online evaluation</span>
+    <h2 class="title">Real users <span class="grad">grade it too.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <ol class="rail" style="--n:4">
+    <li class="cy card fragment" data-fragment-index="0"><span class="bn">1</span><b>Export real chats</b></li>
+    <li class="cy card fragment" data-fragment-index="1"><span class="bn">2</span><b>Score 0 to 10</b></li>
+    <li class="cy card fragment" data-fragment-index="2"><span class="bn">3</span><b>Find the cause</b></li>
+    <li class="cy card fragment" data-fragment-index="3"><span class="bn">4</span><b>Fix it, add a test</b></li>
+  </ol>
+  <div class="audit2 fragment" data-fragment-index="4">
+    <p class="label">Latest audit · 14 days</p>
+    <div class="ak"><b><span data-count="48">48</span></b><small>chats</small></div>
+    <div class="ak"><b><span data-count="37">37</span></b><small>people</small></div>
+    <div class="ak"><b><span data-count="14">14</span></b><small>countries</small></div>
+    <p class="ak-r"><svg class="i"><use href="#i-check"/></svg>Their most-typed question became a start-page card.</p>
+  </div>
+  <aside class="notes">
+    Online evaluation is a repo skill I run every few weeks with GitHub Copilot. It exports up to 30 days of real conversations, read-only and pseudonymised, without my own use and the smoke tests.
+    The production model scores every conversation from 0 to 10 against a fixed rubric, with nothing stored. I read the 5 lowest and 3 highest myself. Rating the same records twice changed 30 of 107 scores, so I average two runs.
+    Then I group the problems by cause, trace each one in the code, check API facts in the docs, fix it and add a test. Real failures become eval cases.
+    Latest audit, 16 November, 14 days: 48 conversations from 37 people in 14 countries. The most typed request became the "Price my own setup" card, signed-in users got a "FinOps assessment report" card, three cards nobody clicked were removed, and two more evals joined the quality report.
+  </aside>
+</section>
+
+<!-- ============ 9 · Running cost ============ -->
+<section class="s-cost">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 1 · Running cost</span>
+    <h2 class="title">AI cost = <span class="grad">tokens × price.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="levers2">
+    <div class="lv card accent fragment" data-fragment-index="0"><span class="icnchip lg"><svg class="i"><use href="#i-spark"/></svg></span><p class="lv-t">Cheaper model</p><p class="lv-n">−<span data-count="59">59</span>%</p><p class="lv-d">cost per answer</p></div>
+    <div class="lv card accent fragment" data-fragment-index="1"><span class="icnchip lg cyan"><svg class="i"><use href="#i-stack"/></svg></span><p class="lv-t">Send less</p><p class="lv-n">27k</p><p class="lv-d">tokens ride on every call</p></div>
+    <div class="lv card accent fragment" data-fragment-index="2"><span class="icnchip lg amber"><svg class="i"><use href="#i-gauge"/></svg></span><p class="lv-t">Think less</p><p class="lv-n">3×</p><p class="lv-d">faster at medium effort</p></div>
+    <div class="lv card accent fragment" data-fragment-index="3"><span class="icnchip lg pink"><svg class="i"><use href="#i-text"/></svg></span><p class="lv-t">Write less</p><p class="lv-n">8k</p><p class="lv-d">tokens for one assessment</p></div>
+  </div>
+  <p class="foot fragment" data-fragment-index="4"><svg class="i"><use href="#i-eye"/></svg>All measured on my own agent’s bill.</p>
+  <aside class="notes">
+    Every AI bill is tokens times price, so there are only two kinds of lever: a cheaper price, or fewer tokens.
+    Cheaper model: pick the model by cost per answer, not price per token. Moving to gpt-6.1-terra halved the token price and cut the cost per answer to 41%, a 59% saving. The median answer went from 58 to 28 seconds, and it passed the same 23 questions first.
+    Send less: instructions and tool definitions ride along on every model call, about 27,000 tokens. Now a turn only gets the tools it can use, and a long chat starts fresh after 100,000 tokens, because calls above 180,000 tokens waited 10 to 17 seconds for the first word.
+    Think less: one round took about 45 seconds at extra-high reasoning effort and 15 at medium.
+    Write less: output tokens are the slow and expensive part. One maturity assessment wrote about 8,000 tokens, so answers now aim for 150 words and one table.
+  </aside>
+</section>
+
+<!-- ============ 10 · What it does ============ -->
+<section class="s-hub">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 2 · What it does</span>
+    <h2 class="title">Six data sources. <span class="grad">One conversation.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="hub">
+    <svg class="flines" viewBox="0 0 1000 333" aria-hidden="true">
+      <defs>
+        <linearGradient id="hubGrad" gradientUnits="userSpaceOnUse" x1="250" y1="0" x2="750" y2="0">
+          <stop offset="0" stop-color="#0078D4"/><stop offset=".5" stop-color="#5C2D91"/><stop offset="1" stop-color="#C239B3"/>
+        </linearGradient>
+      </defs>
+      <g class="fragment fade-only draw" data-fragment-index="1">
+        <path id="hp1" class="fl draw-path" pathLength="100" d="M250 55.5C310 55.5 340 100 388.5 117"/>
+        <path id="hp2" class="fl draw-path" pathLength="100" d="M250 166.5C300 166.5 330 166.5 378 166.5"/>
+        <path id="hp3" class="fl draw-path" pathLength="100" d="M250 277.5C310 277.5 340 233 388.5 216"/>
+        <path id="hp4" class="fl draw-path" pathLength="100" d="M750 55.5C690 55.5 660 100 611.5 117"/>
+        <path id="hp5" class="fl draw-path" pathLength="100" d="M750 166.5C700 166.5 670 166.5 622 166.5"/>
+        <path id="hp6" class="fl draw-path" pathLength="100" d="M750 277.5C690 277.5 660 233 611.5 216"/>
+        <circle class="flow" r="6"><animateMotion dur="3.2s" repeatCount="indefinite"><mpath href="#hp1"/></animateMotion></circle>
+        <circle class="flow" r="6"><animateMotion dur="3.2s" begin="-1.1s" repeatCount="indefinite"><mpath href="#hp2"/></animateMotion></circle>
+        <circle class="flow" r="6"><animateMotion dur="3.2s" begin="-2.2s" repeatCount="indefinite"><mpath href="#hp3"/></animateMotion></circle>
+        <circle class="flow p" r="6"><animateMotion dur="3.2s" begin="-0.5s" repeatCount="indefinite"><mpath href="#hp4"/></animateMotion></circle>
+        <circle class="flow p" r="6"><animateMotion dur="3.2s" begin="-1.6s" repeatCount="indefinite"><mpath href="#hp5"/></animateMotion></circle>
+        <circle class="flow p" r="6"><animateMotion dur="3.2s" begin="-2.7s" repeatCount="indefinite"><mpath href="#hp6"/></animateMotion></circle>
+      </g>
+    </svg>
+    <div class="sat-pos l t"><div class="sat card fragment" data-fragment-index="0"><span class="icnchip"><svg class="i"><use href="#i-coin"/></svg></span><div><b>Cost Management</b><small>What you paid</small></div></div></div>
+    <div class="sat-pos l m"><div class="sat card fragment" data-fragment-index="0" style="transition-delay:.08s"><span class="icnchip cyan"><svg class="i"><use href="#i-chart"/></svg></span><div><b>Azure Monitor</b><small>What ran</small></div></div></div>
+    <div class="sat-pos l b"><div class="sat card fragment" data-fragment-index="0" style="transition-delay:.16s"><span class="icnchip purple"><svg class="i"><use href="#i-graph"/></svg></span><div><b>Resource Graph</b><small>What exists</small></div></div></div>
+    <div class="sat-pos r t"><div class="sat card fragment" data-fragment-index="0" style="transition-delay:.24s"><span class="icnchip amber"><svg class="i"><use href="#i-tag"/></svg></span><div><b>Retail Prices</b><small>What it should cost</small></div></div></div>
+    <div class="sat-pos r m"><div class="sat card fragment" data-fragment-index="0" style="transition-delay:.32s"><span class="icnchip pink"><svg class="i"><use href="#i-people"/></svg></span><div><b>Microsoft Graph</b><small>Licences</small></div></div></div>
+    <div class="sat-pos r b"><div class="sat card fragment" data-fragment-index="0" style="transition-delay:.4s"><span class="icnchip green"><svg class="i"><use href="#i-fix"/></svg></span><div><b>Advisor</b><small>Microsoft’s tips</small></div></div></div>
+    <div class="fcore-pos"><div class="fcore fragment fade-scale" data-fragment-index="1" style="transform-origin:center"><svg class="i"><use href="#i-spark"/></svg><b>Azure FinOps Agent</b></div></div>
+  </div>
+  <div class="example fragment" data-fragment-index="2"><span>For example:</span><span class="ask"><svg class="i"><use href="#i-chat"/></svg>Why did our AI bill go up last month?</span></div>
+  <aside class="notes">
+    Every FinOps question needs data from several places. What you paid: Cost Management. What ran, down to tokens: Azure Monitor and Log Analytics. What exists, with its tags: Resource Graph. What it should cost: the Retail Prices API. Who uses licences and Copilot: Microsoft Graph. What Microsoft recommends: Advisor. Plus Microsoft Learn for the how-to.
+    The real value is the join: it connects a cost with what caused it. Why did our AI bill go up? Cost by meter and project tag, tokens per deployment per day, the price per million tokens, the owner from the tags, then one answer with a fix to approve.
+  </aside>
+</section>
+
+<!-- ============ 11 · Customer value ============ -->
+<section class="s-value">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 2 · What customers get</span>
+    <h2 class="title">Hours of work <span class="grad">become minutes.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="kpi2">
+    <div class="big2 card accent fragment" data-fragment-index="0"><p class="pre">Was <s>30+ hours</s></p><p class="now">&lt;<span data-count="30">30</span>&nbsp;min</p><p class="what">to prepare a FinOps assessment</p></div>
+    <div class="big2 card accent fragment" data-fragment-index="1"><p class="pre">In pilots</p><p class="now">15–<span data-count="40">40</span>%</p><p class="what">potential savings found</p></div>
+  </div>
+  <div class="pills fragment" data-fragment-index="2"><span class="label">In conversations with</span><span class="pill cu">Shipping</span><span class="pill cu">Pharma</span><span class="pill cu">Insurance</span><span class="pill cu">Energy</span><span class="pill cu">Banking</span><span class="pill cu">Public sector</span></div>
+  <aside class="notes">
+    From the pilots: preparing a FinOps assessment went from 30+ hours to under 30 minutes, and 15 to 40 percent potential savings surfaced, from orphaned resources, oversized VMs, underused reservations and idle Copilot seats. Say "potential": these are opportunities, not booked savings.
+    In customer conversations: built from direct asks by a shipping company and a pharmaceutical company, and used on both deliveries. A Swiss insurer deployed it in its own tenant and asked for more features. In the US, a Houston CSA showed it to several customers, and an energy utility reviewed the repo for security and SSO with a positive result. In Denmark it anchors FinOps conversations in energy, banking and the public sector.
+  </aside>
+</section>
+
+<!-- ============ 12 · Trust and open source ============ -->
+<section class="s-trust">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 2 · The main selling point</span>
+    <h2 class="title">Trust can’t be sold. <span class="grad">So it’s open source.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="tiles">
+    <div class="tile card accent c4 fragment" data-fragment-index="0"><span class="icnchip lg"><svg class="i"><use href="#i-eye"/></svg></span><b>Read every line</b><small>MIT licence on GitHub</small></div>
+    <div class="tile card accent c4 fragment" data-fragment-index="1"><span class="icnchip lg cyan"><svg class="i"><use href="#i-cloud"/></svg></span><b>Runs in your tenant</b><small>Your Azure, your model</small></div>
+    <div class="tile card accent c1 fragment" data-fragment-index="2"><span class="icnchip lg purple"><svg class="i"><use href="#i-key"/></svg></span><b>Uses your access</b><small>The user’s own rights</small></div>
+    <div class="tile card accent c2 fragment" data-fragment-index="3"><span class="icnchip lg green"><svg class="i"><use href="#i-shield"/></svg></span><b>Never deletes</b><small>Changes wait for your click</small></div>
+  </div>
+  <aside class="notes">
+    This is the main selling point. Nobody can sell a customer trust in a tool that reads their bill; the customer has to be able to check it, and open source lets them.
+    Read every line: MIT licence, published in Azure-Samples on GitHub.
+    Runs in your tenant: deployed with azd up into their own subscription, calling their own model deployment in Foundry. Be honest about one thing: hosted web search is on by default and sends search terms outside the Azure data boundary. Tenant and resource names are kept out of them, and it can be switched off.
+    Uses your access: delegated sign-in with the user's own Azure permissions. Microsoft Graph, Log Analytics and Storage are separate read-only consents.
+    Never deletes: DELETE is blocked in the code. Other changes show the exact request and wait for a click, and risky fixes come out as scripts the customer reviews and runs. I will show this in the demo.
+  </aside>
+</section>
+
+<!-- ============ 13 · How AI is billed ============ -->
+<section class="s-bills">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 2 · FinOps for AI</span>
+    <h2 class="title">AI is billed <span class="grad">four ways.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="tiles">
+    <div class="tile card accent c1 fragment" data-fragment-index="0"><span class="icnchip lg purple"><svg class="i"><use href="#i-id"/></svg></span><b>Per user</b><small>Microsoft 365 Copilot</small></div>
+    <div class="tile card accent c2 fragment" data-fragment-index="1"><span class="icnchip lg green"><svg class="i"><use href="#i-code"/></svg></span><b>Per seat + credits</b><small>GitHub Copilot</small></div>
+    <div class="tile card accent c3 fragment" data-fragment-index="2"><span class="icnchip lg amber"><svg class="i"><use href="#i-window"/></svg></span><b>Copilot Credits</b><small>Copilot Studio and agents</small></div>
+    <div class="tile card accent c4 fragment" data-fragment-index="3"><span class="icnchip lg"><svg class="i"><use href="#i-token"/></svg></span><b>Per token</b><small>Foundry models</small></div>
+  </div>
+  <div class="allfour fragment" data-fragment-index="4"><span>One question covers all four:</span><span class="ask"><svg class="i"><use href="#i-chat"/></svg>How do we budget and justify AI?</span></div>
+  <aside class="notes">
+    When a customer asks what AI costs, the honest answer is: which of the four meters?
+    Per user: Microsoft 365 Copilot licences. The waste is licences nobody uses; the agent reads the Copilot usage reports through Microsoft Graph.
+    Per seat plus AI credits: GitHub Copilot. Watch the seats and set a budget for the credits.
+    Copilot Credits: Copilot Studio, Cowork, Work IQ API and agents. Governed in the Microsoft 365 admin center under Copilot, Cost management. Pay-as-you-go credits are billed to an Azure subscription, so they also show up in Azure Cost Management.
+    Per token: Foundry models, billed on input, cached input and output tokens, or provisioned throughput by the hour.
+    The start-page card "How do we budget and justify AI?" answers all four in one table.
+  </aside>
+</section>
+
+<!-- ============ 14 · New at Ignite ============ -->
+<section class="s-new">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 2 · New at Ignite 2026</span>
+    <h2 class="title">AI spend per user and model. <span class="grad">Now in the agent.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="tiles t3">
+    <div class="tile card accent c1 fragment" data-fragment-index="0"><span class="icnchip lg purple"><svg class="i"><use href="#i-people"/></svg></span><b>Per user</b><small>Copilot credits</small><span class="tag purple"><svg class="i"><use href="#i-graph"/></svg>Microsoft Graph · new</span></div>
+    <div class="tile card accent c4 fragment" data-fragment-index="1"><span class="icnchip lg"><svg class="i"><use href="#i-token"/></svg></span><b>Per model</b><small>Foundry cost</small><span class="tag blue"><svg class="i"><use href="#i-tag"/></svg>deployment tag</span></div>
+    <div class="tile card accent c3 fragment" data-fragment-index="2"><span class="icnchip lg amber"><svg class="i"><use href="#i-bot"/></svg></span><b>Per agent</b><small>Foundry cost</small><span class="tag warn"><svg class="i"><use href="#i-tag"/></svg>agent.name tag</span></div>
+  </div>
+  <div class="allfour fragment" data-fragment-index="3"><span>Ask it:</span><span class="ask"><svg class="i"><use href="#i-chat"/></svg><span>Who used the most Copilot credits yesterday<span class="qk">?</span></span></span></div>
+  <aside class="notes">
+    New this week. At Ignite on 17 November, Microsoft announced Agent 365 Cost Management in the Microsoft 365 admin center. It tracks AI consumption across users, services, agents and models, and the new Agent 365 Business Analytics app (Frontier preview) breaks it down in dollars.
+    Its Microsoft Graph API (beta, under /copilot/costManagement) gives Copilot Credits per user, security group and service for each completed day, a month by funding class, the tenant credit balance and the spending policies. It reports credits, not currency, and has no model or agent breakdown.
+    The agent now reads it through a new read-only consent in the sidebar, Copilot Cost Management: three read scopes, which need admin consent. It has its own token, so existing licence and chargeback sign-ins are untouched.
+    Per model and per agent, in dollars, comes from Azure Cost Management: Foundry tags model usage with the deployment, and from November with agent.name when an agent made the call, next to the project tag.
+    Demo, if the lab tenant has Copilot Credits usage: Prompts, then "Copilot credits per user".
+  </aside>
+</section>
+
+<!-- ============ 15 · Compared with Agent 365 Cost Management ============ -->
+<section class="s-cmp">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 2 · Compared with Microsoft 365</span>
+    <h2 class="title">Two tools, two jobs. <span class="grad">Use both.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="vs">
+    <div class="side a card fragment" data-fragment-index="0">
+      <div class="top"><span class="icnchip lg purple"><svg class="i"><use href="#i-window"/></svg></span><div><b>Agent 365 Cost Management</b><small>Microsoft 365 admin center</small></div></div>
+      <p class="job">Sets the limits on AI spend</p>
+      <ul><li><svg class="i"><use href="#i-check"/></svg>Users, services, agents, models</li><li><svg class="i"><use href="#i-check"/></svg>Dollars in Business Analytics (preview)</li></ul>
+    </div>
+    <div class="side b card fragment" data-fragment-index="1">
+      <div class="top"><span class="icnchip lg"><svg class="i"><use href="#i-spark"/></svg></span><div><b>Azure FinOps Agent</b><small>Open source, in your tenant</small></div></div>
+      <p class="job">Explains why the bill moved</p>
+      <ul><li><svg class="i"><use href="#i-check"/></svg>Reads its API, plus Azure and Foundry</li><li><svg class="i"><use href="#i-check"/></svg>Shows every call behind the answer</li></ul>
+    </div>
+  </div>
+  <div class="verdict fragment" data-fragment-index="2"><span class="icnchip green"><svg class="i"><use href="#i-check"/></svg></span><span>Set the limits in the admin center. Ask the agent why.</span></div>
+  <aside class="notes">
+    Agent 365 Cost Management in the Microsoft 365 admin center, under Copilot, Cost management, is the control plane: spending policies and limits for users, groups and agents, alerts, credit requests, and consumption across users, services, agents and models. Business Analytics adds dollars, in preview: November for Cowork, December for agents.
+    Its Graph API reports Copilot Credits, not currency, and has no prices, invoices or forecasts.
+    The agent is the analyst: it reads that API and joins it with Azure Cost Management, Foundry model and agent cost, Microsoft 365 licences and list prices, and every answer shows the calls behind it.
+    They don't compete: set the guardrails in the admin center, and ask the agent why the bill moved and what to change. Sources: the Microsoft 365 Copilot blog and the AI FinOps blog on Tech Community (17 November 2026), and Microsoft Learn, "Microsoft 365 Copilot Cost Management API overview".
+  </aside>
+</section>
+
+<!-- ============ 16 · The story so far ============ -->
+<section class="s-tl">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 2 · The story so far</span>
+    <h2 class="title">From first commit <span class="grad">to Pace Setter.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="tl">
+    <div class="tl-track"><i class="tl-fill"></i></div>
+    <ol class="tl-list">
+      <li class="tl-item">
+        <span class="tl-node"></span>
+        <p class="tl-date">15 Mar 2026</p>
+        <div class="tl-card card"><span class="icnchip"><svg class="i"><use href="#i-code"/></svg></span><p class="tl-t">First commit</p><p class="tl-d">Two customers asked</p></div>
+      </li>
+      <li class="tl-item fragment" data-fragment-index="0">
+        <span class="tl-node"></span>
+        <p class="tl-date">27 Mar</p>
+        <div class="tl-card card"><span class="icnchip amber"><svg class="i"><use href="#i-flag"/></svg></span><p class="tl-t">First entry in EMEA</p><p class="tl-d">Dragon’s Den challenge</p></div>
+      </li>
+      <li class="tl-item fragment" data-fragment-index="1">
+        <span class="tl-node"></span>
+        <p class="tl-date">17 Apr</p>
+        <div class="tl-card card"><span class="icnchip cyan"><svg class="i"><use href="#i-people"/></svg></span><p class="tl-t">Product team calls</p><p class="tl-d">Azure Cost Management</p></div>
+      </li>
+      <li class="tl-item win fragment" data-fragment-index="2">
+        <span class="tl-node"></span>
+        <p class="tl-date">May</p>
+        <div class="tl-card card"><span class="icnchip pink"><svg class="i"><use href="#i-trophy"/></svg></span><p class="tl-t">Europe North winner</p><p class="tl-d">EMEA semi-final</p></div>
+      </li>
+      <li class="tl-item fragment" data-fragment-index="3">
+        <span class="tl-node"></span>
+        <p class="tl-date">Jun</p>
+        <div class="tl-card card"><span class="icnchip purple"><svg class="i"><use href="#i-cloud"/></svg></span><p class="tl-t">Swiss insurer deploys it</p><p class="tl-d">In its own tenant</p></div>
+      </li>
+      <li class="tl-item win fragment" data-fragment-index="4">
+        <span class="tl-node"></span>
+        <p class="tl-date">Nov</p>
+        <div class="tl-card card"><span class="icnchip pink"><svg class="i"><use href="#i-medal"/></svg></span><p class="tl-t">FY27 Pace Setter</p><p class="tl-d">From 1,200+ nominations</p></div>
+      </li>
+    </ol>
+  </div>
+  <aside class="notes">
+    15 March: first commit. A shipping company and a pharmaceutical company both asked for FinOps help at the same time; by hand, an assessment took 30+ hours across six APIs.
+    27 March: the Europe North lead wrote that mine was the first submission across all of EMEA in the Dragon's Den AI Agent Challenge, run by EMEA BSO AI Innovation.
+    17 April and 8 May: the Azure Cost Management team in Redmond found the repo and asked for feedback and a call.
+    May: Europe North winner. On 11 May I pitched in the EMEA semi-final as one of ten OU winners, to the AIT Director and the AI Business Solutions sales lead.
+    June: a Swiss insurer wanted to run it and asked for infrastructure as code. I shipped full azd provisioning within seven days and they deployed it in their own tenant.
+    November: selected as an FY27 CSU Pace Setter, from more than 1,200 peer nominations; the agent was the evidence for technical excellence, technical leadership and community impact.
+  </aside>
+</section>
+
+<!-- ============ 17 · Reach ============ -->
+<section class="s-reach">
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 2 · Reach</span>
+    <h2 class="title">No campaign. <span class="grad">15 countries.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <div class="reach">
+    <figure class="map card">
+      <svg class="worldmap" viewBox="0 0 2000 860" role="img" aria-label="Dotted world map with the 15 countries highlighted"><path class="land" d="M782 5h0m11 0h0m10 0h0m11 0h0m10 0h0m21 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M756 14h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m126 0h0m10 0h0m11 0h0m11 0h0m10 0h0m273 0h0m11 0h0M730 23h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m147 0h0m11 0h0m21 0h0M735 32h0m31 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m325 0h0m11 0h0m10 0h0m116 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m106 0h0M782 41h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m304 0h0m11 0h0m115 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M777 50h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m315 0h0m74 0h0m42 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m53 0h0m11 0h0m10 0h0M793 59h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m21 0h0m326 0h0m52 0h0m11 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M788 68h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m179 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m64 0h0m52 0h0m10 0h0m22 0h0m10 0h0m32 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0M257 77h0m11 0h0m10 0h0m11 0h0m115 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m42 0h0m10 0h0m63 0h0m21 0h0M220 86h0m42 0h0m126 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m42 0h0m11 0h0m11 0h0m31 0h0m11 0h0M782 95h0m11 0h0m10 0h0m11 0h0m94 0h0m11 0h0m10 0h0m126 0h0m53 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M777 105h0m11 0h0m10 0h0m10 0h0m221 0h0m11 0h0m10 0h0m52 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m21 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0M782 114h0m11 0h0m10 0h0m221 0h0m10 0h0m11 0h0m10 0h0m42 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m31 0h0m21 0h0m11 0h0m10 0h0M1029 123h0m11 0h0m10 0h0m63 0h0m21 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m31 0h0m42 0h0M1118 132h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m95 0h0m10 0h0M1102 141h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m94 0h0m11 0h0m11 0h0M1097 150h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m105 0h0m10 0h0m11 0h0M1071 159h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m74 0h0M1076 168h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m32 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m74 0h0M1008 177h0m10 0h0m11 0h0m42 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m53 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M1003 186h0m10 0h0m11 0h0m10 0h0m32 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m84 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M987 196h0m11 0h0m10 0h0m10 0h0m11 0h0m31 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m31 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m84 0h0m10 0h0m21 0h0M1003 205h0m10 0h0m11 0h0m31 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m31 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m52 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m105 0h0m10 0h0m21 0h0m42 0h0M998 214h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m22 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m53 0h0m11 0h0m10 0h0m10 0h0m32 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m84 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m105 0h0m11 0h0m10 0h0m32 0h0M961 223h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m42 0h0m11 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m74 0h0m10 0h0m11 0h0m31 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m84 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m105 0h0m11 0h0m42 0h0m10 0h0M956 232h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m63 0h0m11 0h0m20 0h0m11 0h0m11 0h0m10 0h0m42 0h0m42 0h0m10 0h0m11 0h0m42 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m137 0h0m126 0h0M961 241h0m10 0h0m11 0h0m10 0h0m53 0h0m63 0h0m10 0h0m21 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m262 0h0m11 0h0m63 0h0M956 250h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m105 0h0m31 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m31 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m272 0h0m74 0h0M961 259h0m10 0h0m11 0h0m10 0h0m74 0h0m10 0h0m42 0h0m32 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m31 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m283 0h0m63 0h0M1008 268h0m10 0h0m11 0h0m11 0h0m10 0h0m94 0h0m53 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m273 0h0m11 0h0m42 0h0m10 0h0M971 277h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m116 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m262 0h0m32 0h0m10 0h0m21 0h0M966 286h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m136 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m283 0h0m11 0h0M383 296h0m11 0h0m556 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m32 0h0m10 0h0m11 0h0m63 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M388 305h0m22 0h0m10 0h0m10 0h0m11 0h0m515 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m21 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0M394 314h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m493 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m63 0h0M410 323h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m441 0h0m31 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m21 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m21 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m168 0h0M415 332h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m462 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m21 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m42 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M399 341h0m21 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m452 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m22 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m32 0h0m63 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M404 350h0m21 0h0m11 0h0m10 0h0m11 0h0m10 0h0m452 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m31 0h0m11 0h0m63 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M430 359h0m11 0h0m11 0h0m10 0h0m105 0h0m347 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m53 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m22 0h0m10 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0M436 368h0m10 0h0m11 0h0m10 0h0m42 0h0m11 0h0m63 0h0m336 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m21 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m84 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m42 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M430 377h0m11 0h0m11 0h0m10 0h0m10 0h0m42 0h0m95 0h0m11 0h0m294 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m31 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m95 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m62 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0M446 386h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m410 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m32 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m105 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m63 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m84 0h0M462 396h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m400 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m31 0h0m11 0h0m10 0h0m10 0h0m11 0h0m126 0h0m11 0h0m10 0h0m10 0h0m11 0h0m73 0h0m22 0h0m10 0h0m10 0h0m11 0h0m11 0h0m84 0h0M499 405h0m10 0h0m11 0h0m10 0h0m11 0h0m367 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m31 0h0m11 0h0m10 0h0m11 0h0m136 0h0m11 0h0m10 0h0m105 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m73 0h0M514 414h0m11 0h0m11 0h0m378 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m158 0h0m10 0h0m10 0h0m106 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m84 0h0M530 423h0m74 0h0m315 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m189 0h0m10 0h0m116 0h0m21 0h0m10 0h0m11 0h0m10 0h0M536 432h0m52 0h0m10 0h0m11 0h0m11 0h0m304 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m147 0h0m10 0h0m137 0h0m11 0h0m10 0h0m63 0h0m21 0h0m10 0h0M541 441h0m21 0h0m21 0h0m10 0h0m21 0h0m11 0h0m10 0h0m11 0h0m10 0h0m273 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m147 0h0m10 0h0m11 0h0m105 0h0m31 0h0m116 0h0M567 450h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m262 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m179 0h0m105 0h0m94 0h0m32 0h0m10 0h0M572 459h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m263 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m179 0h0m115 0h0M578 468h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m252 0h0m10 0h0m21 0h0m53 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m273 0h0M572 477h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m346 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m283 0h0m63 0h0m42 0h0M567 486h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m346 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m294 0h0m10 0h0m94 0h0M562 496h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m336 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m325 0h0m11 0h0m42 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0M494 505h0m62 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m336 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m336 0h0m42 0h0m11 0h0m11 0h0m10 0h0m10 0h0m64 0h0M562 514h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m304 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m347 0h0m10 0h0m32 0h0m10 0h0m11 0h0m10 0h0m21 0h0m74 0h0m31 0h0M556 523h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m283 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m357 0h0m11 0h0m52 0h0m63 0h0m21 0h0m21 0h0m11 0h0m10 0h0m10 0h0m11 0h0M551 532h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m273 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m367 0h0m84 0h0m11 0h0m84 0h0m10 0h0m11 0h0m10 0h0m11 0h0m42 0h0M556 541h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m273 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m378 0h0m178 0h0m11 0h0m11 0h0m10 0h0m10 0h0M562 550h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m273 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m388 0h0m11 0h0m10 0h0m84 0h0m21 0h0m42 0h0m11 0h0m10 0h0m11 0h0m10 0h0M567 559h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m284 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m430 0h0m137 0h0m31 0h0m74 0h0M572 568h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m283 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M578 577h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m294 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m21 0h0M583 587h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m294 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M588 596h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m294 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m52 0h0M604 605h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m284 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m42 0h0m10 0h0M609 614h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m294 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m53 0h0m10 0h0m10 0h0m704 0h0M625 623h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m294 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m52 0h0m11 0h0m10 0h0M620 632h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m305 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m64 0h0m10 0h0M625 641h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m304 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m63 0h0m11 0h0M620 650h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m326 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m32 0h0m10 0h0m53 0h0m11 0h0M625 659h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m347 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m42 0h0m63 0h0m11 0h0M630 668h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m347 0h0m10 0h0m10 0h0m11 0h0M625 677h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m357 0h0m10 0h0m74 0h0M620 687h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m367 0h0M625 696h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m420 0h0M630 705h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M625 714h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M630 723h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0M625 732h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m1208 0h0M630 741h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m1207 0h0M625 750h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m1218 0h0m10 0h0M630 759h0m10 0h0m11 0h0m11 0h0m10 0h0m1228 0h0M625 768h0m10 0h0m11 0h0m10 0h0m11 0h0m1218 0h0M640 777h0m11 0h0m11 0h0m1207 0h0M635 787h0m11 0h0m10 0h0m11 0h0m1186 0h0M640 796h0m11 0h0m11 0h0m1176 0h0m10 0h0M635 805h0m11 0h0m10 0h0m11 0h0m1165 0h0M630 814h0m10 0h0m11 0h0m11 0h0M646 823h0m10 0h0M651 832h0m11 0h0M656 841h0m11 0h0M682 850h0"/><g class="fragment fade-only" data-fragment-index="0"><path class="hl ask" d="M677 5h0m11 0h0m10 0h0m21 0h0m11 0h0m10 0h0m11 0h0m10 0h0M640 14h0m11 0h0m11 0h0m10 0h0m10 0h0m22 0h0m10 0h0m10 0h0M572 23h0m42 0h0m63 0h0m11 0h0m10 0h0M536 32h0m10 0h0m10 0h0m53 0h0m31 0h0M509 41h0m11 0h0M494 50h0m10 0h0m21 0h0m11 0h0m31 0h0m21 0h0m10 0h0m42 0h0m11 0h0m11 0h0m20 0h0M341 59h0m11 0h0m10 0h0m158 0h0m10 0h0m11 0h0m10 0h0m11 0h0m42 0h0m10 0h0m21 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M315 68h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m20 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m31 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m21 0h0m42 0h0m31 0h0m11 0h0m11 0h0M299 77h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M273 86h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0M299 95h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0m10 0h0m53 0h0m10 0h0m11 0h0M273 105h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m42 0h0m63 0h0M257 114h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m84 0h0m11 0h0m10 0h0M262 123h0m11 0h0m11 0h0m10 0h0m74 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m84 0h0m11 0h0m10 0h0m32 0h0M278 132h0m95 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m84 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M388 141h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m42 0h0m21 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m336 0h0m10 0h0M226 150h0m147 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m31 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m242 0h0m84 0h0M200 159h0m188 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m32 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m20 0h0m232 0h0m10 0h0M394 168h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m231 0h0m892 0h0m11 0h0M399 177h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m20 0h0M394 186h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m21 0h0m42 0h0m11 0h0M388 196h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m52 0h0m11 0h0m305 0h0M394 205h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m346 0h0m11 0h0M388 214h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M373 223h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M378 232h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M373 241h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M368 250h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0M373 259h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M368 268h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M373 277h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M388 286h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0M404 296h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M452 305h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0M467 314h0m11 0h0m10 0h0m74 0h0M472 323h0m95 0h0M562 332h0M1286 350h0m11 0h0"/><g class="mk home" transform="translate(1058.7 145.3)" style="--d:0.00s"><title>Denmark</title><circle class="ring" r="10"/><circle class="core" r="10"/><text class="mk-label" x="-20" y="-26" text-anchor="end">Copenhagen</text></g><g class="mk ask" transform="translate(494.1 246.8)" style="--d:0.23s"><title>United States</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk ask" transform="translate(1298.0 339.2)" style="--d:0.46s"><title>United Arab Emirates</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk ask" transform="translate(970.0 159.5)" style="--d:0.69s"><title>Ireland</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk ask" transform="translate(1042.3 196.7)" style="--d:0.92s"><title>Switzerland</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk ask" transform="translate(647.1 200.3)" style="--d:1.15s"><title>Canada</title><circle class="ring" r="10"/><circle class="core" r="10"/></g></g><g class="fragment fade-only" data-fragment-index="1"><path class="hl star" d="M1076 77h0m11 0h0m10 0h0M1071 86h0m11 0h0m10 0h0M1066 95h0m10 0h0m11 0h0M1060 105h0m11 0h0M1066 114h0m10 0h0M1060 123h0m11 0h0m11 0h0M1055 132h0m11 0h0m10 0h0M976 141h0m84 0h0m11 0h0M971 150h0m11 0h0m10 0h0M987 159h0m11 0h0m42 0h0m10 0h0m10 0h0m526 0h0M982 168h0m10 0h0m11 0h0m21 0h0m10 0h0m11 0h0m10 0h0m11 0h0m525 0h0m10 0h0M976 177h0m64 0h0m10 0h0m10 0h0m526 0h0m10 0h0m10 0h0m11 0h0M1045 186h0m10 0h0m515 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M1050 196h0m378 0h0m10 0h0m158 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0M1412 205h0m11 0h0m10 0h0m11 0h0m136 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1407 214h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m94 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M1412 223h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m95 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M1407 232h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m22 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M1391 241h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m21 0h0M1386 250h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0M1391 259h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M1396 268h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0M1412 277h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1418 286h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0M1423 296h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1428 305h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0M1454 314h0m11 0h0m10 0h0m11 0h0m10 0h0m21 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1533 323h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0M1538 332h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1533 341h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0M1538 350h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m32 0h0M1544 359h0m42 0h0m10 0h0m10 0h0M1596 377h0M1564 468h0m84 0h0m11 0h0M1570 477h0m63 0h0M1575 486h0m53 0h0m10 0h0M1722 577h0m10 0h0m53 0h0M1727 587h0m11 0h0m10 0h0m42 0h0M1690 596h0m11 0h0m21 0h0m10 0h0m11 0h0m42 0h0m11 0h0M1685 605h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m32 0h0m10 0h0M1670 614h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0M1675 623h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1648 632h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0M1633 641h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1155 650h0m11 0h0m451 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M1150 659h0m10 0h0m11 0h0m451 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1124 668h0m10 0h0m10 0h0m11 0h0m11 0h0m451 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M1108 677h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m452 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1092 687h0m21 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m451 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0M1097 696h0m11 0h0m10 0h0m11 0h0m10 0h0m21 0h0m452 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1102 705h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m462 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0M1097 714h0m11 0h0m10 0h0m11 0h0m10 0h0m473 0h0m10 0h0m11 0h0m10 0h0m11 0h0m63 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0M1102 723h0m11 0h0m493 0h0m11 0h0m95 0h0m10 0h0m10 0h0m11 0h0m11 0h0m10 0h0m10 0h0m11 0h0M1717 732h0m10 0h0m11 0h0m10 0h0m11 0h0m10 0h0m11 0h0M1732 741h0m11 0h0m11 0h0m10 0h0m10 0h0M1738 750h0M1738 768h0m10 0h0M1743 777h0"/><g class="mk star" transform="translate(1793.8 720.2)" style="--d:0.00s"><title>Australia</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk star" transform="translate(999.5 170.9)" style="--d:0.23s"><title>United Kingdom</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk star" transform="translate(1050.3 172.8)" style="--d:0.46s"><title>Germany</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk star" transform="translate(1023.5 165.4)" style="--d:0.69s"><title>Netherlands</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk star" transform="translate(1082.8 123.8)" style="--d:0.92s"><title>Sweden</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk star" transform="translate(1150.5 670.4)" style="--d:1.15s"><title>South Africa</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk star" transform="translate(1596.8 244.2)" style="--d:1.38s"><title>China</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk star" transform="translate(1655.1 340.5)" style="--d:1.61s"><title>Taiwan</title><circle class="ring" r="10"/><circle class="core" r="10"/></g><g class="mk star" transform="translate(1564.7 481.6)" style="--d:1.84s"><title>Malaysia</title><circle class="ring" r="10"/><circle class="core" r="10"/></g></g></svg>
+      <figcaption class="legend">
+        <span><i style="background:var(--acc-pink)"></i>Home: Copenhagen</span>
+        <span><i style="background:var(--acc-blue)"></i>Colleagues asked for it</span>
+        <span><i style="background:#4FB0E6"></i>Starred it on GitHub</span>
+      </figcaption>
+    </figure>
+    <div class="rkpis">
+      <div class="rkpi card fragment" data-fragment-index="0"><p class="big"><span data-count="17">17</span>+</p><p>colleagues asked for it</p></div>
+      <div class="rkpi card fragment" data-fragment-index="1"><p class="big"><span data-count="39">39</span></p><p>stars on GitHub</p></div>
+      <div class="rkpi card fragment" data-fragment-index="2"><p class="big"><span data-count="9">9</span></p><p>CSAs on live engagements</p></div>
+    </div>
+  </div>
+  <aside class="notes">
+    No campaign; demand came to me. At least 17 colleagues in 6 countries asked for it between April and November: Denmark 9, United States 3, United Arab Emirates 2, and Ireland, Switzerland and Canada 1 each. That count is a floor: only about 4 in 10 Teams chats were checked.
+    On GitHub: 39 stars and 28 forks. Of the people who starred it, those with a location on their profile come from 12 countries. Together that is 15 countries.
+    On 17 May I sent it with a three-minute demo to nine CSAs on live FinOps engagements. The Azure Cost Management product team reached out in April and May. A CSA in Houston showed it to customers and asked what it would take to make it a product, and a CSA in Canada sent code fixes and says many of his customers love it.
+  </aside>
+</section>
+
+<!-- ============ 18 · Live demo ============ -->
+<section class="s-demo" data-live>
+  <div class="head">
+    <span class="kicker"><span class="ddot"></span>Part 3 · Live demo</span>
+    <h2 class="title">Enough slides. <span class="grad">Let’s ask it.</span></h2>
+    <div class="tline"></div>
+  </div>
+  <ol class="asks">
+    <li class="card fragment" data-fragment-index="0"><span class="bn">1</span><span>Which AI model is best value?</span></li>
+    <li class="card fragment" data-fragment-index="1"><span class="bn">2</span><span>Can we cap AI spending?</span></li>
+    <li class="card fragment" data-fragment-index="2"><span class="bn">3</span><span>Where can I save money<span class="qk">?</span></span></li>
+    <li class="card fragment" data-fragment-index="3"><span class="bn">4</span><span>See every call it made</span></li>
+    <li class="card safe fragment" data-fragment-index="4"><span class="bn">5</span><span>Delete my unused disks</span></li>
+  </ol>
+  <div class="cta fragment" data-fragment-index="5">
+    <div class="qr card"><svg viewBox="-2 -2 33 33" shape-rendering="crispEdges" role="img" aria-label="QR code for azure-finops-agent.com"><rect x="-2" y="-2" width="33" height="33" fill="#fff"/><path fill="#0E1118" d="M0 0h7v1h-7zM10 0h1v1h-1zM13 0h1v1h-1zM16 0h1v1h-1zM18 0h2v1h-2zM22 0h7v1h-7zM0 1h1v1h-1zM6 1h1v1h-1zM9 1h1v1h-1zM11 1h1v1h-1zM13 1h3v1h-3zM18 1h1v1h-1zM20 1h1v1h-1zM22 1h1v1h-1zM28 1h1v1h-1zM0 2h1v1h-1zM2 2h3v1h-3zM6 2h1v1h-1zM9 2h3v1h-3zM13 2h1v1h-1zM16 2h2v1h-2zM22 2h1v1h-1zM24 2h3v1h-3zM28 2h1v1h-1zM0 3h1v1h-1zM2 3h3v1h-3zM6 3h1v1h-1zM9 3h7v1h-7zM18 3h2v1h-2zM22 3h1v1h-1zM24 3h3v1h-3zM28 3h1v1h-1zM0 4h1v1h-1zM2 4h3v1h-3zM6 4h1v1h-1zM12 4h3v1h-3zM16 4h1v1h-1zM18 4h1v1h-1zM22 4h1v1h-1zM24 4h3v1h-3zM28 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM8 5h1v1h-1zM12 5h3v1h-3zM18 5h2v1h-2zM22 5h1v1h-1zM28 5h1v1h-1zM0 6h7v1h-7zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM20 6h1v1h-1zM22 6h7v1h-7zM9 7h1v1h-1zM12 7h1v1h-1zM14 7h1v1h-1zM17 7h2v1h-2zM20 7h1v1h-1zM0 8h1v1h-1zM3 8h1v1h-1zM5 8h2v1h-2zM8 8h1v1h-1zM10 8h3v1h-3zM15 8h1v1h-1zM19 8h1v1h-1zM21 8h1v1h-1zM23 8h1v1h-1zM2 9h1v1h-1zM5 9h1v1h-1zM7 9h2v1h-2zM10 9h1v1h-1zM14 9h2v1h-2zM21 9h2v1h-2zM25 9h1v1h-1zM28 9h1v1h-1zM1 10h2v1h-2zM4 10h1v1h-1zM6 10h4v1h-4zM12 10h1v1h-1zM16 10h2v1h-2zM19 10h1v1h-1zM21 10h1v1h-1zM25 10h3v1h-3zM0 11h1v1h-1zM3 11h2v1h-2zM7 11h1v1h-1zM9 11h2v1h-2zM14 11h2v1h-2zM20 11h1v1h-1zM26 11h2v1h-2zM0 12h1v1h-1zM3 12h4v1h-4zM9 12h1v1h-1zM16 12h2v1h-2zM22 12h2v1h-2zM25 12h1v1h-1zM27 12h2v1h-2zM0 13h1v1h-1zM4 13h2v1h-2zM8 13h1v1h-1zM15 13h1v1h-1zM17 13h5v1h-5zM0 14h1v1h-1zM2 14h2v1h-2zM6 14h5v1h-5zM15 14h3v1h-3zM21 14h1v1h-1zM24 14h5v1h-5zM0 15h4v1h-4zM5 15h1v1h-1zM13 15h2v1h-2zM16 15h2v1h-2zM19 15h1v1h-1zM25 15h1v1h-1zM27 15h1v1h-1zM3 16h1v1h-1zM6 16h3v1h-3zM10 16h1v1h-1zM13 16h7v1h-7zM21 16h1v1h-1zM23 16h1v1h-1zM27 16h1v1h-1zM1 17h1v1h-1zM3 17h2v1h-2zM7 17h1v1h-1zM10 17h1v1h-1zM12 17h1v1h-1zM15 17h1v1h-1zM17 17h1v1h-1zM21 17h3v1h-3zM25 17h1v1h-1zM28 17h1v1h-1zM0 18h1v1h-1zM2 18h1v1h-1zM6 18h2v1h-2zM9 18h5v1h-5zM17 18h1v1h-1zM21 18h2v1h-2zM27 18h2v1h-2zM3 19h1v1h-1zM7 19h1v1h-1zM9 19h3v1h-3zM13 19h1v1h-1zM15 19h3v1h-3zM19 19h3v1h-3zM23 19h2v1h-2zM27 19h2v1h-2zM0 20h1v1h-1zM4 20h3v1h-3zM8 20h1v1h-1zM11 20h1v1h-1zM14 20h1v1h-1zM16 20h1v1h-1zM19 20h6v1h-6zM26 20h1v1h-1zM8 21h2v1h-2zM11 21h1v1h-1zM13 21h1v1h-1zM15 21h3v1h-3zM19 21h2v1h-2zM24 21h1v1h-1zM26 21h3v1h-3zM0 22h7v1h-7zM9 22h1v1h-1zM13 22h3v1h-3zM17 22h2v1h-2zM20 22h1v1h-1zM22 22h1v1h-1zM24 22h1v1h-1zM27 22h1v1h-1zM0 23h1v1h-1zM6 23h1v1h-1zM8 23h1v1h-1zM11 23h1v1h-1zM13 23h1v1h-1zM16 23h1v1h-1zM18 23h1v1h-1zM20 23h1v1h-1zM24 23h5v1h-5zM0 24h1v1h-1zM2 24h3v1h-3zM6 24h1v1h-1zM10 24h1v1h-1zM14 24h4v1h-4zM20 24h5v1h-5zM27 24h1v1h-1zM0 25h1v1h-1zM2 25h3v1h-3zM6 25h1v1h-1zM8 25h2v1h-2zM11 25h1v1h-1zM14 25h3v1h-3zM20 25h1v1h-1zM22 25h1v1h-1zM24 25h3v1h-3zM28 25h1v1h-1zM0 26h1v1h-1zM2 26h3v1h-3zM6 26h1v1h-1zM9 26h1v1h-1zM11 26h2v1h-2zM19 26h2v1h-2zM24 26h3v1h-3zM28 26h1v1h-1zM0 27h1v1h-1zM6 27h1v1h-1zM9 27h2v1h-2zM13 27h1v1h-1zM15 27h8v1h-8zM27 27h1v1h-1zM0 28h7v1h-7zM8 28h1v1h-1zM10 28h1v1h-1zM12 28h4v1h-4zM17 28h1v1h-1zM20 28h2v1h-2zM24 28h2v1h-2zM27 28h1v1h-1z"/></svg><div><b>Try it</b><span>azure-finops-agent.com</span></div></div>
+    <div class="qr card"><svg viewBox="-2 -2 37 37" shape-rendering="crispEdges" role="img" aria-label="QR code for github.com/Azure-Samples/azure-finops-agent"><rect x="-2" y="-2" width="37" height="37" fill="#fff"/><path fill="#0E1118" d="M0 0h7v1h-7zM8 0h1v1h-1zM16 0h1v1h-1zM19 0h3v1h-3zM23 0h1v1h-1zM26 0h7v1h-7zM0 1h1v1h-1zM6 1h1v1h-1zM8 1h1v1h-1zM10 1h2v1h-2zM14 1h1v1h-1zM17 1h1v1h-1zM20 1h2v1h-2zM23 1h2v1h-2zM26 1h1v1h-1zM32 1h1v1h-1zM0 2h1v1h-1zM2 2h3v1h-3zM6 2h1v1h-1zM9 2h1v1h-1zM11 2h1v1h-1zM13 2h2v1h-2zM16 2h1v1h-1zM18 2h1v1h-1zM24 2h1v1h-1zM26 2h1v1h-1zM28 2h3v1h-3zM32 2h1v1h-1zM0 3h1v1h-1zM2 3h3v1h-3zM6 3h1v1h-1zM8 3h2v1h-2zM11 3h1v1h-1zM15 3h1v1h-1zM18 3h2v1h-2zM26 3h1v1h-1zM28 3h3v1h-3zM32 3h1v1h-1zM0 4h1v1h-1zM2 4h3v1h-3zM6 4h1v1h-1zM10 4h1v1h-1zM13 4h1v1h-1zM16 4h3v1h-3zM24 4h1v1h-1zM26 4h1v1h-1zM28 4h3v1h-3zM32 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM9 5h1v1h-1zM12 5h5v1h-5zM18 5h1v1h-1zM21 5h2v1h-2zM26 5h1v1h-1zM32 5h1v1h-1zM0 6h7v1h-7zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM20 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h7v1h-7zM8 7h1v1h-1zM10 7h2v1h-2zM14 7h6v1h-6zM23 7h1v1h-1zM0 8h1v1h-1zM2 8h2v1h-2zM5 8h3v1h-3zM10 8h1v1h-1zM12 8h1v1h-1zM14 8h2v1h-2zM17 8h2v1h-2zM20 8h3v1h-3zM24 8h1v1h-1zM26 8h1v1h-1zM29 8h1v1h-1zM31 8h2v1h-2zM0 9h3v1h-3zM7 9h2v1h-2zM10 9h1v1h-1zM12 9h2v1h-2zM16 9h2v1h-2zM19 9h2v1h-2zM23 9h1v1h-1zM26 9h2v1h-2zM29 9h2v1h-2zM32 9h1v1h-1zM0 10h1v1h-1zM3 10h4v1h-4zM8 10h1v1h-1zM11 10h3v1h-3zM16 10h1v1h-1zM18 10h1v1h-1zM22 10h2v1h-2zM25 10h1v1h-1zM27 10h3v1h-3zM31 10h2v1h-2zM0 11h3v1h-3zM4 11h2v1h-2zM7 11h2v1h-2zM10 11h2v1h-2zM17 11h1v1h-1zM19 11h1v1h-1zM27 11h1v1h-1zM29 11h1v1h-1zM32 11h1v1h-1zM1 12h3v1h-3zM6 12h1v1h-1zM10 12h3v1h-3zM14 12h1v1h-1zM16 12h1v1h-1zM22 12h2v1h-2zM25 12h1v1h-1zM27 12h3v1h-3zM31 12h2v1h-2zM2 13h2v1h-2zM8 13h1v1h-1zM11 13h1v1h-1zM13 13h2v1h-2zM17 13h1v1h-1zM20 13h2v1h-2zM24 13h1v1h-1zM29 13h1v1h-1zM31 13h1v1h-1zM0 14h5v1h-5zM6 14h2v1h-2zM10 14h3v1h-3zM17 14h1v1h-1zM19 14h1v1h-1zM21 14h1v1h-1zM24 14h1v1h-1zM26 14h4v1h-4zM3 15h1v1h-1zM7 15h1v1h-1zM9 15h2v1h-2zM12 15h2v1h-2zM15 15h1v1h-1zM18 15h1v1h-1zM20 15h2v1h-2zM23 15h1v1h-1zM25 15h2v1h-2zM29 15h2v1h-2zM0 16h1v1h-1zM3 16h1v1h-1zM6 16h1v1h-1zM9 16h1v1h-1zM12 16h3v1h-3zM18 16h1v1h-1zM20 16h3v1h-3zM25 16h2v1h-2zM28 16h1v1h-1zM30 16h1v1h-1zM0 17h2v1h-2zM5 17h1v1h-1zM8 17h2v1h-2zM11 17h1v1h-1zM14 17h2v1h-2zM19 17h2v1h-2zM22 17h5v1h-5zM28 17h2v1h-2zM31 17h2v1h-2zM0 18h2v1h-2zM3 18h1v1h-1zM5 18h3v1h-3zM9 18h3v1h-3zM15 18h2v1h-2zM18 18h1v1h-1zM20 18h2v1h-2zM24 18h2v1h-2zM27 18h2v1h-2zM30 18h1v1h-1zM0 19h2v1h-2zM7 19h2v1h-2zM10 19h2v1h-2zM13 19h2v1h-2zM17 19h3v1h-3zM22 19h3v1h-3zM28 19h1v1h-1zM31 19h1v1h-1zM0 20h7v1h-7zM9 20h1v1h-1zM13 20h2v1h-2zM16 20h1v1h-1zM20 20h2v1h-2zM29 20h3v1h-3zM0 21h4v1h-4zM5 21h1v1h-1zM8 21h2v1h-2zM11 21h1v1h-1zM14 21h3v1h-3zM19 21h3v1h-3zM23 21h1v1h-1zM26 21h1v1h-1zM32 21h1v1h-1zM2 22h3v1h-3zM6 22h1v1h-1zM8 22h2v1h-2zM11 22h1v1h-1zM15 22h1v1h-1zM17 22h2v1h-2zM20 22h2v1h-2zM23 22h1v1h-1zM25 22h2v1h-2zM28 22h5v1h-5zM1 23h1v1h-1zM5 23h1v1h-1zM11 23h1v1h-1zM13 23h1v1h-1zM15 23h1v1h-1zM18 23h1v1h-1zM20 23h1v1h-1zM23 23h2v1h-2zM26 23h1v1h-1zM28 23h2v1h-2zM32 23h1v1h-1zM0 24h1v1h-1zM2 24h1v1h-1zM4 24h1v1h-1zM6 24h1v1h-1zM8 24h2v1h-2zM13 24h2v1h-2zM17 24h3v1h-3zM22 24h8v1h-8zM8 25h2v1h-2zM11 25h1v1h-1zM14 25h3v1h-3zM19 25h2v1h-2zM24 25h1v1h-1zM28 25h2v1h-2zM31 25h1v1h-1zM0 26h7v1h-7zM8 26h1v1h-1zM13 26h1v1h-1zM17 26h5v1h-5zM23 26h2v1h-2zM26 26h1v1h-1zM28 26h1v1h-1zM0 27h1v1h-1zM6 27h1v1h-1zM8 27h1v1h-1zM10 27h1v1h-1zM13 27h2v1h-2zM17 27h2v1h-2zM20 27h5v1h-5zM28 27h4v1h-4zM0 28h1v1h-1zM2 28h3v1h-3zM6 28h1v1h-1zM9 28h2v1h-2zM12 28h2v1h-2zM16 28h13v1h-13zM30 28h3v1h-3zM0 29h1v1h-1zM2 29h3v1h-3zM6 29h1v1h-1zM8 29h6v1h-6zM16 29h2v1h-2zM20 29h4v1h-4zM27 29h1v1h-1zM29 29h1v1h-1zM32 29h1v1h-1zM0 30h1v1h-1zM2 30h3v1h-3zM6 30h1v1h-1zM8 30h1v1h-1zM10 30h1v1h-1zM12 30h5v1h-5zM20 30h1v1h-1zM22 30h1v1h-1zM26 30h2v1h-2zM29 30h2v1h-2zM0 31h1v1h-1zM6 31h1v1h-1zM17 31h2v1h-2zM22 31h3v1h-3zM27 31h2v1h-2zM32 31h1v1h-1zM0 32h7v1h-7zM8 32h1v1h-1zM12 32h1v1h-1zM18 32h2v1h-2zM21 32h1v1h-1zM23 32h1v1h-1zM28 32h3v1h-3z"/></svg><div><b>Read the code</b><span>github.com/Azure-Samples/<br>azure-finops-agent</span></div></div>
+    <div class="runit"><span class="label">Deploy it</span><code>azd up</code></div>
+    <a class="see-live" href="https://azure-finops-agent.com" target="_blank" rel="noopener">See it live<svg class="i"><use href="#i-arrow"/></svg></a>
+  </div>
+  <aside class="notes">
+    Demo runbook.
+    Before the session: open azure-finops-agent.com in two windows, outside this deck. One stays signed out (a private window). Sign the other in with your lab tenant, never a customer tenant. Run "FinOps assessment report" once beforehand: it takes a few minutes, and the finished report then waits in Sessions.
+    1. Signed out: click "Which AI model is best value?". It takes a minute or two, so open Agent activity and narrate: one web search finds the leaderboard, the Retail Prices API gives token prices, and the ranking is computed in a query, not guessed.
+    2. Click "Can we cap AI spending?": Microsoft Learn through its MCP server, one table, every step linked.
+    3. Switch to the signed-in window and click "Where can I save money?": savings from the tenant's own data and the Crawl maturity score.
+    4. Open Agent activity on any answer: every call, its URL and its timing. That is how a customer checks the numbers, just like the judge in the warm-up.
+    5. Ask "Delete my unused disks": it cannot delete, so it offers a script to review. To show an approval, ask for a monthly budget with an 80% alert on the lab subscription, show the exact request, then click Reject.
+    Optional, only if the lab tenant has Copilot Credits usage and you granted Copilot Cost Management under Add scopes beforehand (it needs admin consent): Prompts, then "Copilot credits per user". The new Graph API answers in credits per user and service, and Foundry cost tags give each model deployment and agent in dollars.
+    If an answer is slow or fails, open the finished conversation from Sessions: every answer is saved. End on this slide for questions; the QR codes open the site and the repo.
+  </aside>
+</section>
+
+  </div>
+</div>
+
+<script src="https://unpkg.com/reveal.js@5.2.1/dist/reveal.js" integrity="sha384-rZIIVPQD/+U9IL3I62KrBHuVtPgYv+xdXvER5RBiVQRszJEJfLKRrcrZwI7fhcHT" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/reveal.js@5.2.1/plugin/notes/notes.js" integrity="sha384-zaxVZlTGBPySa6IWC61g+1BgKaWp4jQ7Qcm/TrxRPMAziaAmE0ZbNGwRAGI2vmkk" crossorigin="anonymous"></script>
+<script>
+Reveal.initialize({
+  hash: true,
+  transition: "fade",
+  backgroundTransition: "fade",
+  controls: true,
+  controlsLayout: "edges",
+  progress: true,
+  center: true,
+  width: "100%",
+  height: "100%",
+  margin: 0,
+  minScale: 1,
+  maxScale: 1,
+  display: "flex",
+  keyboard: {
+    38: null,
+    40: null,
+  },
+  plugins: window.RevealNotes ? [RevealNotes] : [],
+});
+
+// Up enters fullscreen, Down leaves it, from the keyboard or the on-screen arrows.
+const fsUp = document.getElementById("fsUp");
+const fsDown = document.getElementById("fsDown");
+const enterFullscreen = () => { if (!document.fullscreenElement) document.documentElement.requestFullscreen?.(); };
+const exitFullscreen = () => { if (document.fullscreenElement) document.exitFullscreen?.(); };
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowUp") {
+    e.preventDefault();
+    enterFullscreen();
+  }
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    exitFullscreen();
+  }
+});
+for (const [button, action] of [[fsUp, enterFullscreen], [fsDown, exitFullscreen]]) {
+  button.addEventListener("click", (e) => {
+    e.preventDefault();
+    // Without focus, Space keeps moving the slides instead of pressing this button again.
+    button.blur();
+    action();
+  });
+}
+function syncFullscreen() {
+  const on = !!document.fullscreenElement;
+  fsUp.setAttribute("aria-disabled", String(on));
+  fsDown.setAttribute("aria-disabled", String(!on));
+}
+document.addEventListener("fullscreenchange", syncFullscreen);
+if (!document.fullscreenEnabled) { fsUp.hidden = true; fsDown.hidden = true; }
+syncFullscreen();
+
+// Like /slides: a click on the right half steps forward, on the left half back.
+// Links, buttons and selected text keep their usual behaviour.
+document.querySelector(".reveal").addEventListener("click", (e) => {
+  if (e.button !== 0 || Reveal.isOverview() || e.target.closest("a, button, input, label, select, textarea, .controls")) return;
+  if (String(window.getSelection?.() || "").trim()) return;
+  if (e.clientX >= window.innerWidth / 2) Reveal.next();
+  else Reveal.prev();
+});
+
+const pad = (n) => String(n).padStart(2, "0");
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Numbers count up when they appear; the markup always holds the final value.
+function animateCount(el) {
+  const raw = el.dataset.count;
+  const end = parseFloat(raw);
+  const decimals = (raw.split(".")[1] || "").length;
+  const format = (v) => v.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  if (reduceMotion || !isFinite(end)) { el.textContent = format(end); return; }
+  cancelAnimationFrame(el._raf);
+  const start = performance.now();
+  const step = (now) => {
+    const p = Math.min(1, (now - start) / 1300);
+    el.textContent = format(end * (1 - Math.pow(1 - p, 3)));
+    if (p < 1) el._raf = requestAnimationFrame(step);
+  };
+  el._raf = requestAnimationFrame(step);
+}
+function countIn(root, slideLevel) {
+  if (!root || !root.querySelectorAll) return;
+  const nodes = root.matches("[data-count]") ? [root] : [];
+  root.querySelectorAll("[data-count]").forEach((n) => nodes.push(n));
+  nodes.forEach((n) => {
+    if (slideLevel && n.closest(".fragment")) return;
+    animateCount(n);
+  });
+}
+
+// The timeline's gradient line grows to the newest milestone shown.
+function syncTimeline(slide) {
+  const tl = slide && slide.querySelector(".tl");
+  if (!tl) return;
+  const items = [...tl.querySelectorAll(".tl-item")];
+  const shown = items.filter((i) => !i.classList.contains("fragment") || i.classList.contains("visible")).length;
+  tl.style.setProperty("--p", items.length > 1 ? Math.max(0, shown - 1) / (items.length - 1) : 0);
+}
+
+function syncChrome() {
+  const total = Reveal.getTotalSlides();
+  const slide = Reveal.getCurrentSlide();
+  document.getElementById("slideNum").textContent = pad(Reveal.getIndices().h + 1) + " / " + pad(total);
+  document.getElementById("livePill").classList.toggle("on", !!(slide && slide.hasAttribute("data-live")));
+  syncTimeline(slide);
+}
+
+Reveal.on("ready", (e) => { syncChrome(); countIn(e.currentSlide, true); });
+Reveal.on("slidechanged", (e) => { syncChrome(); countIn(e.currentSlide, true); });
+Reveal.on("fragmentshown", (e) => {
+  (e.fragments || [e.fragment]).forEach((f) => countIn(f, false));
+  syncTimeline(Reveal.getCurrentSlide());
+});
+Reveal.on("fragmenthidden", () => syncTimeline(Reveal.getCurrentSlide()));
+</script>
+</body>
+</html>

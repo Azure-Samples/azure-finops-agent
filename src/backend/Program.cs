@@ -226,6 +226,7 @@ app.Use(async (ctx, next) =>
     }
     // The standalone /slides deck has inline <script> + Google Fonts. Relax CSP for that one route.
     var path = ctx.Request.Path.Value ?? "";
+    var deckPath = path.TrimEnd('/');
     if (path.Equals("/slides", StringComparison.OrdinalIgnoreCase) ||
         path.Equals("/slide", StringComparison.OrdinalIgnoreCase) ||
         path.Equals("/slides.html", StringComparison.OrdinalIgnoreCase))
@@ -239,6 +240,23 @@ app.Use(async (ctx, next) =>
             "connect-src 'self'; " +
             "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com; " +
             "frame-ancestors 'none'";
+    }
+    // The Tech Intensity deck at /tech is one HTML file with inline script and styles, plus Reveal.js
+    // 5.2.1 from unpkg pinned by Subresource Integrity. Reveal's speaker view previews the slides in
+    // same-origin frames, so this route alone may be framed by its own origin.
+    else if (deckPath.Equals("/tech", StringComparison.OrdinalIgnoreCase) ||
+             deckPath.Equals("/tech.html", StringComparison.OrdinalIgnoreCase))
+    {
+        headers["X-Frame-Options"] = "SAMEORIGIN";
+        headers["Content-Security-Policy"] =
+            "default-src 'self'; " +
+            "script-src 'self' 'unsafe-inline' https://unpkg.com; " +
+            "style-src 'self' 'unsafe-inline' https://unpkg.com; " +
+            "img-src 'self' data:; " +
+            "font-src 'self'; " +
+            "connect-src 'self'; " +
+            "frame-src 'self'; " +
+            "frame-ancestors 'self'";
     }
     else
     {
@@ -421,17 +439,19 @@ using var feedbackClient = new GitHubAppClient(
     loggerFactory.CreateLogger("AzureFinOps.Feedback"));
 app.MapFeedbackEndpoints(feedbackClient, new FeedbackRateLimiter(TimeProvider.System), logger);
 
-// Customer overview deck — clean URL (file is also reachable at /slides.html)
-// Both /slides (canonical) and /slide (alias) serve the same deck.
-IResult ServeSlides(IWebHostEnvironment env)
+// Standalone decks: a clean URL for one HTML file in wwwroot (each is also reachable as the .html file).
+IResult ServeDeck(IWebHostEnvironment env, string file)
 {
-    var path = Path.Combine(env.WebRootPath, "slides.html");
+    var path = Path.Combine(env.WebRootPath, file);
     return File.Exists(path)
         ? Results.File(path, "text/html; charset=utf-8")
         : Results.NotFound();
 }
-app.MapGet("/slides", ServeSlides);
-app.MapGet("/slide", ServeSlides);
+// Customer overview deck: /slides (canonical) and /slide (alias).
+app.MapGet("/slides", (IWebHostEnvironment env) => ServeDeck(env, "slides.html"));
+app.MapGet("/slide", (IWebHostEnvironment env) => ServeDeck(env, "slides.html"));
+// Tech Intensity DK deck, 20 November 2026.
+app.MapGet("/tech", (IWebHostEnvironment env) => ServeDeck(env, "tech.html"));
 
 // An unmatched API or auth path is a 404 for the caller, not the single-page app's HTML with a 200.
 app.MapUnmatchedApiNotFound();

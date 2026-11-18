@@ -24,11 +24,11 @@ public sealed class MicrosoftOAuthOptions
     public static readonly IReadOnlySet<string> ValidTiers =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "base", "licenses", "chargeback", "loganalytics", "storage", "all"
+            "base", "licenses", "chargeback", "loganalytics", "storage", "copilotcost", "all"
         };
 
     public static readonly string[] AddOnTiers =
-        ["licenses", "chargeback", "loganalytics", "storage"];
+        ["licenses", "chargeback", "loganalytics", "storage", "copilotcost"];
 
     private static readonly Regex GuidRegex =
         new(@"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
@@ -58,6 +58,11 @@ public sealed class MicrosoftOAuthOptions
     {
         "licenses" => ["https://graph.microsoft.com/User.Read", "https://graph.microsoft.com/Organization.Read.All", "https://graph.microsoft.com/Reports.Read.All"],
         "chargeback" => ["https://graph.microsoft.com/User.Read", "https://graph.microsoft.com/User.Read.All", "https://graph.microsoft.com/Group.Read.All"],
+        // Microsoft 365 Copilot cost management (Microsoft Graph beta): Read.All is the only scope for the tenant
+        // credit balance and also reads every usage report; UserData adds per-user balances; Policy reads the limits.
+        // Its own token, so the shared Graph refresh never asks for these admin-consented scopes.
+        "copilotcost" => ["https://graph.microsoft.com/User.Read", "https://graph.microsoft.com/CopilotCostManagement.Read.All",
+            "https://graph.microsoft.com/CopilotCostManagement-UserData.Read.All", "https://graph.microsoft.com/CopilotCostManagement-Policy.Read.All"],
         "loganalytics" => ["https://api.loganalytics.io/Data.Read"],
         "storage" => ["https://storage.azure.com/user_impersonation"],
         _ => ["https://management.azure.com/user_impersonation"]

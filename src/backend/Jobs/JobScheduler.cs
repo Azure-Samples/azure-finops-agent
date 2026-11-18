@@ -172,6 +172,9 @@ public sealed class JobScheduler : BackgroundService
             if (tiers.Contains("storage"))
                 await HydrateAsync(record, TenantTokenRefresher.ScopeStorage,
                     v => { tokens.StorageToken = v.Token; tokens.StorageTokenExpiry = v.Expiry; });
+            if (tiers.Contains("copilotcost"))
+                await HydrateAsync(record, TenantTokenRefresher.ScopeCopilotCost,
+                    v => { tokens.CopilotCostToken = v.Token; tokens.CopilotCostTokenExpiry = v.Expiry; });
         }
         finally
         {

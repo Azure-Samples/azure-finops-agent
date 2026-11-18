@@ -77,8 +77,11 @@ OAuth tiers are resource-specific and delegated:
 | `chargeback`   | Microsoft Graph        | `User.Read`, `User.Read.All`, `Group.Read.All`           |
 | `loganalytics` | Log Analytics          | `Data.Read`                                              |
 | `storage`      | Azure Storage          | `user_impersonation`                                     |
+| `copilotcost`  | Microsoft Graph (beta) | `User.Read`, `CopilotCostManagement.Read.All`, `CopilotCostManagement-UserData.Read.All`, `CopilotCostManagement-Policy.Read.All` |
 
 `tier=all` walks only the remaining add-on tiers through separate user-scoped consent screens. Do not combine cross-resource scopes or replace this with tenant-wide admin consent.
+
+`copilotcost` reads Microsoft 365 Copilot cost management (Copilot Credits per user, group, service and funding class, the tenant credit balance and spending policies; Graph beta, admin consent, credits only, no currency, model or agent). It has its own token (`copilotcost_token`, `UserTokens.CopilotCostToken`): the shared Graph token is refreshed with the `licenses` and `chargeback` scopes together, and asking that exchange for unconsented admin scopes would fail it for every existing Graph user. `QueryAzure` sends `/v1.0|beta/copilot/costManagement` paths with that token and every other Graph path with the shared one, and each token's `_access` note names only its own tiers.
 
 Disconnect/revoke/logout differ intentionally:
 
@@ -194,6 +197,7 @@ The agent is deliberately minimal: tools are thin, host-enforced pass-throughs a
 - Attachment callbacks must update chips by stable `uid`, never by array index. Wait for uploads before sending, delist files whose chips were removed in flight, and revoke blob thumbnail URLs only after Vue unmounts them.
 - Generated HTML previews must stay in a sandboxed iframe without `allow-same-origin`; model-produced deck scripts must never inherit access to application cookies, storage, DOM, or authenticated APIs.
 - The social sharing card `public/og-image.png` (1200 × 630) is rendered from `src/frontend/social/og-image.html` with `npm run og-image`, using the app's font, colours and start-page questions. Re-render it when those change and bump the `?v=` query on `og:image` and `twitter:image` in `index.html` so platforms refetch it. README screenshots live in `docs/assets/readme/`; capture them from real answers (never tenant data) and keep them under about 600 KB each.
+- `/slides` (customer overview) and `/tech` (Tech Intensity DK session deck) are standalone HTML files in `src/frontend/public`, served by routes in `Program.cs` that each set their own relaxed Content-Security-Policy. `/tech` also loads Reveal.js 5.2.1 from unpkg.com pinned by Subresource Integrity, and only it may be framed by its own origin (Reveal's speaker view). Both are public: never put tenant data, customer names or colleague names in them.
 
 ## Code conventions
 

@@ -451,8 +451,11 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     {
         activity?.SetTag("graph.method", method.Method);
         activity?.SetTag("graph.path", uri.AbsolutePath);
-        var token = tokens.GraphToken;
-        if (string.IsNullOrEmpty(token)) return HttpHelper.TokenMissing("GraphToken", activity, "graph");
+        // Copilot cost management has its own consent tier and token; every other Graph path uses the shared one.
+        var copilotCost = IsCopilotCostPath(uri.AbsolutePath);
+        var token = copilotCost ? tokens.CopilotCostToken : tokens.GraphToken;
+        if (string.IsNullOrEmpty(token))
+            return HttpHelper.TokenMissing(copilotCost ? "CopilotCostToken" : "GraphToken", activity, "graph");
         if (!uri.AbsolutePath.StartsWith("/v1.0/", StringComparison.OrdinalIgnoreCase) && !uri.AbsolutePath.StartsWith("/beta/", StringComparison.OrdinalIgnoreCase))
             return "HTTP 400 BadRequest\nMicrosoft Graph paths start with /v1.0/ or /beta/. No request was sent.";
         var response = await HttpHelper.SendWithRetryAsync(uri.AbsoluteUri, token, activity, "graph", method,
@@ -461,8 +464,13 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         if (method != HttpMethod.Get) return ResponseShaper.Normalize(response);
         response = await PaginateAsync(response, uri, maxPages, next => HttpHelper.SendWithRetryAsync(next.AbsoluteUri, token, activity, "graph",
             HttpMethod.Get, extraHeaders: GraphHeaders(), cancellationToken: cancellationToken));
-        return WithGraphAccessNote(ResponseShaper.Normalize(response), token);
+        return WithGraphAccessNote(ResponseShaper.Normalize(response), token, copilotCost ? CopilotCostTiers : SharedGraphTiers);
     }
+
+    internal static bool IsCopilotCostPath(string path) => CopilotCostPath().IsMatch(path);
+
+    [GeneratedRegex(@"^/(v1\.0|beta)/copilot/costManagement(/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CopilotCostPath();
 
     // Directory advanced queries ($count, $search, assignedLicenses/$count, ne/not/endsWith filters) fail with 400
     // unless this header is present; simple Graph reads return the same result with or without it.
@@ -991,12 +999,18 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     // Graph answers both a delegated permission this app was not granted and a directory role the user lacks with
     // 403 Authorization_RequestDenied, so the note lists the Graph scopes the connection holds and the consent tiers
     // it has not granted. Only the scope names are read from the token, which is neither validated nor returned.
-    internal static string WithGraphAccessNote(string response, string? token) =>
-        response.StartsWith("HTTP 403", StringComparison.Ordinal) && ErrorCode(response) == "Authorization_RequestDenied"
-            ? AnnotateRoot(response, "_access", GraphAccessNote(token)) : response;
+    // A token belongs to its own tiers: the shared Graph token to licenses and chargeback, the Copilot cost token to
+    // copilotcost, so the note never lists another token's scopes as missing.
+    internal static readonly string[] SharedGraphTiers = ["licenses", "chargeback"];
+    internal static readonly string[] CopilotCostTiers = ["copilotcost"];
 
-    internal static IReadOnlyDictionary<string, string> GraphAccessNote(string? token)
+    internal static string WithGraphAccessNote(string response, string? token, IReadOnlyList<string>? tiers = null) =>
+        response.StartsWith("HTTP 403", StringComparison.Ordinal) && ErrorCode(response) == "Authorization_RequestDenied"
+            ? AnnotateRoot(response, "_access", GraphAccessNote(token, tiers)) : response;
+
+    internal static IReadOnlyDictionary<string, string> GraphAccessNote(string? token, IReadOnlyList<string>? tiers = null)
     {
+        tiers ??= SharedGraphTiers;
         var granted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -1006,7 +1020,6 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         catch (ArgumentException) { }
         string[] TierScopes(string tier) => [.. MicrosoftOAuthOptions.GetScopesForTier(tier)
             .Select(scope => scope[(scope.LastIndexOf('/') + 1)..]).Where(scope => scope != "User.Read")];
-        string[] tiers = ["licenses", "chargeback"];
         var note = new Dictionary<string, string>
         {
             ["meaning"] = "Microsoft Graph refused this read: this connection lacks a delegated permission the API requires, or the signed-in user lacks a directory role it requires. The permissions section of the API's Microsoft Learn page names both. Its data is unknown, not zero.",

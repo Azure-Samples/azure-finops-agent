@@ -11,6 +11,7 @@ public class UserTokens
     private volatile string? _graphToken;
     private volatile string? _logAnalyticsToken;
     private volatile string? _storageToken;
+    private volatile string? _copilotCostToken;
 
     // Expiry tracking is stored as Unix-seconds in a long, written/read
     // atomically via Interlocked. The TenantTokenRefresher background service
@@ -20,6 +21,7 @@ public class UserTokens
     private long _graphTokenExpiryUnixSec;
     private long _logAnalyticsTokenExpiryUnixSec;
     private long _storageTokenExpiryUnixSec;
+    private long _copilotCostTokenExpiryUnixSec;
 
     /// <summary>The user id this token bag belongs to (set by the per-user factory).</summary>
     public long UserId { get; init; }
@@ -35,6 +37,9 @@ public class UserTokens
 
     /// <summary>Azure Storage data-plane token (storage.azure.com) for reading cost exports</summary>
     public string? StorageToken { get => _storageToken; set => _storageToken = value; }
+
+    /// <summary>Microsoft Graph token holding only the Copilot cost management scopes (/copilot/costManagement)</summary>
+    public string? CopilotCostToken { get => _copilotCostToken; set => _copilotCostToken = value; }
 
     /// <summary>Expiry of <see cref="AzureToken"/>, or null if unknown.</summary>
     public DateTimeOffset? AzureTokenExpiry
@@ -62,6 +67,13 @@ public class UserTokens
     {
         get => ReadExpiry(ref _storageTokenExpiryUnixSec);
         set => WriteExpiry(ref _storageTokenExpiryUnixSec, value);
+    }
+
+    /// <summary>Expiry of <see cref="CopilotCostToken"/>, or null if unknown.</summary>
+    public DateTimeOffset? CopilotCostTokenExpiry
+    {
+        get => ReadExpiry(ref _copilotCostTokenExpiryUnixSec);
+        set => WriteExpiry(ref _copilotCostTokenExpiryUnixSec, value);
     }
 
     /// <summary>Lock for serializing token refresh operations to prevent double-refresh races.</summary>

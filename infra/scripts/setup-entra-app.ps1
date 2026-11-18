@@ -171,6 +171,10 @@ $graphOrgReadAll = Resolve-DelegatedScopeId $graphAppId "Organization.Read.All" 
 $graphReportsReadAll = Resolve-DelegatedScopeId $graphAppId "Reports.Read.All" "02e97553-ed7b-43d0-ab3c-f8bace0d040c"
 $graphUserReadAll = Resolve-DelegatedScopeId $graphAppId "User.Read.All" "a154be20-db9c-4678-8ab7-66f6cc099a59"
 $graphGroupReadAll = Resolve-DelegatedScopeId $graphAppId "Group.Read.All" "5f8c59db-677d-491f-a6b8-5f174b11ec1d"
+# Microsoft 365 Copilot cost management (Graph beta; admin consent). Requested by the copilotcost tier only.
+$graphCopilotCostReadAll = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement.Read.All" "c0fcd4f8-e2a8-4162-892c-652d9bb651fd"
+$graphCopilotCostUserData = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement-UserData.Read.All" "d3f39420-6eec-4e63-98ba-b2866ef3ba99"
+$graphCopilotCostPolicy = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement-Policy.Read.All" "7fe904eb-5276-4ddc-ab01-67e4d708b664"
 
 # Log Analytics
 $laAppId = "ca7f3f0b-7d91-482c-8e09-c5d840d0eac5"
@@ -195,7 +199,10 @@ $requiredAccess = @(
             @{ id = $graphOrgReadAll; type = "Scope" },
             @{ id = $graphReportsReadAll; type = "Scope" },
             @{ id = $graphUserReadAll; type = "Scope" },
-            @{ id = $graphGroupReadAll; type = "Scope" }
+            @{ id = $graphGroupReadAll; type = "Scope" },
+            @{ id = $graphCopilotCostReadAll; type = "Scope" },
+            @{ id = $graphCopilotCostUserData; type = "Scope" },
+            @{ id = $graphCopilotCostPolicy; type = "Scope" }
         )
     },
     @{
@@ -227,7 +234,9 @@ if ($permExit -ne 0) {
 
 Write-Status "  Azure ARM:       user_impersonation (delegated)" 'Gray'
 Write-Status "  Microsoft Graph: User.Read, Organization.Read.All, Reports.Read.All," 'Gray'
-Write-Status "                   User.Read.All, Group.Read.All (all delegated, read-only)" 'Gray'
+Write-Status "                   User.Read.All, Group.Read.All, CopilotCostManagement.Read.All," 'Gray'
+Write-Status "                   CopilotCostManagement-UserData.Read.All, CopilotCostManagement-Policy.Read.All" 'Gray'
+Write-Status "                   (all delegated, read-only)" 'Gray'
 Write-Status "  Log Analytics:   Data.Read (delegated, read-only)" 'Gray'
 Write-Status "  Azure Storage:   user_impersonation (delegated, for cost exports)" 'Gray'
 Write-Status ""

@@ -1141,6 +1141,70 @@
                     </div>
                   </div>
 
+                  <div
+                    class="scope-row"
+                    :class="{
+                      'scope-row--active': copilotCostEnabled,
+                      'scope-row--glow': glowingRow === 4,
+                      'scope-row--open': addonRowsOpen[4],
+                    }"
+                  >
+                    <button
+                      class="scope-row-summary"
+                      type="button"
+                      @click="clickScopeRow(4)"
+                      title="Show details"
+                    >
+                      <span v-if="copilotCostEnabled" class="scope-row-mark">
+                        <AppIcon name="check" size="14" />
+                      </span>
+                      <span class="scope-row-title">Copilot Cost Management</span>
+                      <span
+                        class="scope-row-chevron"
+                        @click.stop="addonRowsOpen[4] = !addonRowsOpen[4]"
+                        title="Show details"
+                      >
+                        <AppIcon name="moreDown" size="14" />
+                      </span>
+                    </button>
+                    <div class="scope-row-detail-wrap">
+                      <div class="scope-row-detail">
+                        <p class="scope-row-desc">
+                          Read Copilot credit use per user, group &amp; service,
+                          and the spending limits
+                        </p>
+                        <div class="scope-row-meta">
+                          <span class="scope-badge scope-badge--delegated">
+                            <AppIcon name="person" size="13" />
+                            Delegated
+                          </span>
+                          <span class="scope-badge">Microsoft Graph (beta)</span>
+                        </div>
+                        <p class="scope-row-perms">
+                          CopilotCostManagement.Read.All ·
+                          CopilotCostManagement-UserData.Read.All ·
+                          CopilotCostManagement-Policy.Read.All
+                        </p>
+                        <button
+                          v-if="!copilotCostEnabled"
+                          class="scope-row-add"
+                          @click.stop="
+                            startAuth(
+                              'azure',
+                              '/auth/microsoft?tier=copilotcost',
+                            )
+                          "
+                        >
+                          Add scope
+                        </button>
+                        <span v-else class="scope-row-status">
+                          <AppIcon name="checkCircle" size="14" />
+                          Consented
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
                   <div class="addons-divider"></div>
 
                   <button
@@ -1149,7 +1213,8 @@
                         licensesEnabled &&
                         chargebackEnabled &&
                         logAnalyticsEnabled &&
-                        storageEnabled
+                        storageEnabled &&
+                        copilotCostEnabled
                       )
                     "
                     class="scope-grant-all"
@@ -3373,6 +3438,7 @@ const consentActionLabels = {
   storage: "Grant Storage access",
   licenses: "Grant license reporting access",
   chargeback: "Grant cost allocation access",
+  copilotcost: "Grant Copilot cost access",
 };
 // Only the host's own consent routes, with its own labels, whatever a tool result or event names.
 function allowedConsentActions(actions) {
@@ -3388,6 +3454,7 @@ function consentTierGranted(tier) {
     storage: storageEnabled.value,
     licenses: licensesEnabled.value,
     chargeback: chargebackEnabled.value,
+    copilotcost: copilotCostEnabled.value,
   }[tier] === true;
 }
 function setNotice(kind, text, progress = null) {
@@ -3928,6 +3995,7 @@ const licensesEnabled = ref(false);
 const chargebackEnabled = ref(false);
 const logAnalyticsEnabled = ref(false);
 const storageEnabled = ref(false);
+const copilotCostEnabled = ref(false);
 const tenantId = ref(""); // User-specified tenant ID or domain for guest users
 const availableTenants = ref([]);
 const currentTenantId = ref("");
@@ -4997,7 +5065,7 @@ async function deleteSession(sessionId) {
 // Add-ons collapsible parent + per-row open state + onboarding glow tour
 // Defaults to collapsed; the first-login tour expands → animates each row → collapses again.
 const addonsOpen = ref(false);
-const addonRowsOpen = ref([false, false, false, false]);
+const addonRowsOpen = ref([false, false, false, false, false]);
 const glowingRow = ref(-1);
 
 // One-time onboarding tour: when user first connects, briefly open each
@@ -5008,7 +5076,7 @@ async function runAddonsTour() {
   if (localStorage.getItem("addons-tour-shown")) return;
   await new Promise((r) => setTimeout(r, 900));
   addonsOpen.value = true;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < addonRowsOpen.value.length; i++) {
     glowingRow.value = i;
     addonRowsOpen.value[i] = true;
     await new Promise((r) => setTimeout(r, 1400));
@@ -5053,6 +5121,7 @@ async function checkAzureStatus() {
         const gt = data.graphTier || "";
         licensesEnabled.value = gt.includes("licenses");
         chargebackEnabled.value = gt.includes("chargeback");
+        copilotCostEnabled.value = gt.includes("copilotcost");
         logAnalyticsEnabled.value = data.logAnalyticsEnabled || false;
         storageEnabled.value = data.storageEnabled || false;
         // Fetch tenant list after connecting
@@ -5134,6 +5203,7 @@ async function disconnectAzure() {
     chargebackEnabled.value = false;
     logAnalyticsEnabled.value = false;
     storageEnabled.value = false;
+    copilotCostEnabled.value = false;
     maturityScores.crawl = null;
     maturityScores.walk = null;
     maturityScores.run = null;
@@ -5164,6 +5234,7 @@ async function revokeAllPermissions() {
     chargebackEnabled.value = false;
     logAnalyticsEnabled.value = false;
     storageEnabled.value = false;
+    copilotCostEnabled.value = false;
     // Reset onboarding so the next reconnect replays the add-ons tour.
     localStorage.removeItem("addons-tour-shown");
     await clearMessages();

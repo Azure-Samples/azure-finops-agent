@@ -79,6 +79,7 @@ public static class ChatEndpoints
         if (tokens.GraphToken is not null) apis.Add("Microsoft Graph (QueryAzure https://graph.microsoft.com)");
         if (tokens.LogAnalyticsToken is not null) apis.Add("Log Analytics and Application Insights (QueryAzure https://api.loganalytics.io, https://api.applicationinsights.io)");
         if (tokens.StorageToken is not null) apis.Add("Azure Blob Storage (QueryAzure https://{account}.blob.core.windows.net)");
+        if (tokens.CopilotCostToken is not null) apis.Add("Microsoft 365 Copilot cost management (QueryAzure https://graph.microsoft.com/beta/copilot/costManagement)");
         return apis;
     }
 
@@ -255,7 +256,8 @@ public static class ChatEndpoints
                         Fetch("azure", () => tokenStore.GetAzureTokenAsync(ctx, httpFactory)),
                         Fetch("graph", () => tokenStore.GetGraphTokenAsync(ctx, httpFactory)),
                         Fetch("loganalytics", () => tokenStore.GetLogAnalyticsTokenAsync(ctx, httpFactory)),
-                        Fetch("storage", () => tokenStore.GetStorageTokenAsync(ctx, httpFactory)));
+                        Fetch("storage", () => tokenStore.GetStorageTokenAsync(ctx, httpFactory)),
+                        Fetch("copilotcost", () => tokenStore.GetCopilotCostTokenAsync(ctx, httpFactory)));
                     fetchSw.Stop();
                     foreach (var r in results)
                     {
@@ -268,6 +270,7 @@ public static class ChatEndpoints
                     tokens.GraphToken = results[1].Value;
                     tokens.LogAnalyticsToken = results[2].Value;
                     tokens.StorageToken = results[3].Value;
+                    tokens.CopilotCostToken = results[4].Value;
 
                     // Mirror expiry from session into the volatile bag so the
                     // TenantTokenRefresher background service can refresh proactively
@@ -276,6 +279,7 @@ public static class ChatEndpoints
                     tokens.GraphTokenExpiry = ParseExpiry(ctx.Session.GetString("graph_token_expiry"));
                     tokens.LogAnalyticsTokenExpiry = ParseExpiry(ctx.Session.GetString("loganalytics_token_expiry"));
                     tokens.StorageTokenExpiry = ParseExpiry(ctx.Session.GetString("storage_token_expiry"));
+                    tokens.CopilotCostTokenExpiry = ParseExpiry(ctx.Session.GetString("copilotcost_token_expiry"));
                 }
                 finally
                 {
@@ -283,9 +287,9 @@ public static class ChatEndpoints
                 }
             } // end if (entraOid is not null)
 
-            logger.LogInformation("Chat tokens: azure={HasAzure} graph={HasGraph} la={HasLA} storage={HasStorage}",
+            logger.LogInformation("Chat tokens: azure={HasAzure} graph={HasGraph} la={HasLA} storage={HasStorage} copilotcost={HasCopilotCost}",
                 tokens.AzureToken is not null, tokens.GraphToken is not null,
-                tokens.LogAnalyticsToken is not null, tokens.StorageToken is not null);
+                tokens.LogAnalyticsToken is not null, tokens.StorageToken is not null, tokens.CopilotCostToken is not null);
 
             var connectedApis = ConnectedApis(tokens);
             var cachedAzureScopes = ctx.Session.GetString("azure_scope_context");

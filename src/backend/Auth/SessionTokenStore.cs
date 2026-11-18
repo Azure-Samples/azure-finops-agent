@@ -256,4 +256,9 @@ public sealed class SessionTokenStore
         GetSessionTokenAsync(ctx, httpFactory, "storage_token", "storage_token_expiry",
             "https://storage.azure.com/user_impersonation offline_access",
             requiredTiers: "storage");
+
+    public Task<string?> GetCopilotCostTokenAsync(HttpContext ctx, IHttpClientFactory httpFactory) =>
+        GetSessionTokenAsync(ctx, httpFactory, "copilotcost_token", "copilotcost_token_expiry",
+            TenantTokenRefresher.ScopeCopilotCost,
+            requiredTiers: "copilotcost");
 }

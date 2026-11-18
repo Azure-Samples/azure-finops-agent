@@ -505,6 +505,11 @@ const maturityCategories = [
           "Show my Microsoft 365 Copilot license usage. How many seats are assigned vs actively used? Which users haven't used Copilot in the last 30 days? Calculate the monthly waste from inactive Copilot licenses.",
       },
       {
+        label: "Copilot credits per user",
+        prompt:
+          "Who used the most Copilot Credits yesterday? Show the top 10 users and the credits each used, which Copilot services the credits went to, and how much of our tenant credit balance is left. Then show which Foundry model deployments and agents cost the most this month.",
+      },
+      {
         label: "Windows Server licensing",
         prompt:
           "Audit my Windows Server VMs. How many are using Azure Hybrid Benefit vs pay-as-you-go licensing? Show the per-VM cost difference and total savings opportunity from enabling AHUB on all eligible VMs.",

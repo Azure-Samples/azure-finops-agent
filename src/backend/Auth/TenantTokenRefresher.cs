@@ -49,6 +49,8 @@ public sealed class TenantTokenRefresher : BackgroundService
         "https://api.loganalytics.io/Data.Read offline_access";
     internal const string ScopeStorage =
         "https://storage.azure.com/user_impersonation offline_access";
+    internal static readonly string ScopeCopilotCost =
+        string.Join(" ", MicrosoftOAuthOptions.GetScopesForTier("copilotcost")) + " offline_access";
 
     private readonly AiTelemetry _telemetry;
     private readonly SessionTokenStore _tokenStore;
@@ -99,7 +101,8 @@ public sealed class TenantTokenRefresher : BackgroundService
             if (!NeedsRefresh(tokens.AzureTokenExpiry)
                 && !NeedsRefresh(tokens.GraphTokenExpiry)
                 && !NeedsRefresh(tokens.LogAnalyticsTokenExpiry)
-                && !NeedsRefresh(tokens.StorageTokenExpiry))
+                && !NeedsRefresh(tokens.StorageTokenExpiry)
+                && !NeedsRefresh(tokens.CopilotCostTokenExpiry))
                 continue;
 
             var record = _identity.LoadByUserId(userId);
@@ -141,6 +144,14 @@ public sealed class TenantTokenRefresher : BackgroundService
                     var (ok, fail) = await TryRefresh(record, tokens, ScopeStorage, "Storage",
                         v => { tokens.StorageToken = v.Token; tokens.StorageTokenExpiry = v.Expiry; },
                         () => { tokens.StorageToken = null; tokens.StorageTokenExpiry = null; });
+                    refreshed += ok; failed += fail;
+                }
+
+                if (NeedsRefresh(tokens.CopilotCostTokenExpiry))
+                {
+                    var (ok, fail) = await TryRefresh(record, tokens, ScopeCopilotCost, "CopilotCost",
+                        v => { tokens.CopilotCostToken = v.Token; tokens.CopilotCostTokenExpiry = v.Expiry; },
+                        () => { tokens.CopilotCostToken = null; tokens.CopilotCostTokenExpiry = null; });
                     refreshed += ok; failed += fail;
                 }
             }
