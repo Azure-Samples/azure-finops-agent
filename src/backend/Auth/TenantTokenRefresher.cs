@@ -51,6 +51,8 @@ public sealed class TenantTokenRefresher : BackgroundService
         "https://storage.azure.com/user_impersonation offline_access";
     internal static readonly string ScopeCopilotCost =
         string.Join(" ", MicrosoftOAuthOptions.GetScopesForTier("copilotcost")) + " offline_access";
+    internal static readonly string ScopeCopilotChanges =
+        string.Join(" ", MicrosoftOAuthOptions.GetScopesForTier("copilotchanges")) + " offline_access";
 
     private readonly AiTelemetry _telemetry;
     private readonly SessionTokenStore _tokenStore;
@@ -102,7 +104,8 @@ public sealed class TenantTokenRefresher : BackgroundService
                 && !NeedsRefresh(tokens.GraphTokenExpiry)
                 && !NeedsRefresh(tokens.LogAnalyticsTokenExpiry)
                 && !NeedsRefresh(tokens.StorageTokenExpiry)
-                && !NeedsRefresh(tokens.CopilotCostTokenExpiry))
+                && !NeedsRefresh(tokens.CopilotCostTokenExpiry)
+                && !NeedsRefresh(tokens.CopilotChangesTokenExpiry))
                 continue;
 
             var record = _identity.LoadByUserId(userId);
@@ -152,6 +155,14 @@ public sealed class TenantTokenRefresher : BackgroundService
                     var (ok, fail) = await TryRefresh(record, tokens, ScopeCopilotCost, "CopilotCost",
                         v => { tokens.CopilotCostToken = v.Token; tokens.CopilotCostTokenExpiry = v.Expiry; },
                         () => { tokens.CopilotCostToken = null; tokens.CopilotCostTokenExpiry = null; });
+                    refreshed += ok; failed += fail;
+                }
+
+                if (NeedsRefresh(tokens.CopilotChangesTokenExpiry))
+                {
+                    var (ok, fail) = await TryRefresh(record, tokens, ScopeCopilotChanges, "CopilotChanges",
+                        v => { tokens.CopilotChangesToken = v.Token; tokens.CopilotChangesTokenExpiry = v.Expiry; },
+                        () => { tokens.CopilotChangesToken = null; tokens.CopilotChangesTokenExpiry = null; });
                     refreshed += ok; failed += fail;
                 }
             }

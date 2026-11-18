@@ -9,7 +9,7 @@ Perform a complete security audit of this agent to verify it is strictly read-on
 
 Scan `AzureQueryTools.cs` and confirm:
 
-- `DELETE` is centrally blocked. `GET` is read-only. `QueryAzure` refuses `PUT`/`PATCH`; they run only through `ApplyAzureChange`, an `ApprovalRequiredAIFunction` that never applies without the user's explicit approval in the UI.
+- `DELETE` is centrally blocked. `GET` is read-only. `QueryAzure` refuses `PUT`/`PATCH` and reads Microsoft Graph with GET only (POST only for read-only directory lookups, never `$batch`), because Entra puts every Graph scope a user granted into every Graph token; changes run only through `ApplyAzureChange`, an `ApprovalRequiredAIFunction` that never applies without the user's explicit approval in the UI. Its Copilot cost changes are limited to the allowlist in `AzureQueryTools.CopilotChanges` and use the separate `copilotchanges` consent, which `tier=all`, the app registration and scheduled runs never include.
 - ARM `POST` requests are validated by the read-only allowlist in `ValidateReadOnlyPostPath`, plus `ValidateConnectivityBody` for Network Watcher `connectivityCheck`.
 - List every allowlisted POST pattern and verify each is a read-only query/report/calculation/diagnostic endpoint.
 - Verify `ResolveTarget` and `Classify` route credentials by exact host and reject unsafe URLs without echoing them.

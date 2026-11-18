@@ -35,7 +35,8 @@ internal static partial class ResponseShaper
             var line = response.AsSpan(start, end - start).TrimEnd('\r');
             if (!(start == 0 && line.StartsWith("HTTP ") || start > 0 && line.IsEmpty || line.StartsWith(TimestampPrefix)
                 || line.StartsWith("Final URL: ") || line.StartsWith("Content-Type: ") || line.StartsWith("Bytes on wire: ") || line.StartsWith("UTC: ")
-                || line.StartsWith("Azure-AsyncOperation: ") || line.StartsWith("Location: ") || line.StartsWith("Retry-After: "))) break;
+                || line.StartsWith("Azure-AsyncOperation: ") || line.StartsWith("Location: ") || line.StartsWith("Retry-After: ")
+                || line.StartsWith("ETag: "))) break;
             start = end + 1;
         }
         return (response[..start], response[start..]);

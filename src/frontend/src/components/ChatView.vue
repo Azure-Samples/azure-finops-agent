@@ -1171,7 +1171,7 @@
                       <div class="scope-row-detail">
                         <p class="scope-row-desc">
                           Read Copilot credit use per user, group &amp; service,
-                          and the spending limits
+                          the spending limits and credit requests
                         </p>
                         <div class="scope-row-meta">
                           <span class="scope-badge scope-badge--delegated">
@@ -1183,7 +1183,9 @@
                         <p class="scope-row-perms">
                           CopilotCostManagement.Read.All ·
                           CopilotCostManagement-UserData.Read.All ·
-                          CopilotCostManagement-Policy.Read.All
+                          CopilotCostManagement-Policy.Read.All ·
+                          CopilotCostManagement-Assignment.Read.All ·
+                          CopilotCostManagement-CreditReq.Read.All
                         </p>
                         <button
                           v-if="!copilotCostEnabled"
@@ -1192,6 +1194,71 @@
                             startAuth(
                               'azure',
                               '/auth/microsoft?tier=copilotcost',
+                            )
+                          "
+                        >
+                          Add scope
+                        </button>
+                        <span v-else class="scope-row-status">
+                          <AppIcon name="checkCircle" size="14" />
+                          Consented
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Write scopes: never part of "Grant all remaining add-ons", which grants only read access. -->
+                  <div
+                    class="scope-row"
+                    :class="{
+                      'scope-row--active': copilotChangesEnabled,
+                      'scope-row--glow': glowingRow === 5,
+                      'scope-row--open': addonRowsOpen[5],
+                    }"
+                  >
+                    <button
+                      class="scope-row-summary"
+                      type="button"
+                      @click="clickScopeRow(5)"
+                      title="Show details"
+                    >
+                      <span v-if="copilotChangesEnabled" class="scope-row-mark">
+                        <AppIcon name="check" size="14" />
+                      </span>
+                      <span class="scope-row-title">Copilot Cost Changes</span>
+                      <span
+                        class="scope-row-chevron"
+                        @click.stop="addonRowsOpen[5] = !addonRowsOpen[5]"
+                        title="Show details"
+                      >
+                        <AppIcon name="moreDown" size="14" />
+                      </span>
+                    </button>
+                    <div class="scope-row-detail-wrap">
+                      <div class="scope-row-detail">
+                        <p class="scope-row-desc">
+                          Propose Copilot spending limits and credit request
+                          decisions; each runs only after you approve it
+                        </p>
+                        <div class="scope-row-meta">
+                          <span class="scope-badge scope-badge--delegated">
+                            <AppIcon name="person" size="13" />
+                            Delegated
+                          </span>
+                          <span class="scope-badge">Microsoft Graph (beta)</span>
+                        </div>
+                        <p class="scope-row-perms">
+                          CopilotCostManagement-Policy.ReadWrite.All ·
+                          CopilotCostManagement-Assignment.ReadWrite.All ·
+                          CopilotCostManagement-CreditReq.ReadWrite.All
+                        </p>
+                        <button
+                          v-if="!copilotChangesEnabled"
+                          class="scope-row-add"
+                          @click.stop="
+                            startAuth(
+                              'azure',
+                              '/auth/microsoft?tier=copilotchanges',
                             )
                           "
                         >
@@ -1694,6 +1761,9 @@
                 </summary>
                 <p class="change-review-summary">{{ describeChange(change) }}</p>
                 <div class="change-review-target">{{ change.target }}</div>
+                <div v-if="change.ifMatch" class="change-review-target">
+                  If-Match: {{ change.ifMatch }}
+                </div>
                 <pre>{{ change.body || "No request body" }}</pre>
                 <template v-if="change.status === 'awaitingApproval'">
                   <label
@@ -3439,6 +3509,7 @@ const consentActionLabels = {
   licenses: "Grant license reporting access",
   chargeback: "Grant cost allocation access",
   copilotcost: "Grant Copilot cost access",
+  copilotchanges: "Grant Copilot cost changes",
 };
 // Only the host's own consent routes, with its own labels, whatever a tool result or event names.
 function allowedConsentActions(actions) {
@@ -3455,6 +3526,7 @@ function consentTierGranted(tier) {
     licenses: licensesEnabled.value,
     chargeback: chargebackEnabled.value,
     copilotcost: copilotCostEnabled.value,
+    copilotchanges: copilotChangesEnabled.value,
   }[tier] === true;
 }
 function setNotice(kind, text, progress = null) {
@@ -3996,6 +4068,7 @@ const chargebackEnabled = ref(false);
 const logAnalyticsEnabled = ref(false);
 const storageEnabled = ref(false);
 const copilotCostEnabled = ref(false);
+const copilotChangesEnabled = ref(false);
 const tenantId = ref(""); // User-specified tenant ID or domain for guest users
 const availableTenants = ref([]);
 const currentTenantId = ref("");
@@ -5065,7 +5138,7 @@ async function deleteSession(sessionId) {
 // Add-ons collapsible parent + per-row open state + onboarding glow tour
 // Defaults to collapsed; the first-login tour expands → animates each row → collapses again.
 const addonsOpen = ref(false);
-const addonRowsOpen = ref([false, false, false, false, false]);
+const addonRowsOpen = ref([false, false, false, false, false, false]);
 const glowingRow = ref(-1);
 
 // One-time onboarding tour: when user first connects, briefly open each
@@ -5122,6 +5195,7 @@ async function checkAzureStatus() {
         licensesEnabled.value = gt.includes("licenses");
         chargebackEnabled.value = gt.includes("chargeback");
         copilotCostEnabled.value = gt.includes("copilotcost");
+        copilotChangesEnabled.value = gt.includes("copilotchanges");
         logAnalyticsEnabled.value = data.logAnalyticsEnabled || false;
         storageEnabled.value = data.storageEnabled || false;
         // Fetch tenant list after connecting
@@ -5204,6 +5278,7 @@ async function disconnectAzure() {
     logAnalyticsEnabled.value = false;
     storageEnabled.value = false;
     copilotCostEnabled.value = false;
+    copilotChangesEnabled.value = false;
     maturityScores.crawl = null;
     maturityScores.walk = null;
     maturityScores.run = null;
@@ -5235,6 +5310,7 @@ async function revokeAllPermissions() {
     logAnalyticsEnabled.value = false;
     storageEnabled.value = false;
     copilotCostEnabled.value = false;
+    copilotChangesEnabled.value = false;
     // Reset onboarding so the next reconnect replays the add-ons tour.
     localStorage.removeItem("addons-tour-shown");
     await clearMessages();

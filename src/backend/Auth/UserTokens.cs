@@ -12,6 +12,7 @@ public class UserTokens
     private volatile string? _logAnalyticsToken;
     private volatile string? _storageToken;
     private volatile string? _copilotCostToken;
+    private volatile string? _copilotChangesToken;
 
     // Expiry tracking is stored as Unix-seconds in a long, written/read
     // atomically via Interlocked. The TenantTokenRefresher background service
@@ -22,6 +23,7 @@ public class UserTokens
     private long _logAnalyticsTokenExpiryUnixSec;
     private long _storageTokenExpiryUnixSec;
     private long _copilotCostTokenExpiryUnixSec;
+    private long _copilotChangesTokenExpiryUnixSec;
 
     /// <summary>The user id this token bag belongs to (set by the per-user factory).</summary>
     public long UserId { get; init; }
@@ -38,8 +40,14 @@ public class UserTokens
     /// <summary>Azure Storage data-plane token (storage.azure.com) for reading cost exports</summary>
     public string? StorageToken { get => _storageToken; set => _storageToken = value; }
 
-    /// <summary>Microsoft Graph token holding only the Copilot cost management scopes (/copilot/costManagement)</summary>
+    /// <summary>Microsoft Graph token requested with the Copilot cost management read scopes (/copilot/costManagement).
+    /// Entra puts every Graph scope the user granted into every Graph token, so the host's method rules, not this token,
+    /// keep reads from writing.</summary>
     public string? CopilotCostToken { get => _copilotCostToken; set => _copilotCostToken = value; }
+
+    /// <summary>Microsoft Graph token requested with the Copilot cost management write scopes; it marks that consent and is
+    /// sent only by changes the user approved (ApplyAzureChange). Never hydrated for unattended job runs.</summary>
+    public string? CopilotChangesToken { get => _copilotChangesToken; set => _copilotChangesToken = value; }
 
     /// <summary>Expiry of <see cref="AzureToken"/>, or null if unknown.</summary>
     public DateTimeOffset? AzureTokenExpiry
@@ -74,6 +82,13 @@ public class UserTokens
     {
         get => ReadExpiry(ref _copilotCostTokenExpiryUnixSec);
         set => WriteExpiry(ref _copilotCostTokenExpiryUnixSec, value);
+    }
+
+    /// <summary>Expiry of <see cref="CopilotChangesToken"/>, or null if unknown.</summary>
+    public DateTimeOffset? CopilotChangesTokenExpiry
+    {
+        get => ReadExpiry(ref _copilotChangesTokenExpiryUnixSec);
+        set => WriteExpiry(ref _copilotChangesTokenExpiryUnixSec, value);
     }
 
     /// <summary>Lock for serializing token refresh operations to prevent double-refresh races.</summary>

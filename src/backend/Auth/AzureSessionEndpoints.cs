@@ -270,11 +270,20 @@ public static class AzureSessionEndpoints
         }
         if (telemetry.UserTokens.TryGetValue(uid, out var tokens))
         {
+            // Expiries too: TenantTokenRefresher refreshes any token whose expiry is set, and the identity record
+            // survives a disconnect, so a kept expiry would mint the cleared tokens again.
             tokens.AzureToken = null;
+            tokens.AzureTokenExpiry = null;
             tokens.GraphToken = null;
+            tokens.GraphTokenExpiry = null;
             tokens.LogAnalyticsToken = null;
+            tokens.LogAnalyticsTokenExpiry = null;
             tokens.StorageToken = null;
+            tokens.StorageTokenExpiry = null;
             tokens.CopilotCostToken = null;
+            tokens.CopilotCostTokenExpiry = null;
+            tokens.CopilotChangesToken = null;
+            tokens.CopilotChangesTokenExpiry = null;
         }
         if (fullClear)
         {
@@ -307,10 +316,13 @@ public static class AzureSessionEndpoints
         ctx.Session.Remove("storage_token_expiry");
         ctx.Session.Remove("copilotcost_token");
         ctx.Session.Remove("copilotcost_token_expiry");
+        ctx.Session.Remove("copilotchanges_token");
+        ctx.Session.Remove("copilotchanges_token_expiry");
         ctx.Session.Remove("graph_token_unavailable_until");
         ctx.Session.Remove("loganalytics_token_unavailable_until");
         ctx.Session.Remove("storage_token_unavailable_until");
         ctx.Session.Remove("copilotcost_token_unavailable_until");
+        ctx.Session.Remove("copilotchanges_token_unavailable_until");
         ctx.Session.Remove("azure_scope_context");
         if (!includeForceConsent)
             ctx.Session.Remove("auth_tenant");

@@ -339,8 +339,9 @@ public static partial class HttpHelper
         var result = $"HTTP {(int)res.StatusCode} {res.StatusCode}\n";
         if (includeTimestamp)
             result += $"Current UTC time: {DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)}\n";
-        // Asynchronous ARM/Graph operations return where to poll; without it the model cannot learn the final state.
-        foreach (var header in new[] { "Azure-AsyncOperation", "Location", "Retry-After" })
+        // Asynchronous ARM/Graph operations return where to poll; without it the model cannot learn the final state. ETag is
+        // the version a later If-Match must name (a Copilot spending policy carries it only in this header).
+        foreach (var header in new[] { "Azure-AsyncOperation", "Location", "Retry-After", "ETag" })
             if (res.Headers.TryGetValues(header, out var values)) result += $"{header}: {string.Join(", ", values)}\n";
 
         if (maxResponseChars.HasValue && responseBody.Length > maxResponseChars.Value)
@@ -399,6 +400,7 @@ public static partial class HttpHelper
             "LogAnalyticsToken" => new[] { "loganalytics" },
             "StorageToken" => ["storage"],
             "CopilotCostToken" => ["copilotcost"],
+            "CopilotChangesToken" => ["copilotchanges"],
             "GraphToken" => graphTier switch
             {
                 null => ["licenses", "chargeback"],
@@ -423,7 +425,8 @@ public static partial class HttpHelper
         ["storage"] = "Grant Storage access",
         ["licenses"] = "Grant license reporting access",
         ["chargeback"] = "Grant cost allocation access",
-        ["copilotcost"] = "Grant Copilot cost access"
+        ["copilotcost"] = "Grant Copilot cost access",
+        ["copilotchanges"] = "Grant Copilot cost changes"
     };
 
     internal static string ConsentLabel(string tier) => ConsentLabels[tier];

@@ -80,6 +80,7 @@ public static class ChatEndpoints
         if (tokens.LogAnalyticsToken is not null) apis.Add("Log Analytics and Application Insights (QueryAzure https://api.loganalytics.io, https://api.applicationinsights.io)");
         if (tokens.StorageToken is not null) apis.Add("Azure Blob Storage (QueryAzure https://{account}.blob.core.windows.net)");
         if (tokens.CopilotCostToken is not null) apis.Add("Copilot Credits consumption (QueryAzure https://graph.microsoft.com/beta/copilot/costManagement)");
+        if (tokens.CopilotChangesToken is not null) apis.Add("Copilot spending policy and credit request changes, sent only after the user approves them (ApplyAzureChange https://graph.microsoft.com/beta/copilot/costManagement)");
         return apis;
     }
 
@@ -257,7 +258,8 @@ public static class ChatEndpoints
                         Fetch("graph", () => tokenStore.GetGraphTokenAsync(ctx, httpFactory)),
                         Fetch("loganalytics", () => tokenStore.GetLogAnalyticsTokenAsync(ctx, httpFactory)),
                         Fetch("storage", () => tokenStore.GetStorageTokenAsync(ctx, httpFactory)),
-                        Fetch("copilotcost", () => tokenStore.GetCopilotCostTokenAsync(ctx, httpFactory)));
+                        Fetch("copilotcost", () => tokenStore.GetCopilotCostTokenAsync(ctx, httpFactory)),
+                        Fetch("copilotchanges", () => tokenStore.GetCopilotChangesTokenAsync(ctx, httpFactory)));
                     fetchSw.Stop();
                     foreach (var r in results)
                     {
@@ -271,6 +273,7 @@ public static class ChatEndpoints
                     tokens.LogAnalyticsToken = results[2].Value;
                     tokens.StorageToken = results[3].Value;
                     tokens.CopilotCostToken = results[4].Value;
+                    tokens.CopilotChangesToken = results[5].Value;
 
                     // Mirror expiry from session into the volatile bag so the
                     // TenantTokenRefresher background service can refresh proactively
@@ -280,6 +283,7 @@ public static class ChatEndpoints
                     tokens.LogAnalyticsTokenExpiry = ParseExpiry(ctx.Session.GetString("loganalytics_token_expiry"));
                     tokens.StorageTokenExpiry = ParseExpiry(ctx.Session.GetString("storage_token_expiry"));
                     tokens.CopilotCostTokenExpiry = ParseExpiry(ctx.Session.GetString("copilotcost_token_expiry"));
+                    tokens.CopilotChangesTokenExpiry = ParseExpiry(ctx.Session.GetString("copilotchanges_token_expiry"));
                 }
                 finally
                 {
@@ -287,9 +291,10 @@ public static class ChatEndpoints
                 }
             } // end if (entraOid is not null)
 
-            logger.LogInformation("Chat tokens: azure={HasAzure} graph={HasGraph} la={HasLA} storage={HasStorage} copilotcost={HasCopilotCost}",
+            logger.LogInformation("Chat tokens: azure={HasAzure} graph={HasGraph} la={HasLA} storage={HasStorage} copilotcost={HasCopilotCost} copilotchanges={HasCopilotChanges}",
                 tokens.AzureToken is not null, tokens.GraphToken is not null,
-                tokens.LogAnalyticsToken is not null, tokens.StorageToken is not null, tokens.CopilotCostToken is not null);
+                tokens.LogAnalyticsToken is not null, tokens.StorageToken is not null, tokens.CopilotCostToken is not null,
+                tokens.CopilotChangesToken is not null);
 
             var connectedApis = ConnectedApis(tokens);
             var cachedAzureScopes = ctx.Session.GetString("azure_scope_context");
@@ -1000,7 +1005,7 @@ public static class ChatEndpoints
     /// <summary>What the UI shows for a change awaiting approval: the exact request the tool will send once approved.</summary>
     internal static object PendingChange(ApprovalRequestEvent request)
     {
-        string? method = null, target = null, body = null;
+        string? method = null, target = null, body = null, ifMatch = null;
         try
         {
             using var arguments = JsonDocument.Parse(request.Arguments ?? "{}");
@@ -1011,10 +1016,12 @@ public static class ChatEndpoints
                 target = root.TryGetProperty("url", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null;
                 body = root.TryGetProperty("body", out var b) && b.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)
                     ? b.ValueKind == JsonValueKind.String ? b.GetString() : b.GetRawText() : null;
+                ifMatch = root.TryGetProperty("ifMatch", out var i) && i.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(i.GetString())
+                    ? i.GetString()!.Trim() : null;
             }
         }
         catch (JsonException) { }
-        return new { requestId = request.RequestId, tool = request.ToolName, method, target, body, arguments = request.Arguments, status = "awaitingApproval" };
+        return new { requestId = request.RequestId, tool = request.ToolName, method, target, body, ifMatch, arguments = request.Arguments, status = "awaitingApproval" };
     }
 
     internal static string? EmptyResultNotice(TurnExecution turn) =>

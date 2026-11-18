@@ -22,9 +22,10 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// are public, credential-free GETs. All calls are traced via OpenTelemetry → Application Insights.
 ///
 /// Security model: DELETE is blocked everywhere. ARM POST is restricted to known read-only
-/// query/report/calculation/diagnostic endpoints; ARM PUT/PATCH run only through ApplyAzureChange, which Agent Framework
-/// holds until the user approves it in the UI. Storage, Retail Prices and public pages are GET-only. Beyond that the
-/// user's Entra RBAC and delegated consent are the security boundary.
+/// query/report/calculation/diagnostic endpoints; ARM PUT/PATCH and the documented Microsoft 365 Copilot cost management
+/// POST/PATCH operations run only through ApplyAzureChange, which Agent Framework holds until the user approves it in the
+/// UI. Storage, Retail Prices and public pages are GET-only. Beyond that the user's Entra RBAC and delegated consent are
+/// the security boundary.
 /// </summary>
 public sealed partial class AzureQueryTools(UserTokens tokens)
 {
@@ -51,7 +52,7 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
         - Azure Retail Prices (public list prices, no auth): GET https://prices.azure.com/api/retail/prices?currencyCode=USD&$filter=<OData>. This entry is its complete contract, so start with the price request itself: no documentation lookup or web search first. currencyCode stays USD unless the prices are compared with or applied to the tenant's own amounts (actual cost, a budget, Advisor savings): then request the currency those rows carry (their Currency column) when it is one of AUD, BRL, CAD, CHF, CNY, DKK, EUR, GBP, INR, JPY, KRW, NOK, NZD, RUB, SEK or TWD, which the API converts from USD at the current exchange rate, so call the converted price an estimate; never compare, add or rank amounts in two currencies. Fields and operators (eq, and, or, contains(field,'x'), tolower(field)): https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices. Values are case-sensitive (meter spellings change case between releases, so match words in meterName with contains(tolower(meterName),'x')); armRegionName is lowercase (eastus); Azure OpenAI and other Foundry models use serviceName 'Foundry Models'. Meter, product and SKU names are not derivable from ARM SKU names: start with structural fields (serviceName, armRegionName, armSkuName, priceType) and read the returned values; returned rows carry priceType as type, so a query selects x.type, never x.priceType; armSkuName is the full ARM size name with its prefix (Standard_D4s_v5, never D4s_v5). Compare regions or SKUs with 'or' in one filter; for a multi-service estimate, fetch every component in the first call as url lines, one structural filter per service, and price the whole estimate with combine (responses[i] holds component i's Items), so no later calculation is needed. Storage and SQL Database publish thousands of rows per region, so their filter also needs a product family term (contains(productName,'Premium SSD'), contains(productName,'General Purpose')) that still returns every billed component: SQL Database 'General Purpose' returns both the '- Compute Gen5' and the '- Storage' products, while a Compute-only term misses storage. Product names abbreviate inconsistently within one service (Azure Database for PostgreSQL bills compute under 'Flexible Server ...' products but storage under 'Azure Database for PostgreSQL Flex Server Storage', meter 'Storage Data Stored' per GB-month), so check that a productName term still matches every billed component, and price each component from its own service's rows, never another service's (a managed disk's P-tier price is not a database's storage price). SQL Database vCore compute rows exclude the SQL Server license: license-included pricing adds the tier's '- SQL License' product, published only under armRegionName 'Global' per single vCore-hour (skuName 'vCore', so multiply it by the vCore count; its DevTestConsumption row is zero), so the SQL filter includes (armRegionName eq '<region>' or armRegionName eq 'Global'); omit the license only for Azure Hybrid Benefit and say so. Storage: General Purpose and Business Critical bill the configured maximum data size plus 30 percent for the log file (500 GB of data bills 650 GB; https://learn.microsoft.com/azure/azure-sql/database/service-tiers-sql-database-vcore#data-and-log-storage), and Hyperscale bills allocated data storage (at least 10 GB) and no log storage. An answer that applies this cites it, so send one microsoft_docs_search for SQL Database vCore data and log storage in the same response as the first price request, which adds no round. A lookup that returns complete=false has missed rows. Some services publish one worldwide rate under armRegionName 'Global' and no per-region rows (Load Balancer has none in any region), so filter those with (armRegionName eq '<region>' or armRegionName eq 'Global') in the first request and label rows returned as Global as worldwide rates, not the region's. The host follows NextPageLink; never send $top. Zero Items means the filter matched nothing, not a zero price; tierMinimumUnits marks volume bands. Identify each rate by its productName, skuName, meterName, unitOfMeasure, currency and retrievedAtUtc (named in plain words in the answer), and state the lookup's coverage (complete or partial, from its complete flag); a sized skuName (for example '4 vCore' with unitOfMeasure '1 Hour') prices that whole size per unit, not each vCore, so say so and never multiply it by the size. Convert units in the same query that selects the rows (per-1M token rates as retailPrice * (unitOfMeasure == "1K" ? 1000 : 1), since older token meters are per '1K' and the newer GPT generations' meters per '1M'; monthly from hourly × 730), never in a later call or a web search.
         - Any other public https URL, GET only and without credentials: GitHub, vendor pricing pages, and the public Azure status feed https://azure.status.microsoft/en-us/status/feed/ (not tenant-specific: an empty feed does not prove a resource is healthy; use ARM Microsoft.ResourceHealth for a named resource). Azure's own pricing pages (azure.microsoft.com/pricing) fill their price tables in the browser, so a GET returns placeholders ($-) instead of prices: take Azure prices from the Retail Prices API and pricing terms (what a price includes, how a meter bills) from Microsoft Learn, never from those pages. Microsoft Learn documentation is searched with microsoft_docs_search and read with microsoft_docs_fetch instead; only when those tools are not available, search https://learn.microsoft.com/api/search?search=<terms>&locale=en-us (locale is required) here and fetch only URLs it returns. Pages become text lines; read the part you need in the same call with query: lines.Where(l => l.Contains("...")).Take(40) for matching lines, or lines.SkipWhile(l => !l.Contains("...")).Take(60) for the section that starts at the first match (lists have no IndexOf; TakeWhile(...).Count() is its index), never refetching a page to bisect line ranges.
         Host rules:
-        - DELETE is blocked. ARM POST is limited to read-only endpoints: Cost Management query/forecast/report generation/pricesheet download, Resource Graph, reservation and savings-plan price calculation, PolicyInsights policy-state summarize/queryResults and policy-event queryResults, management-group entities, carbon reports, Spot placement scores and Network Watcher connectivityCheck from an existing VM (body {source:{resourceId:<VM id>},destination:{address,port}}). Action POSTs such as start, restart, deallocate, power off or return are blocked. QueryAzure never sends PUT or PATCH: propose an ARM change with ApplyAzureChange, which runs only after the user approves it in the UI; never claim a change was applied before its result says so. A 201 or 202 result is accepted, not complete: poll its Azure-AsyncOperation or Location URL with GET, after any Retry-After, until a terminal status. Standard Graph consent is read-only, so writes return 403: report that instead of retrying.
+        - DELETE is blocked. ARM POST is limited to read-only endpoints: Cost Management query/forecast/report generation/pricesheet download, Resource Graph, reservation and savings-plan price calculation, PolicyInsights policy-state summarize/queryResults and policy-event queryResults, management-group entities, carbon reports, Spot placement scores and Network Watcher connectivityCheck from an existing VM (body {source:{resourceId:<VM id>},destination:{address,port}}). Action POSTs such as start, restart, deallocate, power off or return are blocked. QueryAzure never sends PUT or PATCH, nor any change to Copilot cost management: propose an ARM or Copilot cost management change with ApplyAzureChange, which runs only after the user approves it in the UI; never claim a change was applied before its result says so. A 201 or 202 result is accepted, not complete: poll its Azure-AsyncOperation or Location URL with GET, after any Retry-After, until a terminal status. Microsoft Graph is read with GET here (POST only for the read-only getByIds, getMemberGroups, getMemberObjects, checkMemberGroups and checkMemberObjects lookups, never $batch).
         - Cost Management, Consumption and PolicyInsights paths need a scope prefix (/subscriptions/{id}, a resource group, a management group or a billing account). Resource Graph bodies list the requested scope in an explicit subscriptions or managementGroups array, and Resource Graph KQL rejects kind, type and count as assigned column names in project, extend or summarize (write resourceKind='x' or n=count()). A type filter that names no real resource type returns zero rows, not an error, so zero rows show absence only for a type name copied from returned data or a provider listing; to find which types exist, summarize count() by type over the scope first.
         - Send requests of the same kind (one per region, subscription or scope) as several url lines in one call: GETs, or POSTs sharing one body; the host applies the same query to each, or combine once to all of them, runs at most 4 at a time and shows a schema shared by several large responses once. Make other independent calls in parallel in one response instead of one after another. Cost Management /query and /forecast are tenant-throttled: the host runs them one at a time, and when the service throttles one it waits out each cooldown the service names and retries, for up to five minutes, while the user sees the countdown. After a returned 429, make no further Cost Management calls this turn and report the retry deadline.
         - Paginated GET results (nextLink, @odata.nextLink, NextPageLink) are followed on the same host for up to 10 pages; complete=false means more pages remained, and a response with no pagesRead or complete had no next page, so its list is complete (say so, never "pagination not reported").
@@ -66,7 +67,10 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     internal const int QueryCharacters = 48 * 1024;
 
     internal const string ChangeDescription = """
-        Applies one Azure Resource Manager PUT or PATCH (tags, SKU or size, autoscale, budgets, schedules, diagnostic settings and similar non-destructive changes) under the signed-in user's RBAC. The host shows the exact method, url and body to the user and runs the call only after they approve it in the UI; a rejection returns without sending anything. Read the current resource with QueryAzure first and send the complete intended body for PUT or only the changed properties for PATCH, with the api-version that read used (its _apiVersion.used when the host chose it). Deletions are never available: put destructive steps in a GenerateScript script for the user to review. A 201 or 202 result is accepted, not complete: poll its Azure-AsyncOperation or Location URL with QueryAzure GET until a terminal status.
+        Applies one change under the signed-in user's permissions. The host shows the exact method, url, body and ifMatch to the user and runs the call only after they approve it in the UI; a rejection returns without sending anything.
+        - Azure Resource Manager: one PUT or PATCH (tags, SKU or size, autoscale, budgets, schedules, diagnostic settings and similar non-destructive changes). Read the current resource with QueryAzure first and send the complete intended body for PUT or only the changed properties for PATCH, with the api-version that read used (its _apiVersion.used when the host chose it). A 201 or 202 result is accepted, not complete: poll its Azure-AsyncOperation or Location URL with QueryAzure GET until a terminal status.
+        - Microsoft 365 Copilot cost management, url https://graph.microsoft.com/beta/copilot/costManagement/{operation}, sent with the user's Copilot cost changes consent: POST spendingPolicies creates a spending policy; PATCH spendingPolicies/{id}, POST spendingPolicies/{id}/serviceSettings, PATCH spendingPolicies/{id}/serviceSettings/{serviceId} (state disabled turns a service off), PATCH spendingPolicies/{id}/emailThresholdSettings, POST spendingPolicies/{id}/microsoft.graph.selectedGroupsSpendingPolicy/assignedGroups/$ref and POST spendingPolicies/{id}/emailThresholdSettings/recipients/$ref change one and need ifMatch, the policy's current ETag copied exactly with its weak W/ prefix: the ETag line of a QueryAzure GET of spendingPolicies/{id}, or parentEtag on its service settings; PATCH creditRequests/{id} approves or rejects one credit request (body {"state":"approved"} or {"state":"rejected"}) with ifMatch its own @odata.etag, and POST creditRequests/batchRecordDecisions decides up to 100 (body {"requests":[{"requestId","state","etag"}]}); it is not atomic, so report each item's status, and to retry read the requests again and send only the decisions still wanted. Approving a credit request lets that user consume more credits, so say so before proposing it. Take body shapes from the API reference (https://learn.microsoft.com/microsoft-365/copilot/extensibility/api/admin-settings/cost-management/overview) rather than guessing.
+        Deletions are never available: put destructive Azure steps in a GenerateScript script for the user to review, and the user deletes a Copilot spending policy or alert setting, or removes a group or recipient, in the Microsoft 365 admin center.
         """;
 
     public IEnumerable<AIFunction> Create() =>
@@ -106,18 +110,93 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     }
 
     private async Task<string> ApplyAzureChange(
-        [Description("PUT or PATCH.")] string method,
-        [Description("The ARM path starting with /, including the api-version your read of the resource used.")] string url,
+        [Description("PUT or PATCH for Azure Resource Manager; POST or PATCH for Copilot cost management.")] string method,
+        [Description("The ARM path starting with /, including the api-version your read of the resource used, or a https://graph.microsoft.com/beta/copilot/costManagement/... URL.")] string url,
         [Description("The request body as a native JSON object.")] JsonElement? body = null,
+        [Description("Copilot cost management only: the spending policy's current ETag (the ETag line of a QueryAzure GET of the policy, or parentEtag on its service settings, with its W/ prefix; also for its service settings, alert settings, groups and recipients) or the credit request's strong @odata.etag, copied exactly. Omit it for Azure Resource Manager, for creating a policy and for batchRecordDecisions.")] string ifMatch = "",
         CancellationToken cancellationToken = default)
     {
-        if (!IsWrite(method)) return "HTTP 400 BadRequest\nmethod must be PUT or PATCH. No request was sent.";
+        if (HasDotSegment(url))
+            return "HTTP 400 BadRequest\nurl must not contain . or .. path segments: an approved change is sent exactly as the user saw it. No request was sent.";
+        if (ResolveTarget(url) is { } copilotTarget && Classify(copilotTarget) == Service.Graph && IsCopilotCostPath(copilotTarget.AbsolutePath))
+            return await CopilotChangeAsync(copilotTarget, method, body, ifMatch, cancellationToken);
+        if (!IsWrite(method)) return "HTTP 400 BadRequest\nmethod must be PUT or PATCH for Azure Resource Manager. No request was sent.";
         if (ResolveTarget(url) is not { } target || Classify(target) != Service.Arm)
-            return "HTTP 400 BadRequest\nurl must be an Azure Resource Manager path starting with /. No request was sent.";
+            return "HTTP 400 BadRequest\nurl must be an Azure Resource Manager path starting with /, or a Copilot cost management URL. No request was sent.";
+        if (!string.IsNullOrWhiteSpace(ifMatch))
+            return "HTTP 400 BadRequest\nifMatch is only for Copilot cost management changes. No request was sent.";
         if (!HasApiVersion(target.PathAndQuery))
             return "HTTP 400 BadRequest\nA change needs an explicit api-version: use the one your read of this resource used (its _apiVersion.used when the host chose it). No request was sent.";
         using var activity = HttpHelper.Telemetry.StartActivity("ApplyAzureChange");
         return await SendAsync(url, method.Trim().ToUpperInvariant(), ModelJson.Text(body), activity, cancellationToken);
+    }
+
+    // The approval card shows the url as written, but Uri removes dot segments, so ".." could send an approved change to
+    // another resource or operation than the one the user read (encoded dots and slashes count too).
+    internal static bool HasDotSegment(string? url) =>
+        (url ?? "").Split('?', 2)[0]
+            .Replace("%2e", ".", StringComparison.OrdinalIgnoreCase).Replace("%2f", "/", StringComparison.OrdinalIgnoreCase)
+            .Split('/').Any(segment => segment is "." or "..");
+
+    // The documented Copilot cost management writes, whether each changes a resource that carries an ETag, and whether that
+    // ETag is strong. Creating a policy has none yet, and batchRecordDecisions carries each request's etag in its body;
+    // a policy's ETag is weak (W/"6"), a credit request's strong. Deleting a policy or alert setting and removing a group
+    // or recipient are never available.
+    private static readonly (string Method, Regex Path, bool NeedsETag, bool StrongETag)[] CopilotChanges =
+    [
+        ("POST", CopilotChangePath("spendingPolicies"), false, false),
+        ("PATCH", CopilotChangePath("spendingPolicies/[^/]+"), true, false),
+        ("POST", CopilotChangePath("spendingPolicies/[^/]+/serviceSettings"), true, false),
+        ("PATCH", CopilotChangePath("spendingPolicies/[^/]+/serviceSettings/[^/]+"), true, false),
+        ("PATCH", CopilotChangePath("spendingPolicies/[^/]+/emailThresholdSettings"), true, false),
+        ("POST", CopilotChangePath(@"spendingPolicies/[^/]+/microsoft\.graph\.selectedGroupsSpendingPolicy/assignedGroups/\$ref"), true, false),
+        ("POST", CopilotChangePath(@"spendingPolicies/[^/]+/emailThresholdSettings/recipients/\$ref"), true, false),
+        ("PATCH", CopilotChangePath("creditRequests/(?!batchRecordDecisions$)[^/]+"), true, true),
+        ("POST", CopilotChangePath("creditRequests/batchRecordDecisions"), false, false),
+    ];
+
+    private static Regex CopilotChangePath(string operation) =>
+        new($@"^/(v1\.0|beta)/copilot/costManagement/{operation}$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static readonly string[] CopilotChangesTiers = ["copilotchanges"];
+
+    /// <summary>
+    /// One approved Copilot cost management change: a documented POST or PATCH only, with a JSON body and, where the
+    /// service requires it, the If-Match ETag the user saw on the approval card. It is sent once with the separate write
+    /// token; a missing token returns that consent's button.
+    /// </summary>
+    private async Task<string> CopilotChangeAsync(Uri target, string? method, JsonElement? body, string? ifMatch, CancellationToken cancellationToken)
+    {
+        using var activity = HttpHelper.Telemetry.StartActivity("ApplyAzureChange");
+        var verb = method?.Trim().ToUpperInvariant() ?? "";
+        activity?.SetTag("graph.method", verb);
+        activity?.SetTag("graph.path", target.AbsolutePath);
+        if (verb == "DELETE")
+            return "HTTP 403 Forbidden\nThis agent never deletes: the user deletes a Copilot spending policy or alert setting, or removes a group or recipient, in the Microsoft 365 admin center (Copilot > Cost management). No request was sent.";
+        if (target.Query.Length > 0)
+            return "HTTP 400 BadRequest\nA Copilot cost management change takes no query string. No request was sent.";
+        var operation = CopilotChanges.FirstOrDefault(change => change.Method == verb && change.Path.IsMatch(target.AbsolutePath));
+        if (operation.Path is null)
+            return "HTTP 400 BadRequest\nNot a Copilot cost management change this agent sends. The changes are POST spendingPolicies, PATCH spendingPolicies/{id}, POST spendingPolicies/{id}/serviceSettings, PATCH spendingPolicies/{id}/serviceSettings/{serviceId}, PATCH spendingPolicies/{id}/emailThresholdSettings, POST spendingPolicies/{id}/microsoft.graph.selectedGroupsSpendingPolicy/assignedGroups/$ref, POST spendingPolicies/{id}/emailThresholdSettings/recipients/$ref, PATCH creditRequests/{id} and POST creditRequests/batchRecordDecisions, under https://graph.microsoft.com/beta/copilot/costManagement/. No request was sent.";
+        var etag = ifMatch?.Trim() ?? "";
+        if (!operation.NeedsETag && etag.Length > 0)
+            return "HTTP 400 BadRequest\nCreating a spending policy and batchRecordDecisions take no ifMatch (batchRecordDecisions carries each request's etag in its body). No request was sent.";
+        if (operation.NeedsETag && etag.Length == 0)
+            return "HTTP 400 BadRequest\nThis change needs ifMatch: the spending policy's ETag (the ETag line of a QueryAzure GET of the policy, or parentEtag on its service settings) or the credit request's @odata.etag, copied exactly. No request was sent.";
+        if (etag.Length > 256 || etag.Any(char.IsControl) || etag == "*")
+            return "HTTP 400 BadRequest\nifMatch must be the ETag your read returned, copied exactly (never *). No request was sent.";
+        if (operation.StrongETag && etag.StartsWith("W/", StringComparison.Ordinal))
+            return "HTTP 400 BadRequest\nA credit request's ETag is strong: copy its @odata.etag exactly, without W/. No request was sent.";
+        var text = ModelJson.Text(body);
+        if (string.IsNullOrWhiteSpace(text) || !text.TrimStart().StartsWith('{'))
+            return "HTTP 400 BadRequest\nA Copilot cost management change needs its request body as a JSON object. No request was sent.";
+        var token = tokens.CopilotChangesToken;
+        if (string.IsNullOrEmpty(token)) return HttpHelper.TokenMissing("CopilotChangesToken", activity, "graph");
+        Dictionary<string, string>? headers = etag.Length > 0 ? new(StringComparer.OrdinalIgnoreCase) { ["If-Match"] = etag } : null;
+        // Sent once: repeating a change after an ambiguous failure could apply it twice.
+        var response = await HttpHelper.SendWithRetryAsync(target.AbsoluteUri, token, activity, "graph", new HttpMethod(verb), text,
+            includeTimestamp: true, extraHeaders: headers, maxAttemptsOverride: 1, cancellationToken: cancellationToken);
+        return WithGraphAccessNote(ResponseShaper.Normalize(response), token, CopilotChangesTiers);
     }
 
     // query without url is a calculator over figures the model copies from earlier results; nothing is fetched, so it is not source evidence.
@@ -451,6 +530,11 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
     {
         activity?.SetTag("graph.method", method.Method);
         activity?.SetTag("graph.path", uri.AbsolutePath);
+        // Entra puts every Graph scope the user granted this app into every Graph token, so once the Copilot cost changes
+        // consent exists the read tokens can write as well. QueryAzure therefore reads Graph with GET only, plus a few
+        // read-only directory lookups (a $batch could wrap any method); changes go through ApplyAzureChange after approval.
+        if (method != HttpMethod.Get && !(method == HttpMethod.Post && ReadOnlyGraphPost().IsMatch(uri.AbsolutePath)))
+            return "HTTP 405 MethodNotAllowed\nQueryAzure reads Microsoft Graph with GET (POST only for the read-only getByIds, getMemberGroups, getMemberObjects, checkMemberGroups and checkMemberObjects lookups, never $batch). Propose a Copilot cost management change with ApplyAzureChange so the user can approve it. No request was sent.";
         // Copilot cost management has its own consent tier and token; every other Graph path uses the shared one.
         var copilotCost = IsCopilotCostPath(uri.AbsolutePath);
         var token = copilotCost ? tokens.CopilotCostToken : tokens.GraphToken;
@@ -471,6 +555,11 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
 
     [GeneratedRegex(@"^/(v1\.0|beta)/copilot/costManagement(/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CopilotCostPath();
+
+    // The Graph POST actions that only read: resolve directory object ids, and list or check a principal's memberships.
+    [GeneratedRegex(@"^/(v1\.0|beta)/(directoryObjects/getByIds|(me|(users|groups|servicePrincipals|devices|directoryObjects)/[^/]+)/(getMemberGroups|getMemberObjects|checkMemberGroups|checkMemberObjects))$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ReadOnlyGraphPost();
 
     // Directory advanced queries ($count, $search, assignedLicenses/$count, ne/not/endsWith filters) fail with 400
     // unless this header is present; simple Graph reads return the same result with or without it.

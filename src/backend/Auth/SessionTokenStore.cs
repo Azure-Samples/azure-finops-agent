@@ -261,4 +261,9 @@ public sealed class SessionTokenStore
         GetSessionTokenAsync(ctx, httpFactory, "copilotcost_token", "copilotcost_token_expiry",
             TenantTokenRefresher.ScopeCopilotCost,
             requiredTiers: "copilotcost");
+
+    public Task<string?> GetCopilotChangesTokenAsync(HttpContext ctx, IHttpClientFactory httpFactory) =>
+        GetSessionTokenAsync(ctx, httpFactory, "copilotchanges_token", "copilotchanges_token_expiry",
+            TenantTokenRefresher.ScopeCopilotChanges,
+            requiredTiers: "copilotchanges");
 }

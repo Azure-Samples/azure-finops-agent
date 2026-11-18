@@ -175,6 +175,9 @@ public sealed class JobScheduler : BackgroundService
             if (tiers.Contains("copilotcost"))
                 await HydrateAsync(record, TenantTokenRefresher.ScopeCopilotCost,
                     v => { tokens.CopilotCostToken = v.Token; tokens.CopilotCostTokenExpiry = v.Expiry; });
+            // Never the copilotchanges write token: a run can only propose a change, which runs after the user approves
+            // it in the conversation. The Graph tokens above can carry its scopes too (Entra issues every granted Graph
+            // scope), and QueryAzure's GET-only Graph rule keeps an unattended run from writing with them.
         }
         finally
         {

@@ -1,6 +1,6 @@
-// A plain-language line for a held Azure change, derived only from the exact
+// A plain-language line for a held change, derived only from the exact
 // request the user approves (method, URL and body), never from model text.
-// The card still shows the exact URL and body under it.
+// The card still shows the exact URL, If-Match and body under it.
 
 const MAX_PROPERTIES = 3;
 
@@ -33,8 +33,72 @@ function listProperties(names) {
   return rest > 0 ? `${shown.join(", ")} and ${rest} more` : text;
 }
 
+// Microsoft 365 Copilot cost management changes go to Microsoft Graph: the operation comes from the URL, and a credit
+// request decision, a service's state or a new policy's name from the body that is sent.
+const COPILOT_CHANGE =
+  /^https:\/\/graph\.microsoft\.com\/(?:v1\.0|beta)\/copilot\/costManagement\/(.+)$/i;
+const POLICY = "a Copilot spending policy";
+
+function bodyObject(body) {
+  try {
+    const parsed = typeof body === "string" ? JSON.parse(body) : body;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function describeCopilotChange(verb, operation, body) {
+  const parts = operation.split("/").filter(Boolean);
+  const lower = parts.map((part) => part.toLowerCase());
+  const fields = bodyObject(body);
+  if (lower[0] === "creditrequests") {
+    if (lower[1] === "batchrecorddecisions") {
+      const items = Array.isArray(fields.requests) ? fields.requests : [];
+      const count = (state) =>
+        items.filter((item) => item && item.state === state).length;
+      const decisions = [
+        count("approved") && `approve ${count("approved")}`,
+        count("rejected") && `reject ${count("rejected")}`,
+      ].filter(Boolean);
+      if (!decisions.length) return "Decide Copilot credit requests";
+      const text = `${decisions.join(" and ")} Copilot credit request${items.length === 1 ? "" : "s"}`;
+      return text[0].toUpperCase() + text.slice(1);
+    }
+    if (fields.state === "approved") return "Approve a Copilot credit request";
+    if (fields.state === "rejected") return "Reject a Copilot credit request";
+    return "Update a Copilot credit request";
+  }
+  if (lower[0] !== "spendingpolicies") return "Change Copilot cost management";
+  if (parts.length === 1)
+    return typeof fields.displayName === "string" && fields.displayName
+      ? `Create the Copilot spending policy ${fields.displayName}`
+      : "Create a Copilot spending policy";
+  if (lower.includes("assignedgroups")) return `Add a group to ${POLICY}`;
+  if (lower.includes("recipients"))
+    return `Add an alert recipient to ${POLICY}`;
+  if (lower[2] === "emailthresholdsettings")
+    return `Change the alerts of ${POLICY}`;
+  if (lower[2] === "servicesettings") {
+    if (verb === "POST") return `Add a service to ${POLICY}`;
+    const service = parts[3] || "a service";
+    return fields.state === "disabled"
+      ? `Turn off ${service} in ${POLICY}`
+      : `Update ${service} in ${POLICY}`;
+  }
+  const properties = Object.keys(fields);
+  return properties.length
+    ? `Update ${listProperties(properties)} on ${POLICY}`
+    : `Update ${POLICY}`;
+}
+
 export function describeChange({ method = "", target = "", body = "" } = {}) {
   const path = String(target).split("?")[0];
+  const copilot = path.match(COPILOT_CHANGE);
+  if (copilot)
+    return describeCopilotChange(String(method).toUpperCase(), copilot[1], body);
   const parts = path.split("/").filter(Boolean);
   const lower = parts.map((part) => part.toLowerCase());
   const name = parts.at(-1) || "the resource";

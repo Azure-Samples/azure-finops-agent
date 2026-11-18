@@ -24,7 +24,7 @@ public static class MicrosoftAuthEndpoints
 
     /// <summary>Appends a consented add-on tier to the session's consent list
     /// (session key <c>graph_tier</c>, persisted via <c>IdentityRecord.GraphTier</c>).
-    /// Tracked for ALL add-on tiers — licenses, chargeback, loganalytics, storage, copilotcost —
+    /// Tracked for ALL add-on tiers — licenses, chargeback, loganalytics, storage, copilotcost, copilotchanges —
     /// so <see cref="SessionTokenStore"/> can skip refresh-token exchanges for
     /// scopes the user never consented to (each is a guaranteed HTTP 400).</summary>
     private static void AppendConsentTier(HttpContext ctx, string tier)
@@ -58,6 +58,7 @@ public static class MicrosoftAuthEndpoints
             "loganalytics" => "loganalytics",
             "storage" => "storage",
             "copilotcost" => "copilotcost",
+            "copilotchanges" => "copilotchanges",
             _ => "azure"
         };
         ctx.Session.Remove($"{prefix}_token");
@@ -425,6 +426,13 @@ public static class MicrosoftAuthEndpoints
                     AppendConsentTier(ctx, authTier);
                     ctx.Session.Remove("copilotcost_token_unavailable_until");
                 }
+                else if (authTier == "copilotchanges")
+                {
+                    ctx.Session.SetString("copilotchanges_token", accessToken);
+                    ctx.Session.SetString("copilotchanges_token_expiry", DateTimeOffset.UtcNow.AddSeconds(expiresIn - 60).ToString("o"));
+                    AppendConsentTier(ctx, authTier);
+                    ctx.Session.Remove("copilotchanges_token_unavailable_until");
+                }
                 else
                 {
                     ctx.Session.SetString("azure_token", accessToken);
@@ -502,6 +510,7 @@ public static class MicrosoftAuthEndpoints
                                 "loganalytics" => ["loganalytics_token", "loganalytics_token_expiry"],
                                 "storage" => ["storage_token", "storage_token_expiry"],
                                 "copilotcost" => ["copilotcost_token", "copilotcost_token_expiry"],
+                                "copilotchanges" => ["copilotchanges_token", "copilotchanges_token_expiry"],
                                 _ => ["azure_token", "azure_token_expiry"],
                             };
                             string[] allTokenKeys =
@@ -511,15 +520,16 @@ public static class MicrosoftAuthEndpoints
                                 "loganalytics_token", "loganalytics_token_expiry",
                                 "storage_token", "storage_token_expiry",
                                 "copilotcost_token", "copilotcost_token_expiry",
+                                "copilotchanges_token", "copilotchanges_token_expiry",
                                 "graph_token_unavailable_until", "loganalytics_token_unavailable_until", "storage_token_unavailable_until",
-                                "copilotcost_token_unavailable_until",
+                                "copilotcost_token_unavailable_until", "copilotchanges_token_unavailable_until",
                             ];
                             foreach (var key in allTokenKeys.Except(keep))
                                 ctx.Session.Remove(key);
                             // Consent tiers belong to the previous account — reset to just
                             // what this callback granted (otherwise A's tiers get persisted
                             // into B's identity record below).
-                            if (authTier is "licenses" or "chargeback" or "loganalytics" or "storage" or "copilotcost")
+                            if (authTier is "licenses" or "chargeback" or "loganalytics" or "storage" or "copilotcost" or "copilotchanges")
                                 ctx.Session.SetString("graph_tier", authTier);
                             else
                                 ctx.Session.Remove("graph_tier");

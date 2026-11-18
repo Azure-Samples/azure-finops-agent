@@ -175,6 +175,10 @@ $graphGroupReadAll = Resolve-DelegatedScopeId $graphAppId "Group.Read.All" "5f8c
 $graphCopilotCostReadAll = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement.Read.All" "c0fcd4f8-e2a8-4162-892c-652d9bb651fd"
 $graphCopilotCostUserData = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement-UserData.Read.All" "d3f39420-6eec-4e63-98ba-b2866ef3ba99"
 $graphCopilotCostPolicy = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement-Policy.Read.All" "7fe904eb-5276-4ddc-ab01-67e4d708b664"
+$graphCopilotCostAssignment = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement-Assignment.Read.All" "fa5c8c5b-5aef-4d37-a426-02fdbb9c4a74"
+$graphCopilotCostCreditReq = Resolve-DelegatedScopeId $graphAppId "CopilotCostManagement-CreditReq.Read.All" "0696c9ff-8589-4687-8015-58a87d0ae29f"
+# The copilotchanges tier's write scopes (Policy, Assignment and CreditReq .ReadWrite.All) are deliberately not declared:
+# the app requests them by name only when a user grants that tier, so a tenant-wide .default admin consent never grants them.
 
 # Log Analytics
 $laAppId = "ca7f3f0b-7d91-482c-8e09-c5d840d0eac5"
@@ -202,7 +206,9 @@ $requiredAccess = @(
             @{ id = $graphGroupReadAll; type = "Scope" },
             @{ id = $graphCopilotCostReadAll; type = "Scope" },
             @{ id = $graphCopilotCostUserData; type = "Scope" },
-            @{ id = $graphCopilotCostPolicy; type = "Scope" }
+            @{ id = $graphCopilotCostPolicy; type = "Scope" },
+            @{ id = $graphCopilotCostAssignment; type = "Scope" },
+            @{ id = $graphCopilotCostCreditReq; type = "Scope" }
         )
     },
     @{
@@ -235,8 +241,9 @@ if ($permExit -ne 0) {
 Write-Status "  Azure ARM:       user_impersonation (delegated)" 'Gray'
 Write-Status "  Microsoft Graph: User.Read, Organization.Read.All, Reports.Read.All," 'Gray'
 Write-Status "                   User.Read.All, Group.Read.All, CopilotCostManagement.Read.All," 'Gray'
-Write-Status "                   CopilotCostManagement-UserData.Read.All, CopilotCostManagement-Policy.Read.All" 'Gray'
-Write-Status "                   (all delegated, read-only)" 'Gray'
+Write-Status "                   CopilotCostManagement-UserData.Read.All, CopilotCostManagement-Policy.Read.All," 'Gray'
+Write-Status "                   CopilotCostManagement-Assignment.Read.All, CopilotCostManagement-CreditReq.Read.All" 'Gray'
+Write-Status "                   (all delegated, read-only; the Copilot cost change scopes are requested by name only)" 'Gray'
 Write-Status "  Log Analytics:   Data.Read (delegated, read-only)" 'Gray'
 Write-Status "  Azure Storage:   user_impersonation (delegated, for cost exports)" 'Gray'
 Write-Status ""
