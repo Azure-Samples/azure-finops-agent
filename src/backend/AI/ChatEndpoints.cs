@@ -79,7 +79,7 @@ public static class ChatEndpoints
         if (tokens.GraphToken is not null) apis.Add("Microsoft Graph (QueryAzure https://graph.microsoft.com)");
         if (tokens.LogAnalyticsToken is not null) apis.Add("Log Analytics and Application Insights (QueryAzure https://api.loganalytics.io, https://api.applicationinsights.io)");
         if (tokens.StorageToken is not null) apis.Add("Azure Blob Storage (QueryAzure https://{account}.blob.core.windows.net)");
-        if (tokens.CopilotCostToken is not null) apis.Add("Microsoft 365 Copilot cost management (QueryAzure https://graph.microsoft.com/beta/copilot/costManagement)");
+        if (tokens.CopilotCostToken is not null) apis.Add("Copilot Credits consumption (QueryAzure https://graph.microsoft.com/beta/copilot/costManagement)");
         return apis;
     }
 
