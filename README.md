@@ -27,7 +27,7 @@ Azure FinOps Agent is an open-source AI agent for Azure. Ask it in plain words h
 ## See it in action
 
 <p align="center">
-  <img src="docs/assets/readme/start-page.png" alt="Start page: questions on governing AI agents, controlling AI spending and comparing Azure prices, ready to click" width="74%">
+  <img src="docs/assets/readme/start-page.png" alt="Start page: the products it covers (Azure, Microsoft Foundry, Microsoft 365 Copilot, Microsoft Agent 365 and GitHub) and questions on governing AI agents, controlling AI spending and comparing Azure prices, ready to click" width="74%">
   <img src="docs/assets/readme/mobile-start.png" alt="The same start page on a phone" width="23%">
 </p>
 
