@@ -188,8 +188,14 @@ public sealed class EvaluationGateTests
         Assert.Contains("Reject unsupported paid-seat or actual-waste claims", instructions);
         Assert.Contains("If invoice or contract evidence supplies a purchased quantity or rate, require it", instructions);
         Assert.Contains("unavailable required activity report still leaves an activity task incomplete", instructions);
-        Assert.Contains("The single exception is zero seats", instructions);
+        Assert.Contains("One exception is zero seats", instructions);
         Assert.Contains("was actually requested and is unavailable", instructions);
+        // A tenant without Microsoft 365 usage reporting (the host's reportServiceProvisioned=false result) cannot show
+        // activity from any source (maintainer decision, 18 November 2026).
+        Assert.Contains("The other exception is a tenant without usage reporting", instructions);
+        Assert.Contains("returned the host's result reportServiceProvisioned=false", instructions);
+        Assert.Contains("none for seats of a trial subscription (isTrial true in the returned evidence)", instructions);
+        Assert.Contains("An answer that only calls activity unknown, without that host result, is still incomplete", instructions);
         Assert.Contains("Reject invented facts", instructions);
         Assert.Contains("Judge materiality, not polish", instructions);
         Assert.Contains("Set complete false only when a core requested result or rubric requirement is missing", instructions);

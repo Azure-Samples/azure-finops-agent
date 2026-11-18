@@ -239,6 +239,10 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("a requested workbook is described as calculator-style, never as the calculator's own export")]
     // The best-value eval's first run left out a Claude preview model Microsoft Learn lists for Foundry.
     [InlineData("the preview models it lists included and marked preview")]
+    // The gate's Copilot license case after the test tenant got a Microsoft 365 Copilot trial (18 November 2026): usage
+    // reporting does not exist for that tenant, and trial seats carry no charge.
+    [InlineData("say that the active count and which assigned users are inactive are unavailable because the tenant has no usage reporting")]
+    [InlineData("seats of a trial subscription (GET /directory/subscriptions shows isTrial true for that SKU) are not charged while the trial lasts")]
     public void PromptKeepsHostInvariants(string phrase) =>
         Assert.Contains(phrase, Prompt, StringComparison.OrdinalIgnoreCase);
 

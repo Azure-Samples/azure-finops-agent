@@ -132,40 +132,42 @@ const infrastructurePricingPrompts = [
 // Signed-in prompts, shown first in the AI section. Microsoft 365 Copilot cost
 // management (announced 17 November 2026, Microsoft Graph beta) reports Copilot
 // Credits per user and service. The cards rank the top Copilot users with what
-// they use Copilot for, show spend by service and agent like the admin center,
-// price the user's own Copilot work, show Copilot users next to the Azure VMs
-// that cost the most, and put Copilot, Foundry and GitHub spend in one view (no
-// admin center shows these together). All of them only read; proposing a
-// spending limit is in the Prompts library. A user without the Copilot cost
-// consent gets its button in the answer.
+// they use Copilot for, show the admin center's Services & agents view, price
+// the user's own Copilot work, show Copilot users next to the Azure VMs that
+// cost the most, and put Copilot, Foundry and GitHub spend in one view (no
+// admin center shows these together). Every name follows the Microsoft 365
+// admin center (views, columns, services) or Azure Cost Management (services),
+// never a grouping of our own. All of them only read; proposing a spending
+// limit is in the Prompts library. A user without the Copilot cost consent
+// gets its button in the answer.
 const connectedAiPrompts = [
   {
     label: "Who uses Copilot most, and for what?",
     sources: [COPILOT, AGENT_365],
     badge: "Preview",
     prompt:
-      "Who are our top 5 Copilot users, what did they spend Copilot Credits on, and under which spending policy? Find the top users in the daily per-user reports for the last 7 completed days and include me. For each user, read their credits this month per Copilot service from their user balance, with each service's spending policy (its name, its monthly limit for all users and per user, what remains, and whether the user may still use the service) and their display name; for me, also read today's sessions from my raw usage. Show one table with one row per user and service: user, Copilot service and what it is used for (in plain words, as Microsoft Learn describes it), credits this month, spending policy and what remains. Then list my sessions today with their times and credits, and say how current each figure is.",
+      "Who are our top 5 Copilot users, what did they spend Copilot Credits on, and under which spending policy? Find the top users in the daily per-user reports for the last 7 completed days and include me. For each user, read their credits this month per service from their user balance, with each service's spending policy (its name, its monthly limit for all users and per user, what remains, and whether the user may still use the service) and their display name; for me, also read today's sessions from my raw usage. Name every service as the Microsoft 365 admin center does (for example Code, Cowork). Show one table with one row per user and service: user, service, what it is used for (in plain words, as Microsoft Learn describes it), credits this month, spending policy and what remains. Then list my sessions today with their times and credits, and say how current each figure is.",
   },
   {
-    label: "Copilot spend by service and agent",
+    label: "Copilot services & agents",
     sources: [COPILOT, AGENT_365],
     badge: "Preview",
     prompt:
-      "Show our Microsoft 365 Copilot spend by service and agent, like the Services and agents view of Copilot cost management in the Microsoft 365 admin center. Take each service's credits from the daily per-service reports for the last 7 completed days, and today's use from the raw usage of me and the top users in the daily per-user reports, including services no spending policy governs; show the rest of the tenant's month total by funding class as one row not split by service yet, so the credits add up to the month total. Show one table: service or agent, active users, sessions, credits, last activity, list-price cost in USD at the pay-as-you-go rate per Copilot Credit from the Azure Retail Prices API. Then say which days and users each column covers and how current each figure is.",
+      "Show the Services & agents view of Copilot cost management's Consumption for Month to date, as the Microsoft 365 admin center shows it. Take each service's credits from the daily per-service reports for the completed days of this month, and today's use from the raw usage of me and the top users in the daily per-user reports, including services no spending policy governs. Show one table with the admin center's columns and names: Service or agent (each service by its admin center name, such as Code, Cowork, Opal or Copilot Managed Runtime), Active users, Session count, Total credits used, Last activity date, plus the list price in USD at the pay-as-you-go rate per Copilot Credit from the Azure Retail Prices API. Write Unavailable where Microsoft Graph gives no value, as the admin center does. Under the table, compare the credits listed with the month's total by funding class and say how many credits Microsoft Graph has not reported by service yet, and how current each figure is.",
   },
   {
     label: "What did my Copilot work cost?",
     sources: [COPILOT, AZURE],
     badge: "Preview",
     prompt:
-      "What did my Copilot work cost today? Read my Copilot use today from my raw usage: each session with its start and end time and credits, and the credits per Copilot service, including services no spending policy governs. Price it at the pay-as-you-go list price per Copilot Credit from the Azure Retail Prices API, and look for what Azure Cost Management has billed this month under Microsoft Copilot Studio. Show one table: time (UTC), Copilot service, credits, list-price cost in USD rounded to the cent. Then give the total, which services no spending policy governs, my credits this month under my spending policy and its limit, the billed amount, and how current each figure is.",
+      "What did my Copilot work cost today? Read my Copilot use today from my raw usage: each session with its start and end time and credits, and the credits per service, including services no spending policy governs, each named as the Microsoft 365 admin center names it (for example Code, Cowork). Price it at the pay-as-you-go list price per Copilot Credit from the Azure Retail Prices API, and look for what Azure Cost Management has billed this month under Microsoft Copilot Studio. Show one table: time (UTC), service, credits, list-price cost in USD rounded to the cent. Then give the total, which services no spending policy governs, my credits this month under my spending policy and its limit, the billed amount, and how current each figure is.",
   },
   {
     label: "All our AI spend in one view",
     sources: [COPILOT, FOUNDRY, GITHUB],
     badge: "Preview",
     prompt:
-      "Show all our AI spend this month in one view, with every figure also as cost in our billing currency. Microsoft 365 Copilot: split the tenant's Copilot Credits this month (the month by funding class) by Copilot service, from the daily per-service reports for the last 7 completed days and my raw usage today, with the rest of the month total as one row not split by service yet; price the credits at the pay-as-you-go list price per Copilot Credit from the Azure Retail Prices API in that currency, and look for what Azure Cost Management has billed for them under Microsoft Copilot Studio. Azure: model cost per Foundry deployment and per agent, and any GitHub charges billed through our Azure subscriptions, from Azure Cost Management, sent together in one round. Show one table with one row per Copilot service, then one row each for Copilot billed in Azure, Foundry models, Foundry agents (the model cost tagged to an agent, which is part of Foundry models and not added again), any other Foundry services and GitHub: item, Copilot Credits, cost (list price for credits, billed cost for the rest), largest consumer where known. Then give the total cost, counting Copilot once, which item to review first, and how current each figure is.",
+      "Show all our AI spend this month in one view, each figure also as cost in our billing currency. Microsoft 365 Copilot: the tenant's Copilot Credits this month by service, from the daily per-service reports for the completed days of this month and my raw usage today, each service named as the Microsoft 365 admin center names it (for example Code, Cowork), priced at the pay-as-you-go list price per Copilot Credit from the Azure Retail Prices API in that currency. Azure: actual cost this month by service name as Azure Cost Management names it, for Microsoft Copilot Studio (where Copilot Credits are billed), Foundry Models, Foundry Tools and GitHub, with Foundry Models cost per deployment tag and agent.name tag, sent together in one round. Show one table with one row per service: source (Microsoft 365 admin center or Azure Cost Management), service, Copilot Credits, cost, largest deployment or agent where known. Under the table, give the month's total Copilot Credits by funding class and how many of them Microsoft Graph has not reported by service yet, then the total cost, counting Copilot once (its credits at list price, or what Azure billed for them), which service to review first, and how current each figure is.",
   },
   {
     label: "Copilot user and VM spend",
