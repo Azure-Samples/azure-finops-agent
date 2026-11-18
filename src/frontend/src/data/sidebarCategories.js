@@ -131,12 +131,13 @@ const infrastructurePricingPrompts = [
 
 // Signed-in prompts, shown first in the AI section. Microsoft 365 Copilot cost
 // management (announced 17 November 2026, Microsoft Graph beta) reports Copilot
-// Credits per user and service and sets spending limits. The cards rank the
-// top Copilot users with what they use Copilot for, put Copilot, Foundry and
-// GitHub spend in one view, show Copilot users next to the Azure VMs that cost
-// the most (no admin center shows these together), and propose a per-user
-// limit as a change the user approves. A user without the Copilot cost
-// consents gets their buttons in the answer.
+// Credits per user and service. The cards rank the top Copilot users with what
+// they use Copilot for, show spend by service and agent like the admin center,
+// price the user's own Copilot work, show Copilot users next to the Azure VMs
+// that cost the most, and put Copilot, Foundry and GitHub spend in one view (no
+// admin center shows these together). All of them only read; proposing a
+// spending limit is in the Prompts library. A user without the Copilot cost
+// consent gets its button in the answer.
 const connectedAiPrompts = [
   {
     label: "Who uses Copilot most, and for what?",
@@ -144,6 +145,13 @@ const connectedAiPrompts = [
     badge: "Preview",
     prompt:
       "Who are our top 5 Copilot users, what did they spend Copilot Credits on, and under which spending policy? Find the top users in the daily per-user reports for the last 7 completed days and include me. For each user, read their credits this month per Copilot service from their user balance, with each service's spending policy (its name, its monthly limit for all users and per user, what remains, and whether the user may still use the service) and their display name; for me, also read today's sessions from my raw usage. Show one table with one row per user and service: user, Copilot service and what it is used for (in plain words, as Microsoft Learn describes it), credits this month, spending policy and what remains. Then list my sessions today with their times and credits, and say how current each figure is.",
+  },
+  {
+    label: "Copilot spend by service and agent",
+    sources: [COPILOT, AGENT_365],
+    badge: "Preview",
+    prompt:
+      "Show our Microsoft 365 Copilot spend by service and agent, like the Services and agents view of Copilot cost management in the Microsoft 365 admin center. Take each service's credits from the daily per-service reports for the last 7 completed days, and today's use from the raw usage of me and the top users in the daily per-user reports, including services no spending policy governs. Show one table: service or agent, active users, sessions, credits, last activity, list-price cost in USD at the pay-as-you-go rate per Copilot Credit from the Azure Retail Prices API. Then say which days and users each column covers and how current each figure is.",
   },
   {
     label: "What did my Copilot work cost?",
@@ -157,7 +165,7 @@ const connectedAiPrompts = [
     sources: [COPILOT, FOUNDRY, GITHUB],
     badge: "Preview",
     prompt:
-      "Show all our AI spend this month in one view: Microsoft 365 Copilot Credits from Copilot cost management (the tenant's month by funding class, and my own credits this month from my user balance) next to what Azure Cost Management bills for them under Microsoft Copilot Studio, Azure AI model cost per Foundry deployment and agent from Azure Cost Management, and any GitHub charges billed through our Azure subscriptions. Show one table: product, what drives the cost, this month (with its unit, credits or the billing currency), largest consumer. Then say which product to review first and how current each figure is.",
+      "Show all our AI spend this month in one view: Microsoft 365 Copilot Credits from Copilot cost management (the tenant's month by funding class, and my own credits this month from my user balance) next to what Azure Cost Management bills for them under Microsoft Copilot Studio, Azure AI model cost per Foundry deployment and agent from Azure Cost Management, and any GitHub charges billed through our Azure subscriptions. Show one table with one row per product (Copilot Credits, their Azure billing, Foundry models, Foundry agents, GitHub): product, what drives the cost, this month (with its unit, credits or the billing currency), largest consumer. Then say which product to review first and how current each figure is.",
   },
   {
     label: "Copilot user and VM spend",
@@ -165,13 +173,6 @@ const connectedAiPrompts = [
     badge: "Preview",
     prompt:
       "Who are our top Copilot users this month, and which Azure VMs cost the most? Find the 5 users who used the most Copilot Credits in the daily per-user reports for the last 7 completed days, include me, and take each one's credits this month from their Copilot user balance, with their display name. Add the 5 VMs with the highest actual cost this month from Azure Cost Management. Show one table: source (Copilot or Azure VM), user or VM, this month (with its unit, credits or the billing currency). Then say how much of our Copilot credit balance is left and how current each figure is.",
-  },
-  {
-    label: "Cap Copilot spend per user",
-    sources: [COPILOT],
-    badge: "Preview",
-    prompt:
-      "Should we cap Copilot Credits per user? Show our Copilot spending policies with each one's limit for all its users and per user, and the 5 users who used the most Copilot Credits in the daily per-user reports for the last 7 completed days, by name with their credits this month from their user balance. Then propose a monthly per-user limit on the policy that covers all users, with headroom above the highest user's credits this month, as one change I can approve. Show one table: user, credits this month.",
   },
 ];
 
@@ -575,6 +576,12 @@ const maturityCategories = [
         label: "Copilot credits per user",
         prompt:
           "Who used the most Copilot Credits this month? Show the top 10 users by name with the credits each used this month, which Copilot services the credits went to, and how much of our tenant credit balance is left. Then show which Foundry model deployments and agents cost the most this month.",
+      },
+      // Proposes a change: nothing is sent unless the user approves the exact request.
+      {
+        label: "Cap Copilot spend per user",
+        prompt:
+          "Should we cap Copilot Credits per user? Show our Copilot spending policies with each one's limit for all its users and per user, and the 5 users who used the most Copilot Credits in the daily per-user reports for the last 7 completed days plus me, by name with their credits this month from their user balance. Then propose a monthly per-user limit on the policy that covers all users, with headroom above the highest user's credits this month, as one change I can approve. Show one table: user, credits this month.",
       },
       {
         label: "Windows Server licensing",

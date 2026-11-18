@@ -71,6 +71,9 @@ internal static class Program
         {
             ["azure"] = "https://management.azure.com/.default",
             ["graph"] = "https://graph.microsoft.com/.default",
+            // Microsoft 365 Copilot cost management reads use their own session token in the app; the identity's Graph
+            // token must carry the CopilotCostManagement read scopes. Evaluations never hold the Copilot cost changes token.
+            ["copilotcost"] = "https://graph.microsoft.com/.default",
             ["loganalytics"] = "https://api.loganalytics.io/.default",
             ["storage"] = "https://storage.azure.com/.default"
         };

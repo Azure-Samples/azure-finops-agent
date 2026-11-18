@@ -407,16 +407,21 @@ test("signed in, jobs and chats sit in the right rail and the maturity levels in
 
   // The start page shows the question sections only; the maturity levels live
   // in the navigation with their stars. Signed in, the price section is titled
-  // for the user's own estate and leads with its signed-in questions.
+  // for the user's own estate and leads with its signed-in questions, and the
+  // AI section leads with its Copilot cost questions, marked Preview.
   await expect(page.locator(".starters-heading--section")).toHaveText(
     pricingSections.map((section) =>
       section.connectedPrompts.length && section.connectedLabel ? section.connectedLabel : section.label,
     ),
   );
-  const ownEstate = pricingSections.find((section) => section.connectedPrompts.length);
+  const ownEstate = pricingSections.find((section) => section.key === "infrastructure-pricing");
   await expect(
     page.locator(`#starters-${ownEstate.key} .starter-question`).first(),
   ).toHaveText(ownEstate.connectedPrompts[0].label);
+  const aiSpending = pricingSections.find((section) => section.key === "ai-pricing");
+  const firstAiCard = page.locator(`#starters-${aiSpending.key} .starter-question`).first();
+  await expect(firstAiCard).toContainText(aiSpending.connectedPrompts[0].label);
+  await expect(firstAiCard.locator(".starter-badge")).toHaveText("Preview");
   await expect(page.getByText("Score your FinOps maturity")).toHaveCount(0);
 
   if (mobile) await page.locator(".portal-burger").click();

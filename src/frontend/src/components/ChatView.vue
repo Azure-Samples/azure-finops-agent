@@ -1346,22 +1346,26 @@
                 </h1>
                 <!-- The products the agent's answers cover, each named beside
                      its official icon. -->
-                <ul class="hero-products" aria-label="Works with">
-                  <li class="hero-products-lead" aria-hidden="true">Works with</li>
-                  <li
-                    v-for="product in HERO_PRODUCTS"
-                    :key="product"
-                    class="hero-product"
+                <div class="hero-products">
+                  <span id="hero-products-label" class="hero-products-lead"
+                    >Works with</span
                   >
-                    <img
-                      :src="STARTER_SOURCES[product].icon"
-                      alt=""
-                      width="20"
-                      height="20"
-                    />
-                    {{ STARTER_SOURCES[product].name }}
-                  </li>
-                </ul>
+                  <ul class="hero-products-list" aria-labelledby="hero-products-label">
+                    <li
+                      v-for="product in HERO_PRODUCTS"
+                      :key="product"
+                      class="hero-product"
+                    >
+                      <img
+                        :src="STARTER_SOURCES[product].icon"
+                        alt=""
+                        width="20"
+                        height="20"
+                      />
+                      {{ STARTER_SOURCES[product].name }}
+                    </li>
+                  </ul>
+                </div>
                 <!-- The most asked questions, each one click from an answer.
                      Signed in, the maturity levels sit in the navigation with
                      their scores. -->
@@ -10779,9 +10783,7 @@ async function send() {
 }
 /* The products the agent's answers cover, under the title. */
 .hero-products {
-  list-style: none;
   margin: -8px 0 clamp(20px, 4vh, 32px);
-  padding: 0;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
@@ -10793,6 +10795,15 @@ async function send() {
 }
 .hero-products-lead {
   color: var(--text-muted);
+}
+.hero-products-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 18px;
 }
 .hero-product {
   display: inline-flex;
