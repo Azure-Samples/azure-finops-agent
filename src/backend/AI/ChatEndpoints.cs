@@ -86,20 +86,25 @@ public static class ChatEndpoints
 
     /// <summary>
     /// The [CONTEXT: …] block a turn starts with: the APIs the user reaches, the discovered subscriptions (with their
-    /// offer quotaId) and management groups, and today's date. Chat turns and scheduled runs send the same block.
+    /// offer quotaId) and management groups, the signed-in user's own object id and today's date. Chat turns and
+    /// scheduled runs send the same block. The object id lets the model read the user's own Copilot cost and Graph
+    /// data in its first round instead of spending a round on GET /me.
     /// </summary>
-    internal static string ConnectionContext(IReadOnlyList<string> connectedApis, string? scopesJson, string? tenantId, DateTime utcNow)
+    internal static string ConnectionContext(IReadOnlyList<string> connectedApis, string? scopesJson, string? tenantId, DateTime utcNow, string? userObjectId = null)
     {
         var tenantScopeHint = !string.IsNullOrWhiteSpace(scopesJson)
             ? $" Discovered Azure scopes (reuse these; do not list them again): {scopesJson}"
             : !string.IsNullOrWhiteSpace(tenantId)
                 ? $" Tenant/root management-group candidate: {tenantId}."
                 : "";
+        var userHint = !string.IsNullOrWhiteSpace(userObjectId)
+            ? $" Signed-in user's Entra object id (their userId for their own reads): {userObjectId}."
+            : "";
         // Date-only keeps the per-session context dedup stable within a day while
         // anchoring the model's year, which it otherwise misquotes from tool timestamps.
         var today = utcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
         return connectedApis.Count > 0
-            ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}.{tenantScopeHint} Today is {today} (UTC). Proceed with tool calls directly.]"
+            ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}.{tenantScopeHint}{userHint} Today is {today} (UTC). Proceed with tool calls directly.]"
             : $"[CONTEXT: Azure NOT connected. Today is {today} (UTC). Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only when the question needs their tenant data: call QueryAzure once with GET /subscriptions, which sends nothing without a connection and shows the user a Connect Azure button, then say in one or two sentences what connecting lets you read and offer to analyze a cost or usage export they upload now instead. Do NOT refuse public questions.]";
     }
 
@@ -330,7 +335,7 @@ public static class ChatEndpoints
                     ctx.Session.Remove("azure_scope_context");
                 }
             }
-            var connectionContext = ConnectionContext(connectedApis, cachedAzureScopes, azureTenantId, DateTime.UtcNow);
+            var connectionContext = ConnectionContext(connectedApis, cachedAzureScopes, azureTenantId, DateTime.UtcNow, entraOid);
 
             // Surface any files the user has dropped into this session so the LLM
             // immediately knows the fileIds it can pass to QueryUploadedFile.

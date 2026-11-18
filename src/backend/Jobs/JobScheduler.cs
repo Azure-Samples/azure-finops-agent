@@ -189,7 +189,7 @@ public sealed class JobScheduler : BackgroundService
         var (subscriptions, managementGroups) = await AzureSessionEndpoints.DiscoverScopesAsync(_httpFactory.CreateClient(), tokens.AzureToken!, _logger, ct);
         var connectionContext = ChatEndpoints.ConnectionContext(ChatEndpoints.ConnectedApis(tokens),
             subscriptions.Count + managementGroups.Count > 0 ? AzureSessionEndpoints.ScopeContext(subscriptions, managementGroups) : null,
-            job.EntraTenantId, DateTime.UtcNow);
+            job.EntraTenantId, DateTime.UtcNow, job.EntraOid);
 
         // Keep the janitor from evicting this user's state mid-run.
         UserStateJanitor.LastSeenUtc[job.UserId] = DateTimeOffset.UtcNow;

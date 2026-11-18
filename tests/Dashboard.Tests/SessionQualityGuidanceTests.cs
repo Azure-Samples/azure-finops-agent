@@ -102,7 +102,7 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("when they are not in your tool list, search with QueryAzure GET https://learn.microsoft.com/api/search")]
     // Thirty one-per-subscription cost queries made one session's first answer take 395 seconds.
     [InlineData("never a query per subscription, which the host runs one at a time")]
-    [InlineData("Enterprise Agreement subscriptions only: for Microsoft Customer Agreement, CSP and other offers")]
+    [InlineData("not for Microsoft Customer Agreement or CSP subscriptions")]
     [InlineData("{\"usage\":{\"name\":\"UsageQuantity\",\"function\":\"Sum\"}}")]
     // A chargeback answer claimed 0% owner-tag coverage for 1 October to 10 November although its owner queries covered
     // only 1-10 October and 1-10 November (live gate, 10 November 2026).

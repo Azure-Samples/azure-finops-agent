@@ -25,6 +25,14 @@ public static partial class HttpHelper
     /// </summary>
     internal static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// How long the first attempt of a Cost Management query or forecast waits before it is sent again. The slowest
+    /// successful one took 18 s in production (745 in 30 days to 18 November 2026) and 24 s in the deployment gate, while
+    /// one that hung never answered, and its retry usually answered within seconds: a 30-second first attempt sends that
+    /// retry half a minute sooner. The retry keeps the full deadline, for a scope whose queries are slow.
+    /// </summary>
+    internal static readonly TimeSpan FirstCostQueryAttemptTimeout = TimeSpan.FromSeconds(30);
+
     /// <summary>Lets a test shorten the attempt deadline for its own async flow only.</summary>
     internal static readonly AsyncLocal<TimeSpan?> AttemptTimeoutOverride = new();
 
@@ -195,6 +203,9 @@ public static partial class HttpHelper
         // a Log Analytics query).
         var read = method == HttpMethod.Get || method == HttpMethod.Post && readOnlyPost;
         var attemptTimeout = AttemptTimeoutOverride.Value ?? AttemptTimeout;
+        var firstAttemptTimeout = AttemptTimeoutOverride.Value is null && IsInteractiveCostQueryUrl(url)
+            ? FirstCostQueryAttemptTimeout
+            : attemptTimeout;
 
         var totalSw = Stopwatch.StartNew();
         var totalWaitSec = 0.0;
@@ -263,8 +274,9 @@ public static partial class HttpHelper
                     catch (OperationCanceledException) { /* expected on response */ }
                 }, hbCts.Token);
 
+                var thisAttemptTimeout = timeoutRetries == 0 ? firstAttemptTimeout : attemptTimeout;
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(requestToken);
-                deadline.CancelAfter(attemptTimeout);
+                deadline.CancelAfter(thisAttemptTimeout);
                 try
                 {
                     res = await Http.SendAsync(req, deadline.Token);
@@ -286,14 +298,14 @@ public static partial class HttpHelper
                 {
                     timeoutRetries++;
                     retryCount++;
-                    Logger?.LogWarning("HTTP timeout retry {Tool} attempt={Attempt} timeoutSec={Timeout:F0}", telemetryPrefix, attempt + 1, attemptTimeout.TotalSeconds);
+                    Logger?.LogWarning("HTTP timeout retry {Tool} attempt={Attempt} timeoutSec={Timeout:F0}", telemetryPrefix, attempt + 1, thisAttemptTimeout.TotalSeconds);
                     await Task.Delay(TimeSpan.FromSeconds(timeoutRetries), requestToken);
                     continue;
                 }
                 catch (OperationCanceledException exception) when (!requestToken.IsCancellationRequested)
                 {
                     throw new TimeoutException(
-                        $"The service sent no response within {attemptTimeout.TotalSeconds:F0} seconds{(timeoutRetries > 0 ? ", on either attempt" : "")}, so the result is unknown.",
+                        $"The service sent no response within {(timeoutRetries > 0 && firstAttemptTimeout != attemptTimeout ? $"{firstAttemptTimeout.TotalSeconds:F0} and {attemptTimeout.TotalSeconds:F0}" : $"{thisAttemptTimeout.TotalSeconds:F0}")} seconds{(timeoutRetries > 0 ? ", on either attempt" : "")}, so the result is unknown.",
                         exception);
                 }
                 finally

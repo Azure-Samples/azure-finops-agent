@@ -1351,10 +1351,7 @@
                 <!-- The products the agent's answers cover, each named beside
                      its official icon. -->
                 <div class="hero-products">
-                  <span id="hero-products-label" class="hero-products-lead"
-                    >Works with</span
-                  >
-                  <ul class="hero-products-list" aria-labelledby="hero-products-label">
+                  <ul class="hero-products-list" aria-label="Integrated with">
                     <li
                       v-for="product in HERO_PRODUCTS"
                       :key="product"
@@ -1363,8 +1360,8 @@
                       <img
                         :src="STARTER_SOURCES[product].icon"
                         alt=""
-                        width="20"
-                        height="20"
+                        width="32"
+                        height="32"
                       />
                       {{ STARTER_SOURCES[product].name }}
                     </li>
@@ -1380,16 +1377,13 @@
                       :key="section.key"
                       :id="'starters-' + section.key"
                       class="starters-group"
-                      :style="{ '--starter-icon-slots': section.iconSlots }"
+                      :class="{ 'starters-group--featured': section.featured }"
                       :aria-labelledby="'starters-' + section.key + '-heading'"
                     >
                       <h2
                         :id="'starters-' + section.key + '-heading'"
                         class="starters-heading starters-heading--section"
                       >
-                        <span class="starters-heading-icon" aria-hidden="true">
-                          <AppIcon :name="section.icon" size="18" />
-                        </span>
                         {{ section.label }}
                       </h2>
                       <!-- Five questions (phones: the first three, with More
@@ -1407,28 +1401,29 @@
                         :title="q.prompt"
                         @click="sendQuestion(q.prompt)"
                       >
+                        <!-- The products the answer covers and any badge sit
+                             above the question, which keeps the card's width. -->
                         <span
-                          v-if="q.sources.length"
-                          class="starter-sources"
-                          aria-hidden="true"
+                          v-if="q.sources.length || q.badge"
+                          class="starter-meta"
                         >
-                          <img
-                            v-for="source in q.sources"
-                            :key="source"
-                            class="starter-source"
-                            :src="STARTER_SOURCES[source].icon"
-                            :title="STARTER_SOURCES[source].name"
-                            alt=""
-                            width="18"
-                            height="18"
-                          />
-                        </span>
-                        <span class="starter-question-label"
-                          >{{ q.label
-                          }}<span v-if="q.badge" class="starter-badge">{{
+                          <span class="starter-sources" aria-hidden="true">
+                            <img
+                              v-for="source in q.sources"
+                              :key="source"
+                              class="starter-source"
+                              :src="STARTER_SOURCES[source].icon"
+                              :title="STARTER_SOURCES[source].name"
+                              alt=""
+                              width="18"
+                              height="18"
+                            />
+                          </span>
+                          <span v-if="q.badge" class="starter-badge">{{
                             q.badge
-                          }}</span></span
-                        >
+                          }}</span>
+                        </span>
+                        <span class="starter-question-label">{{ q.label }}</span>
                       </button>
                       <button
                         v-if="section.expandable"
@@ -2732,6 +2727,7 @@ import {
   toolResultSucceeded,
 } from "../lib/requestProgress.js";
 import {
+  allCostsSection,
   maturityCategories,
   pricingSections,
 } from "../data/sidebarCategories.js";
@@ -6304,8 +6300,11 @@ const scoreCategories = computed(() =>
   }).filter(Boolean),
 );
 
-const pricingNavigationSections = computed(() =>
-  pricingSections.map((section) => {
+// Signed in, the start page and the Prompts library open with every product's
+// spend side by side, a section that spans the start page's columns.
+const pricingNavigationSections = computed(() => [
+  ...(azureConnected.value ? [{ ...allCostsSection, featured: true }] : []),
+  ...pricingSections.map((section) => {
     const connected = azureConnected.value && section.connectedPrompts?.length > 0;
     return {
       ...section,
@@ -6315,7 +6314,7 @@ const pricingNavigationSections = computed(() =>
         : section.prompts,
     };
   }),
-);
+]);
 
 // The start page shows each section's five most important questions; phones
 // show the first three (CSS), and More shows the rest in place there.
@@ -6368,11 +6367,8 @@ const startPageSections = computed(() =>
     return {
       key: section.key,
       label: section.label,
-      icon: section.icon,
+      featured: !!section.featured,
       prompts,
-      // Room for the most product icons any of its cards shows, so every
-      // question in the section starts at the same place.
-      iconSlots: Math.max(0, ...prompts.map((prompt) => prompt.sources.length)),
       expanded,
       expandable: prompts.length > START_PAGE_PHONE_QUESTIONS,
     };
@@ -10714,13 +10710,16 @@ async function send() {
 }
 
 /* ── Empty state ── */
+/* A container, so the start page lays out by the chat column's own width; its
+   auto margins centre it vertically when the column is taller than it. */
 .empty-state {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: clamp(12px, 3.5vh, 40px) 0 0;
   max-width: 960px;
-  margin: 0 auto;
+  margin: auto;
   width: 100%;
   animation: fadeSlideIn 0.35s ease;
 }
@@ -10812,13 +10811,9 @@ async function send() {
   flex-wrap: wrap;
   justify-content: center;
   align-items: center;
-  gap: 8px 18px;
-  font-size: var(--text-label-size);
-  line-height: var(--text-label-line);
+  font-size: var(--text-title-size);
+  line-height: var(--text-title-line);
   color: var(--ink);
-}
-.hero-products-lead {
-  color: var(--text-muted);
 }
 .hero-products-list {
   list-style: none;
@@ -10827,12 +10822,12 @@ async function send() {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px 18px;
+  gap: 10px 24px;
 }
 .hero-product {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 .hero-product img {
   display: block;
@@ -10852,27 +10847,23 @@ async function send() {
   gap: 12px;
   min-width: 0;
 }
+/* Signed in, the first section puts every product's spend side by side: it
+   spans the columns, two questions to a row, since each shows all five icons. */
+.starters-group--featured {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+}
+.starters-group--featured > :not(.starter-question) {
+  grid-column: 1 / -1;
+}
 .starters-heading {
   margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--text-title-size);
-  line-height: var(--text-title-line);
+  font-size: var(--text-heading-size);
+  line-height: var(--text-heading-line);
   font-weight: 600;
   color: var(--ink);
-  white-space: nowrap;
-}
-.starters-heading-icon {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius);
-  background: var(--accent-soft);
-  color: var(--accent);
 }
 /* Starter cards follow Microsoft's Copilot prompt starter (Fluent AI
    PromptStarter, compact layout): a white card with a thin border, 12 px
@@ -10914,22 +10905,24 @@ async function send() {
 }
 .starter-question {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   width: 100%;
-  padding: 8px 14px;
+  padding: 10px 14px;
   font-size: var(--text-body-size);
   line-height: var(--text-body-line);
   font-weight: 400;
 }
-/* Room for the section's most product icons (18 px each, 4 px apart), so
-   every card's question starts at the same place. */
+/* Above the question: the official icons of the products its answer covers,
+   and a badge such as Preview at the far end. */
+.starter-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .starter-sources {
-  flex: 0 0
-    calc(
-      var(--starter-icon-slots, 1) * 18px +
-        (var(--starter-icon-slots, 1) - 1) * 4px
-    );
   display: inline-flex;
   gap: 4px;
 }
@@ -10939,14 +10932,11 @@ async function send() {
   height: 18px;
 }
 .starter-question-label {
-  flex: 1 1 auto;
   min-width: 0;
 }
-/* Marks a question about a feature in preview; it follows the label's last
-   word, so it wraps with the text instead of narrowing it. */
+/* Marks a question about a feature in preview. */
 .starter-badge {
   display: inline-block;
-  margin-left: 8px;
   padding: 0 6px;
   border-radius: var(--radius);
   background: var(--preview-soft);
@@ -10954,7 +10944,6 @@ async function send() {
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
   font-weight: 600;
-  vertical-align: 2px;
   white-space: nowrap;
 }
 /* More/Fewer: a quiet text button under a section's cards, on phones only. */
@@ -10995,6 +10984,17 @@ async function send() {
   }
   .starter-question--wide {
     display: none;
+  }
+}
+/* Three columns need about 760 px of the chat column, which the side panels or
+   a small window can take: below that the sections stack, centred. */
+@container (max-width: 760px) {
+  .starter-columns {
+    grid-template-columns: minmax(0, 560px);
+    justify-content: center;
+  }
+  .starters-group--featured {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .es-eyebrow {

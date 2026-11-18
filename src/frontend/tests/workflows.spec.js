@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { pricingSections } from "../src/data/sidebarCategories.js";
+import { allCostsSection, pricingSections } from "../src/data/sidebarCategories.js";
 
 const sessionId = "synthetic-conversation";
 const artifactId = "11111111111111111111111111111111";
@@ -406,14 +406,19 @@ test("signed in, jobs and chats sit in the right rail and the maturity levels in
   const rail = page.locator(".tools-sidebar");
 
   // The start page shows the question sections only; the maturity levels live
-  // in the navigation with their stars. Signed in, the price section is titled
-  // for the user's own estate and leads with its signed-in questions, and the
-  // AI section leads with its Copilot cost questions, marked Preview.
-  await expect(page.locator(".starters-heading--section")).toHaveText(
-    pricingSections.map((section) =>
+  // in the navigation with their stars. Signed in, it opens with every
+  // product's spend side by side, the price section is titled for the user's
+  // own estate and leads with its signed-in questions, and the AI section leads
+  // with its Copilot cost questions, marked Preview.
+  await expect(page.locator(".starters-heading--section")).toHaveText([
+    allCostsSection.label,
+    ...pricingSections.map((section) =>
       section.connectedPrompts.length && section.connectedLabel ? section.connectedLabel : section.label,
     ),
-  );
+  ]);
+  await expect(
+    page.locator(`#starters-${allCostsSection.key} .starter-question`).first(),
+  ).toContainText(allCostsSection.prompts[0].label);
   const ownEstate = pricingSections.find((section) => section.key === "infrastructure-pricing");
   await expect(
     page.locator(`#starters-${ownEstate.key} .starter-question`).first(),

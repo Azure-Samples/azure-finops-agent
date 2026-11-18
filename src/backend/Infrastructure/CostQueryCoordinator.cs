@@ -159,31 +159,38 @@ internal sealed class CostQueryCoordinator(TimeProvider? timeProvider = null) : 
 
     private static string Digest(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
-    private static string Annotate(string response, string cacheStatus, DateTimeOffset retrievedUtc, DateTimeOffset retryAt)
+    private const string BillingFreshness = "Billing data may be delayed; retrieval time is not the billing data timestamp.";
+
+    private static string Annotate(string response, string cacheStatus, DateTimeOffset retrievedUtc, DateTimeOffset retryAt) =>
+        WithCacheStatus(response, cacheStatus, retrievedUtc, retryAt, BillingFreshness) ?? response;
+
+    /// <summary>Adds the root _finops record (cache status, retrieval time, freshness) to a JSON response, or returns null
+    /// when the body is not a JSON object and so cannot carry it.</summary>
+    internal static string? WithCacheStatus(string response, string cacheStatus, DateTimeOffset retrievedUtc, DateTimeOffset retryAt, string freshness)
     {
         var separator = response.IndexOf('\n');
-        if (separator < 0) return response;
+        if (separator < 0) return null;
         var bodyStart = separator + 1;
         if (response.AsSpan(bodyStart).StartsWith("Current UTC time: ", StringComparison.Ordinal))
         {
             var timestampEnd = response.IndexOf('\n', bodyStart);
-            if (timestampEnd < 0) return response;
+            if (timestampEnd < 0) return null;
             bodyStart = timestampEnd + 1;
         }
         try
         {
-            if (JsonNode.Parse(response[bodyStart..]) is not JsonObject body) return response;
+            if (JsonNode.Parse(response[bodyStart..]) is not JsonObject body) return null;
             body["_finops"] = JsonSerializer.SerializeToNode(new
             {
                 cacheStatus,
                 retrievedAtUtc = retrievedUtc,
                 dataAsOfUtc = (DateTimeOffset?)null,
-                freshness = "Billing data may be delayed; retrieval time is not the billing data timestamp.",
+                freshness,
                 retryAtUtc = retryAt == default ? (DateTimeOffset?)null : retryAt
             });
             return response[..bodyStart] + body.ToJsonString();
         }
-        catch (JsonException) { return response; }
+        catch (JsonException) { return null; }
     }
 
     public void Dispose()

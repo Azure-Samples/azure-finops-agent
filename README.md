@@ -12,12 +12,12 @@
 Azure FinOps Agent is an open-source AI agent for Azure. Ask it in plain words how to govern your AI agents, how to budget and cap AI spend, or what an Azure setup will cost. It answers from current Microsoft documentation and live Azure prices, and shows every call behind the answer. Connect your Azure tenant and it works with your own costs, budgets and resources: it finds savings, scores your FinOps maturity and drafts the fix, using only your own permissions. It never deletes Azure resources.
 
 <p>
-  <b>Works with</b>&nbsp;&nbsp;
-  <img src="src/frontend/public/product-icons/azure.svg" alt="" width="18" height="18" align="middle"> Azure&nbsp;&nbsp;
-  <img src="src/frontend/public/product-icons/foundry.svg" alt="" width="18" height="18" align="middle"> Microsoft Foundry&nbsp;&nbsp;
-  <img src="src/frontend/public/product-icons/copilot.svg" alt="" width="18" height="18" align="middle"> Microsoft 365 Copilot&nbsp;&nbsp;
-  <img src="src/frontend/public/product-icons/agent-365.svg" alt="" width="18" height="18" align="middle"> Microsoft Agent 365&nbsp;&nbsp;
-  <img src="src/frontend/public/product-icons/github.svg" alt="" width="18" height="18" align="middle"> GitHub
+  <b>Integrated with</b>&nbsp;&nbsp;
+  <img src="src/frontend/public/product-icons/azure.svg" alt="" width="24" height="24" align="middle"> Azure&nbsp;&nbsp;
+  <img src="src/frontend/public/product-icons/foundry.svg" alt="" width="24" height="24" align="middle"> Microsoft Foundry&nbsp;&nbsp;
+  <img src="src/frontend/public/product-icons/copilot.svg" alt="" width="24" height="24" align="middle"> Microsoft 365 Copilot&nbsp;&nbsp;
+  <img src="src/frontend/public/product-icons/agent-365.svg" alt="" width="24" height="24" align="middle"> Microsoft Agent 365&nbsp;&nbsp;
+  <img src="src/frontend/public/product-icons/github.svg" alt="" width="24" height="24" align="middle"> GitHub
 </p>
 
 **[Try it now](https://azure-finops-agent.com)** · [Deploy to your Azure](#deploy-to-your-azure-subscription) · [Slides](https://azure-finops-agent.com/slides)
@@ -74,7 +74,7 @@ You can also ask your own question about Azure prices or service health, or uplo
 
 ### After you connect Azure
 
-The start page's third section becomes **Optimize my Azure costs** and starts with *Where can I save money?* and a *FinOps assessment report*, and **Control AI spending** starts with five Microsoft 365 Copilot cost questions marked Preview: *Who uses Copilot most, and for what?*, *Copilot services & agents*, *What did my Copilot work cost?*, *All our AI spend in one view* and *Copilot user and VM spend*.
+The start page's third section becomes **Optimize my Azure costs** and starts with *Where can I save money?* and a *FinOps assessment report*, and **Control AI spending** starts with four Microsoft 365 Copilot cost questions marked Preview: *Who uses Copilot most, and for what?*, *Copilot services & agents*, *What did my Copilot work cost?* and *Copilot user and VM spend*. Above them, a new **See all my costs** section puts every product's spend side by side in one answer, counting Copilot once: *What did everything cost last week?*, *What will this month cost in total?*, *Daily cost of everything this week* and *Where is my AI money going?*.
 
 - **Spend:** costs by service, subscription, resource group, tag and region, with forecasts and budgets.
 - **Savings:** Azure Advisor, reservations and savings plans, and idle or orphaned resources.

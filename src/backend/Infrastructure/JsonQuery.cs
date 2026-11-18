@@ -587,10 +587,13 @@ internal static partial class JsonQuery
         node.Members = null;
         node.Value = null;
         var kinds = (node.Strings > 0 ? 1 : 0) + (node.Numbers > 0 ? 1 : 0) + (node.Bools > 0 ? 1 : 0) + (node.Objects > 0 ? 1 : 0) + (node.Arrays > 0 ? 1 : 0);
+        // A list's items are resolved under their own name, not the list's: a query that uses a member named like the list
+        // as a number (x.consumedQuantity.value ?? 0) must not turn the never-seen items of an empty Graph value list into
+        // numbers, which would make x.serviceId an error instead of a member read as null.
         if (node.Unknown && node.ForceList)
         {
             node.Element ??= new Node();
-            Resolve(node.Element, name, numeric);
+            Resolve(node.Element, name + "[]", numeric);
             node.Clr = typeof(List<>).MakeGenericType(node.Element.Clr!);
             return;
         }
@@ -601,7 +604,7 @@ internal static partial class JsonQuery
         if (node.Arrays > 0)
         {
             node.Element ??= new Node();
-            Resolve(node.Element, name, numeric);
+            Resolve(node.Element, name + "[]", numeric);
             node.Clr = typeof(List<>).MakeGenericType(node.Element.Clr!);
             return;
         }

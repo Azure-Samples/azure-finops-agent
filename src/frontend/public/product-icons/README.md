@@ -19,5 +19,5 @@ None of these icons is covered by this repository's MIT license, and each owner 
   Microsoft service, to show that it integrates with that product: unaltered, never as a logo or in a sentence, never
   more prominent than the app's own name, and in a lineup with the full product name beside the icon.
 
-The start page shows each icon with its full product name: under the title as a lineup labelled "Works with", and as each
-card icon's tooltip.
+The start page shows each icon with its full product name: under the title as a lineup (its list named "Integrated with"
+for screen readers), set well below the app's own name, and as each card icon's tooltip.
