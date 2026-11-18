@@ -500,7 +500,7 @@ test("group selection and the quality bar are validated", () => {
     assert.match(presentationFor(buildCoreSuite(), 0.8, false).tierNote, /the 15 most important evals/);
 });
 
-test("the extended run writes the board, the structured results and the dashboard, and runs every scenario", async () => {
+test("with fail-fast off (EVAL_FAIL_FAST=false, a local full run), the extended run writes the board, the structured results and the dashboard, and runs every scenario", async () => {
     const directory = await createDirectory();
     try {
         const planned = extended.slice(0, 12);
@@ -743,11 +743,16 @@ test("the report is one pipeline: a plan, one job per stage of the core evals, a
         assert.match(stage, /needs: plan\n/);
         assert.match(stage, new RegExp(`if: contains\\(fromJSON\\(needs\\.plan\\.outputs\\.stages\\), '${group}'\\)`));
         assert.match(stage, /environment: ai-evaluation/);
+        assert.match(stage, index === 0
+            ? /permissions: &stage-permissions\n      contents: read\n      id-token: write\n      actions: write\n/
+            : /permissions: \*stage-permissions\n/);
         assert.match(stage, index === 0 ? /env: &stage-env/ : /env: \*stage-env\n/);
         assert.match(stage, index === 0 ? /steps: &stage-steps/ : /steps: \*stage-steps\n/);
     }
     const first = job(stages[0]);
     assert.match(first, /EVAL_STAGE: \$\{\{ github\.job \}\}/);
+    // A failed eval stops the whole report: after keeping its results, the stage cancels the run, so the other stages stop.
+    assert.match(first, /- name: Retain this stage's results for the scoreboard[\s\S]*?- name: Stop the other stages after a failed eval\n        if: failure\(\)\n        run: gh run cancel "\$GITHUB_RUN_ID" --repo "\$GITHUB_REPOSITORY"\n/);
     // A dispatched run can compare another reasoning effort; every other trigger keeps the variable the gate deploys.
     assert.match(quality, /^      reasoning_effort:\n(?:        .+\n)*?        options: \[default, low, medium, high, xhigh\]\n        default: default$/m);
     assert.match(first, /EVAL_REASONING_EFFORT: \$\{\{ \(inputs\.reasoning_effort != 'default' && inputs\.reasoning_effort\) \|\| vars\.EVAL_REASONING_EFFORT \|\| 'medium' \}\}/);

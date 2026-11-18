@@ -112,6 +112,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     environment: ai-evaluation
+    # actions: write lets a stage with a failed eval cancel the run, stopping the other stages.
+    permissions: &stage-permissions
+      contents: read
+      id-token: write
+      actions: write
     env: &stage-env
       EVAL_CLIENT_ID: ${{ secrets.AZURE_EVAL_CLIENT_ID }}
       EVAL_LOGIN_SUBSCRIPTION: ${{ secrets.AZURE_EVAL_SUBSCRIPTION_ID }}
@@ -200,6 +205,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # A failed eval is final: this stage started no further eval, and cancelling the run stops the other stages too.
+      # The scoreboard still runs (if: always()) and shows what failed.
+      - name: Stop the other stages after a failed eval
+        if: failure()
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+
   cost:
     name: 📊 Cost analysis
     needs: plan
@@ -207,6 +218,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     environment: ai-evaluation
+    permissions: *stage-permissions
     env: *stage-env
     steps: *stage-steps
 
@@ -217,6 +229,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     environment: ai-evaluation
+    permissions: *stage-permissions
     env: *stage-env
     steps: *stage-steps
 
@@ -227,6 +240,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     environment: ai-evaluation
+    permissions: *stage-permissions
     env: *stage-env
     steps: *stage-steps
 

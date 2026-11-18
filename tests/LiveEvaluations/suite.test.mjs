@@ -1377,8 +1377,8 @@ test("the deployment gate fails a failed or throttled case at once and never run
     }
 });
 
-// The quality report keeps the earlier rule (10 November 2026): a failed scenario runs once more, unchanged, and fails only
-// when both runs fail, so a pass that needed its second run is published as flaky.
+// With fail-fast off (a local full run of the quality report), a failed scenario runs once more, unchanged, and fails
+// only when both runs fail, so a pass that needed its second run is published as flaky.
 test("with retryFailed, a failed case runs once more, unchanged, and fails only when both runs fail", async () => {
     const directory = await createDirectory();
     try {

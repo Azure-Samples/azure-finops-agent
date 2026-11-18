@@ -355,10 +355,11 @@ async function main() {
         Math.min(Math.max(Number(process.env.EVAL_CASE_PAUSE_SECONDS ?? 20) || 0, 0), 120) * 1000,
         {
             privateDiagnosticsDirectory: process.env.EVAL_PRIVATE_DIAGNOSTICS_DIRECTORY,
-            // Every scenario runs: the point of this tier is the whole picture, not the first failure.
-            failFast: false,
-            // A failed scenario runs once more, so a pass that needed it is shown as flaky instead of decided by one run.
-            retryFailed: true,
+            // A failed eval is final and stops the run (maintainer decision, 18 November 2026): no lane starts another
+            // eval, and the workflow cancels the other stages, so a red run spends no more time or quota. A local run
+            // with EVAL_FAIL_FAST=false runs every eval and retries a failed one once, to show flakiness.
+            failFast: process.env.EVAL_FAIL_FAST !== "false",
+            retryFailed: process.env.EVAL_FAIL_FAST === "false",
             laneOf: extendedLane,
             throttleRetryQuietMs: COST_QUOTA_WINDOW_MS,
             encryptDiagnosticsTo,
