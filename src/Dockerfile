@@ -10,7 +10,7 @@ COPY frontend/ ./
 RUN npx vite build --outDir ../wwwroot
 
 # ── Stage 2: Build .NET backend ──
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 COPY backend/Dashboard.csproj ./
 RUN dotnet restore -r linux-x64
