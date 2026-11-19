@@ -144,7 +144,7 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("nor any other phrase that names no license, opt-in or role (such as tenant permissions or licensing varies), which is unconfirmed")]
     // Even so, a later report's inventory answer linked nothing; the row format now sits in the documentation-question
     // workflow where the answer is planned, and a link counts as the cell's one value.
-    [InlineData("A table of steps writes each step's tool as a link to the Learn page read for that step, in the tool cell itself: | 1. <step> | [<tool>](<that page's URL>) | <what to do> | <what it needs> |")]
+    [InlineData("A table of steps writes each step's tool as a link to the Learn page read for that step, in the tool cell itself: | 1. <step> | [<tool>](<that page's URL>) | <what to do> | License: <license>; Preview: <opt-in>; Role: <role> |")]
     [InlineData("the link is that cell's one value, and its URL does not count toward the cell's word limit")]
     // The best-value card reported Claude as having no published price: Claude models have no Retail Prices meter, and
     // Microsoft bills them at Anthropic's own rates (Learn, Claude Consumption Units billing in Microsoft Foundry).
