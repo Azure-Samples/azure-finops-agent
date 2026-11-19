@@ -19,7 +19,7 @@ COPY --from=frontend /app/wwwroot ./wwwroot/
 RUN dotnet publish -c Release -r linux-x64 --self-contained false -o /app/publish
 
 # ── Stage 3: Final runtime image ──
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS final
 
 # Optional Ubuntu mirror host for apt; empty keeps the base image's Canonical servers. CI passes azure.archive.ubuntu.com,
 # which serves the same signed archive, so an outage of Canonical's own servers cannot block a release.
