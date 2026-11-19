@@ -60,7 +60,7 @@ The panel on the right lists every call behind an answer, so you can check where
 
 ### Without signing in
 
-The start page offers the questions customers ask most. Each card shows the products it covers, and the line under the title lists them all:
+The start page offers the questions customers ask most, and the line under the title lists the products its answers cover:
 
 | Govern AI agents                   | Control AI spending               | Compare Azure prices               |
 | ---------------------------------- | --------------------------------- | ---------------------------------- |
@@ -74,11 +74,11 @@ You can also ask your own question about Azure prices or service health, or uplo
 
 ### After you connect Azure
 
-The start page's third section becomes **Optimize Azure** and starts with *Where can I save money?* and a *FinOps assessment report*, and **Control AI spending** shows four Microsoft 365 Copilot cost questions, marked Preview: *Who uses Copilot most, and for what?*, *Copilot services & agents*, *What did my Copilot work cost?* and *Copilot user and VM spend*. Before them, a new **See all my costs** section, the first of four columns, puts every product's spend side by side in one answer, counting Copilot once: *What did everything cost last week?*, *What will this month cost in total?*, *Daily cost of everything this week* and *Where is my AI money going?*.
+The start page's third section becomes **Optimize Azure** and starts with *Where can I save money?* and a *FinOps assessment report*, and **Control AI spending** shows four Microsoft 365 Copilot cost questions under one Preview badge: *Who uses Copilot most, and for what?*, *Copilot services & agents*, *What did my Copilot work cost?* and *Copilot user and VM spend*. Before them, a new **See all my costs** section, the first of four columns, puts every product's spend side by side in one answer, counting Copilot once: *What did everything cost last week?*, *What will this month cost in total?*, *Daily cost of everything this week* and *Where is my AI money going?*.
 
 - **Spend:** costs by service, subscription, resource group, tag and region, with forecasts and budgets.
 - **Savings:** Azure Advisor, reservations and savings plans, and idle or orphaned resources.
-- **Maturity:** a Crawl, Walk and Run FinOps score, with the evidence behind each rating, and a FinOps Foundation assessment report of your subscriptions.
+- **Maturity:** a Crawl, Walk and Run FinOps score, with the evidence behind each rating, and a FinOps Foundation assessment report of your subscriptions that marks each capability it could not check as not assessed instead of scoring it.
 - **Microsoft 365 Copilot spend (preview):** from Microsoft Graph's new Copilot cost management API, Copilot Credits per user, service and security group, each user's balance under the spending policy that governs it, a user's sessions, the tenant's credit balance, the spending policies and users' credit requests, shown as the Microsoft 365 admin center's Policies, Users & groups and Services & agents views with its names and columns. Their money comes from your Azure costs, where pay-as-you-go Copilot use is billed as Microsoft Copilot Studio, priced at the published rate per credit until it is billed. Changing a limit or deciding credit requests needs a second consent, and you approve each change.
 - **GitHub:** GitHub Copilot plans, prices and budgets from GitHub's documentation, and GitHub charges that an Azure subscription pays for in your Azure costs.
 - **More data, with your consent:** Microsoft 365 licenses and Copilot usage (Microsoft Graph), Microsoft 365 Copilot cost management, Log Analytics and Application Insights queries, and cost exports in Azure Storage. Each needs its own consent.
@@ -90,6 +90,7 @@ The agent acts with your own delegated permissions, so your Azure roles and the 
 
 ## Answers you can check
 
+- **Short and precise:** the first words answer the question, then one table or chart and at most three one-line notes, however much research the answer took. Detail it leaves out is offered as a follow-up.
 - **Sources and freshness:** figures come from calls you can see, with their source and retrieval time. Billed costs, budget snapshots, list prices and estimates are kept apart.
 - **Unknown is not zero:** missing data, failed calls and partial coverage are stated, never shown as zero.
 - **Activity is not savings:** a Copilot license with no reported activity, for example, is not proof that removing it saves money.
