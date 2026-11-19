@@ -121,6 +121,7 @@ jobs:
             BUILD_SHA=${{ steps.meta.outputs.sha }}
             BUILD_NUMBER=${{ steps.meta.outputs.build }}
             BUILD_BRANCH=main
+            UBUNTU_MIRROR=azure.archive.ubuntu.com
           # Registry-mode cache lives in ACR, shared across all workflows.
           # `buildcache-main` is the warm baseline that feature.yml also
           # reads from, so feature builds inherit prod's cached layers.

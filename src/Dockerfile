@@ -21,8 +21,17 @@ RUN dotnet publish -c Release -r linux-x64 --self-contained false -o /app/publis
 # ── Stage 3: Final runtime image ──
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 
+# Optional Ubuntu mirror host for apt; empty keeps the base image's Canonical servers. CI passes azure.archive.ubuntu.com,
+# which serves the same signed archive, so an outage of Canonical's own servers cannot block a release.
+ARG UBUNTU_MIRROR=
+
 # Python 3 runs the file-analysis tool (plain RUN — classic-builder compatible, no BuildKit).
-RUN apt-get update -qq && \
+RUN if [ -n "$UBUNTU_MIRROR" ]; then \
+  for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do \
+  if [ -f "$f" ]; then sed -i -E "s#//(archive|security)\.ubuntu\.com/#//$UBUNTU_MIRROR/#g" "$f"; fi; \
+  done; \
+  fi && \
+  apt-get update -qq && \
   apt-get install -y --no-install-recommends \
   python3 python3-pip && \
   ln -sf /usr/bin/python3 /usr/bin/python && \

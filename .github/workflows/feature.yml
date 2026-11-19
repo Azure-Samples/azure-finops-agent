@@ -158,6 +158,7 @@ jobs:
             BUILD_SHA=${{ steps.meta.outputs.sha }}
             BUILD_NUMBER=${{ steps.meta.outputs.build }}
             BUILD_BRANCH=${{ steps.meta.outputs.branch }}
+            UBUNTU_MIRROR=azure.archive.ubuntu.com
           # Registry-mode cache lives in ACR and is shared across every
           # branch + every workflow run. Far bigger than the 10GB GHA cache
           # and survives indefinitely. We read from both the per-feature
