@@ -250,9 +250,9 @@ public sealed class SessionQualityGuidanceTests
     [Fact]
     public void ASignedOutTenantQuestionShowsTheConnectButtonAndOffersAnUpload()
     {
-        var context = ChatEndpoints.ConnectionContext([], null, null, new DateTime(2026, 11, 10, 12, 0, 0, DateTimeKind.Utc));
+        var context = ChatEndpoints.ConnectionContext([], null, null);
 
-        Assert.StartsWith("[CONTEXT: Azure NOT connected. Today is 2026-11-10 (UTC).", context);
+        Assert.StartsWith("[CONTEXT: Azure NOT connected. Answer public questions freely", context);
         Assert.Contains("call QueryAzure once with GET /subscriptions, which sends nothing without a connection and shows the user a Connect Azure button", context);
         Assert.Contains("offer to analyze a cost or usage export they upload now instead", context);
         Assert.Contains("Do NOT refuse public questions", context);

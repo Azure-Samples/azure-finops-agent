@@ -1371,13 +1371,15 @@
                      Signed in, the maturity levels sit in the navigation with
                      their scores. -->
                 <div class="starters">
-                  <div class="starter-columns">
+                  <div
+                    class="starter-columns"
+                    :class="{ 'starter-columns--four': startPageSections.length === 4 }"
+                  >
                     <section
                       v-for="section in startPageSections"
                       :key="section.key"
                       :id="'starters-' + section.key"
                       class="starters-group"
-                      :class="{ 'starters-group--featured': section.featured }"
                       :aria-labelledby="'starters-' + section.key + '-heading'"
                     >
                       <h2
@@ -6301,9 +6303,9 @@ const scoreCategories = computed(() =>
 );
 
 // Signed in, the start page and the Prompts library open with every product's
-// spend side by side, a section that spans the start page's columns.
+// spend side by side, a section of its own beside the other three.
 const pricingNavigationSections = computed(() => [
-  ...(azureConnected.value ? [{ ...allCostsSection, featured: true }] : []),
+  ...(azureConnected.value ? [allCostsSection] : []),
   ...pricingSections.map((section) => {
     const connected = azureConnected.value && section.connectedPrompts?.length > 0;
     return {
@@ -6367,7 +6369,6 @@ const startPageSections = computed(() =>
     return {
       key: section.key,
       label: section.label,
-      featured: !!section.featured,
       prompts,
       expanded,
       expandable: prompts.length > START_PAGE_PHONE_QUESTIONS,
@@ -8424,6 +8425,9 @@ async function send() {
         fileIds: [...attachments.value, ...consumedImages]
           .filter((attachment) => attachment.fileId && !attachment.error)
           .map((attachment) => attachment.fileId),
+        // The user's own clock: "today" and "the last 7 days" are their local dates.
+        utcOffsetMinutes: -new Date().getTimezoneOffset(),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
       }),
       signal: streamAbortController.signal,
     });
@@ -10847,17 +10851,6 @@ async function send() {
   gap: 12px;
   min-width: 0;
 }
-/* Signed in, the first section puts every product's spend side by side: it
-   spans the columns, two questions to a row, since each shows all five icons. */
-.starters-group--featured {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 20px;
-}
-.starters-group--featured > :not(.starter-question) {
-  grid-column: 1 / -1;
-}
 .starters-heading {
   margin: 0;
   font-size: var(--text-heading-size);
@@ -10902,6 +10895,11 @@ async function send() {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 20px;
+}
+/* Signed in, every product's spend is a fourth section, one column of four. */
+.starter-columns--four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 16px;
 }
 .starter-question {
   display: flex;
@@ -10986,15 +10984,29 @@ async function send() {
     display: none;
   }
 }
+/* Four columns need about 900 px of the chat column: below that the four
+   sections sit two by two. */
+@container (max-width: 899px) {
+  .starter-columns--four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+/* Side by side, the four sections share their rows, so the headings line up
+   and so does each row of cards, whichever of them wraps. */
+@container (min-width: 761px) {
+  .starter-columns--four .starters-group {
+    display: grid;
+    grid-row: span 6;
+    grid-template-rows: subgrid;
+    row-gap: 12px;
+  }
+}
 /* Three columns need about 760 px of the chat column, which the side panels or
    a small window can take: below that the sections stack, centred. */
 @container (max-width: 760px) {
   .starter-columns {
     grid-template-columns: minmax(0, 560px);
     justify-content: center;
-  }
-  .starters-group--featured {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 .es-eyebrow {

@@ -86,11 +86,12 @@ public static class ChatEndpoints
 
     /// <summary>
     /// The [CONTEXT: …] block a turn starts with: the APIs the user reaches, the discovered subscriptions (with their
-    /// offer quotaId) and management groups, the signed-in user's own object id and today's date. Chat turns and
-    /// scheduled runs send the same block. The object id lets the model read the user's own Copilot cost and Graph
-    /// data in its first round instead of spending a round on GET /me.
+    /// offer quotaId) and management groups and the signed-in user's own object id. Chat turns and scheduled runs send
+    /// the same block once per model context; the date and time come with every message instead (<see cref="TimeContext"/>,
+    /// or the scheduled run's own block). The object id lets the model read the user's own Copilot cost and Graph data
+    /// in its first round instead of spending a round on GET /me.
     /// </summary>
-    internal static string ConnectionContext(IReadOnlyList<string> connectedApis, string? scopesJson, string? tenantId, DateTime utcNow, string? userObjectId = null)
+    internal static string ConnectionContext(IReadOnlyList<string> connectedApis, string? scopesJson, string? tenantId, string? userObjectId = null)
     {
         var tenantScopeHint = !string.IsNullOrWhiteSpace(scopesJson)
             ? $" Discovered Azure scopes (reuse these; do not list them again): {scopesJson}"
@@ -100,12 +101,30 @@ public static class ChatEndpoints
         var userHint = !string.IsNullOrWhiteSpace(userObjectId)
             ? $" Signed-in user's Entra object id (their userId for their own reads): {userObjectId}."
             : "";
-        // Date-only keeps the per-session context dedup stable within a day while
-        // anchoring the model's year, which it otherwise misquotes from tool timestamps.
-        var today = utcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
         return connectedApis.Count > 0
-            ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}.{tenantScopeHint}{userHint} Today is {today} (UTC). Proceed with tool calls directly.]"
-            : $"[CONTEXT: Azure NOT connected. Today is {today} (UTC). Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only when the question needs their tenant data: call QueryAzure once with GET /subscriptions, which sends nothing without a connection and shows the user a Connect Azure button, then say in one or two sentences what connecting lets you read and offer to analyze a cost or usage export they upload now instead. Do NOT refuse public questions.]";
+            ? $"[CONTEXT: User IS connected to Azure. Available APIs: {string.Join(", ", connectedApis)}.{tenantScopeHint}{userHint} Proceed with tool calls directly.]"
+            : "[CONTEXT: Azure NOT connected. Answer public questions freely (pricing, regions, service health, concepts, charts via public tools). Only when the question needs their tenant data: call QueryAzure once with GET /subscriptions, which sends nothing without a connection and shows the user a Connect Azure button, then say in one or two sentences what connecting lets you read and offer to analyze a cost or usage export they upload now instead. Do NOT refuse public questions.]";
+    }
+
+    /// <summary>
+    /// The [TIME: …] block every chat message starts with: the user's local date and time, from the UTC offset their
+    /// browser sends (with its time zone name as a label), and the UTC time. The days a user names (today, the last 7
+    /// days) are their local dates, while Azure Cost Management and the Copilot reports count UTC days, and a Copilot raw
+    /// usage read may not end after now, so the model needs both. It used to see only the server's UTC date, once per
+    /// conversation: at 00:50 in Copenhagen the last 7 completed UTC days ended two local days before today.
+    /// </summary>
+    internal static string TimeContext(DateTimeOffset now, int? utcOffsetMinutes, string? timeZone)
+    {
+        var utc = now.ToUniversalTime();
+        var utcText = utc.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " UTC";
+        if (utcOffsetMinutes is not { } offset || offset is < -14 * 60 or > 14 * 60)
+            return $"[TIME: {utcText}. The user's time zone is unknown, so their dates are UTC dates.]";
+        var local = utc.ToOffset(TimeSpan.FromMinutes(offset)).ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+        var zone = $"UTC{(offset < 0 ? '-' : '+')}{Math.Abs(offset) / 60:00}:{Math.Abs(offset) % 60:00}";
+        // The name only labels the offset, so anything but an IANA-style identifier is left out rather than echoed.
+        var named = timeZone is { Length: > 0 and <= 64 } name && char.IsAsciiLetter(name[0])
+            && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '/' or '+' or '-');
+        return $"[TIME: The user's local time is {local} ({(named ? $"{timeZone}, {zone}" : zone)}), which is {utcText}.]";
     }
 
     /// <summary>The connection block to send in this session, or null when the current model context already has it.</summary>
@@ -200,6 +219,11 @@ public static class ChatEndpoints
                 && approvalProp.TryGetProperty("requestId", out var requestIdProp) && requestIdProp.ValueKind == JsonValueKind.String
                 && approvalProp.TryGetProperty("approved", out var approvedProp) && approvedProp.ValueKind is JsonValueKind.True or JsonValueKind.False)
                 approval = new ApprovalDecision(requestIdProp.GetString() ?? "", approvedProp.GetBoolean());
+            // The browser's UTC offset sets the user's local date and time; its time zone name only labels it.
+            int? utcOffsetMinutes = bodyDoc.RootElement.TryGetProperty("utcOffsetMinutes", out var offsetProp)
+                && offsetProp.ValueKind == JsonValueKind.Number && offsetProp.TryGetInt32(out var offsetValue) ? offsetValue : null;
+            var timeZone = bodyDoc.RootElement.TryGetProperty("timeZone", out var zoneProp) && zoneProp.ValueKind == JsonValueKind.String
+                ? zoneProp.GetString() : null;
 
             // Track activity for the janitor's idle eviction.
             UserStateJanitor.LastSeenUtc[userId] = DateTimeOffset.UtcNow;
@@ -335,7 +359,7 @@ public static class ChatEndpoints
                     ctx.Session.Remove("azure_scope_context");
                 }
             }
-            var connectionContext = ConnectionContext(connectedApis, cachedAzureScopes, azureTenantId, DateTime.UtcNow, entraOid);
+            var connectionContext = ConnectionContext(connectedApis, cachedAzureScopes, azureTenantId, entraOid);
 
             // Surface any files the user has dropped into this session so the LLM
             // immediately knows the fileIds it can pass to QueryUploadedFile.
@@ -485,6 +509,8 @@ public static class ChatEndpoints
                 // removes the tool round-trip and the table.
                 if (trivialTurn)
                     contextBits.Add(TrivialTurnDirective);
+                // Every message carries the current date and time, unlike the connection block.
+                contextBits.Add(TimeContext(DateTimeOffset.UtcNow, utcOffsetMinutes, timeZone));
                 // The conversation is named from the question the user wrote, not the context blocks.
                 var question = prompt;
                 if (contextBits.Count > 0)

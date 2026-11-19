@@ -112,11 +112,12 @@ public sealed class JobOutcomeTests
             [new { id = "sub-1", name = "Sponsored", state = "Enabled", tenantId = "t", quotaId = "Sponsored_2016-01-01" }], []);
 
         var context = AzureFinOps.Dashboard.AI.ChatEndpoints.ConnectionContext(
-            AzureFinOps.Dashboard.AI.ChatEndpoints.ConnectedApis(tokens), scopes, "t", new DateTime(2026, 10, 7, 12, 0, 0, DateTimeKind.Utc));
+            AzureFinOps.Dashboard.AI.ChatEndpoints.ConnectedApis(tokens), scopes, "t");
 
         Assert.StartsWith("[CONTEXT: User IS connected to Azure.", context);
         Assert.Contains("\"quotaId\":\"Sponsored_2016-01-01\"", context);
-        Assert.Contains("Today is 2026-10-07 (UTC)", context);
+        // The run block carries the date and time; the connection block stays the same across days, so it is sent once.
+        Assert.DoesNotContain("Today is", context);
         Assert.DoesNotContain("ownerObjectId", context);
         Assert.Equal(context, AzureFinOps.Dashboard.AI.ChatEndpoints.NewConnectionContext("job-session-synthetic", context));
         Assert.Null(AzureFinOps.Dashboard.AI.ChatEndpoints.NewConnectionContext("job-session-synthetic", context));

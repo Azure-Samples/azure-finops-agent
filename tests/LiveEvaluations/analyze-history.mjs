@@ -114,7 +114,8 @@ export function userQuestion(content) {
             /^\[UPLOADED FILES IN THIS SESSION[\s\S]*?\[FILE EVIDENCE:[\s\S]*?\]\s*/i,
             "",
         )
-        .replace(/^\[Turn style:[\s\S]*?\]\s*/i, "");
+        .replace(/^\[Turn style:[\s\S]*?\]\s*/i, "")
+        .replace(/^\[TIME:[^\]]*\]\s*/i, "");
 }
 
 export function verifyOwner(start, owner, root) {

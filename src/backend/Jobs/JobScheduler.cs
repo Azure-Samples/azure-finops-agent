@@ -184,12 +184,13 @@ public sealed class JobScheduler : BackgroundService
             tokens.RefreshLock.Release();
         }
 
-        // The same connection block a chat turn starts with: the APIs these tokens reach, the subscriptions with their
-        // offer quotaId (an unsupported offer, not a reporting delay, explains empty cost data) and today's date.
+        // The same connection block a chat turn starts with: the APIs these tokens reach and the subscriptions with their
+        // offer quotaId (an unsupported offer, not a reporting delay, explains empty cost data). The run block below
+        // carries the date and time, in UTC, since no browser reports the owner's time zone here.
         var (subscriptions, managementGroups) = await AzureSessionEndpoints.DiscoverScopesAsync(_httpFactory.CreateClient(), tokens.AzureToken!, _logger, ct);
         var connectionContext = ChatEndpoints.ConnectionContext(ChatEndpoints.ConnectedApis(tokens),
             subscriptions.Count + managementGroups.Count > 0 ? AzureSessionEndpoints.ScopeContext(subscriptions, managementGroups) : null,
-            job.EntraTenantId, DateTime.UtcNow, job.EntraOid);
+            job.EntraTenantId, job.EntraOid);
 
         // Keep the janitor from evicting this user's state mid-run.
         UserStateJanitor.LastSeenUtc[job.UserId] = DateTimeOffset.UtcNow;

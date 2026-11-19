@@ -129,13 +129,14 @@ const infrastructurePricingPrompts = [
   },
 ];
 
-// Signed-in prompts for the start page's first section, which spans its columns: each puts every product's spend side
+// Signed-in prompts for the start page's first section, a column of its own: each puts every product's spend side
 // by side (Azure, Microsoft Foundry and GitHub from Azure Cost Management; Microsoft 365 Copilot and Agent 365, which
 // Copilot Credits pay for, from the Copilot cost management API), counting Copilot once, in a minimal table with one row
 // per product, the Copilot row split into the admin center's services and agents, and a follow-up link to break each
 // product down. No admin center shows these together. The cards send short questions: how to read, combine and show
-// that spend is the system prompt's "Spend across products" rule, so a typed question gets the same answer. They only
-// read, and they need the Copilot cost consent, whose button a user without it gets.
+// that spend is the system prompt's "Spend across products" rule, so a typed question gets the same answer. A period in
+// days ends with today so far, by the user's own clock, which every message carries. They only read, and they need the
+// Copilot cost consent, whose button a user without it gets.
 const ALL_PRODUCTS = [AZURE, FOUNDRY, COPILOT, AGENT_365, GITHUB];
 const PRODUCTS = "Azure, Microsoft Foundry, GitHub, and Microsoft 365 Copilot and Agent 365";
 const connectedAllCostPrompts = [
@@ -143,7 +144,7 @@ const connectedAllCostPrompts = [
     label: "What did everything cost last week?",
     sources: ALL_PRODUCTS,
     badge: "Preview",
-    prompt: `What did everything we use cost in the last 7 completed days (UTC): ${PRODUCTS}?`,
+    prompt: `What did everything we use cost in the last 7 days, today included: ${PRODUCTS}?`,
   },
   {
     label: "What will this month cost in total?",
@@ -155,7 +156,7 @@ const connectedAllCostPrompts = [
     label: "Daily cost of everything this week",
     sources: ALL_PRODUCTS,
     badge: "Preview",
-    prompt: `Show a stacked daily chart of everything we spent in the last 7 completed days (UTC), one series per product: ${PRODUCTS}.`,
+    prompt: `Show a stacked daily chart of everything we spent in the last 7 days, today included, one series per product: ${PRODUCTS}.`,
   },
   {
     label: "Where is my AI money going?",
