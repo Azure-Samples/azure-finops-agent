@@ -1,3 +1,4 @@
+using System.ClientModel;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -10,13 +11,25 @@ namespace AzureFinOps.Dashboard.AI.Runtime;
 /// You can retry your request") or a transient service-unavailable error reported inside the stream, or a stream that
 /// died on the wire (the client's read timeout, or a dropped connection). The SDK retries HTTP 5xx and a request that
 /// timed out before its response started, but not a stream that already opened, and such a failure otherwise ends
-/// the whole turn without an answer after every tool round succeeded. Sits below Agent Framework's function
-/// invocation, so only the failed model request is sent again, never a tool.
+/// the whole turn without an answer after every tool round succeeded. A request that continues a response the
+/// service has not made visible yet is resent once too, after <see cref="PreviousResponseRetryDelay"/>. Sits below
+/// Agent Framework's function invocation, so only the failed model request is sent again, never a tool.
 /// </summary>
 internal sealed class ModelStreamRetryChatClient(IChatClient inner, ILogger logger) : DelegatingChatClient(inner)
 {
     /// <summary>Shown when a model stream stops twice in a row, or after the answer had started.</summary>
     internal const string StalledMessage = "The connection to the model stopped responding, so this answer stopped. Ask again.";
+
+    /// <summary>
+    /// The Responses API stores a response after its stream ends, and a request continuing it can arrive first: the AI
+    /// quality report for fbffa20 (19 November 2026) lost a turn when a calculation returned in 12 ms and the next request
+    /// was answered 400 previous_response_not_found, for a response the service then listed as completed and stored.
+    /// </summary>
+    internal static readonly TimeSpan PreviousResponseRetryDelay = TimeSpan.FromSeconds(2);
+
+    internal static bool IsPreviousResponseNotFound(Exception exception) =>
+        exception is ClientResultException { Status: 400 or 404 } failure
+        && failure.Message.Contains("previous_response_not_found", StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsRetryable(ErrorContent error) =>
         (string.Equals(error.ErrorCode, "server_error", StringComparison.OrdinalIgnoreCase) || IsServiceUnavailable(error))
@@ -48,6 +61,7 @@ internal sealed class ModelStreamRetryChatClient(IChatClient inner, ILogger logg
         {
             var committed = false;
             var retry = false;
+            var wait = TimeSpan.Zero;
             await using var stream = base.GetStreamingResponseAsync(request, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
             while (true)
             {
@@ -61,6 +75,14 @@ internal sealed class ModelStreamRetryChatClient(IChatClient inner, ILogger logg
                     retry = true;
                     break;
                 }
+                catch (Exception exception) when (attempt == 1 && !committed && IsPreviousResponseNotFound(exception))
+                {
+                    logger.LogWarning("Model request continues a response the service could not find yet; sending it once more in {Seconds} s",
+                        PreviousResponseRetryDelay.TotalSeconds);
+                    retry = true;
+                    wait = PreviousResponseRetryDelay;
+                    break;
+                }
                 var update = stream.Current;
                 if (attempt == 1 && !committed && update.Contents.OfType<ErrorContent>().FirstOrDefault(IsRetryable) is { } error)
                 {
@@ -72,6 +94,7 @@ internal sealed class ModelStreamRetryChatClient(IChatClient inner, ILogger logg
                 yield return update;
             }
             if (!retry) yield break;
+            if (wait > TimeSpan.Zero) await Task.Delay(wait, cancellationToken);
         }
     }
 }
