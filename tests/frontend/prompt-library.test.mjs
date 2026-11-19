@@ -63,7 +63,7 @@ test('the own-setup card asks for every input in one message before it looks up 
 // prompt word for word, so the deployment gate keeps evaluating it as one case.
 test('signed in, the price section is titled for the user\'s estate and leads with the gate-tested savings prompt', () => {
   const section = pricingSections.find((candidate) => candidate.key === 'infrastructure-pricing');
-  assert.equal(section.connectedLabel, 'Optimize my Azure costs');
+  assert.equal(section.connectedLabel, 'Optimize Azure');
   assert.deepEqual(section.connectedPrompts.slice(0, 2).map(({ label }) => label), ['Where can I save money?', 'FinOps assessment report']);
   const crawl = maturityCategories.find((category) => category.key === 'crawl').prompts
     .find(({ label }) => label === 'Score Crawl maturity');

@@ -74,7 +74,7 @@ You can also ask your own question about Azure prices or service health, or uplo
 
 ### After you connect Azure
 
-The start page's third section becomes **Optimize my Azure costs** and starts with *Where can I save money?* and a *FinOps assessment report*, and **Control AI spending** starts with four Microsoft 365 Copilot cost questions marked Preview: *Who uses Copilot most, and for what?*, *Copilot services & agents*, *What did my Copilot work cost?* and *Copilot user and VM spend*. Above them, a new **See all my costs** section puts every product's spend side by side in one answer, counting Copilot once: *What did everything cost last week?*, *What will this month cost in total?*, *Daily cost of everything this week* and *Where is my AI money going?*.
+The start page's third section becomes **Optimize Azure** and starts with *Where can I save money?* and a *FinOps assessment report*, and **Control AI spending** shows four Microsoft 365 Copilot cost questions, marked Preview: *Who uses Copilot most, and for what?*, *Copilot services & agents*, *What did my Copilot work cost?* and *Copilot user and VM spend*. Before them, a new **See all my costs** section, the first of four columns, puts every product's spend side by side in one answer, counting Copilot once: *What did everything cost last week?*, *What will this month cost in total?*, *Daily cost of everything this week* and *Where is my AI money going?*.
 
 - **Spend:** costs by service, subscription, resource group, tag and region, with forecasts and budgets.
 - **Savings:** Azure Advisor, reservations and savings plans, and idle or orphaned resources.

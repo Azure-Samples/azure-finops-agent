@@ -375,6 +375,8 @@
                 </span>
               </div>
               <div class="maturity-card-body">
+                <!-- Not scored yet: words, because five empty stars read as a
+                     score of zero. -->
                 <span
                   class="maturity-card-stars"
                   :class="{ 'maturity-card-stars--empty': !maturityScores[cat.key] }"
@@ -389,16 +391,17 @@
                       : 'Not scored'
                   "
                 >
-                  <AppIcon
-                    v-for="(star, starIndex) in maturityStarIcons(
-                      maturityScores[cat.key]
-                        ? maturityOverall(cat.key)
-                        : undefined,
-                    )"
-                    :key="`${cat.key}-${starIndex}`"
-                    :name="star"
-                    size="18"
-                  />
+                  <template v-if="maturityScores[cat.key]">
+                    <AppIcon
+                      v-for="(star, starIndex) in maturityStarIcons(
+                        maturityOverall(cat.key),
+                      )"
+                      :key="`${cat.key}-${starIndex}`"
+                      :name="star"
+                      size="18"
+                    />
+                  </template>
+                  <template v-else>Not scored</template>
                 </span>
                 <AppIcon
                   v-if="maturityScores[cat.key]"
@@ -1354,16 +1357,16 @@
                   <ul class="hero-products-list" aria-label="Integrated with">
                     <li
                       v-for="product in HERO_PRODUCTS"
-                      :key="product"
+                      :key="product.key"
                       class="hero-product"
                     >
                       <img
-                        :src="STARTER_SOURCES[product].icon"
+                        :src="product.icon"
                         alt=""
                         width="32"
                         height="32"
                       />
-                      {{ STARTER_SOURCES[product].name }}
+                      {{ product.name }}
                     </li>
                   </ul>
                 </div>
@@ -1382,12 +1385,19 @@
                       class="starters-group"
                       :aria-labelledby="'starters-' + section.key + '-heading'"
                     >
-                      <h2
-                        :id="'starters-' + section.key + '-heading'"
-                        class="starters-heading starters-heading--section"
-                      >
-                        {{ section.label }}
-                      </h2>
+                      <!-- A badge such as Preview shows once, beside the heading
+                           of the questions it holds for. -->
+                      <div class="starters-heading-row">
+                        <h2
+                          :id="'starters-' + section.key + '-heading'"
+                          class="starters-heading starters-heading--section"
+                        >
+                          {{ section.label }}
+                        </h2>
+                        <span v-if="section.badge" class="starter-badge">{{
+                          section.badge
+                        }}</span>
+                      </div>
                       <!-- Five questions (phones: the first three, with More
                            showing the rest in place). -->
                       <button
@@ -1403,28 +1413,6 @@
                         :title="q.prompt"
                         @click="sendQuestion(q.prompt)"
                       >
-                        <!-- The products the answer covers and any badge sit
-                             above the question, which keeps the card's width. -->
-                        <span
-                          v-if="q.sources.length || q.badge"
-                          class="starter-meta"
-                        >
-                          <span class="starter-sources" aria-hidden="true">
-                            <img
-                              v-for="source in q.sources"
-                              :key="source"
-                              class="starter-source"
-                              :src="STARTER_SOURCES[source].icon"
-                              :title="STARTER_SOURCES[source].name"
-                              alt=""
-                              width="18"
-                              height="18"
-                            />
-                          </span>
-                          <span v-if="q.badge" class="starter-badge">{{
-                            q.badge
-                          }}</span>
-                        </span>
                         <span class="starter-question-label">{{ q.label }}</span>
                       </button>
                       <button
@@ -2140,7 +2128,7 @@
               @paste="onPaste"
               :placeholder="
                 azureConnected
-                  ? 'Ask a question about your Azure costs'
+                  ? 'Ask about your Azure, AI and Copilot costs'
                   : 'Ask a FinOps or Azure pricing question'
               "
               class="input-field"
@@ -6322,24 +6310,17 @@ const pricingNavigationSections = computed(() => [
 // show the first three (CSS), and More shows the rest in place there.
 const START_PAGE_QUESTIONS = 5;
 const START_PAGE_PHONE_QUESTIONS = 3;
-// Each card shows the official icons of the products its answer covers
-// (public/product-icons, used under each owner's terms: see its README), each
-// named in its tooltip; the start page lists them all under its title with
-// their full names.
-const STARTER_SOURCES = {
-  azure: { icon: "/product-icons/azure.svg", name: "Azure" },
-  foundry: { icon: "/product-icons/foundry.svg", name: "Microsoft Foundry" },
-  copilot: {
-    icon: "/product-icons/copilot.svg",
-    name: "Microsoft 365 Copilot",
-  },
-  agent365: {
-    icon: "/product-icons/agent-365.svg",
-    name: "Microsoft Agent 365",
-  },
-  github: { icon: "/product-icons/github.svg", name: "GitHub" },
-};
-const HERO_PRODUCTS = ["azure", "foundry", "copilot", "agent365", "github"];
+// The products the agent's answers cover, listed under the start page's title,
+// each beside its official icon (public/product-icons, used under each owner's
+// terms: see its README) and full name. The cards carry no icons: on every card
+// they repeated this list in marks too small to tell apart.
+const HERO_PRODUCTS = [
+  { key: "azure", icon: "/product-icons/azure.svg", name: "Azure" },
+  { key: "foundry", icon: "/product-icons/foundry.svg", name: "Microsoft Foundry" },
+  { key: "copilot", icon: "/product-icons/copilot.svg", name: "Microsoft 365 Copilot" },
+  { key: "agent365", icon: "/product-icons/agent-365.svg", name: "Microsoft Agent 365" },
+  { key: "github", icon: "/product-icons/github.svg", name: "GitHub" },
+];
 const expandedStarterSections = ref({});
 
 function toggleStarterSection(key) {
@@ -6357,18 +6338,24 @@ watch(
   },
 );
 
+// A badge such as Preview shows once, beside its section's heading, so it must
+// hold for every question there: a section whose first question carries one
+// shows only the questions that lead it with that badge (the Prompts library
+// lists the rest).
 const startPageSections = computed(() =>
   pricingNavigationSections.value.map((section) => {
     const expanded = !!expandedStarterSections.value[section.key];
-    const prompts = section.prompts.slice(0, START_PAGE_QUESTIONS).map((prompt) => ({
-      ...prompt,
-      sources: (prompt.sources ?? section.sources ?? []).filter(
-        (source) => STARTER_SOURCES[source],
-      ),
-    }));
+    const badge = section.prompts[0]?.badge ?? "";
+    const unbadged = badge
+      ? section.prompts.findIndex((prompt) => prompt.badge !== badge)
+      : -1;
+    const prompts = (
+      unbadged === -1 ? section.prompts : section.prompts.slice(0, unbadged)
+    ).slice(0, START_PAGE_QUESTIONS);
     return {
       key: section.key,
       label: section.label,
+      badge,
       prompts,
       expanded,
       expandable: prompts.length > START_PAGE_PHONE_QUESTIONS,
@@ -9783,9 +9770,10 @@ async function send() {
   gap: 2px;
   line-height: 1;
 }
-/* Not scored yet: outline stars, quieter than a score. */
+/* Not scored yet: a quiet caption instead of stars. */
 .maturity-card-stars--empty {
-  opacity: 0.45;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
 }
 .maturity-card-chevron {
   width: 16px;
@@ -10912,27 +10900,21 @@ async function send() {
   line-height: var(--text-body-line);
   font-weight: 400;
 }
-/* Above the question: the official icons of the products its answer covers,
-   and a badge such as Preview at the far end. */
-.starter-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.starter-sources {
-  display: inline-flex;
-  gap: 4px;
-}
-.starter-source {
-  display: block;
-  width: 18px;
-  height: 18px;
-}
 .starter-question-label {
   min-width: 0;
 }
-/* Marks a question about a feature in preview. */
+/* A section's heading with its badge beside it, or under it when the column is
+   too narrow for both; the lines pack at the top, so headings with and without
+   a badge line up. */
+.starters-heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: flex-start;
+  gap: 4px 8px;
+  min-width: 0;
+}
+/* Marks a section whose questions are about a feature in preview. */
 .starter-badge {
   display: inline-block;
   padding: 0 6px;

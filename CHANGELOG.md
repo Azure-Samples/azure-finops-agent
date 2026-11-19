@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- A calmer start page. Signed in, it showed 46 small product icons and 8 Preview tags around 19 questions, almost three to one, and the icons repeated the product line under the title in marks too small to tell apart. Cards now carry only their question, and the product line under the title stays. A Preview tag shows once, beside the heading of a section whose questions are previews, so signed in, *Control AI spending* shows its four Copilot cost questions and *How do we budget and justify AI?* stays in the Prompts library (signed out, it still leads that section). The fourth heading, *Optimize my Azure costs*, wrapped onto two lines and is now *Optimize Azure*; the signed-in input box reads "Ask about your Azure, AI and Copilot costs" instead of naming Azure alone; and a maturity level not scored yet says *Not scored* instead of showing five empty stars, which read as a score of zero.
+
 ## [0.6.0] - 2026-11-19
 
 ### Added

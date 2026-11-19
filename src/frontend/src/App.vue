@@ -105,7 +105,8 @@ async function logout() {
   --warning-soft: rgba(191, 135, 0, 0.1);
   --warning-border: rgba(191, 135, 0, 0.25);
 
-  /* The Preview badge on a start page question about a feature in preview. */
+  /* The Preview badge beside a start page section whose questions are about a
+     feature in preview. */
   --preview: #7c3aed;
   --preview-soft: rgba(124, 58, 237, 0.12);
 
