@@ -507,19 +507,38 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
             candidates.AddRange(SupportedApiVersions(listing, await send(listing), int.MaxValue)
                 .Where(version => version.Length == 10 && string.CompareOrdinal(version, sent) < 0).Take(2));
         }
+        string? lastRejection = null;
+        string? lastRejectedPath = null;
+        var exhausted = true;
         foreach (var version in candidates)
         {
             var correctedPath = WithApiVersion(path, version);
             var corrected = await send(correctedPath);
-            if (IsUnlistedApiVersionRejection(corrected)) continue;
+            if (IsUnlistedApiVersionRejection(corrected))
+            {
+                (lastRejection, lastRejectedPath) = (corrected, correctedPath);
+                continue;
+            }
             ChosenApiVersions[key] = (version, DateTimeOffset.UtcNow + ChosenApiVersionLifetime);
             activity?.SetTag("azure.api_version_corrected", version);
             var success = corrected.StartsWith("HTTP 2", StringComparison.Ordinal);
             if (chosen || success) return (corrected, correctedPath, success ? ApiVersionNote(version, chosen ? null : sent) : null);
+            exhausted = false;
             break;
         }
+        // Every version tried was rejected: the provider's own last answer, not the placeholder's version listing,
+        // says what failed, and the note keeps the model from reading the failed read as empty.
+        if (exhausted && lastRejection is not null)
+            return (lastRejection, lastRejectedPath!, RejectedApiVersionsNote(chosen ? candidates : [sent, .. candidates]));
         return (response, path, chosen && response.StartsWith("HTTP 2", StringComparison.Ordinal) ? ApiVersionNote(sent, null) : null);
     }
+
+    /// <summary>The _apiVersion note of a read whose every api-version was rejected.</summary>
+    internal static Dictionary<string, string> RejectedApiVersionsNote(IEnumerable<string> tried) => new()
+    {
+        ["tried"] = string.Join(", ", tried),
+        ["reason"] = "The service rejected every api-version tried for this resource type, so this read failed: what it holds is unknown, not empty.",
+    };
 
     // Supported api-versions belong to a resource type, so the key drops every name (subscription, group, resource, region).
     internal static string ApiVersionKey(string path) => ResourceTypeOf(path) is { } resource
@@ -1037,19 +1056,28 @@ public sealed partial class AzureQueryTools(UserTokens tokens)
 
     internal static string RequestedVersion(string path) => Uri.UnescapeDataString(ApiVersionParameter().Match(path).Groups[1].Value);
 
-    /// <summary>True when a resource provider rejects the api-version with UnsupportedApiVersion without naming supported versions.</summary>
+    /// <summary>
+    /// True when a resource provider rejects the api-version without naming supported versions: ARM's
+    /// UnsupportedApiVersion, or a provider's own bare {"Message": "Invalid api-version query string value."}, which a
+    /// Cost Management list read (saved views or exports) answered on 19 November 2026 for the newest version ARM lists.
+    /// </summary>
     internal static bool IsUnlistedApiVersionRejection(string response)
     {
         if (!response.StartsWith("HTTP 400", StringComparison.Ordinal)) return false;
         try
         {
             using var document = JsonDocument.Parse(ResponseShaper.SplitPreamble(response).Body);
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                && document.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object
-                && error.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String
-                && string.Equals(code.GetString(), "UnsupportedApiVersion", StringComparison.OrdinalIgnoreCase)
-                && !(error.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String
-                    && SupportedVersionList().IsMatch(message.GetString()!));
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object)
+                return error.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String
+                    && string.Equals(code.GetString(), "UnsupportedApiVersion", StringComparison.OrdinalIgnoreCase)
+                    && !(error.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String
+                        && SupportedVersionList().IsMatch(message.GetString()!));
+            return (root.TryGetProperty("Message", out var bare) || root.TryGetProperty("message", out bare))
+                && bare.ValueKind == JsonValueKind.String
+                && bare.GetString()!.Contains("api-version", StringComparison.OrdinalIgnoreCase)
+                && !SupportedVersionList().IsMatch(bare.GetString()!);
         }
         catch (JsonException) { return false; }
     }
