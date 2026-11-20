@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using AzureFinOps.Dashboard.Infrastructure;
 
@@ -10,7 +12,8 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// Credential-free public HTTPS GET used by QueryAzure for documentation, specs, public pricing pages,
 /// feeds and public JSON APIs. Connections are only made to public addresses (checked after DNS
 /// resolution, on every redirect), no auth or cookies are sent, and downloads are capped.
-/// HTML is stripped to text; JSON is returned as-is and XML/CSV are converted to JSON so they can be retained and queried.
+/// HTML becomes text lines followed by the data records its scripts embed; JSON is returned as-is and XML/CSV are
+/// converted to JSON so they can be retained and queried.
 /// </summary>
 internal static class PublicWebReader
 {
@@ -182,23 +185,183 @@ internal static class PublicWebReader
         return contentType.Contains("csv", StringComparison.OrdinalIgnoreCase) ? ResponseShaper.CsvToJson(raw) : null;
     }
 
-    // Lightweight HTML → text. Drops <script>, <style>, <noscript>, <nav>, <header>, <footer>,
-    // strips remaining tags, decodes entities, collapses whitespace. Good enough for pricing
-    // pages and docs. Not a parser — we don't need a tree, just readable text.
+    // Lightweight HTML → text. Drops <script>, <style>, <noscript>, <nav>, <header>, <footer>, <svg> and <form>,
+    // puts each table row (cells separated by " | "), paragraph, heading and list item on its own line, strips the
+    // remaining tags, decodes entities and collapses whitespace. Not a parser — we don't need a tree, just lines a
+    // query can crop by name: a minified page used to become one line of thousands of characters that no crop narrowed.
     private static readonly Regex DropBlocks = new(
         @"<(script|style|noscript|nav|header|footer|svg|form)\b[^>]*>.*?</\1>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    // A row ends at its own </tr>; the atomic, tempered body stops at the next <tr, so an unclosed row never rescans the page.
+    private static readonly Regex TableRows = new(
+        @"<tr\b[^>]*>((?>(?:(?!</?tr\b).)*))</tr\s*>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex CellEnds = new(@"</t[dh]\s*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex BlockEnds = new(
+        @"<br\b[^>]*>|<hr\b[^>]*>|</(?:p|li|h[1-6]|dt|dd|ul|ol|dl|table|thead|tbody|tfoot|caption|section|article|aside|main|blockquote|pre|figcaption|details|summary)\s*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex Tags = new(@"<[^>]+>", RegexOptions.Compiled);
     private static readonly Regex Whitespace = new(@"[ \t]+", RegexOptions.Compiled);
-    private static readonly Regex BlankLines = new(@"(\r?\n){3,}", RegexOptions.Compiled);
+    private static readonly Regex BlankLines = new(@"\n{3,}", RegexOptions.Compiled);
 
     private static string StripHtml(string html)
     {
+        var records = EmbeddedRecords(html);
         var s = DropBlocks.Replace(html, " ");
+        s = TableRows.Replace(s, row => "\n" + Tags.Replace(CellEnds.Replace(row.Groups[1].Value, " | "), " ").ReplaceLineEndings(" ") + "\n");
+        s = BlockEnds.Replace(s, "\n");
         s = Tags.Replace(s, " ");
         s = WebUtility.HtmlDecode(s);
         s = Whitespace.Replace(s, " ");
-        s = BlankLines.Replace(s, "\n\n");
-        return s.Trim();
+        s = string.Join('\n', s.ReplaceLineEndings("\n").Split('\n').Select(line => line.Trim().TrimEnd('|').TrimEnd()));
+        s = BlankLines.Replace(s, "\n\n").Trim();
+        return records.Count == 0 ? s : s + "\n\n" + RecordsHeading + "\n" + string.Join('\n', records);
+    }
+
+    // Sites built with frameworks such as Next.js render only part of a table into the HTML (a leaderboard's top
+    // entries) and carry the whole data set in script tags, which the text drops: the leaderboards the best-value eval
+    // read in November 2026 showed scores for some requested models and none for others, while their scripts held all.
+    // Each object in that data that has a name and at least one number becomes one line, "name: X; field: value; …",
+    // with a nested object's values as "parent.field", so a query can crop every model's scores by name.
+    private const string RecordsHeading = "Records embedded in the page's scripts (the data behind its tables and charts, one per line):";
+    private const int MaxRecords = 5_000;
+    private const int MaxRecordCharacters = 1_500_000;
+    private const int MaxRecordLength = 2_000;
+    private const int MaxValueLength = 160;
+    private static readonly Regex Scripts = new(@"<script\b([^>]*)>(.*?)</script\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex JsonScriptType = new(@"\btype\s*=\s*[""']?application/(?:ld\+)?json\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // Next.js streams its data as self.__next_f.push([1,"<rows>"]); each row is "<id>:<JSON>".
+    private static readonly Regex FlightPush = new(@"^\s*self\.__next_f\.push\((\[.*\])\)\s*;?\s*$", RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex FlightRow = new(@"^[0-9a-zA-Z]+:(?=[\[{])", RegexOptions.Compiled);
+    private static readonly Regex HexColour = new(@"^#[0-9a-fA-F]{3,8}$", RegexOptions.Compiled);
+    private static readonly Regex ImagePath = new(@"\.(?:svg|png|jpe?g|gif|webp|ico|avif)(?:[?#].*)?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly HashSet<string> NameKeys = new(StringComparer.OrdinalIgnoreCase) { "name", "title", "label", "model", "modelName", "displayName", "shortName" };
+    private static readonly JsonDocumentOptions EmbeddedJson = new() { MaxDepth = 256 };
+
+    private static List<string> EmbeddedRecords(string html)
+    {
+        var records = new RecordLines();
+        var flight = new StringBuilder();
+        foreach (Match script in Scripts.Matches(html))
+        {
+            var body = script.Groups[2].Value;
+            if (JsonScriptType.IsMatch(script.Groups[1].Value)) records.AddJson(body);
+            else flight.Append(FlightChunk(body));
+        }
+        foreach (var row in flight.ToString().Split('\n'))
+            if (FlightRow.Match(row) is { Success: true } prefix) records.AddJson(row[prefix.Length..]);
+        return records.Lines;
+    }
+
+    private static string? FlightChunk(string script)
+    {
+        if (FlightPush.Match(script) is not { Success: true } push) return null;
+        using var document = Parse(push.Groups[1].Value);
+        return document?.RootElement is { ValueKind: JsonValueKind.Array } array && array.GetArrayLength() > 1
+            && array[1].ValueKind == JsonValueKind.String ? array[1].GetString() : null;
+    }
+
+    private static JsonDocument? Parse(string json)
+    {
+        try { return JsonDocument.Parse(json, EmbeddedJson); }
+        catch (JsonException) { return null; }
+    }
+
+    private sealed class RecordLines
+    {
+        private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
+        private int _characters;
+        public List<string> Lines { get; } = [];
+        private bool Full => Lines.Count >= MaxRecords || _characters >= MaxRecordCharacters;
+
+        public void AddJson(string json)
+        {
+            if (Full) return;
+            using var document = Parse(json);
+            if (document is not null) Walk(document.RootElement);
+        }
+
+        private void Walk(JsonElement element)
+        {
+            if (Full) return;
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                Record(element);
+                foreach (var property in element.EnumerateObject()) Walk(property.Value);
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+                foreach (var item in element.EnumerateArray()) Walk(item);
+        }
+
+        private void Record(JsonElement element)
+        {
+            string? name = null;
+            var numeric = false;
+            var fields = new List<string>();
+            foreach (var property in element.EnumerateObject())
+            {
+                if (name is null && property.Value.ValueKind == JsonValueKind.String && NameKeys.Contains(property.Name)
+                    && Scalar(property.Value) is { } title)
+                {
+                    name = $"{property.Name}: {title}";
+                    continue;
+                }
+                if (property.Value.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var inner in property.Value.EnumerateObject())
+                        if (Scalar(inner.Value) is { } nested)
+                        {
+                            fields.Add($"{property.Name}.{inner.Name}: {nested}");
+                            numeric |= inner.Value.ValueKind == JsonValueKind.Number;
+                        }
+                }
+                else if (Scalar(property.Value) is { } value)
+                {
+                    fields.Add($"{property.Name}: {value}");
+                    numeric |= property.Value.ValueKind == JsonValueKind.Number;
+                }
+            }
+            if (name is null || !numeric) return;
+            var line = new StringBuilder(name);
+            foreach (var field in fields)
+            {
+                if (line.Length + field.Length + 2 > MaxRecordLength)
+                {
+                    line.Append("; …");
+                    break;
+                }
+                line.Append("; ").Append(field);
+            }
+            var text = line.ToString();
+            if (_seen.Add(text))
+            {
+                Lines.Add(text);
+                _characters += text.Length + 1;
+            }
+        }
+
+        // Numbers, booleans and readable strings; framework references ($L1b, $undefined), GUIDs, colours and image paths
+        // carry nothing a reader needs.
+        private static string? Scalar(JsonElement value)
+        {
+            switch (value.ValueKind)
+            {
+                case JsonValueKind.Number:
+                    var raw = value.GetRawText();
+                    return raw.Length <= 12 || !value.TryGetDouble(out var number) ? raw : number.ToString("G6", CultureInfo.InvariantCulture);
+                case JsonValueKind.True:
+                    return "true";
+                case JsonValueKind.False:
+                    return "false";
+                case JsonValueKind.String:
+                    var text = value.GetString()?.ReplaceLineEndings(" ").Trim();
+                    if (string.IsNullOrEmpty(text)
+                        || text.Length > 1 && text[0] == '$' && (char.IsLetter(text[1]) || text[1] is '@' or '$')
+                        || Guid.TryParse(text, out _) || HexColour.IsMatch(text) || ImagePath.IsMatch(text)) return null;
+                    return text.Length <= MaxValueLength ? text : text[..MaxValueLength] + "…";
+                default:
+                    return null;
+            }
+        }
     }
 }
