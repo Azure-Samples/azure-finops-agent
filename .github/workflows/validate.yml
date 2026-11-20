@@ -8,6 +8,13 @@ on:
       - "tests/**"
       - "global.json"
       - ".github/workflows/**"
+      # The standalone /tech and /slides decks, their media and READMEs change no agent behaviour and no test reads
+      # them, so a pull request of only these runs no regressions.
+      - "!src/frontend/public/tech.html"
+      - "!src/frontend/public/slides.html"
+      - "!src/frontend/public/sam-finops-images/**"
+      - "!src/frontend/public/video1.mp4"
+      - "!**/README.md"
 
 permissions:
   contents: read

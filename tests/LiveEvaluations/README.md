@@ -2,6 +2,8 @@
 
 Production and test-slot deployment both require the `live-evaluations` job to succeed. Local and CI runs use the same explicitly selected **23 distinct questions**, and all 23 must pass. No percentage threshold, retry-until-green, skip flag, or `continue-on-error` is used. One failed, missing, malformed, wrong-revision or timed-out case blocks deployment. A subset, an arbitrary replacement set of 23, or changed case contracts cannot satisfy the gate.
 
+A push or pull request that changes only the standalone `/tech` and `/slides` decks (`src/frontend/public/tech.html`, `slides.html` and the slides' `sam-finops-images/` and `video1.mp4`) or README files starts neither the deployment workflows nor the regressions (negated `paths` patterns in `main.yml`, `feature.yml` and `validate.yml`), so it runs no gate, deployment or AI quality report: those files change no agent behaviour and no test reads them. They ship with the next deployment, or at once with a manual run of **Deploy main to production**, which still runs the gate.
+
 The live suite calls the model in-process with the **evaluation identity**, so it cannot prove the deployed app's own managed identity, settings or network path. After each deployment, [deployment-smoke.mjs](../../infra/scripts/deployment-smoke.mjs) therefore sends one real anonymous chat turn through the deployed URL and requires a completed answer echoing a per-run verification code. An error event, empty or incomplete answer, or a missing code fails the deployment after three attempts. The workflow then restores the previously recorded image and the three model settings. Published failure reasons redact ids, URLs, hosts and emails.
 
 ## Coverage

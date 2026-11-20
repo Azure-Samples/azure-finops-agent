@@ -18,6 +18,13 @@ on:
       - ".github/workflows/validate.yml"
       - ".github/workflows/live-evaluations.yml"
       - ".github/workflows/feature.yml"
+      # The standalone /tech and /slides decks, their media and READMEs change no agent behaviour, so a push of only
+      # these runs no gate or slot deployment; they ship with the next deployment (or a manual run).
+      - "!src/frontend/public/tech.html"
+      - "!src/frontend/public/slides.html"
+      - "!src/frontend/public/sam-finops-images/**"
+      - "!src/frontend/public/video1.mp4"
+      - "!**/README.md"
   workflow_dispatch:
     inputs:
       deploy:
