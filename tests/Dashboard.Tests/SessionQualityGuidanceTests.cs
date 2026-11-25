@@ -34,6 +34,9 @@ public sealed class SessionQualityGuidanceTests
     [InlineData("only when the user explicitly requests it")]
     [InlineData("Never request, echo or store passwords")]
     [InlineData("ReportMaturityScore")]
+    [InlineData("ReportMaturityScore requires evidenceCoverage for every dimension")]
+    [InlineData("partial or none is unknown with score=null")]
+    [InlineData("GenerateMaturityReport uses the stricter practiceEvidence rule for process capabilities")]
     [InlineData("request period totals with granularity None")]
     [InlineData("test every offered key against billed cost")]
     [InlineData("a Resource Graph tag count is inventory context, never billing evidence")]
@@ -85,9 +88,21 @@ public sealed class SessionQualityGuidanceTests
     // Guidance answers searched or read pages one round at a time.
     [InlineData("three products are three searches in the first response, never one now and another later")]
     [InlineData("never a third round, a reworded search, a page reached through another page's links")]
+    [InlineData("A broad product overview is not enough to say a field is absent")]
+    [InlineData("use \"unconfirmed\" only when the required source could not be read")]
+    // A current Agent 365 inventory answer read Connected platforms but still labeled its stated AI Administrator and
+    // platform-administrator duties unconfirmed (session evaluation, 20 November 2026).
+    [InlineData("connect/sync duties come from the Connected platforms page")]
+    [InlineData("governance from its agent roles/ownership page")]
     // Unrequested data files cost about a minute of writing each.
     [InlineData("offer the complete list as a file in a follow-up link")]
     [InlineData("a breakdown such as per model or by subscription is a table, not a file")]
+    [InlineData("Treat \"inventory\", \"complete list\", \"all\" and a question asking which users")]
+    [InlineData("Never finish with a top-N preview and a follow-up for a complete list that could be delivered now")]
+    [InlineData("Deliver full-list intent in that turn while it fits the 5,000-row limit")]
+    // Estate-wide savings questions were answered with per-VM ceilings without the requested total and ranking.
+    [InlineData("A request for estate-wide, annual, total or by-SKU savings is incomplete")]
+    [InlineData("A missing candidate keeps the estate total partial or unknown, never complete")]
     // A token-usage question spent four documentation rounds finding the Azure Monitor token metrics.
     [InlineData("metricnames=InputTokens,OutputTokens,TotalTokens&aggregation=Total&interval=FULL")]
     [InlineData("their dimensions are ApiName, Region, ModelDeploymentName, ModelName and ModelVersion, none per project")]

@@ -30,7 +30,7 @@ public sealed class ScoreTools
         yield return AIFunctionFactory.Create(GetScoreHistory);
     }
 
-    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores: submit once, in a later response than every evidence read it scores, never alongside QueryAzure calls, then answer with no further tool call. Each dimension must include status=observed|unknown|notApplicable. Observed dimensions get 0-5; unknown and notApplicable get score=null and a reason. Missing permission is unknown, not zero. Unknown is only for evidence that could not be read (a denied, failed or throttled read): a dimension whose reads succeeded is observed and scored from what they returned, its detail naming anything left unchecked, never unknown because more could have been read. An absent workload makes workload-specific controls notApplicable. Auto-saved to history for trend analysis.
+    [Description(@"Report FinOps maturity scores after evaluating a level (crawl, walk, run, or playbook). Call AFTER querying APIs and computing scores: submit once, in a later response than every evidence read it scores, never alongside QueryAzure calls, then answer with no further tool call. Each dimension must include status=observed|unknown|notApplicable and evidenceCoverage=complete|partial|none. Only evidenceCoverage=complete may have status=observed and a 0-5 score. Partial or no evidence uses status=unknown and score=null, with a reason. Missing permission is unknown, not zero. Unknown is only for evidence that could not be read (a denied, failed or throttled read); a partial check that does not establish the dimension is unknown too. Never call a partial dimension observed merely because one readable source answered, but a dimension with all its required reads is observed and never unknown because more could have been read. An absent workload makes workload-specific controls notApplicable. Auto-saved to history for trend analysis.
 
 Evaluate ALL the dimensions for the requested level via QueryAzure (ARM, and Microsoft Graph or Log Analytics URLs where relevant) and score each 0-5 with a `detail` of at most 20 words. Don't ask which to score — score them all. Plan the whole level first: fetch all its independent evidence in one response, putting same-kind GETs (every built-in policy definition, every resource group's budgets) as url lines of one QueryAzure call and the rest as parallel calls, each with query that returns only the counts and amounts the dimension scores, and compute each response's figures inside its own query (one object holding every count and amount needed from that response); a level should need about 15 tool calls, not 30. Read each source once: before its first read, list every field any dimension, the savings ranking or the answer table needs from that response and select all of them in that one query (Advisor: impact, category, problem, solution, annual savings, currency, term and lastUpdated; budgets: amount, time grain, current spend and every notification's enabled flag, threshold and thresholdType; policyStates summarize: every assignment's definitions, effects and non-compliant counts; custom policy definition lists: every definition's displayName, policyType and effect, not a keyword-filtered subset). Another read of the same URL with a different query is a wasted call that pushes the level past the turn's tool-call budget; repeat a URL only to correct a query that returned an error. Figures an evidence query returned are final: never retype them into a query-only call. Make one short query-only call only when a cited figure combines numbers from different responses (a share of one response's total in another's), passing only those inputs; when no cited figure does, make none. When the user also asks for savings opportunities, rank them from the level's evidence (Advisor cost recommendations, waste counts, the month-to-date breakdown): no per-resource, daily, service-filtered or verification reads and no RecordSavingsAction.
 
@@ -63,14 +63,14 @@ RUN — Scale & Accountability (id slug — label — what to check):
   5. allocation — 'Cost allocation & MG governance' — management-group hierarchy depth, policy at MG scope, subscription-to-team mapping, Cost Mgmt cost-allocation rules.
   6. aicost — 'AI / GPU & emerging cost' — Azure OpenAI/Foundry spend, GPU VM/AKS spend, PTU vs PAYG mix; flag uncommitted GPU/AI spend. Carbon optional.
 
-Return scores array: id=slug, label=exact name above, status=observed|unknown|notApplicable, score=0-5 for observed or null otherwise, detail=at most 20 words of decisive evidence (counts, %, amounts) or the specific reason evidence is unavailable.")]
+Return scores array: id=slug, label=exact name above, status=observed|unknown|notApplicable, evidenceCoverage=complete|partial|none, score=0-5 for observed or null otherwise, detail=at most 20 words of decisive evidence (counts, %, amounts) or the specific reason evidence is unavailable.")]
     private string ReportMaturityScore(
         [Description("Level: 'crawl', 'walk', 'run', or 'playbook'")] string level,
-        [Description(@"Native JSON array (not an escaped string) of all requested level dimensions with concise filtered evidence (each detail at most 20 words), not raw resource lists. Example: [{""id"":""tagging"",""label"":""Tagging"",""status"":""observed"",""score"":3,""detail"":""45% of resources tagged""}]. Include unknown/notApplicable dimensions with score=null and a reason.")] JsonElement? scores = null)
+        [Description(@"Native JSON array (not an escaped string) of all requested level dimensions with concise filtered evidence (each detail at most 20 words), not raw resource lists. Example: [{""id"":""tagging"",""label"":""Tagging"",""status"":""observed"",""evidenceCoverage"":""complete"",""score"":3,""detail"":""45% of resources tagged""}]. Partial/no evidence uses status=unknown, score=null and a reason; never score a partial check as observed.")] JsonElement? scores = null)
     {
         if (level is not ("crawl" or "walk" or "run" or "playbook")) return "Error: invalid maturity level.";
         var normalized = NormalizeScores(ModelJson.Text(scores));
-        if (normalized is null) return "Error: scores require id, label, detail, status and an observed score from 0 to 5, or null for unknown/notApplicable.";
+        if (normalized is null) return "Error: scores require id, label, detail, status, evidenceCoverage and an observed 0-5 score only for complete evidence, or null for unknown/notApplicable.";
         SaveScore(level, normalized);
         return $"__MATURITY_SCORE__:{level}:{normalized}";
     }
@@ -89,15 +89,22 @@ Return scores array: id=slug, label=exact name above, status=observed|unknown|no
                 var label = item.GetProperty("label").GetString();
                 var detail = item.GetProperty("detail").GetString();
                 var status = item.GetProperty("status").GetString();
+                var evidenceCoverage = item.GetProperty("evidenceCoverage").GetString();
                 if (string.IsNullOrWhiteSpace(id) || !identifiers.Add(id) || string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(detail)) return null;
+                if (evidenceCoverage is not ("complete" or "partial" or "none")) return null;
                 int? score = null;
                 if (status == "observed")
                 {
+                    if (evidenceCoverage != "complete") return null;
                     if (!item.GetProperty("score").TryGetInt32(out var value) || value is < 0 or > 5) return null;
                     score = value;
                 }
-                else if (status is not ("unknown" or "notApplicable")) return null;
-                normalized.Add(new { id, label, score, detail, status });
+                else if (status == "unknown")
+                {
+                    if (evidenceCoverage == "complete") return null;
+                }
+                else if (status is not "notApplicable") return null;
+                normalized.Add(new { id, label, score, detail, status, evidenceCoverage });
             }
             return JsonSerializer.Serialize(normalized);
         }

@@ -23,16 +23,87 @@ namespace AzureFinOps.Dashboard.AI.Tools;
 /// </summary>
 public sealed class MaturityReportTools(long ownerUserId)
 {
+    private sealed record CapabilityDefinition(
+        string Domain,
+        string Crawl,
+        string Walk,
+        string Run,
+        bool RequiresPracticeEvidence = false);
+
+    private static readonly IReadOnlyDictionary<string, CapabilityDefinition> CapabilityDefinitions =
+        new Dictionary<string, CapabilityDefinition>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Data Ingestion & Normalization"] = new("Understand Cloud Usage & Cost",
+                "Create a repeatable cost-data feed.", "Validate and normalize feeds across scopes.",
+                "Automate quality checks and reconcile source data."),
+            ["Cost Allocation"] = new("Understand Cloud Usage & Cost",
+                "Define owners and a shared cost allocation key.", "Apply and validate allocation across billed usage.",
+                "Reconcile and automate allocation with shared-cost rules."),
+            ["Reporting & Analytics"] = new("Understand Cloud Usage & Cost",
+                "Produce a repeatable cost view for stakeholders.", "Share segmented reports on a regular cadence.",
+                "Automate reconciled, decision-ready reporting."),
+            ["Anomaly Management"] = new("Understand Cloud Usage & Cost",
+                "Configure anomaly detection and a named recipient.", "Review alerts and investigate deviations routinely.",
+                "Measure response and automate escalation."),
+            ["Planning & Forecasting"] = new("Quantify Business Value",
+                "Create an initial forecast and review it.", "Update forecasts with workload and business inputs.",
+                "Continuously compare forecast accuracy and decisions.", true),
+            ["Budgeting"] = new("Quantify Business Value",
+                "Set a budget with meaningful alerts.", "Assign owners and review budgets against forecasts.",
+                "Integrate budgets with business plans and actions."),
+            ["Benchmarking / Unit Economics"] = new("Quantify Business Value",
+                "Select a business unit and baseline cost per unit.", "Track comparable unit costs over time.",
+                "Use unit economics to guide investment decisions.", true),
+            ["Architecting for Cloud"] = new("Optimize Cloud Usage & Cost",
+                "Review one workload against architectural cost goals.", "Apply cost-aware patterns to major workloads.",
+                "Continuously validate architecture against business outcomes.", true),
+            ["Rate Optimization"] = new("Optimize Cloud Usage & Cost",
+                "Review usage and commitment recommendations.", "Purchase commitments against stable, suitable usage.",
+                "Manage coverage, utilization and expiry continuously.", true),
+            ["Workload Optimization"] = new("Optimize Cloud Usage & Cost",
+                "Review utilization and one right-sizing opportunity.", "Operate a repeatable optimization review.",
+                "Continuously optimize workloads against service objectives.", true),
+            ["Cloud Sustainability"] = new("Optimize Cloud Usage & Cost",
+                "Establish a sustainability baseline.", "Use carbon and efficiency signals in workload reviews.",
+                "Continuously balance carbon, cost and service objectives.", true),
+            ["Licensing & SaaS"] = new("Optimize Cloud Usage & Cost",
+                "Inventory licenses and SaaS commitments.", "Reconcile usage, ownership and renewal opportunities.",
+                "Continuously optimize license and SaaS portfolios."),
+            ["FinOps Practice Operations"] = new("Manage the FinOps Practice",
+                "Assign ownership and run a basic operating rhythm.", "Coordinate shared goals across teams.",
+                "Measure and improve the operating model continuously.", true),
+            ["Onboarding Workloads"] = new("Manage the FinOps Practice",
+                "Add one workload to the FinOps intake process.", "Standardize onboarding and accountability.",
+                "Automate intake and decision gates across the estate.", true),
+            ["FinOps Education"] = new("Manage the FinOps Practice",
+                "Provide basic role-based FinOps guidance.", "Run recurring training for engineering and finance.",
+                "Measure proficiency and improve learning continuously.", true),
+            ["Policy & Governance"] = new("Manage the FinOps Practice",
+                "Define and review core FinOps guardrails.", "Apply policy and remediate exceptions consistently.",
+                "Continuously govern outcomes across the organization."),
+            ["Invoicing & Chargeback"] = new("Manage the FinOps Practice",
+                "Define a repeatable invoice or showback process.", "Allocate and reconcile charges with owners.",
+                "Automate accurate, governed chargeback and variance handling.", true),
+            ["FinOps Assessment"] = new("Manage the FinOps Practice",
+                "Run and review an initial maturity assessment.", "Reassess goals and progress regularly.",
+                "Continuously prioritize improvements from measured outcomes.", true),
+            ["Intersecting Frameworks"] = new("Manage the FinOps Practice",
+                "Connect one FinOps decision with a related framework.", "Coordinate controls across frameworks.",
+                "Use shared outcomes across governance frameworks.", true)
+        };
+
     public IEnumerable<AIFunction> Create()
     {
         yield return AIFunctionFactory.Create(GenerateMaturityReport, "GenerateMaturityReport",
             @"Generates a DEEP, evidence-based FinOps maturity ASSESSMENT REPORT as one scrolling, print/PDF-friendly HTML document. Use this — NOT GenerateHtmlPresentation — whenever the user wants a 'maturity assessment', 'full FinOps assessment', 'FinOps Foundation report', or a board/exec maturity report with depth.
 
-DATA SCOPING: reportJson uses concise source aggregates for the requested assessment period and full declared scope. Include every requested capability and subscription, but only fields needed for scores, evidence and decisions; do not embed raw inventories, entire exports or transcripts. This is a renderer, not a data-query tool. Scope evidence queries before generating the report and preserve unknown or partial findings instead of dropping them to improve a score.
+DATA SCOPING: reportJson uses concise source aggregates for the requested assessment period and full declared scope. Include every requested capability and subscription, but only fields needed for scores, evidence and decisions; do not embed raw inventories, entire exports or transcripts. This is a renderer, not a data-query tool. Scope evidence queries before generating the report and preserve unknown or partial findings instead of dropping them to improve a score. Keep the payload compact: the host fills a capability's canonical domain, stage and Crawl/Walk/Run definitions from its name, so omit those fields unless the framework definition is intentionally different.
 
 This renders the canonical FinOps Foundation framework: 4 DOMAINS — 'Understand Cloud Usage & Cost', 'Quantify Business Value', 'Optimize Cloud Usage & Cost', 'Manage the FinOps Practice' — and up to 19 CAPABILITIES. Score every capability 0-5 from REAL Azure API data before calling (Resource Graph, Cost Management query+forecast, Consumption budgets, Advisor, Policy, Locks, Cost exports, Graph, Log Analytics). Rate Optimization reads commitment coverage from the month's cost query with PricingModel as one of its two grouping dimensions (Reservation and SavingsPlan rows are usage a commitment covered, OnDemand rows are not) and Advisor's reservation and savings plan recommendations, never the tenant's reservation or savings plan lists, which need billing roles a subscription reader lacks (403). A capability the evidence did not check at all (no source for it was read, or its reads failed or were throttled) scores null with stage 'Not assessed', and the report shows it as not assessed; 0 means the reads that test its practice found it absent, and a capability checked in part is scored from what was read. A read that found nothing shows only that its own part is absent: an empty list that shows only what this user may see (billing accounts) is unknown, not none, and one narrow check (one license setting, one scope) does not show that a whole capability is not started. So a capability whose practice was otherwise unread (Licensing & SaaS: license entitlements and SaaS inventory; Invoicing & Chargeback: invoices and allocation rules) is 'Not assessed', with that read named in its evidence, and no capability is scored from data that does not test it (resource counts and waste checks do not score Architecting for Cloud). Score practices, not symptoms: a capability's score needs a read of its practice itself (budgets that exist for Budgeting, exports for Data Ingestion, tags on billed cost for Allocation, assigned policies for Governance); reads that only find or miss problems (waste, orphaned resources, Advisor recommendations) or count inventory test no practice, so a capability with nothing else is 'Not assessed', never 0 (a clean orphan scan and no rightsizing advice do not show that Workload Optimization has not started).
 
-MANDATORY for credibility — every capability MUST include: concrete EVIDENCE bullets with real numbers (counts, %, $), a per-capability priority (CRITICAL/HIGH/MEDIUM/LOW), an effort estimate, the Crawl/Walk/Run definitions for THAT capability, and a per-subscription score breakdown. No empty evidence. Never invent numbers — only report what the APIs returned. Prefer projected EOM cost (Cost Management Forecast) for the headline spend.
+An API result that creates a forecast or recommendation does not prove the organization reviewed it. For a capability whose Crawl definition is an operating or review practice, a non-null score requires a nonempty practiceEvidence array citing direct evidence of that practice (the user's own statement or an API/audit record of the review, action or cadence). Without it, score=null and stage is omitted or 'Not assessed'. The host rejects a process score with no practiceEvidence so an incomplete assessment cannot be published as a completed one.
+
+MANDATORY for credibility — every capability MUST include concrete EVIDENCE bullets with real numbers (counts, %, $), a per-capability priority (CRITICAL/HIGH/MEDIUM/LOW), an effort estimate, direct practice evidence when the capability requires it, and a per-subscription score breakdown. No empty evidence. Never invent numbers — only report what the APIs returned. Prefer projected EOM cost (Cost Management Forecast) for the headline spend.
 
 THE VERDICT is the assessment's main result, so it is REQUIRED: 'overall.stage' is the stage most of the assessed capabilities reached (count them from your own capability list, leaving out Not assessed ones; on a tie, the lower stage), with 'overall.notStarted' and 'overall.walkOrRun' counted the same way; 'priorityActions' groups the CRITICAL and HIGH actions; and the first 'executiveSummary' bullet states the overall stage and the two or three most urgent actions. Your answer in the chat opens with the same verdict, the overall stage and the most urgent actions, in one or two sentences; the report holds the detail.
 
@@ -57,11 +128,10 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
   ""priorityActions"":  [ { ""priority"": ""CRITICAL"", ""count"": 3, ""keyActions"": ""Cost Allocation, Rate Optimization, FinOps Practice"" } ],
   ""domains"": [ { ""name"": ""Understand Cloud Usage & Cost"", ""capabilities"": 4, ""avgScore"": 0.2, ""stage"": ""Not Started"" } ],
   ""capabilities"": [ {
-      ""domain"": ""Understand Cloud Usage & Cost"",
       ""name"": ""Cost Allocation"",
-      ""score"": 0, ""stage"": ""Not Started"", ""priority"": ""CRITICAL"", ""effort"": ""Medium (1-2 weeks)"",
-      ""definitions"": { ""crawl"": ""..."", ""walk"": ""..."", ""run"": ""..."" },
+      ""score"": 0, ""priority"": ""CRITICAL"", ""effort"": ""Medium (1-2 weeks)"",
       ""evidence"": [ ""0% governance tag coverage across all 10 subs"", ""Top sub has 4.1% tag rate"" ],
+      ""practiceEvidence"": [ ""A directly observed review/action/cadence, only when this capability requires it"" ],
       ""perSubscription"": [ { ""name"": ""sub-5"", ""score"": 0 }, { ""name"": ""sub-3"", ""score"": 1 } ],
       ""recommendation"": ""Enforce tag policy; configure cost allocation rules.""
   } ],
@@ -71,7 +141,7 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
                   ""actions"": [ { ""action"": ""Implement governance tagging"", ""capability"": ""Cost Allocation"", ""priority"": ""CRITICAL"", ""effort"": ""Medium"", ""impact"": ""Enables all cost attribution"" } ] } ],
   ""dataSources"": [ { ""source"": ""Resource Inventory"", ""api"": ""Azure Resource Graph"", ""finding"": ""186 resources across 10 subs"" } ]
 }
-'capabilities', 'overall' (at least its stage and counts), 'executiveSummary' and 'priorityActions' are required, because they carry the verdict; every other section renders when present. Provide as many as you have real data for. A capability, domain average or per-subscription score whose evidence was not checked is null (stage 'Not assessed'), never 0.")] string reportJson,
+'capabilities', 'overall' (at least its stage and counts), 'executiveSummary' and 'priorityActions' are required, because they carry the verdict; every other section renders when present. Omit a capability's domain, stage and definitions to keep the tool payload compact; the host fills them from its canonical catalog. Provide as many as you have real data for. A capability, domain average or per-subscription score whose evidence was not checked is null (stage 'Not assessed'), never 0. A scored process capability requires practiceEvidence with direct evidence.")] string reportJson,
         [Description("Filename without extension. Default 'FinOps-Maturity-Assessment'.")] string? filename = null,
         [Description("Optional customer/tenant name (overrides reportJson.customer for chrome).")] string? customer = null)
     {
@@ -85,6 +155,8 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
         catch (JsonException jex) { return Task.FromResult($"Error: invalid reportJson — {jex.Message}"); }
         if (root.ValueKind != JsonValueKind.Object)
             return Task.FromResult("Error: reportJson must be a JSON object.");
+        if (ValidateReport(root) is { } validationError)
+            return Task.FromResult(validationError);
 
         using var activity = HttpHelper.Telemetry.StartActivity("GenerateMaturityReport");
 
@@ -101,6 +173,34 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
 
         // slideCount slot doubles as the section/capability count shown on the card.
         return Task.FromResult($"__HTML_READY__:{artifact.Id}:{safeName}.html:{capabilityCount} capabilities");
+    }
+
+    internal static string? ValidateReport(JsonElement root)
+    {
+        if (!root.TryGetProperty("capabilities", out var capabilities) ||
+            capabilities.ValueKind != JsonValueKind.Array)
+            return "Error: reportJson capabilities must be an array.";
+
+        foreach (var capability in capabilities.EnumerateArray())
+        {
+            var name = Str(capability, "name");
+            if (string.IsNullOrWhiteSpace(name))
+                return "Error: every capability requires a name.";
+            if (Score(capability, "score") is null ||
+                !TryGetCapabilityDefinition(name, out var definition) ||
+                !definition.RequiresPracticeEvidence)
+                continue;
+
+            if (!capability.TryGetProperty("practiceEvidence", out var practiceEvidence) ||
+                practiceEvidence.ValueKind != JsonValueKind.Array ||
+                !practiceEvidence.EnumerateArray().Any(item =>
+                    item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString())))
+            {
+                return $"Error: capability '{name}' is scored but has no direct practiceEvidence; set score=null and stage='Not assessed', or provide direct review/action/cadence evidence.";
+            }
+        }
+
+        return null;
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -251,7 +351,7 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
             foreach (var c in cps.EnumerateArray())
             {
                 capabilityCount++;
-                var domain = Str(c, "domain");
+                var domain = CapabilityDomain(c);
                 if (!string.IsNullOrWhiteSpace(domain) && domain != currentDomain)
                 {
                     currentDomain = domain;
@@ -351,12 +451,13 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
     {
         var sb = new StringBuilder();
         var score = Score(c, "score");
+        var definition = GetCapabilityDefinition(c);
         sb.Append("<div class='cap-card'><div class='cap-card-header'>");
         sb.Append($"<h4>{Enc(Str(c, "name"))}</h4><div class='cap-meta'>");
         sb.Append(score is { } value
             ? $"<span class='cap-score' style='color:{ScoreColor(value)}'>{value:0}/5</span>"
             : $"<span class='cap-score' style='color:#616161'>{NotAssessed}</span>");
-        var stage = Str(c, "stage");
+        var stage = CapabilityStage(c);
         if (stage.Length > 0) sb.Append(StageBadge(stage));
         var priority = Str(c, "priority");
         if (priority.Length > 0) sb.Append(PriorityBadge(priority));
@@ -366,12 +467,12 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
         if (effort.Length > 0) sb.Append($"<div class='cap-effort'>Effort: {Enc(effort)}</div>");
 
         var defs = Obj(c, "definitions");
-        if (defs is { } df)
+        if (defs is not null || definition is not null)
         {
             sb.Append("<div class='maturity-defs'>");
-            AppendDef(sb, "Crawl", Str(df, "crawl"), "#f57c00");
-            AppendDef(sb, "Walk", Str(df, "walk"), "#66bb6a");
-            AppendDef(sb, "Run", Str(df, "run"), "#2e7d32");
+            AppendDef(sb, "Crawl", defs is { } crawlDefs ? Str(crawlDefs, "crawl") : definition?.Crawl ?? "", "#f57c00");
+            AppendDef(sb, "Walk", defs is { } walkDefs ? Str(walkDefs, "walk") : definition?.Walk ?? "", "#66bb6a");
+            AppendDef(sb, "Run", defs is { } runDefs ? Str(runDefs, "run") : definition?.Run ?? "", "#2e7d32");
             sb.Append("</div>");
         }
 
@@ -380,6 +481,15 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
         {
             sb.Append("<h5>Evidence Collected</h5><ul class='evidence-list'>");
             foreach (var e in ev.EnumerateArray())
+                if (e.ValueKind == JsonValueKind.String) sb.Append($"<li>{Enc(e.GetString())}</li>");
+            sb.Append("</ul>");
+        }
+
+        var practiceEvidence = Arr(c, "practiceEvidence");
+        if (practiceEvidence is { } pe)
+        {
+            sb.Append("<h5>Direct Practice Evidence</h5><ul class='evidence-list'>");
+            foreach (var e in pe.EnumerateArray())
                 if (e.ValueKind == JsonValueKind.String) sb.Append($"<li>{Enc(e.GetString())}</li>");
             sb.Append("</ul>");
         }
@@ -398,6 +508,37 @@ Returns a __HTML_READY__ marker; the UI shows a download card and inline viewer.
 
         sb.Append("</div>");
         return sb.ToString();
+    }
+
+    private static CapabilityDefinition? GetCapabilityDefinition(JsonElement capability) =>
+        TryGetCapabilityDefinition(Str(capability, "name"), out var definition) ? definition : null;
+
+    private static bool TryGetCapabilityDefinition(string name, out CapabilityDefinition definition)
+    {
+        if (CapabilityDefinitions.TryGetValue(name, out definition!))
+            return true;
+        var canonical = name.Split('(', 2)[0].Trim();
+        return CapabilityDefinitions.TryGetValue(canonical, out definition!);
+    }
+
+    private static string CapabilityDomain(JsonElement capability) =>
+        Str(capability, "domain") is { Length: > 0 } domain
+            ? domain
+            : GetCapabilityDefinition(capability)?.Domain ?? "";
+
+    private static string CapabilityStage(JsonElement capability)
+    {
+        if (Str(capability, "stage") is { Length: > 0 } stage)
+            return stage;
+        return Score(capability, "score") switch
+        {
+            null => "Not assessed",
+            0 => "Not Started",
+            1 => "Crawl",
+            >= 2 and <= 3 => "Walk",
+            >= 4 => "Run",
+            _ => "Not assessed"
+        };
     }
 
     private static void AppendDef(StringBuilder sb, string label, string text, string color)

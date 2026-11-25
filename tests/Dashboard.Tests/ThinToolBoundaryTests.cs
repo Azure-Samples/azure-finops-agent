@@ -99,7 +99,7 @@ public sealed class ThinToolBoundaryTests
     [Fact]
     public void ScoresAreReadAsJsonWithoutRepair()
     {
-        const string item = """[{"id":"tagging","label":"Tagging","status":"observed","score":3,"detail":"45% tagged"}]""";
+        const string item = """[{"id":"tagging","label":"Tagging","status":"observed","evidenceCoverage":"complete","score":3,"detail":"45% tagged"}]""";
         Assert.NotNull(ScoreTools.NormalizeScores(item));
         Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(" " + item + "\n"));
         Assert.Equal(ScoreTools.NormalizeScores(item), ScoreTools.NormalizeScores(ModelJson.Text(JsonDocument.Parse(item).RootElement)));
@@ -107,5 +107,7 @@ public sealed class ThinToolBoundaryTests
         Assert.Null(ScoreTools.NormalizeScores(item[..^1]));
         Assert.Null(ScoreTools.NormalizeScores(item + "x"));
         Assert.Null(ScoreTools.NormalizeScores("""{"id":"tagging"}"""));
+        Assert.Null(ScoreTools.NormalizeScores(
+            """[{"id":"tagging","label":"Tagging","status":"observed","evidenceCoverage":"partial","score":0,"detail":"One scope checked"}]"""));
     }
 }

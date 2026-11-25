@@ -64,6 +64,7 @@ See [contributor instructions](../CONTRIBUTING.md#regression-tests) for local co
 
 Each of these has a regression test or an enforced contract; do not report them as new defects without reproducing them on the current build.
 
+- A 25 November 2026 session audit found that a returned forecast or Advisor recommendation could be scored as a reviewed practice, and a complete inventory could become a six-row preview. `ReportMaturityScore` now requires explicit `evidenceCoverage` and rejects partial-as-observed scores; `GenerateMaturityReport` fills canonical static fields and rejects process scores without direct `practiceEvidence`. Full-list/which-match intent requires `GenerateDataReport` in the same turn within its row limit, while dedicated Agent 365 role, ownership, licensing and connector pages distinguish documented absence from an unread source.
 - A complete assistant `message` replaced by an earlier partial stream, and terminal 429s shown as success.
 - GPU SKUs missed because large Compute SKU catalogues were truncated before filtering, and regional records collapsed into one.
 - Unknown or partial availability reported as "unavailable everywhere".

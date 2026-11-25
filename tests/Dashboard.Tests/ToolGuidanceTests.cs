@@ -92,6 +92,8 @@ public sealed class ToolGuidanceTests
     // member definitions of a built-in security initiative were not read; the judge called the assessment incomplete.
     [InlineData("ReportMaturityScore", null, "Unknown is only for evidence that could not be read (a denied, failed or throttled read)")]
     [InlineData("ReportMaturityScore", null, "never unknown because more could have been read")]
+    [InlineData("ReportMaturityScore", null, "evidenceCoverage=complete|partial|none")]
+    [InlineData("ReportMaturityScore", null, "Only evidenceCoverage=complete may have status=observed")]
     [InlineData("ReportMaturityScore", null, "A built-in initiative (policy set) is classified by its own displayName")]
     [InlineData("ApplyAzureChange", null, "only after they approve")]
     [InlineData("ApplyAzureChange", null, "with the api-version that read used (its _apiVersion.used when the host chose it)")]
@@ -197,6 +199,27 @@ public sealed class ToolGuidanceTests
         Assert.Contains("Your answer in the chat opens with the same verdict, the overall stage and the most urgent actions", tool.Description);
         var report = tool.JsonSchema.GetProperty("properties").GetProperty("reportJson").GetProperty("description").GetString()!;
         Assert.Contains("'capabilities', 'overall' (at least its stage and counts), 'executiveSummary' and 'priorityActions' are required", report);
+    }
+
+    [Fact]
+    public void MaturityReportRequiresDirectEvidenceForProcessScoresAndStaysCompact()
+    {
+        var tool = new MaturityReportTools(101).Create().Single();
+
+        Assert.Contains("a non-null score requires a nonempty practiceEvidence array", tool.Description);
+        Assert.Contains("host fills a capability's canonical domain, stage and Crawl/Walk/Run definitions", tool.Description);
+        var report = tool.JsonSchema.GetProperty("properties").GetProperty("reportJson").GetProperty("description").GetString()!;
+        Assert.Contains("Omit a capability's domain, stage and definitions", report);
+        Assert.Contains("scored process capability requires practiceEvidence with direct evidence", report);
+    }
+
+    [Fact]
+    public void ReportToolTreatsInventoryAsFullReportIntent()
+    {
+        var tool = new ReportTools(101).Create().Single(candidate => candidate.Name == "GenerateDataReport");
+
+        Assert.Contains("an inventory, complete list, or question asking which users/resources/VMs/recommendations match is full-report intent", tool.Description);
+        Assert.Contains("must not end as a top-N preview", tool.Description);
     }
 
     [Fact]

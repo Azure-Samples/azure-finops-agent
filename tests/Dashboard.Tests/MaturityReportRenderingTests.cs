@@ -11,6 +11,59 @@ namespace Dashboard.Tests;
 public sealed class MaturityReportRenderingTests
 {
     [Fact]
+    public void AProcessCapabilityCannotBeScoredFromProxyEvidence()
+    {
+        using var report = JsonDocument.Parse("""
+            {
+              "capabilities": [
+                {
+                  "name": "Planning & Forecasting",
+                  "score": 1,
+                  "evidence": ["Cost Management returned a month-end forecast."],
+                  "perSubscription": [{ "name": "sub-a", "score": 1 }]
+                }
+              ]
+            }
+            """);
+
+        var error = MaturityReportTools.ValidateReport(report.RootElement);
+
+        Assert.NotNull(error);
+        Assert.Contains("Planning & Forecasting", error);
+        Assert.Contains("direct practiceEvidence", error);
+        Assert.Contains("score=null", error);
+    }
+
+    [Fact]
+    public void CanonicalCapabilityMetadataAndPracticeEvidenceAreRenderedWithoutRetypingThem()
+    {
+        using var report = JsonDocument.Parse("""
+            {
+              "capabilities": [
+                {
+                  "name": "Planning & Forecasting",
+                  "score": 1,
+                  "priority": "MEDIUM",
+                  "evidence": ["Cost Management returned a month-end forecast."],
+                  "practiceEvidence": ["Finance reviewed the forecast with workload owners on 25 November."],
+                  "perSubscription": [{ "name": "sub-a", "score": 1 }]
+                }
+              ]
+            }
+            """);
+
+        Assert.Null(MaturityReportTools.ValidateReport(report.RootElement));
+        var html = MaturityReportTools.BuildBody(report.RootElement, null, out var count);
+
+        Assert.Equal(1, count);
+        Assert.Contains("Quantify Business Value", html);
+        Assert.Contains("Create an initial forecast and review it.", html);
+        Assert.Contains(">Crawl</span>", html);
+        Assert.Contains("Direct Practice Evidence", html);
+        Assert.Contains("Finance reviewed the forecast", html);
+    }
+
+    [Fact]
     public void AnUnassessedCapabilityIsNeitherZeroNorCharted()
     {
         using var report = JsonDocument.Parse("""
