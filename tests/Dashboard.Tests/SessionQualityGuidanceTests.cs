@@ -223,10 +223,12 @@ public sealed class SessionQualityGuidanceTests
     // copilotReportRoot: getMicrosoft365CopilotUsageUserDetail); the prompt's D30 example was invalid.
     [InlineData("getMicrosoft365CopilotUsageUserDetail(period='D28')")]
     [InlineData("accepts periods D7, D28, D90, D180 and ALL, never D30")]
-    [InlineData("a request for activity in the last 30 days uses D28, never D90")]
+    [InlineData("A request for the last 30 days uses D90")]
+    [InlineData("D28 covers only 28 days and leaves the requested window partial")]
     [InlineData("list the anonymized values returned rather than replacing those rows with \"unknown\"")]
     [InlineData("do not try to join them to directory users by list position")]
-    [InlineData("0 active days, 0 prompts and blank activity dates make it inactive")]
+    [InlineData("one populated app or Last Activity Date is on or after the Report Refresh Date minus 29 days")]
+    [InlineData("0 active days, 0 prompts and blank activity dates make it inactive for the whole 90-day source period")]
     [InlineData("When the report's rowCount equals consumedUnits (assigned seats)")]
     [InlineData("Report enabled and assigned seats as separate counts in every license answer")]
     // Foundry tags usage of models sold by Azure with an automatic project tag (preview), and bills CCU-billed Claude
