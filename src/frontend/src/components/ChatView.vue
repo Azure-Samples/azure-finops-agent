@@ -677,10 +677,11 @@
             <!-- Admin approval / consent error banner -->
             <div v-if="tenantError" class="tenant-error-banner">
               <AppIcon name="error" size="14" />
-              <span
-                >Your home tenant blocked this app. Pick a tenant below or type
-                one manually.</span
-              >
+              <span>{{
+                failedTenant
+                  ? "Sign-in to the selected tenant did not finish. Confirm the tenant and account, then try again."
+                  : "Sign-in did not finish. Confirm the account or choose another tenant."
+              }}</span>
             </div>
             <!-- Saved tenants — hidden -->
             <div v-if="false" class="saved-tenants">
@@ -700,26 +701,54 @@
                 }}
               </button>
             </div>
-            <!-- Connect uses the home tenant; Switch tenant changes it after
-                 sign-in. A tenant box appears only when the home tenant
-                 blocked this app, so the user can connect to another one. -->
-            <div v-if="tenantError" class="tenant-input-area">
+            <button
+              v-if="!tenantBoxOpen"
+              type="button"
+              class="tenant-picker-toggle"
+              @click="tenantBoxOpen = true"
+            >
+              Sign in to another tenant
+            </button>
+            <div v-else class="tenant-input-area">
+              <label class="tenant-input-label" for="azure-tenant-id">
+                Tenant ID or domain
+              </label>
               <input
+                id="azure-tenant-id"
                 v-model="tenantId"
                 type="text"
                 class="tenant-input"
                 :class="{
-                  'tenant-input--highlight':
-                    tenantError && !savedTenants.length,
+                  'tenant-input--highlight': tenantError && !tenantInvalid,
+                  'tenant-input--invalid': tenantInvalid,
                 }"
-                placeholder="Tenant ID (optional)"
-                aria-label="Tenant ID (optional). Leave empty to use your home tenant."
+                placeholder="Tenant ID or contoso.onmicrosoft.com"
+                :aria-invalid="tenantInvalid ? 'true' : undefined"
+                aria-describedby="azure-tenant-help"
+                autocomplete="off"
+                spellcheck="false"
+                @input="tenantInvalid = false"
+                @blur="
+                  tenantInvalid =
+                    Boolean(tenantId.trim()) && !isValidTenantIdentifier(tenantId)
+                "
+                @keyup.enter="connectAzure"
               />
+              <p
+                id="azure-tenant-help"
+                class="tenant-input-help"
+                :class="{ 'tenant-input-help--error': tenantInvalid }"
+              >
+                {{ tenantInvalid
+                  ? "Enter a tenant GUID or a valid domain, or leave it empty."
+                  : "Leave empty to use your account's home tenant."
+                }}
+              </p>
             </div>
             <button
               class="azure-connect-btn"
               :disabled="authLoading === 'azure'"
-              @click="startAuth('azure', '/auth/microsoft')"
+              @click="connectAzure"
             >
               <span
                 v-if="authLoading === 'azure'"
@@ -740,7 +769,7 @@
               {{
                 authLoading === "azure"
                   ? "Connecting..."
-                  : tenantId.trim()
+                  : tenantBoxOpen && tenantId.trim()
                     ? "Connect to " + tenantId.trim()
                     : "Connect Azure"
               }}
@@ -1777,9 +1806,9 @@
                 <a
                   v-for="action in activeConsentActions"
                   :key="action.href"
-                  :href="action.href"
+                  :href="consentHref(action.href)"
                   class="html-deck-card-btn"
-                  @click="trackConnectClick(action.href, 'chat')"
+                  @click="followConsentAction(action.href)"
                   >{{ action.label }}</a
                 >
               </div>
@@ -2691,6 +2720,11 @@ import {
   watch,
 } from "vue";
 import { createAssistantMessageStream } from "../lib/assistantMessageStream.js";
+import {
+  isValidTenantIdentifier,
+  normalizeTenantIdentifier,
+  withTenantIdentifier,
+} from "../lib/authTenant.js";
 import { describeChange } from "../lib/changeSummary.js";
 import { groupChats, withQuestionTitle } from "../lib/chatGroups.js";
 import { mapFeatureNames, resolveCountryName } from "../lib/mapNames.js";
@@ -4117,7 +4151,10 @@ const logAnalyticsEnabled = ref(false);
 const storageEnabled = ref(false);
 const copilotCostEnabled = ref(false);
 const copilotChangesEnabled = ref(false);
-const tenantId = ref(""); // User-specified tenant ID or domain for guest users
+const tenantId = ref("");
+const tenantBoxOpen = ref(false);
+const tenantInvalid = ref(false);
+const failedTenant = ref("");
 const availableTenants = ref([]);
 const currentTenantId = ref("");
 const showTenantSwitcher = ref(false);
@@ -5234,6 +5271,8 @@ async function checkAzureStatus() {
       const data = await r.json();
       azureConnected.value = data.connected;
       if (data.connected) {
+        sessionStorage.removeItem("authTenant");
+        failedTenant.value = "";
         azureUserEmail.value = data.user?.email || data.user?.name || "";
         azureSubscriptions.value = data.subscriptions || [];
         azureManagementGroups.value = data.managementGroups || [];
@@ -5284,7 +5323,7 @@ const savedTenants = computed(() => {
 });
 
 function switchTenant(tid) {
-  startAuth("azure", "/auth/microsoft?tenant=" + encodeURIComponent(tid));
+  startAuth("azure", "/auth/microsoft", tid);
 }
 
 // Content-free: which access the user went to grant and from where (the sidebar or a button in the chat), so the
@@ -5297,16 +5336,48 @@ function trackConnectClick(url, source) {
   });
 }
 
-function startAuth(provider, url) {
+function connectAzure() {
+  if (authLoading.value) return;
+  const requestedTenant = tenantBoxOpen.value ? tenantId.value.trim() : "";
+  tenantInvalid.value =
+    Boolean(requestedTenant) && !isValidTenantIdentifier(requestedTenant);
+  if (tenantInvalid.value) return;
+  startAuth("azure", "/auth/microsoft", requestedTenant);
+}
+
+// A tenant typed in the signed-out sidebar also applies to the in-chat Connect Azure button.
+function consentHref(href) {
+  if (azureConnected.value || !tenantBoxOpen.value) return href;
+  const tier =
+    new URL(href, window.location.origin).searchParams.get("tier") || "base";
+  return tier === "base" ? withTenantIdentifier(href, tenantId.value) : href;
+}
+
+function followConsentAction(href) {
+  trackConnectClick(href, "chat");
+  const tenant = new URL(
+    consentHref(href),
+    window.location.origin,
+  ).searchParams.get("tenant");
+  if (tenant) sessionStorage.setItem("authTenant", tenant);
+  else sessionStorage.removeItem("authTenant");
+}
+
+function startAuth(provider, url, selectedTenant = "") {
+  const tenant = normalizeTenantIdentifier(selectedTenant);
+  if (selectedTenant.trim() && !tenant) {
+    tenantInvalid.value = true;
+    tenantBoxOpen.value = true;
+    authLoading.value = "";
+    sessionStorage.removeItem("authLoading");
+    return;
+  }
   trackConnectClick(url, "sidebar");
   authLoading.value = provider;
   sessionStorage.setItem("authLoading", provider);
-  // Append tenant param if user specified one (for guest users with multiple tenants)
-  let authUrl = url;
-  if (tenantId.value.trim()) {
-    const sep = url.includes("?") ? "&" : "?";
-    authUrl += sep + "tenant=" + encodeURIComponent(tenantId.value.trim());
-  }
+  if (tenant) sessionStorage.setItem("authTenant", tenant);
+  else sessionStorage.removeItem("authTenant");
+  const authUrl = withTenantIdentifier(url, tenant);
   setTimeout(() => {
     window.location.href = authUrl;
   }, 100);
@@ -5599,12 +5670,18 @@ onMounted(async () => {
   if (pendingAuth) {
     authLoading.value = pendingAuth;
   }
+  const pendingTenant = sessionStorage.getItem("authTenant") || "";
+  if (isValidTenantIdentifier(pendingTenant)) {
+    tenantId.value = pendingTenant;
+    tenantBoxOpen.value = true;
+  }
   // Handle Azure OAuth error redirect
   const params = new URLSearchParams(window.location.search);
   const azureError = params.get("azure_error");
   if (azureError) {
-    // Show tenant picker with error banner — the user's home tenant likely blocked the app
+    failedTenant.value = tenantId.value;
     tenantError.value = true;
+    tenantBoxOpen.value = true;
     window.history.replaceState({}, "", window.location.pathname);
   }
   // Handle admin consent success — chain through each tier silently to populate
@@ -9975,6 +10052,35 @@ async function send() {
 .tenant-input-area {
   margin-bottom: 6px;
 }
+.tenant-picker-toggle {
+  width: 100%;
+  margin: 0 0 4px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  cursor: pointer;
+}
+.tenant-picker-toggle:hover {
+  background: var(--hover);
+}
+.tenant-input-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+.tenant-input-help {
+  margin: 4px 2px 0;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
 .tenant-input {
   width: 100%;
   padding: 8px 12px;
@@ -10001,6 +10107,14 @@ async function send() {
 .tenant-input--highlight {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft-strong);
+}
+.tenant-input--invalid,
+.tenant-input--invalid:focus {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+.tenant-input-help--error {
+  color: var(--danger);
 }
 .es-tenant-input-row {
   width: 100%;

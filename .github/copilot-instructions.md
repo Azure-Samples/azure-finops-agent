@@ -94,6 +94,8 @@ Disconnect/revoke/logout differ intentionally:
 
 A signed-out user who asks about their own tenant gets the Connect Azure button inline: the not-connected context (`ChatEndpoints.ConnectionContext`) has the agent make one `QueryAzure` GET of `/subscriptions`, which sends nothing without a token and returns the host's `consent_required` result, then offer to analyze a cost or usage export the user uploads. The page records a content-free `chat.connect.click` event (tier, source and conversation, never a tenant) for that button and the sidebar's, so its effect can be measured.
 
+The signed-out sidebar has an optional *Sign in to another tenant* box (`src/frontend/src/lib/authTenant.js`) for one tenant GUID or ASCII domain name; left empty, Connect Azure uses Entra's default/home tenant and the server drops a tenant a failed attempt left in `auth_tenant`. The browser and `MicrosoftOAuthOptions.IsValidTenantId` both validate it. Only a base sign-in carries `tenant` (the sidebar button, a tenant switch, or the in-chat Connect Azure button while a tenant is typed); add-on consent hops and re-authentication use the connected principal's tenant (`MicrosoftOAuthOptions.ResolveTenantId`), so a restored session without `auth_tenant` never falls back to `common`.
+
 Before manually testing a fresh consent flow, revoke existing grants for the test app in the selected test tenant. Use placeholders or local configuration—never commit real values.
 
 ## Tool patterns

@@ -36,16 +36,50 @@ public sealed class MicrosoftOAuthOptions
     private static readonly Regex GuidRegex =
         new(@"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             RegexOptions.Compiled);
+    private static readonly Regex TenantDomainRegex =
+        new(@"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$",
+            RegexOptions.Compiled);
 
     /// <summary>
-    /// Whether a string is a valid Entra tenant identifier — either a GUID or one
-    /// of the well-known aliases. Anything else is rejected to prevent attackers
-    /// supplying a custom tenant via <c>?tenant=</c> for phishing-style consent.
+    /// Whether a string is a valid Entra tenant identifier: a GUID, a well-known
+    /// alias, or an ASCII DNS name such as <c>contoso.onmicrosoft.com</c>. A domain's
+    /// top-level label is never all digits, which also rules out IP addresses.
     /// </summary>
-    public static bool IsValidTenantId(string tenant) =>
-        !string.IsNullOrEmpty(tenant)
-        && (tenant == "common" || tenant == "organizations" || tenant == "consumers"
-            || GuidRegex.IsMatch(tenant));
+    public static bool IsValidTenantId(string? tenant)
+    {
+        if (string.IsNullOrWhiteSpace(tenant) || tenant != tenant.Trim())
+            return false;
+
+        if (GuidRegex.IsMatch(tenant)
+            || tenant.Equals("common", StringComparison.OrdinalIgnoreCase)
+            || tenant.Equals("organizations", StringComparison.OrdinalIgnoreCase)
+            || tenant.Equals("consumers", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return TenantDomainRegex.IsMatch(tenant)
+            && !tenant[(tenant.LastIndexOf('.') + 1)..].All(char.IsAsciiDigit);
+    }
+
+    internal static string NormalizeTenantId(string tenant) =>
+        tenant.ToLowerInvariant();
+
+    /// <summary>
+    /// Resolves the OAuth authority from a chosen tenant, the connected principal,
+    /// or the configured default, in that order.
+    /// </summary>
+    internal static string ResolveTenantId(
+        string? selectedTenantId,
+        string? connectedTenantId,
+        string? configuredTenantId)
+    {
+        foreach (var candidate in new[] { selectedTenantId, connectedTenantId, configuredTenantId })
+        {
+            if (IsValidTenantId(candidate))
+                return NormalizeTenantId(candidate!);
+        }
+
+        return "common";
+    }
 
     /// <summary>Normalize a tier value supplied via query string. Falls back to <c>"base"</c>.</summary>
     public static string NormalizeTier(string? tier) =>

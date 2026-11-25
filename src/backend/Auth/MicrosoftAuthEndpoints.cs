@@ -42,6 +42,12 @@ public static class MicrosoftAuthEndpoints
             : PersistentIdentity.PrincipalDirectoryName(tenantId, oid);
     }
 
+    private static string EffectiveTenant(HttpContext ctx, MicrosoftOAuthOptions options) =>
+        MicrosoftOAuthOptions.ResolveTenantId(
+            ctx.Session.GetString("auth_tenant"),
+            SessionIdentity.EntraPrincipal(ctx.Session).TenantId,
+            options.TenantId);
+
     private static void ClearAuthChain(HttpContext ctx)
     {
         ctx.Session.Remove("auth_chain");
@@ -197,6 +203,7 @@ public static class MicrosoftAuthEndpoints
             ctx.Session.SetString("auth_tier", tier);
 
             var tenantParam = ctx.Request.Query["tenant"].ToString().Trim();
+            var connectedTenant = SessionIdentity.EntraPrincipal(ctx.Session).TenantId;
             if (!string.IsNullOrEmpty(tenantParam))
             {
                 if (!MicrosoftOAuthOptions.IsValidTenantId(tenantParam))
@@ -204,11 +211,19 @@ public static class MicrosoftAuthEndpoints
                     logger.LogWarning("Rejected invalid tenant query parameter");
                     return Results.BadRequest("Invalid tenant identifier");
                 }
-                ctx.Session.SetString("auth_tenant", tenantParam);
+                ctx.Session.SetString("auth_tenant", MicrosoftOAuthOptions.NormalizeTenantId(tenantParam));
             }
-            var effectiveTenant = ctx.Session.GetString("auth_tenant") ?? options.TenantId;
-            if (!MicrosoftOAuthOptions.IsValidTenantId(effectiveTenant))
-                effectiveTenant = options.TenantId;
+            else if (MicrosoftOAuthOptions.IsValidTenantId(connectedTenant))
+            {
+                // Consent hops and re-authentication stay in the connected tenant, also in a restored session.
+                ctx.Session.SetString("auth_tenant", MicrosoftOAuthOptions.NormalizeTenantId(connectedTenant!));
+            }
+            else if (tier == "base")
+            {
+                // A plain Connect Azure uses the account's home tenant, never one a failed attempt left behind.
+                ctx.Session.Remove("auth_tenant");
+            }
+            var effectiveTenant = EffectiveTenant(ctx, options);
 
             var redirectUri = $"{MicrosoftOAuthOptions.NormalizeCallbackHost(ctx)}/auth/microsoft/callback";
             var scope = string.Join(" ", ["openid", "profile", "email", "offline_access", ..MicrosoftOAuthOptions.GetScopesForTier(tier)]);
@@ -268,9 +283,9 @@ public static class MicrosoftAuthEndpoints
                     logger.LogWarning("Rejected invalid admin consent tenant query parameter");
                     return Results.BadRequest("Invalid tenant identifier");
                 }
-                ctx.Session.SetString("auth_tenant", tenantParam);
+                ctx.Session.SetString("auth_tenant", MicrosoftOAuthOptions.NormalizeTenantId(tenantParam));
             }
-            var effectiveTenant = ctx.Session.GetString("auth_tenant") ?? options.TenantId;
+            var effectiveTenant = EffectiveTenant(ctx, options);
             if (effectiveTenant == "common") effectiveTenant = "organizations";
 
             var redirectUri = $"{MicrosoftOAuthOptions.NormalizeCallbackHost(ctx)}/auth/microsoft/adminconsent/callback";
@@ -309,7 +324,7 @@ public static class MicrosoftAuthEndpoints
                     logger.LogWarning("Rejected invalid tenant from admin consent callback");
                     return Results.BadRequest("Invalid tenant identifier");
                 }
-                ctx.Session.SetString("auth_tenant", grantedTenant);
+                ctx.Session.SetString("auth_tenant", MicrosoftOAuthOptions.NormalizeTenantId(grantedTenant));
             }
             logger.LogInformation("Admin consent granted");
             return Results.Redirect("/?admin_consent=ok&tenant=" + Uri.EscapeDataString(grantedTenant));
@@ -347,7 +362,7 @@ public static class MicrosoftAuthEndpoints
                 // already applied by ConfigureHttpClientDefaults in Program.cs.
                 var http = httpFactory.CreateClient("entra-token");
                 var redirectUri = $"{MicrosoftOAuthOptions.NormalizeCallbackHost(ctx)}/auth/microsoft/callback";
-                var effectiveTenant = ctx.Session.GetString("auth_tenant") ?? options.TenantId;
+                var effectiveTenant = EffectiveTenant(ctx, options);
 
                 using var tokenReq = new HttpRequestMessage(HttpMethod.Post,
                     $"https://login.microsoftonline.com/{Uri.EscapeDataString(effectiveTenant)}/oauth2/v2.0/token");
@@ -482,7 +497,7 @@ public static class MicrosoftAuthEndpoints
                     };
                     ctx.Session.Remove("azure_scope_context");
                     ctx.Session.SetString("azure_user", JsonSerializer.Serialize(azureUser));
-                    ctx.Session.SetString("auth_tenant", validated.TenantId);
+                    ctx.Session.SetString("auth_tenant", MicrosoftOAuthOptions.NormalizeTenantId(validated.TenantId));
 
                     // Promote the random anonymous userId to a deterministic
                     // tenant-and-object-derived id.

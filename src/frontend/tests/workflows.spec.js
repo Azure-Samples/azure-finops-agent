@@ -306,11 +306,17 @@ test("navigation exposes one New chat and the start page offers the starter ques
   }
 
   // Signed out, the menu is New chat and Connect Azure: no prompt library, no
-  // empty chat history and no tenant box (Switch tenant changes it later).
+  // empty chat history, and the tenant box stays closed until the user asks to
+  // sign in to another tenant.
   await expect(page.locator("#sidebar-prompts")).toHaveCount(0);
   await expect(page.locator("#sidebar-chat-history")).toHaveCount(1);
   await expect(page.locator("#sidebar-chat-history .session-row")).toHaveCount(0);
   await expect(page.locator(".tenant-input")).toHaveCount(0);
+  await expect(
+    page
+      .locator("#chat-navigation")
+      .getByRole("button", { name: "Sign in to another tenant" }),
+  ).toBeVisible();
   await expect(
     page.locator("#chat-navigation").getByRole("button", { name: "Connect Azure" }),
   ).toBeVisible();
