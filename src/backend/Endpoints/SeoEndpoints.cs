@@ -8,23 +8,25 @@ namespace AzureFinOps.Dashboard.Endpoints;
 /// </summary>
 public static class SeoEndpoints
 {
+    private const string StaticFaqDate = "2026-11-25";
+
     private static readonly Dictionary<string, (string Title, string Question, string Answer, string Prompt)> StaticFaqs =
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["azure-vm-pricing"] = (
             "Azure VM Pricing by Region — D4s_v5 Monthly Cost Comparison",
             "How much does a D4s_v5 VM cost per month on Azure?",
-            "A Standard_D4s_v5 VM (4 vCPUs, 16 GB RAM) on Azure costs approximately $98–$168/month depending on the region. The cheapest regions are typically US Central, Central India, and US West. Pricing is calculated at the hourly pay-as-you-go rate × 730 hours/month. Use Azure Reserved Instances for 30–65% savings on steady-state workloads.",
+            "A D4s_v5 price depends on region, operating system, license model, and billing option. Compare current Azure Retail Prices rows for Linux and Windows in the regions you can deploy to, then multiply the hourly rate by the expected running hours. On-demand, reservation, and Savings Plan prices are alternatives for the same compute—not additive. Use a connected estimate for the resource's actual cost and runtime.",
             "Compare the monthly cost of a D4s_v5 VM across the 10 cheapest Azure regions. Show a bar chart."),
             ["spot-vs-on-demand"] = (
             "Azure Spot vs On-Demand VM Pricing — Savings Comparison",
             "What is the difference between Azure spot and on-demand VM pricing?",
-            "Azure spot VMs offer up to 80% discount compared to on-demand pricing, but can be evicted when Azure needs capacity. For example, a D4s_v5 costs ~$0.192/hr on-demand vs ~$0.038/hr spot (80% savings). Spot is ideal for fault-tolerant workloads like batch processing, CI/CD, and dev/test environments.",
+            "Spot VMs trade price certainty for capacity availability: Azure can evict them when capacity is needed, so use them for interruptible, checkpointed workloads. On-demand capacity has the standard hourly rate without Spot eviction. Compare the current rates, regional availability, quota, and historical Spot eviction data for the exact SKU. A lower Spot rate does not guarantee allocation.",
             "Compare spot vs on-demand pricing for D4s_v5, D8s_v5, and NC24ads_A100_v4 in East US."),
             ["reserved-instances"] = (
             "Azure Reserved Instances vs Pay-As-You-Go — Pricing Comparison",
             "How do Azure Reserved Instances compare to pay-as-you-go?",
-            "Azure Reserved Instances offer 30–40% savings for 1-year commitments and 55–65% savings for 3-year commitments compared to pay-as-you-go pricing. They're best for predictable, steady-state workloads running 24/7. Savings Plans offer similar discounts with more flexibility across VM families and regions.",
+            "Reservations commit eligible, steady-state compute for one or three years at an upfront or periodic rate. Pay-as-you-go is flexible but has no term commitment. Savings Plans trade some flexibility for broad compute coverage. Choose from actual usage, reservation coverage, Advisor recommendations, and expected runtime; compare overlapping recommendations carefully rather than adding them together.",
             "Compare pay-as-you-go vs 1-year vs 3-year reserved pricing for a D4s_v5 VM in East US."),
             ["finops-azure"] = (
             "What is FinOps? — Azure Cloud Financial Management Guide",
@@ -39,17 +41,17 @@ public static class SeoEndpoints
             ["storage-tier-pricing"] = (
             "Azure Blob Storage Tier Pricing — Hot, Cool, Cold, Archive Comparison",
             "How do Azure Blob Storage tiers compare in pricing?",
-            "Azure Blob Storage tiers from most to least expensive for storage: Hot (~$0.018/GB), Cool (~$0.01/GB, 30-day minimum), Cold (~$0.0036/GB, 90-day minimum), Archive (~$0.00099/GB, 180-day minimum). Access costs are inverse — Archive has the highest retrieval fees and hours-long rehydration. Use lifecycle management policies to automatically tier data based on access patterns.",
+            "Hot, Cool, Cold, and Archive trade storage price for access and retrieval cost. Hot suits frequently read data; Archive minimizes stored capacity cost but has slower rehydration and higher retrieval-related trade-offs. Cool and Cold sit between them with minimum retention rules. Estimate storage capacity, write volume, read frequency, transactions, replication, and expected retrieval before choosing a tier, then use lifecycle policies to move data as access falls.",
             "Compare Azure Blob Storage costs for 10 TB across Hot, Cool, Cold, and Archive tiers in East US."),
             ["aks-vs-container-apps"] = (
             "AKS vs Container Apps vs Azure Functions — Cost Comparison",
             "What is the cost of running microservices on AKS vs Container Apps vs Functions?",
-            "AKS charges only for underlying VMs (control plane is free). Container Apps has consumption billing per vCPU-second and GB-second. Functions consumption plan charges per execution and GB-second. For 20 microservices: AKS is cheapest at scale (~$300–600/mo), Container Apps is simplest for moderate traffic (~$200–800/mo), Functions is cheapest for bursty/infrequent workloads (~$50–300/mo).",
+            "Choose from the workload, not a generic price ranking. AKS bills the worker nodes, storage, networking, monitoring, and other cluster resources you run. Azure Container Apps combines active vCPU and memory time, requests, scaling, networking, and related resources. Azure Functions can fit event-driven or bursty work where execution-based billing matches the demand. Compare the same request volume, concurrency, memory, minimum replicas or always-on capacity, CPU minutes, storage, egress, and operational model. AKS can amortize reserved worker capacity at steady scale, while Container Apps and Functions reduce idle infrastructure for sporadic workloads. Read the workload's autoscaling metrics and use Azure retail prices for each billed component before deciding.",
             "Compare cost of running 20 microservices on AKS vs Azure Container Apps vs Azure Functions."),
             ["gpu-training-cost"] = (
             "Azure GPU Training Cost — A100 vs H100 Pricing Comparison",
             "How much does GPU training cost on Azure (A100 vs H100)?",
-            "The ND96asr_v4 (8× A100 80GB) costs ~$27–32/hr on-demand. The NC80adis_H100_v5 (8× H100) costs ~$32–38/hr. Spot pricing reduces costs 60–80% when available. A 4-node training cluster costs $80K–110K/month on-demand, or $16K–30K with spot instances. H100 offers ~2× training throughput vs A100, making cost-per-training-step often comparable.",
+            "Compare GPU training by cost per completed training step, not hardware price alone. A current estimate needs the exact VM SKU, region, operating system, GPU memory, node count, storage, network traffic, expected runtime, and Spot or on-demand capacity. Check regional SKU restrictions, quota, and Spot history separately; a retail price is not an allocation guarantee. Benchmark the same model, batch size, precision, checkpoint strategy, and throughput on A100 and H100 before choosing.",
             "Compare monthly cost of 4x A100 (ND96asr_v4) vs 4x H100 (NC80adis_H100_v5) on-demand."),
         };
 
@@ -60,7 +62,7 @@ public static class SeoEndpoints
             string title, question, answer, prompt, date;
             if (StaticFaqs.TryGetValue(slug, out var page))
             {
-                title = page.Title; question = page.Question; answer = page.Answer; prompt = page.Prompt; date = "2026-03-29";
+                title = page.Title; question = page.Question; answer = page.Answer; prompt = page.Prompt; date = StaticFaqDate;
             }
             else if (FaqTools.TryGet(slug, out var dynamic))
             {
@@ -93,35 +95,17 @@ public static class SeoEndpoints
         var jsonLd = JsonSerializer.Serialize(new Dictionary<string, object>
         {
             ["@context"] = "https://schema.org",
-            ["@type"] = "QAPage",
+            ["@type"] = "FAQPage",
             ["mainEntity"] = new Dictionary<string, object>
             {
                 ["@type"] = "Question",
                 ["name"] = question,
-                ["text"] = question,
-                ["answerCount"] = 1,
-                ["dateCreated"] = isoDate,
-                ["datePublished"] = isoDate,
-                ["author"] = new Dictionary<string, object>
-                {
-                    ["@type"] = "Organization",
-                    ["name"] = "Azure FinOps Agent",
-                    ["url"] = baseUrl
-                },
                 ["acceptedAnswer"] = new Dictionary<string, object>
                 {
                     ["@type"] = "Answer",
                     ["text"] = answer,
                     ["dateCreated"] = isoDate,
-                    ["datePublished"] = isoDate,
-                    ["upvoteCount"] = 1,
-                    ["url"] = faqUrl,
-                    ["author"] = new Dictionary<string, object>
-                    {
-                        ["@type"] = "Organization",
-                        ["name"] = "Azure FinOps Agent",
-                        ["url"] = baseUrl
-                    }
+                    ["datePublished"] = isoDate
                 }
             }
         });
@@ -133,18 +117,36 @@ public static class SeoEndpoints
             + "<link rel=\"canonical\" href=\"" + faqUrl + "\">"
             + "<meta property=\"og:type\" content=\"article\">"
             + "<meta property=\"og:title\" content=\"" + e(title) + "\">"
+            + "<meta property=\"og:description\" content=\"" + e(desc) + "\">"
+            + "<meta property=\"og:image\" content=\"" + baseUrl + "/og-image.png\">"
             + "<meta property=\"og:url\" content=\"" + faqUrl + "\">"
+            + "<meta name=\"twitter:card\" content=\"summary_large_image\">"
+            + "<meta name=\"twitter:title\" content=\"" + e(title) + "\">"
+            + "<meta name=\"twitter:description\" content=\"" + e(desc) + "\">"
+            + "<meta name=\"twitter:image\" content=\"" + baseUrl + "/og-image.png\">"
             + "<script type=\"application/ld+json\">" + jsonLd + "</script>"
-            + "<style>body{font-family:Segoe UI,system-ui,sans-serif;max-width:800px;margin:0 auto;padding:2rem 1rem;color:#1a1a2e;line-height:1.7}h1{font-size:1.6rem;color:#0078d4}h2{font-size:1.2rem;margin-top:2rem}.answer{background:#f0f6ff;border-left:4px solid #0078d4;padding:1rem 1.5rem;border-radius:0 8px 8px 0;margin:1.5rem 0}.cta{display:inline-block;background:#0078d4;color:#fff;padding:0.75rem 1.5rem;border-radius:8px;text-decoration:none;margin-top:1.5rem;font-weight:600}.cta:hover{background:#106ebe}footer{margin-top:3rem;font-size:0.85rem;color:#888}</style>"
-            + "</head><body>"
+            + "<style>body{font-family:Segoe UI,system-ui,sans-serif;max-width:820px;margin:0 auto;padding:2rem 1rem;color:#1a1a2e;line-height:1.75}.breadcrumbs{font-size:.9rem;margin-bottom:1.5rem}h1{font-size:1.75rem;color:#0078d4}h2{font-size:1.25rem;margin-top:2rem}.answer{background:#f0f6ff;border-left:4px solid #0078d4;padding:1rem 1.5rem;border-radius:0 8px 8px 0;margin:1.5rem 0}.cta{display:inline-block;background:#0078d4;color:#fff;padding:.75rem 1.5rem;border-radius:8px;text-decoration:none;margin-top:1.5rem;font-weight:600}.cta:hover{background:#106ebe}ul.related{padding-left:1.25rem}footer{margin-top:3rem;font-size:.85rem;color:#626262}</style>"
+            + "</head><body><main><article>"
+            + "<nav class=\"breadcrumbs\"><a href=\"/faq\">Azure FinOps FAQ</a> / " + e(question) + "</nav>"
             + "<h1>" + e(title) + "</h1>"
             + "<h2>" + e(question) + "</h2>"
             + "<div class=\"answer\"><p>" + e(answer) + "</p></div>"
             + "<p>Want a live, interactive answer with real-time Azure pricing data and charts?</p>"
             + "<a class=\"cta\" href=\"/?q=" + Uri.EscapeDataString(prompt) + "\">Ask the FinOps Agent</a>"
+            + RenderRelatedFaqs(slug, e)
+            + "</article></main>"
             + "<footer><p>Azure FinOps Agent &mdash; AI-powered cloud cost optimization. <a href=\"/\">Back to home</a></p>"
             + "<p>Pricing data from <a href=\"https://prices.azure.com\">Azure Retail Prices API</a>. Prices may vary.</p></footer>"
             + "</body></html>";
+    }
+
+    private static string RenderRelatedFaqs(string slug, Func<string?, string> encode)
+    {
+        var related = StaticFaqs
+            .Where(item => item.Key != slug)
+            .Take(3)
+            .Select(item => "<li><a href=\"/faq/" + item.Key + "\">" + encode(item.Value.Question) + "</a></li>");
+        return "<h2>Related Azure cost questions</h2><ul class=\"related\">" + string.Join("", related) + "</ul>";
     }
 
     private static string RenderFaqIndex(string baseUrl)
