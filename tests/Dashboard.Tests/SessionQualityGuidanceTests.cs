@@ -110,6 +110,10 @@ public sealed class SessionQualityGuidanceTests
     // the agent re-read every account; per-project figures then took three rounds of Application Insights exploration.
     [InlineData("so compare dimension names with ToLower()")]
     [InlineData("the account's FoundryModelEstimatedCost metric (preview; estimated USD for Foundry models, not billed cost)")]
+    [InlineData("AI billing modes are mutually exclusive inside one deployment or usage stream")]
+    [InlineData("never add PTU capacity and token charges for the same deployment")]
+    [InlineData("never apply a second rate to credits already covered")]
+    [InlineData("only credits above the included allowance added as overage")]
     // A per-model token answer dropped an image model billed USD 296 and an audio model, so its rows missed the total.
     [InlineData("A breakdown of a stated total accounts for all of it")]
     [InlineData("For Azure cost, budget, inventory, tag and pricing answers, quote the reported retrieval time")]
